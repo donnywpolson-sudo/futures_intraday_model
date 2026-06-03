@@ -24,6 +24,12 @@ What the sync does:
 3. Pulls latest GitHub changes with rebase.
 4. Pushes your branch back to GitHub.
 
+For a new GitHub repo with no origin remote yet:
+  python sync_local.py --remote-url https://github.com/YOUR_USER/YOUR_REPO.git
+
+If the new GitHub repo was initialized with a README/license commit:
+  python sync_local.py --bootstrap-new-remote
+
 GitHub remains the source of truth.
 """
 
@@ -324,6 +330,49 @@ def remote_branch_exists(repo: Path, branch: str) -> bool:
     return bool(result.stdout.strip())
 
 
+def branches_share_history(repo: Path, local_branch: str, remote_ref: str) -> bool:
+    result = run_git(
+        repo,
+        ["merge-base", local_branch, remote_ref],
+        check=False,
+    )
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def origin_remote_url(repo: Path) -> str | None:
+    result = run_git(repo, ["remote", "get-url", "origin"], check=False)
+
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+
+    return None
+
+
+def ensure_origin_remote(repo: Path, remote_url: str | None) -> None:
+    existing_url = origin_remote_url(repo)
+
+    if existing_url:
+        if remote_url and existing_url != remote_url:
+            print(f"Origin exists: {existing_url}")
+            print(f"Updating origin to: {remote_url}")
+            run_git(repo, ["remote", "set-url", "origin", remote_url])
+            return
+
+        print(f"Origin: {existing_url}")
+        return
+
+    if remote_url:
+        print(f"\nNo origin remote found. Adding origin: {remote_url}")
+        run_git(repo, ["remote", "add", "origin", remote_url])
+        return
+
+    print("\nSTOP: No GitHub remote named 'origin' is configured.")
+    print("For a new GitHub repo, run one of:")
+    print("  git remote add origin https://github.com/YOUR_USER/YOUR_REPO.git")
+    print("  python sync_local.py --remote-url https://github.com/YOUR_USER/YOUR_REPO.git")
+    sys.exit(1)
+
+
 def print_changed_files(paths: list[str]) -> None:
     print("\nChanged files:")
 
@@ -366,6 +415,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show what this computer is currently marked as.",
     )
+    parser.add_argument(
+        "--remote-url",
+        help="For a new repo: add this URL as origin before syncing.",
+    )
+    parser.add_argument(
+        "--bootstrap-new-remote",
+        action="store_true",
+        help=(
+            "For a disposable new GitHub repo only: force-with-lease push this "
+            "local branch over an unrelated remote initial commit."
+        ),
+    )
 
     return parser
 
@@ -389,6 +450,8 @@ def main() -> None:
             "\nNote: You are on 'main'. This script works on main, "
             "but feature branches are safer."
         )
+
+    ensure_origin_remote(repo, args.remote_url)
 
     print("\nFetching from GitHub...")
     run_git(repo, ["fetch", "origin"])
@@ -441,6 +504,30 @@ def main() -> None:
         print("\nNo local changes to commit.")
 
     if remote_branch_exists(repo, branch):
+        remote_ref = f"origin/{branch}"
+
+        if not branches_share_history(repo, branch, remote_ref):
+            if args.bootstrap_new_remote:
+                print(
+                    f"\nBootstrapping new remote: replacing {remote_ref} "
+                    f"with local {branch} using --force-with-lease."
+                )
+                run_git(
+                    repo,
+                    ["push", "--force-with-lease", "-u", "origin", branch],
+                    capture=False,
+                )
+                print("\nFinal status:")
+                run_git(repo, ["status", "--short"], capture=False)
+                print("\nDone.")
+                return
+
+            print(f"\nSTOP: {branch} and {remote_ref} do not share history.")
+            print("This usually means the new GitHub repo has an initial README/license commit.")
+            print("If that remote commit is disposable, run:")
+            print("  python sync_local.py --bootstrap-new-remote")
+            sys.exit(1)
+
         print(f"\nPulling latest changes from origin/{branch} using rebase...")
         pull = run_git(
             repo,
