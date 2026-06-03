@@ -25,7 +25,7 @@ What the sync does:
 4. Pushes your branch back to GitHub.
 
 For a new GitHub repo with no origin remote yet:
-  python sync_vm.py --remote-url https://github.com/YOUR_USER/YOUR_REPO.git
+  python sync_vm.py
 
 If the new GitHub repo was initialized with a README/license commit:
   python sync_vm.py --bootstrap-new-remote
@@ -46,6 +46,7 @@ from typing import Iterable
 EXPECTED_MACHINE = "vm"
 MACHINE_LABEL = "VIRTUAL MACHINE / CODESPACES"
 DEFAULT_COMMIT_MESSAGE = "sync from virtual machine"
+DEFAULT_REMOTE_URL = "https://github.com/donnywpolson-sudo/quant_project.git"
 MARKER_PATH = Path.home() / ".quant_sync_machine"
 
 # These are blocked from auto-commit unless you explicitly type YES.
@@ -160,6 +161,12 @@ def handle_machine_commands(args: argparse.Namespace) -> None:
         sys.exit(0)
 
     if args.mark_local:
+        detected, source = detect_machine()
+        if detected == "vm":
+            print(f"STOP: This machine is already marked as vm ({source}).")
+            print("Use sync_vm.py on this machine.")
+            sys.exit(1)
+
         if is_codespaces():
             print("STOP: This is GitHub Codespaces, so it should not be marked local.")
             sys.exit(1)
@@ -168,6 +175,12 @@ def handle_machine_commands(args: argparse.Namespace) -> None:
         sys.exit(0)
 
     if args.mark_vm:
+        detected, source = detect_machine()
+        if detected == "local":
+            print(f"STOP: This machine is already marked as local ({source}).")
+            print("Do not mark your local machine as a VM.")
+            sys.exit(1)
+
         write_machine_marker("vm")
         sys.exit(0)
 
@@ -348,29 +361,42 @@ def origin_remote_url(repo: Path) -> str | None:
     return None
 
 
+def normalize_remote_url(url: str) -> str:
+    value = url.strip().lower()
+
+    if value.startswith("git@github.com:"):
+        value = "https://github.com/" + value.removeprefix("git@github.com:")
+
+    return value.removesuffix(".git")
+
+
+def same_remote_url(left: str, right: str) -> bool:
+    return normalize_remote_url(left) == normalize_remote_url(right)
+
+
 def ensure_origin_remote(repo: Path, remote_url: str | None) -> None:
     existing_url = origin_remote_url(repo)
+    target_url = remote_url or DEFAULT_REMOTE_URL
 
     if existing_url:
-        if remote_url and existing_url != remote_url:
+        if remote_url and not same_remote_url(existing_url, remote_url):
             print(f"Origin exists: {existing_url}")
             print(f"Updating origin to: {remote_url}")
             run_git(repo, ["remote", "set-url", "origin", remote_url])
             return
 
+        if not same_remote_url(existing_url, DEFAULT_REMOTE_URL):
+            print(f"\nSTOP: origin points somewhere else: {existing_url}")
+            print(f"Expected: {DEFAULT_REMOTE_URL}")
+            print("If this is intentional, update it explicitly:")
+            print(f"  python sync_vm.py --remote-url {DEFAULT_REMOTE_URL}")
+            sys.exit(1)
+
         print(f"Origin: {existing_url}")
         return
 
-    if remote_url:
-        print(f"\nNo origin remote found. Adding origin: {remote_url}")
-        run_git(repo, ["remote", "add", "origin", remote_url])
-        return
-
-    print("\nSTOP: No GitHub remote named 'origin' is configured.")
-    print("For a new GitHub repo, run one of:")
-    print("  git remote add origin https://github.com/YOUR_USER/YOUR_REPO.git")
-    print("  python sync_vm.py --remote-url https://github.com/YOUR_USER/YOUR_REPO.git")
-    sys.exit(1)
+    print(f"\nNo origin remote found. Adding origin: {target_url}")
+    run_git(repo, ["remote", "add", "origin", target_url])
 
 
 def print_changed_files(paths: list[str]) -> None:
