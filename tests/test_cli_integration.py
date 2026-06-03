@@ -70,6 +70,10 @@ def test_minimal_synthetic_run_writes_audit_artifacts(tmp_path):
     out = tmp_path / "out"
     discover = _run(["discover", "--data", str(path), "--out", str(manifest)], cwd=tmp_path)
     assert discover.returncode == 0, discover.stderr
+    discovery_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert discovery_payload["discovery_data"]
+    assert Path(discovery_payload["discovery_data"]).exists()
+    assert discovery_payload["discovery_scope"] == "input_window"
     run = _run(["run", "--data", str(path), "--manifest", str(manifest), "--out", str(out)], cwd=tmp_path)
     assert run.returncode == 0, run.stderr
 

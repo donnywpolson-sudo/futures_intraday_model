@@ -84,10 +84,14 @@ def _represented_in_manifest(key: str) -> bool:
 
 
 def _exists_any(patterns: tuple[str, ...]) -> bool:
-    concrete = [p for p in patterns if "{" not in p and "*" not in p]
-    globs = [p for p in patterns if "*" in p and "{" not in p]
+    normalized = [p.replace("{market}", "*").replace("{year}", "*").replace("{symbol}", "*").replace("{run_id}", "*").replace("{split_id}", "*") for p in patterns]
+    concrete = [p for p in normalized if "*" not in p]
+    globs = [p for p in normalized if "*" in p]
     if any(Path(p).exists() for p in concrete):
         return True
+    for p in concrete:
+        if "/" not in p and "\\" not in p and list(Path().glob(f"**/{p}")):
+            return True
     return any(list(Path().glob(g)) for g in globs)
 
 

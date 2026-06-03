@@ -1,4 +1,5 @@
 import polars as pl
+from pathlib import Path
 
 from pipeline.causal.gate import causal_gate_df, causal_gate_root
 
@@ -42,3 +43,37 @@ def test_causal_gating_preserves_raw_ohlcv_and_session_columns():
     for col in ["open", "high", "low", "close", "volume", "prediction_time", "earliest_execution_time"]:
         assert col in out.columns
     assert out["earliest_execution_time"].dtype == out["ts_event"].dtype
+
+
+def test_causal_gate_root_filters_markets_and_years(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    for market, year in [("ES", 2023), ("ES", 2025), ("CL", 2024), ("ZN", 2025), ("NQ", 2025)]:
+        p = tmp_path / "data" / "session_normalized" / market / f"{year}.parquet"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        pl.DataFrame(
+            {
+                "ts_event": [1],
+                "open": [1.0],
+                "high": [1.0],
+                "low": [1.0],
+                "close": [1.0],
+                "volume": [1],
+                "session_id": ["s"],
+                "session_date": ["2025-01-01"],
+                "market": [market],
+                "session_timezone": ["America/Chicago"],
+                "session_calendar_accuracy": ["reviewed"],
+            }
+        ).write_parquet(p)
+    report = causal_gate_root(
+        "data/session_normalized",
+        "data/causally_gated_normalized",
+        markets=["ES", "CL"],
+        start_year=2024,
+        end_year=2025,
+    )
+    assert report["status"] == "PASS"
+    assert sorted((Path(r["output"]).parent.name, Path(r["output"]).stem) for r in report["files"]) == [("CL", "2024"), ("ES", "2025")]
+    assert (tmp_path / "data" / "causally_gated_normalized" / "ES" / "2025.parquet").exists()
+    assert not (tmp_path / "data" / "causally_gated_normalized" / "ES" / "2023.parquet").exists()
+    assert not (tmp_path / "data" / "causally_gated_normalized" / "NQ" / "2025.parquet").exists()

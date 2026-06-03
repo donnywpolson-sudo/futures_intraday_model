@@ -34,17 +34,22 @@ METADATA = {
     "close",
     "volume",
 }
-FORBIDDEN_PREFIXES = ("future_", "roll_", "continuous_", "front_contract", "back_contract")
+FORBIDDEN_PREFIXES = ("future_", "continuous_", "front_contract", "back_contract")
+SAFE_ROLL_FEATURE_PREFIXES = ("roll_vol_", "roll_volume_", "roll_range_")
 
 
 def build_column_registry(df: pl.DataFrame, source_stage: str = "") -> dict:
     target_cols = [c for c in df.columns if c.startswith(TARGET_PREFIXES)]
-    forbidden = [c for c in df.columns if c.startswith(FORBIDDEN_PREFIXES)]
+    forbidden = [
+        c for c in df.columns
+        if c.startswith(FORBIDDEN_PREFIXES) or (c.startswith("roll_") and not c.startswith(SAFE_ROLL_FEATURE_PREFIXES))
+    ]
     availability = [c for c in df.columns if c.endswith("_available_at")]
     metadata = sorted(set([c for c in df.columns if c in METADATA or c.endswith("_is_available")] + availability + forbidden))
     feature_cols = [
         c for c, dtype in zip(df.columns, df.dtypes)
         if dtype.is_numeric() and c not in target_cols and c not in metadata and not c.startswith(FORBIDDEN_PREFIXES)
+        and not (c.startswith("roll_") and not c.startswith(SAFE_ROLL_FEATURE_PREFIXES))
     ]
     schema = "|".join(f"{c}:{t}" for c, t in zip(df.columns, df.dtypes))
     return {

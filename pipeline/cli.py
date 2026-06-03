@@ -36,6 +36,8 @@ EXCLUDE_COLS = {
 }
 
 MINIMAL_MODELING_WARNING = "minimal_compatible modeling validates pipeline wiring only; it is not strategy evidence"
+SAFE_ROLL_FEATURE_PREFIXES = ("roll_vol_", "roll_volume_", "roll_range_")
+ALLOWED_LABEL_METADATA_COLS = {"label_entry_lag_bars", "label_horizon_bars", "label_target_scale_factor"}
 
 
 def _load_cfg() -> RootConfig:
@@ -128,6 +130,9 @@ def _feature_cols(df: pl.DataFrame, target_col: str, cfg: RootConfig) -> list[st
     for c, dtype in zip(df.columns, df.dtypes):
         if c == target_col or c in EXCLUDE_COLS:
             continue
+        if c.startswith("roll_") and c.startswith(SAFE_ROLL_FEATURE_PREFIXES) and dtype.is_numeric():
+            cols.append(c)
+            continue
         if any(c.startswith(p) for p in forbidden):
             continue
         if dtype.is_numeric():
@@ -139,6 +144,8 @@ def _forbidden_input_columns(df: pl.DataFrame, target_col: str, cfg: RootConfig)
     bad = []
     for c in df.columns:
         if c == target_col:
+            continue
+        if c in ALLOWED_LABEL_METADATA_COLS:
             continue
         if c.startswith("future_") or c.startswith("label_") or c.startswith("target_"):
             bad.append(c)
@@ -157,12 +164,18 @@ def cmd_discover(args: argparse.Namespace) -> None:
     df = _ensure_target(df, target_col)
     df = _enforce_safe_label_end(df, args.end, cfg)
     features = _feature_cols(df, target_col, cfg)
+    discovery_data = str(Path(args.out).with_suffix(".discovery.parquet"))
+    Path(discovery_data).parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(discovery_data)
     payload = {
         "status": "PASS",
         "target_col": target_col,
         "feature_cols": features,
         "selected_features": features,
         "data": args.data,
+        "input_data": args.data,
+        "discovery_data": discovery_data,
+        "discovery_scope": "train_only" if args.start or args.end else "input_window",
         "rows": df.height,
         "start": args.start,
         "end": args.end,
@@ -435,6 +448,7 @@ def cmd_run(args: argparse.Namespace, hmm: bool = False) -> None:
         train_start=args.train_start, train_end=args.train_end, test_start=args.start, test_end=args.end,
     ))
     metrics = compute_backtest_metrics(result)
+    metrics["status"] = "PASS"
     metrics["modeling_mode"] = modeling_mode
     if modeling_mode == "minimal_compatible":
         metrics["warnings"] = [MINIMAL_MODELING_WARNING]

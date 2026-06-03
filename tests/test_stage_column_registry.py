@@ -2,7 +2,7 @@ import json
 
 import polars as pl
 
-from pipeline.cli import _feature_cols
+from pipeline.cli import _feature_cols, _forbidden_input_columns
 from pipeline.common.config import RootConfig
 from pipeline.features.engine import load_or_build_feature_target_matrix
 from pipeline.features.registry import build_column_registry, write_column_registry
@@ -18,6 +18,23 @@ def test_column_registry_separates_feature_target_metadata(tmp_path):
     path = tmp_path / "column_registry.json"
     write_column_registry(df, path, "baseline")
     assert json.loads(path.read_text())["source_stage"] == "baseline"
+
+
+def test_registry_allows_generated_rolling_features_but_blocks_roll_metadata():
+    df = pl.DataFrame(
+        {
+            "ts_event": [1],
+            "roll_vol_5": [0.1],
+            "roll_volume_5": [100.0],
+            "roll_range_1": [0.01],
+            "roll_flag": [1],
+            "target_15m_ret": [0.0],
+        }
+    )
+    reg = build_column_registry(df, "baseline")
+    assert {"roll_vol_5", "roll_volume_5", "roll_range_1"}.issubset(set(reg["feature_columns"]))
+    assert "roll_flag" not in reg["feature_columns"]
+    assert "roll_flag" in reg["metadata_columns"]
 
 
 def test_metadata_ids_timing_and_prices_cannot_be_model_features():
@@ -62,3 +79,23 @@ def test_metadata_ids_timing_and_prices_cannot_be_model_features():
     assert forbidden.isdisjoint(reg["feature_columns"])
     assert forbidden.isdisjoint(engine_features)
     assert forbidden.isdisjoint(cli_features)
+
+
+def test_label_metadata_allowed_as_input_but_not_model_feature():
+    df = pl.DataFrame(
+        {
+            "ts_event": [1],
+            "x": [1.0],
+            "target_15m_ret": [0.1],
+            "label_entry_lag_bars": [1],
+            "label_horizon_bars": [15],
+            "label_target_scale_factor": [100.0],
+        }
+    )
+    cfg = RootConfig()
+    assert _forbidden_input_columns(df, "target_15m_ret", cfg) == []
+    features = _feature_cols(df, "target_15m_ret", cfg)
+    assert "x" in features
+    assert "label_entry_lag_bars" not in features
+    assert "label_horizon_bars" not in features
+    assert "label_target_scale_factor" not in features

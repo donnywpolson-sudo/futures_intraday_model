@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import polars as pl
 
 from pipeline.session.normalize import load_session_config, normalize_session_df, session_normalize_root
@@ -80,6 +82,26 @@ def test_session_normalize_root_records_merged_session_config(tmp_path, monkeypa
     assert report["files"][0]["timezone"] == "America/Chicago"
     assert out["session_timezone"].to_list() == ["America/Chicago"]
     assert out["session_calendar_accuracy"].to_list() == ["reviewed"]
+
+
+def test_session_normalize_root_filters_markets_and_years(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    for market, year in [("ES", 2023), ("ES", 2025), ("CL", 2024), ("ZN", 2025), ("NQ", 2025)]:
+        p = tmp_path / "data" / "validated" / market / f"{year}.parquet"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        pl.DataFrame({"ts_event": [1], "open": [1.0], "high": [1.0], "low": [1.0], "close": [1.0], "volume": [1]}).write_parquet(p)
+    report = session_normalize_root(
+        "data/validated",
+        "data/session_normalized",
+        markets=["ES", "CL"],
+        start_year=2024,
+        end_year=2025,
+    )
+    assert report["status"] == "PASS"
+    assert sorted((Path(r["output"]).parent.name, Path(r["output"]).stem) for r in report["files"]) == [("CL", "2024"), ("ES", "2025")]
+    assert (tmp_path / "data" / "session_normalized" / "ES" / "2025.parquet").exists()
+    assert not (tmp_path / "data" / "session_normalized" / "ES" / "2023.parquet").exists()
+    assert not (tmp_path / "data" / "session_normalized" / "NQ" / "2025.parquet").exists()
 
 
 def test_session_normalize_script_default_uses_merged_config(tmp_path, monkeypatch, capsys):

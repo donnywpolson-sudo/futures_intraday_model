@@ -13,14 +13,17 @@ from pipeline.features.registry import write_column_registry
 def build_baseline_features(df: pl.DataFrame) -> pl.DataFrame:
     exprs = []
     if "close" in df.columns:
+        ret = pl.col("close").pct_change()
+        safe_ret = pl.when(ret.is_finite()).then(ret).otherwise(0).fill_null(0)
         exprs += [
-            pl.col("close").pct_change().fill_null(0).alias("ret_lag_1"),
-            pl.col("close").pct_change().rolling_std(5).fill_null(0).alias("roll_vol_5"),
+            safe_ret.alias("ret_lag_1"),
+            safe_ret.rolling_std(5).fill_null(0).alias("roll_vol_5"),
         ]
     if "volume" in df.columns:
         exprs.append(pl.col("volume").cast(pl.Float64).rolling_mean(5).fill_null(0).alias("roll_volume_5"))
     if {"high", "low", "close"}.issubset(df.columns):
-        exprs.append(((pl.col("high") - pl.col("low")) / pl.col("close")).fill_null(0).alias("roll_range_1"))
+        range_frac = (pl.col("high") - pl.col("low")) / pl.col("close")
+        exprs.append(pl.when(range_frac.is_finite()).then(range_frac).otherwise(0).fill_null(0).alias("roll_range_1"))
     if "session_id" in df.columns:
         exprs.append(pl.col("session_id").cum_count().over("session_id").alias("session_bar_index"))
     out = df.with_columns(exprs) if exprs else df

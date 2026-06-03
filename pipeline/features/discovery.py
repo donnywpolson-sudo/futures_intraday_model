@@ -32,9 +32,11 @@ def select_features_train_only(
             rankings.append({"feature": c, "score": score})
     rankings.sort(key=lambda r: (-r["score"], r["feature"]))
     selected = [r["feature"] for r in rankings[:max_features]]
+    feature_set_id = _feature_set_id(selected)
     artifact = {
         "selected_features": selected,
         "rejected_features": sorted(set(rejected)),
+        "feature_set_id": feature_set_id,
         "target_col": target_col,
         "train_start": context.get("train_start"),
         "train_end": context.get("train_end"),
@@ -43,6 +45,8 @@ def select_features_train_only(
         "selection_method": "train_abs_corr",
         "random_seed": seed,
         "feature_ranking": rankings,
+        "source_stage": "train_only_feature_selection",
+        "output_stage": "frozen_feature_set",
         "modeling_mode": getattr(cfg.pipeline, "modeling_mode", "unknown"),
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
     }
@@ -86,3 +90,9 @@ def _selector_path(context: dict[str, Any]) -> Path:
     symbol = str(context.get("symbol") or "UNKNOWN")
     split_id = str(context.get("split_id") or 1)
     return Path("artifacts/selectors") / run_id / f"{symbol}_split_{split_id}_features.json"
+
+
+def _feature_set_id(features: list[str]) -> str:
+    import hashlib
+
+    return hashlib.sha256("\n".join(features).encode("utf-8")).hexdigest()[:16]

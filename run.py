@@ -30,6 +30,7 @@ from pipeline.orchestration.stage_plan import START_STAGE_NUM, build_stage_plan,
 from pipeline.audit.pipeline_coverage import stage_catalog
 from pipeline.audit.run_manifest import write_run_manifest
 from pipeline.gates.deployment import run_deployment_readiness_gate
+from pipeline.walkforward.split_plan import write_wfa_split_plan
 
 _LOG_MODE = os.environ.get('LOG_MODE', 'clean').strip().lower()
 if _LOG_MODE not in {'clean', 'verbose', 'debug'}:
@@ -1511,6 +1512,7 @@ if __name__ == '__main__':
         checkpoint_start={"start_stage": start_stage, "checkpoint_root": data_dir, "checkpoint_gate": checkpoint_report, "stage_plan": stage_plan},
     )
     splits = generate_walkforward_splits(files, config)
+    write_wfa_split_plan(splits, files, config)
     total = len(splits)
     print(
         f'[RUN] env={_ns_cfg.ACTIVE_PROFILE} profile={_ns_cfg.ACTIVE_PROFILE} '

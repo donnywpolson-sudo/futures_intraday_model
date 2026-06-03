@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 import polars as pl
@@ -39,7 +40,16 @@ def _filter_window(df: pl.DataFrame, ts_col: str, start: Any, end: Any) -> pl.Da
     out = df
     dtype = df[ts_col].dtype
     if start is not None:
-        out = out.filter(pl.col(ts_col) >= pl.lit(start).cast(dtype))
+        out = out.filter(pl.col(ts_col) >= pl.lit(_coerce_boundary(start, dtype)).cast(dtype))
     if end is not None:
-        out = out.filter(pl.col(ts_col) < pl.lit(end).cast(dtype))
+        out = out.filter(pl.col(ts_col) < pl.lit(_coerce_boundary(end, dtype)).cast(dtype))
     return out
+
+
+def _coerce_boundary(value: Any, dtype: pl.DataType) -> Any:
+    if not isinstance(value, str) or not str(dtype).startswith("Datetime"):
+        return value
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if dt.tzinfo is None and "UTC" in str(dtype):
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt

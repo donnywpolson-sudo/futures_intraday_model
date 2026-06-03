@@ -81,6 +81,10 @@ def compute_backtest_metrics(df: pl.DataFrame) -> dict[str, Any]:
     metrics = compute_metrics(df)
     pnl_col = "pnl" if "pnl" in df.columns else ("net_pnl" if "net_pnl" in df.columns else None)
     pnl = df[pnl_col].cast(pl.Float64) if pnl_col else pl.Series([0.0])
+    gross = df["gross_pnl"].cast(pl.Float64) if "gross_pnl" in df.columns else pnl
+    costs = df["costs"].cast(pl.Float64) if "costs" in df.columns else pl.Series([0.0] * df.height)
+    fees = df["fees"].cast(pl.Float64) if "fees" in df.columns else pl.Series([0.0] * df.height)
+    slippage = df["slippage"].cast(pl.Float64) if "slippage" in df.columns else pl.Series([0.0] * df.height)
     bars_per_year = 252 * 390
     if "ts_event" in df.columns and df.height > 2:
         try:
@@ -92,16 +96,26 @@ def compute_backtest_metrics(df: pl.DataFrame) -> dict[str, Any]:
             pass
     mean = float(pnl.mean() or 0.0)
     std = float(pnl.std() or 0.0)
+    gross_mean = float(gross.mean() or 0.0)
+    gross_std = float(gross.std() or 0.0)
     sharpe_per_bar = 0.0 if std == 0 else mean / std
+    gross_sharpe_per_bar = 0.0 if gross_std == 0 else gross_mean / gross_std
     pos_delta = df["position_delta"].abs() if "position_delta" in df.columns else pl.Series([0.0] * df.height)
     active = pnl.filter(pnl != 0)
     trade_pnl = pnl.filter(pos_delta > 0) if len(pos_delta) == len(pnl) else active
     metrics.update(
         {
             "total_pnl": float(pnl.sum() or 0.0),
+            "net_pnl": float(pnl.sum() or 0.0),
+            "gross_pnl": float(gross.sum() or 0.0),
+            "costs": float(costs.sum() or 0.0),
+            "fees": float(fees.sum() or 0.0),
+            "slippage": float(slippage.sum() or 0.0),
             "bars_per_year": bars_per_year,
             "sharpe_per_bar": sharpe_per_bar,
             "sharpe_annualized": sharpe_per_bar * math.sqrt(bars_per_year),
+            "gross_sharpe_per_bar": gross_sharpe_per_bar,
+            "gross_sharpe_annualized": gross_sharpe_per_bar * math.sqrt(bars_per_year),
             "bar_hit_rate_all_bars": float((pnl > 0).mean() or 0.0),
             "bar_hit_rate_all_bars_n": df.height,
             "bar_hit_rate_active_bars": float((active > 0).mean() or 0.0) if active.len() else 0.0,

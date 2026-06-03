@@ -6,7 +6,8 @@ from typing import Any
 import polars as pl
 
 
-METADATA_PREFIXES = ("target_", "future_", "label_", "roll_", "continuous_")
+METADATA_PREFIXES = ("target_", "future_", "label_", "continuous_")
+SAFE_ROLL_FEATURE_PREFIXES = ("roll_vol_", "roll_volume_", "roll_range_")
 METADATA_COLS = {
     "ts_event",
     "date",
@@ -81,6 +82,8 @@ def _safe_numeric_features(df: pl.DataFrame, target_col: str) -> list[str]:
     out = []
     for col, dtype in zip(df.columns, df.dtypes):
         if col == target_col or col in METADATA_COLS:
+            continue
+        if col.startswith("roll_") and not col.startswith(SAFE_ROLL_FEATURE_PREFIXES):
             continue
         if col.startswith(METADATA_PREFIXES):
             continue

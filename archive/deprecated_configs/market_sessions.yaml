@@ -1,6 +1,0 @@
-default:
-  timezone: America/New_York
-  session_start_local: "18:00"
-  session_end_local: "16:00"
-  session_break_start_local: "17:00"
-  session_break_end_local: "18:00"

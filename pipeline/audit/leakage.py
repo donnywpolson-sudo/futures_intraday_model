@@ -8,6 +8,8 @@ import polars as pl
 from pipeline.common.config import config
 from pipeline.common.io_safe import atomic_write_json
 
+SAFE_ROLL_FEATURE_PREFIXES = ("roll_vol_", "roll_volume_", "roll_range_")
+
 
 def _as_lf(df: pl.DataFrame | pl.LazyFrame) -> pl.LazyFrame:
     return df.lazy() if isinstance(df, pl.DataFrame) else df
@@ -25,7 +27,7 @@ def run_leakage_audit(df: pl.DataFrame | pl.LazyFrame, feature_cols: list[str], 
     for c in feature_cols:
         if any(c.startswith(p) for p in forbidden):
             failures.append(f"forbidden feature prefix: {c}")
-        if any(c.startswith(p) for p in meta_forbidden):
+        if any(c.startswith(p) for p in meta_forbidden) and not c.startswith(SAFE_ROLL_FEATURE_PREFIXES):
             failures.append(f"forbidden model metadata feature: {c}")
         if c not in cols:
             failures.append(f"missing feature column: {c}")

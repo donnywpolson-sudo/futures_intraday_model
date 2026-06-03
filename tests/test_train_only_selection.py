@@ -23,3 +23,5 @@ def test_train_only_feature_selection_cannot_see_test_only_predictive_feature(tm
     payload = json.loads((tmp_path / artifact["path"]).read_text(encoding="utf-8"))
     assert payload["modeling_mode"] == "full_research"
     assert payload["train_end"] == 4
+    assert payload["output_stage"] == "frozen_feature_set"
+    assert payload["feature_set_id"]
