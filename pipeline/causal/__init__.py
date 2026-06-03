@@ -1,0 +1,2 @@
+"""Causal gating stage."""
+

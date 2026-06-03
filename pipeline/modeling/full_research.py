@@ -1,0 +1,133 @@
+from __future__ import annotations
+
+from typing import Any
+
+import numpy as np
+import polars as pl
+
+from pipeline.features.discovery import select_features_train_only
+from pipeline.features.engine import load_or_build_feature_target_matrix
+from pipeline.features.preprocessing import fit_apply_train_scaler
+from pipeline.walkforward.walkforward import apply_walkforward_contract
+
+
+def run_full_research_modeling(
+    df_or_path: pl.DataFrame | str,
+    feature_cols: list[str],
+    target_col: str,
+    train_start: Any,
+    train_end: Any,
+    test_start: Any,
+    test_end: Any,
+    context: dict[str, Any],
+) -> tuple[pl.DataFrame, dict[str, Any]]:
+    cfg = context["config"]
+    df, safe_features, registry = load_or_build_feature_target_matrix(df_or_path, feature_cols, target_col, context)
+    train, test = apply_walkforward_contract(
+        df,
+        train_start,
+        train_end,
+        test_start,
+        test_end,
+        target_horizon_bars=int(getattr(cfg.target, "target_15m_horizon", 0)),
+        embargo_bars=int(getattr(cfg.walkforward, "embargo_bars", 0)),
+        purge_target_overlap=bool(getattr(cfg.walkforward, "purge_target_overlap", True)),
+        entry_lag_bars=int(getattr(cfg.execution, "entry_lag_bars", 1)),
+    )
+    train = train.drop_nulls([target_col])
+    test = test.drop_nulls([target_col])
+    if train.is_empty() or test.is_empty():
+        raise RuntimeError("FULL_RESEARCH MODELING FAIL: empty train/test after walkforward contract")
+    selected, selector_artifact = select_features_train_only(
+        train,
+        test,
+        safe_features,
+        target_col,
+        {**context, "train_start": train_start, "train_end": train_end, "test_start": test_start, "test_end": test_end},
+    )
+    if not selected:
+        raise RuntimeError("FULL_RESEARCH MODELING FAIL: no selected train-safe features")
+    train_s, test_s, scaler_artifact = fit_apply_train_scaler(
+        train,
+        test,
+        selected,
+        {**context, "train_start": train_start, "train_end": train_end, "test_start": test_start, "test_end": test_end},
+    )
+    beta, intercept = _fit_ridge(train_s, selected, target_col, float(cfg.walkforward.ridge_params.get("alpha", 1.0)))
+    pred = _predict(test_s, selected, beta, intercept)
+    result = _attach_execution(test_s, pred, target_col, cfg, feature_set_id=_feature_set_id(selected))
+    artifacts = {
+        "feature_registry": registry,
+        "selector_path": selector_artifact["path"],
+        "scaler_path": scaler_artifact["path"],
+        "selected_features": selected,
+        "feature_set_id": _feature_set_id(selected),
+    }
+    return result, artifacts
+
+
+def _fit_ridge(train: pl.DataFrame, features: list[str], target_col: str, alpha: float) -> tuple[np.ndarray, float]:
+    x = train.select(features).to_numpy()
+    y = train[target_col].cast(pl.Float64).to_numpy()
+    mask = np.isfinite(x).all(axis=1) & np.isfinite(y)
+    x = x[mask]
+    y = y[mask]
+    if x.shape[0] < 2:
+        raise RuntimeError("FULL_RESEARCH MODELING FAIL: insufficient finite train rows")
+    x_aug = np.column_stack([np.ones(x.shape[0]), x])
+    reg = np.eye(x_aug.shape[1]) * alpha
+    reg[0, 0] = 0.0
+    coef = np.linalg.solve(x_aug.T @ x_aug + reg, x_aug.T @ y)
+    return coef[1:], float(coef[0])
+
+
+def _predict(test: pl.DataFrame, features: list[str], beta: np.ndarray, intercept: float) -> np.ndarray:
+    x = test.select(features).to_numpy()
+    return x @ beta + intercept
+
+
+def _attach_execution(df: pl.DataFrame, pred: np.ndarray, target_col: str, cfg: Any, feature_set_id: str) -> pl.DataFrame:
+    out = df.with_columns(pl.Series("prediction", pred))
+    out = out.with_columns(
+        (1.0 / (1.0 + (-pl.col("prediction")).exp())).alias("prediction_prob"),
+        pl.when(pl.col("prediction") > 0).then(1).when(pl.col("prediction") < 0).then(-1).otherwise(0).alias("raw_signal"),
+    )
+    if out["ts_event"].dtype in (pl.Int64, pl.Int32, pl.UInt64, pl.UInt32):
+        exec_time = pl.col("ts_event") + int(cfg.execution.entry_lag_bars)
+    else:
+        exec_time = pl.col("ts_event") + pl.duration(minutes=int(cfg.execution.entry_lag_bars))
+    fill = "open" if "open" in out.columns else "close"
+    out = out.with_columns(
+        pl.col("ts_event").alias("prediction_time"),
+        exec_time.alias("execution_time"),
+        pl.col("raw_signal").clip(-cfg.execution.max_contracts, cfg.execution.max_contracts).alias("position"),
+        pl.col(fill).alias("assumed_fill_price"),
+    )
+    out = out.with_columns(
+        pl.col("position").shift(1).fill_null(0).alias("position_before"),
+        pl.col("position").alias("position_after"),
+    )
+    out = out.with_columns((pl.col("position_after") - pl.col("position_before")).alias("position_delta"))
+    per_contract_cost = (
+        float(cfg.execution.commission_per_contract)
+        + float(cfg.execution.exchange_fees_per_contract)
+        + float(cfg.execution.spread_ticks) * 0.5
+    )
+    out = out.with_columns(
+        pl.col(target_col).cast(pl.Float64).alias("ret_exec"),
+        pl.col(target_col).cast(pl.Float64).alias("target_exec"),
+        (pl.col("position_after") * pl.col(target_col).cast(pl.Float64)).alias("gross_pnl"),
+        (pl.col("position_delta").abs() * per_contract_cost).alias("fees"),
+        (pl.col("position_delta").abs() * float(cfg.execution.slippage_ticks)).alias("slippage"),
+        pl.lit(feature_set_id).alias("feature_set_id"),
+    )
+    out = out.with_columns((pl.col("fees") + pl.col("slippage")).alias("costs"))
+    out = out.with_columns((pl.col("gross_pnl") - pl.col("costs")).alias("pnl"))
+    out = out.with_columns(pl.col("pnl").alias("net_pnl"), pl.col("pnl").cum_sum().alias("equity_curve"))
+    return out.with_columns((pl.col("equity_curve") - pl.col("equity_curve").cum_max()).alias("drawdown_pct"))
+
+
+def _feature_set_id(features: list[str]) -> str:
+    import hashlib
+
+    return hashlib.sha256("\n".join(features).encode("utf-8")).hexdigest()[:16]

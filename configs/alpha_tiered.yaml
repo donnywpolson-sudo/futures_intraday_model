@@ -28,6 +28,7 @@ base:
     require_validated_files: true
     forbid_raw_fallback_after_validation: true
     manifest_required: true
+    allow_manifest_rebuild: false
 
   roll_policy:
     method: "volume_or_days_before_expiry"
@@ -108,6 +109,8 @@ base:
     wf_test_days: 30
     wf_step_days: 30
     mode: outer_split
+    embargo_bars: 0
+    purge_target_overlap: true
     model_type: "Ridge"
     ridge_params:
       alpha: 1.0
@@ -166,11 +169,17 @@ base:
     # Your old config used 20, which can silently cap a multi-market, multi-year run.
     max_files: 100000
     skip_completed: true
+    cache_requires_config_hash: true
 
   pipeline:
     enable_discovery: true
     enable_expansion: false
     modeling_mode: "minimal_compatible"
+    start_stage: "raw"
+    allow_checkpoint_start: true
+    checkpoint_stage: null
+    checkpoint_root: null
+    auto_adopt_checkpoint: false
 
   stress_tests:
     enabled: true

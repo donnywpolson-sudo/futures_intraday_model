@@ -193,6 +193,8 @@ class WalkforwardConfig(BaseModel):
     mode: str = ""  # "" = inner bar-fold walkforward, "outer_split" = single train→test pass
     discovery_target: str = "target_15m_ret"
     walkforward_target: str = "target_15m_ret"
+    embargo_bars: int = 0
+    purge_target_overlap: bool = True
 
 
 class ExecutionConfig(BaseModel):
@@ -242,12 +244,18 @@ class IOConfig(BaseModel):
     row_group_size: int = 65536
     max_files: int = 20
     skip_completed: bool = True
+    cache_requires_config_hash: bool = True
 
 
 class PipelineConfig(BaseModel):
     enable_discovery: bool = True
     enable_expansion: bool = True
     modeling_mode: str = "minimal_compatible"
+    start_stage: str = "raw"
+    allow_checkpoint_start: bool = True
+    checkpoint_stage: str | None = None
+    checkpoint_root: str | None = None
+    auto_adopt_checkpoint: bool = False
 
 
 class DataSectionConfig(BaseModel):
@@ -259,6 +267,7 @@ class DataSectionConfig(BaseModel):
     require_validated_files: bool = True
     forbid_raw_fallback_after_validation: bool = True
     manifest_required: bool = True
+    allow_manifest_rebuild: bool = False
     data_glob: str = "data/futures/*.parquet"
     manifest_path: str = "output/manifest.json"
     baseline_features_file: str = "configs/baseline_features.yaml"
@@ -464,6 +473,7 @@ def _populate_simple_namespace(cfg: RootConfig, active_profile: str = "", config
     config.REQUIRE_VALIDATED_FILES = c.data.require_validated_files
     config.FORBID_RAW_FALLBACK_AFTER_VALIDATION = c.data.forbid_raw_fallback_after_validation
     config.MANIFEST_REQUIRED = c.data.manifest_required
+    config.ALLOW_MANIFEST_REBUILD = c.data.allow_manifest_rebuild
     config.DATA_GLOB = c.data.data_glob
     config.MANIFEST_PATH = c.data.manifest_path
     config.BASELINE_FEATURES_FILE = c.data.baseline_features_file
@@ -585,6 +595,8 @@ def _populate_simple_namespace(cfg: RootConfig, active_profile: str = "", config
     config.WF_MODE = c.walkforward.mode
     config.DISCOVERY_TARGET = getattr(c.walkforward, 'discovery_target', 'target_15m_ret')
     config.WALKFORWARD_TARGET = getattr(c.walkforward, 'walkforward_target', c.walkforward.discovery_target)
+    config.WF_EMBARGO_BARS = c.walkforward.embargo_bars
+    config.WF_PURGE_TARGET_OVERLAP = c.walkforward.purge_target_overlap
 
     # -- execution -----------------------------------------------------------
     config.EXECUTE_AT = c.execution.execute_at
@@ -634,11 +646,17 @@ def _populate_simple_namespace(cfg: RootConfig, active_profile: str = "", config
     config.ROW_GROUP_SIZE = c.io.row_group_size
     config.MAX_FILES = c.io.max_files
     config.SKIP_COMPLETED = c.io.skip_completed
+    config.CACHE_REQUIRES_CONFIG_HASH = c.io.cache_requires_config_hash
 
     # -- pipeline ------------------------------------------------------------
     config.ENABLE_DISCOVERY = c.pipeline.enable_discovery
     config.ENABLE_EXPANSION = c.pipeline.enable_expansion
     config.MODELING_MODE = c.pipeline.modeling_mode
+    config.START_STAGE = c.pipeline.start_stage
+    config.ALLOW_CHECKPOINT_START = c.pipeline.allow_checkpoint_start
+    config.CHECKPOINT_STAGE = c.pipeline.checkpoint_stage
+    config.CHECKPOINT_ROOT = c.pipeline.checkpoint_root
+    config.AUTO_ADOPT_CHECKPOINT = c.pipeline.auto_adopt_checkpoint
 
     # -- legacy flat keys ----------------------------------------------------
     config.MARKETS = list(c.markets)

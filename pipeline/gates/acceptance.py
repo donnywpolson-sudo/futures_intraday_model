@@ -64,9 +64,15 @@ def run_acceptance_gate(metrics_report: dict[str, Any], stress_report: dict[str,
     if modeling_mode == "minimal_compatible":
         check("minimal_compatible_modeling_mode", False, modeling_mode, "full_research for strategy acceptance", warn=True)
 
-    status = "REJECT" if any(g["status"] == "FAIL" for g in gates) else ("WARN" if any(g["status"] == "WARN" for g in gates) else "ACCEPT")
+    has_fail = any(g["status"] == "FAIL" for g in gates)
+    has_warn = any(g["status"] == "WARN" for g in gates)
+    pipeline_acceptance_status = "FAIL" if has_fail else "PASS"
+    strategy_acceptance_status = "NOT_EVALUATED" if modeling_mode == "minimal_compatible" else ("REJECT" if has_fail else "ACCEPT")
+    status = "REJECT" if has_fail else ("WARN" if has_warn else "ACCEPT")
     result = {
         "status": status,
+        "pipeline_acceptance_status": pipeline_acceptance_status,
+        "strategy_acceptance_status": strategy_acceptance_status,
         "modeling_mode": modeling_mode,
         "acceptance_type": "RESEARCH_PIPELINE_ONLY" if modeling_mode == "minimal_compatible" else "STRATEGY_ACCEPTANCE",
         "warnings": ["minimal_compatible modeling is not strategy acceptance"] if modeling_mode == "minimal_compatible" else [],

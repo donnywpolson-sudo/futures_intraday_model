@@ -14,6 +14,7 @@ import json
 import hashlib
 import threading
 import re
+import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
 import shutil
@@ -23,6 +24,10 @@ from pipeline.common.config import load_config, RootConfig, config as _ns_cfg
 from pipeline.common.market import get_contract_multiplier
 from pipeline.data_gate.manifest import DatasetGateError, validate_dataset_gate
 from pipeline.data_gate.preflight import DatasetPreflightError, validate_research_data_preflight
+from pipeline.data_gate.checkpoint import validate_checkpoint_stage
+from pipeline.data.classify_checkpoint import canonical_stage, classify_checkpoint
+from pipeline.orchestration.stage_plan import START_STAGE_NUM, build_stage_plan, normalize_start_stage
+from pipeline.audit.pipeline_coverage import stage_catalog
 from pipeline.audit.run_manifest import write_run_manifest
 from pipeline.gates.deployment import run_deployment_readiness_gate
 
@@ -1075,8 +1080,8 @@ def process_split(train_years: list[int], test_years: list[int], files: list[Pat
     test_files = [f for f in files if int(f.stem) in test_years]
     _raw_log(
         f'[SPLIT {split_idx}/{total_splits}] test_window=[{test_start}, {test_end}) run_id={_RUN_ID} '
-        f'cwd={os.getcwd()} run_py_mtime={Path("run.py").stat().st_mtime:.0f} '
-        f'cli_py_mtime={Path("pipeline/cli.py").stat().st_mtime:.0f}'
+        f'cwd={os.getcwd()} run_py_mtime={Path(__file__).stat().st_mtime:.0f} '
+        f'cli_py_mtime={(Path(__file__).resolve().parent / "pipeline" / "cli.py").stat().st_mtime:.0f}'
     )
     if not train_files or not test_files:
         logger.warning('Empty train/test split — skipping')
@@ -1394,14 +1399,95 @@ def process_split(train_years: list[int], test_years: list[int], files: list[Pat
     # ---- Master dashboard ----
     _print_split_dashboard(split_idx, total_splits, per_symbol)
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument("--from-stage", dest="from_stage")
+    parser.add_argument("--data-root", dest="data_root")
+    args, _unknown = parser.parse_known_args()
     config = load_config(os.environ.get('CONFIG_ENV') or os.environ.get('QUANT_ENV'))
+    start_stage = normalize_start_stage(args.from_stage or os.environ.get("QUANT_START_STAGE") or getattr(config.pipeline, "start_stage", "raw"))
+    data_root_override = args.data_root or os.environ.get("QUANT_DATA_ROOT")
+    if data_root_override:
+        config.data.root = data_root_override
+        config.pipeline.checkpoint_root = data_root_override
+    auto_report = None
+    if start_stage == "auto":
+        source = data_root_override or config.data.root
+        auto_report = classify_checkpoint(source, getattr(config.walkforward, "walkforward_target", "target_15m_ret"))
+        inferred = canonical_stage(auto_report["inferred_stage"])
+        print(
+            f"[CHECKPOINT AUTO-DETECT]\nsource={source}\ninferred_stage={inferred}\n"
+            f"reason={auto_report['reason']}",
+            flush=True,
+        )
+        if inferred in {"unknown", "raw"}:
+            raise SystemExit(f"CHECKPOINT GATE FAIL: stage=auto root={source} reason={auto_report['reason']}")
+        start_stage = inferred
+        next_num = START_STAGE_NUM[start_stage]
+        next_name = next((s.name for s in stage_catalog() if s.number == next_num), "")
+        print(f"continuing_from_stage={next_num} {next_name}", flush=True)
+    config.pipeline.start_stage = start_stage
+    config.pipeline.checkpoint_stage = None if start_stage == "raw" else start_stage
     _PROGRESS.rename_for_config(_ns_cfg.ACTIVE_PROFILE, config.symbols)
-    data_dir = getattr(_ns_cfg, 'DATA_ROOT', 'data/L0_ohlcv_1m')
-    try:
-        preflight = validate_research_data_preflight(config)
-        _stage(1, f"data_preflight={preflight['status']} root={preflight['data_root']}")
-    except DatasetPreflightError as exc:
-        raise SystemExit(f"DATA PREFLIGHT FAIL: {exc}") from exc
+    data_dir = config.data.root if start_stage != "raw" else getattr(_ns_cfg, 'DATA_ROOT', 'data/L0_ohlcv_1m')
+    checkpoint_report = None
+    stage_plan = build_stage_plan(start_stage, config)
+    if start_stage == "raw":
+        try:
+            preflight = validate_research_data_preflight(config)
+            _stage(1, f"data_preflight={preflight['status']} root={preflight['data_root']}")
+        except DatasetPreflightError as exc:
+            raise SystemExit(f"DATA PREFLIGHT FAIL: {exc}") from exc
+    else:
+        if not getattr(config.pipeline, "allow_checkpoint_start", True):
+            raise SystemExit(f"CHECKPOINT GATE FAIL: stage={start_stage} root={data_dir} reason=checkpoint starts disabled")
+        # Advance intermediate checkpoints to the first WFA-capable root.
+        if start_stage == "validated":
+            from pipeline.session.normalize import session_normalize_root
+            from pipeline.causal.gate import causal_gate_root
+            checkpoint_report = validate_checkpoint_stage("validated", data_dir, config, config.symbols, config.start_year, config.end_year)
+            if checkpoint_report["status"] != "PASS":
+                raise SystemExit(f"CHECKPOINT GATE FAIL: stage=validated root={data_dir} reason={'; '.join(checkpoint_report['failures'][:3])}\n{checkpoint_report.get('remediation','')}")
+            session_normalize_root(data_dir, config.data.session_normalized_root)
+            causal_gate_root(config.data.session_normalized_root, config.data.causally_gated_root)
+            data_dir = config.data.causally_gated_root
+            start_stage = "causally_gated_normalized"
+        elif start_stage == "session_normalized":
+            from pipeline.causal.gate import causal_gate_root
+            checkpoint_report = validate_checkpoint_stage("session_normalized", data_dir, config, config.symbols, config.start_year, config.end_year)
+            if checkpoint_report["status"] != "PASS":
+                raise SystemExit(f"CHECKPOINT GATE FAIL: stage=session_normalized root={data_dir} reason={'; '.join(checkpoint_report['failures'][:3])}\n{checkpoint_report.get('remediation','')}")
+            causal_gate_root(data_dir, config.data.causally_gated_root)
+            data_dir = config.data.causally_gated_root
+            start_stage = "causally_gated_normalized"
+        checkpoint_report = validate_checkpoint_stage(start_stage, data_dir, config, config.symbols, config.start_year, config.end_year)
+        if checkpoint_report["status"] != "PASS":
+            raise SystemExit(f"CHECKPOINT GATE FAIL: stage={start_stage} root={data_dir} reason={'; '.join(checkpoint_report['failures'][:3])}\n{checkpoint_report.get('remediation','')}")
+        skipped = [s["stage_num"] for s in stage_plan if s["status"] == "SKIPPED_CHECKPOINT"]
+        skipped_txt = f"{min(skipped)}-{max(skipped)}" if skipped else "none"
+        next_stage = next((s for s in stage_plan if s["status"] == "PENDING"), {})
+        print(
+            f"[CHECKPOINT START]\nstart_stage={start_stage}\ncheckpoint_root={data_dir}\n"
+            f"skipped_stages={skipped_txt}\ncheckpoint_gate={checkpoint_report['status']}\n"
+            f"continuing_from_stage={next_stage.get('stage_num')} {next_stage.get('stage_name')}",
+            flush=True,
+        )
+        if start_stage == "causally_gated_normalized":
+            from pipeline.labels.generate import label_root
+            from pipeline.features.baseline import baseline_feature_root
+            from pipeline.features.expansion import expanded_feature_root
+            label_root(data_dir, "data/labeled", config)
+            baseline_feature_root("data/labeled", "data/feature_matrices/baseline", config)
+            expanded_feature_root("data/feature_matrices/baseline", "data/feature_matrices/expanded", config)
+        elif start_stage == "labeled":
+            from pipeline.features.baseline import baseline_feature_root
+            from pipeline.features.expansion import expanded_feature_root
+            baseline_feature_root(data_dir, "data/feature_matrices/baseline", config)
+            expanded_feature_root("data/feature_matrices/baseline", "data/feature_matrices/expanded", config)
+        elif start_stage == "baseline_feature_matrix":
+            from pipeline.features.expansion import expanded_feature_root
+            expanded_feature_root(data_dir, "data/feature_matrices/expanded", config)
+        config.data.root = data_dir
+        _ns_cfg.DATA_ROOT = data_dir
     files = get_files(data_dir, config)
     if not files:
         logger.warning('No files found after filtering')
@@ -1422,6 +1508,7 @@ if __name__ == '__main__':
         config,
         files,
         audit_paths={"research_data_preflight": "reports/validation/research_data_preflight.json"},
+        checkpoint_start={"start_stage": start_stage, "checkpoint_root": data_dir, "checkpoint_gate": checkpoint_report, "stage_plan": stage_plan},
     )
     splits = generate_walkforward_splits(files, config)
     total = len(splits)
@@ -1463,6 +1550,7 @@ if __name__ == '__main__':
                 "path": "reports/acceptance/deployment_readiness.json",
                 "status": deployment_report.get("status"),
             },
+            checkpoint_start={"start_stage": start_stage, "checkpoint_root": data_dir, "checkpoint_gate": checkpoint_report, "stage_plan": stage_plan},
         )
         _PROGRESS.close()
     logging.getLogger().setLevel(logging.INFO)
