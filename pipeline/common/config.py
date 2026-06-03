@@ -197,15 +197,25 @@ class WalkforwardConfig(BaseModel):
 
 class ExecutionConfig(BaseModel):
     execute_at: str = "open[t+1]"
+    entry_lag_bars: int = 1
     slippage_k: float = 0.001
+    slippage_ticks: float = 1.0
+    spread_ticks: float = 1.0
     vol_penalty: float = 0.005
     commission_per_trade: float = 2e-05
     tx_cost_per_roundturn: float = 0.00015
     commission_per_contract: float = 1.50
+    exchange_fees_per_contract: float = 0.0
+    participation_rate_limit: float = 0.05
+    max_contracts: int = 1
     target_vol: float = 0.01
     max_leverage: float = 3.0
     max_pos_change_per_min: float = 0.1
     flat_before_close_minutes: int = 5
+    latency_bars: int = 0
+    reject_same_bar_fill: bool = True
+    write_execution_trace: bool = True
+    execution_trace_rows: int = 200
     htf_trend_alignment: bool = True
     htf_vol_scaling: bool = True
     htf_vol_window: int = 10
@@ -240,7 +250,14 @@ class PipelineConfig(BaseModel):
 
 
 class DataSectionConfig(BaseModel):
-    root: str = "data/L0_ohlcv_1m"
+    root: str = "data/validated"
+    raw_root: str = "data/raw"
+    validated_root: str = "data/validated"
+    session_normalized_root: str = "data/session_normalized"
+    causally_gated_root: str = "data/causally_gated_normalized"
+    require_validated_files: bool = True
+    forbid_raw_fallback_after_validation: bool = True
+    manifest_required: bool = True
     data_glob: str = "data/futures/*.parquet"
     manifest_path: str = "output/manifest.json"
     baseline_features_file: str = "configs/baseline_features.yaml"
@@ -255,6 +272,78 @@ class MemoryConfig(BaseModel):
     rows_per_chunk_max: int = 5_000_000
     memory_safety_margin: float = 0.95
     memory_log_enabled: bool = True
+
+
+class RollPolicyConfig(BaseModel):
+    method: str = "volume_or_days_before_expiry"
+    days_before_expiry: int = 5
+    volume_ratio_threshold: float = 1.0
+    open_interest_ratio_threshold: float | None = None
+    adjustment: str = "back_adjusted"
+    trade_actual_contracts: bool = False
+    allow_missing_roll_metadata: bool = False
+
+
+class PointInTimeConfig(BaseModel):
+    enabled: bool = True
+    timestamp_col: str = "ts_event"
+    prediction_time_col: str = "prediction_time"
+    availability_time_suffix: str = "_available_at"
+    fail_on_missing_availability_for: list[str] = Field(
+        default_factory=lambda: ["settlement", "open_interest", "economic_release", "roll_metadata"]
+    )
+    allow_same_bar_execution: bool = False
+    minimum_execution_lag_bars: int = 1
+
+
+class LeakageAuditConfig(BaseModel):
+    enabled: bool = True
+    fail_on_error: bool = True
+    report_dir: str = "reports/leakage"
+    forbidden_feature_prefixes: list[str] = Field(default_factory=lambda: ["target_", "future_", "label_"])
+    forbidden_model_metadata_prefixes: list[str] = Field(
+        default_factory=lambda: ["continuous_", "roll_", "front_contract", "back_contract"]
+    )
+    max_allowed_feature_target_abs_corr: float = 0.999
+
+
+class StressTestsConfig(BaseModel):
+    enabled: bool = True
+    report_dir: str = "reports/stress"
+    cost_multipliers: list[float] = Field(default_factory=lambda: [1.0, 2.0, 3.0])
+    delayed_entry_bars: list[int] = Field(default_factory=lambda: [0, 1])
+    adverse_fill_ticks: list[int] = Field(default_factory=lambda: [0, 1])
+    remove_top_trade_percentiles: list[float] = Field(default_factory=lambda: [0.0, 0.05])
+    market_ablation: bool = True
+    year_ablation: bool = True
+
+
+class AcceptanceGateConfig(BaseModel):
+    enabled: bool = True
+    report_dir: str = "reports/acceptance"
+    min_oos_sharpe: float = 0.25
+    min_trades: int = 30
+    max_drawdown_pct: float = -0.20
+    min_profit_factor: float = 1.05
+    max_turnover_per_bar: float = 10.0
+    require_positive_after_2x_costs: bool = True
+    require_positive_after_1bar_delay: bool = True
+    max_single_market_pnl_concentration: float = 0.60
+    max_single_year_pnl_concentration: float = 0.60
+    fail_on_leakage: bool = True
+    fail_on_execution_trace_error: bool = True
+    required: bool = False
+
+
+class DeploymentConfig(BaseModel):
+    enabled: bool = False
+    mode: str = "research_only"
+    paper_trading_required: bool = True
+    live_shadow_required: bool = True
+    require_kill_switch: bool = True
+    require_post_trade_reconciliation: bool = True
+    max_daily_loss: float = 1000.0
+    max_drawdown_pct: float = -0.10
 
 
 class RootConfig(BaseModel):
@@ -281,6 +370,12 @@ class RootConfig(BaseModel):
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     data: DataSectionConfig = Field(default_factory=DataSectionConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    roll_policy: RollPolicyConfig = Field(default_factory=RollPolicyConfig)
+    point_in_time: PointInTimeConfig = Field(default_factory=PointInTimeConfig)
+    leakage_audit: LeakageAuditConfig = Field(default_factory=LeakageAuditConfig)
+    stress_tests: StressTestsConfig = Field(default_factory=StressTestsConfig)
+    acceptance_gate: AcceptanceGateConfig = Field(default_factory=AcceptanceGateConfig)
+    deployment: DeploymentConfig = Field(default_factory=DeploymentConfig)
 
     # -- legacy flat keys retained for module compatibility ------------------
     markets: list[str] = Field(default_factory=lambda: DEFAULT_MARKETS.copy())
@@ -361,6 +456,13 @@ def _populate_simple_namespace(cfg: RootConfig, active_profile: str = "", config
 
     # -- data paths ----------------------------------------------------------
     config.DATA_ROOT = c.data.root
+    config.RAW_ROOT = c.data.raw_root
+    config.VALIDATED_ROOT = c.data.validated_root
+    config.SESSION_NORMALIZED_ROOT = c.data.session_normalized_root
+    config.CAUSALLY_GATED_ROOT = c.data.causally_gated_root
+    config.REQUIRE_VALIDATED_FILES = c.data.require_validated_files
+    config.FORBID_RAW_FALLBACK_AFTER_VALIDATION = c.data.forbid_raw_fallback_after_validation
+    config.MANIFEST_REQUIRED = c.data.manifest_required
     config.DATA_GLOB = c.data.data_glob
     config.MANIFEST_PATH = c.data.manifest_path
     config.BASELINE_FEATURES_FILE = c.data.baseline_features_file
@@ -374,6 +476,57 @@ def _populate_simple_namespace(cfg: RootConfig, active_profile: str = "", config
     config.ROWS_PER_CHUNK_MAX = c.memory.rows_per_chunk_max
     config.MEMORY_SAFETY_MARGIN = c.memory.memory_safety_margin
     config.MEMORY_LOG_ENABLED = c.memory.memory_log_enabled
+
+    # -- professional safeguards --------------------------------------------
+    config.ROLL_POLICY = c.roll_policy.model_dump()
+    config.ROLL_POLICY_METHOD = c.roll_policy.method
+    config.ROLL_POLICY_DAYS_BEFORE_EXPIRY = c.roll_policy.days_before_expiry
+    config.ROLL_POLICY_VOLUME_RATIO_THRESHOLD = c.roll_policy.volume_ratio_threshold
+    config.ROLL_POLICY_OPEN_INTEREST_RATIO_THRESHOLD = c.roll_policy.open_interest_ratio_threshold
+    config.ROLL_POLICY_ADJUSTMENT = c.roll_policy.adjustment
+    config.ROLL_POLICY_TRADE_ACTUAL_CONTRACTS = c.roll_policy.trade_actual_contracts
+    config.ROLL_POLICY_ALLOW_MISSING_ROLL_METADATA = c.roll_policy.allow_missing_roll_metadata
+
+    config.POINT_IN_TIME = c.point_in_time.model_dump()
+    config.POINT_IN_TIME_ENABLED = c.point_in_time.enabled
+    config.POINT_IN_TIME_TIMESTAMP_COL = c.point_in_time.timestamp_col
+    config.POINT_IN_TIME_PREDICTION_TIME_COL = c.point_in_time.prediction_time_col
+    config.POINT_IN_TIME_AVAILABILITY_TIME_SUFFIX = c.point_in_time.availability_time_suffix
+    config.POINT_IN_TIME_FAIL_ON_MISSING_AVAILABILITY_FOR = list(c.point_in_time.fail_on_missing_availability_for)
+    config.POINT_IN_TIME_ALLOW_SAME_BAR_EXECUTION = c.point_in_time.allow_same_bar_execution
+    config.POINT_IN_TIME_MINIMUM_EXECUTION_LAG_BARS = c.point_in_time.minimum_execution_lag_bars
+
+    config.LEAKAGE_AUDIT = c.leakage_audit.model_dump()
+    config.LEAKAGE_AUDIT_ENABLED = c.leakage_audit.enabled
+    config.LEAKAGE_AUDIT_FAIL_ON_ERROR = c.leakage_audit.fail_on_error
+    config.LEAKAGE_AUDIT_REPORT_DIR = c.leakage_audit.report_dir
+    config.LEAKAGE_FORBIDDEN_FEATURE_PREFIXES = list(c.leakage_audit.forbidden_feature_prefixes)
+    config.LEAKAGE_FORBIDDEN_MODEL_METADATA_PREFIXES = list(c.leakage_audit.forbidden_model_metadata_prefixes)
+    config.LEAKAGE_MAX_ALLOWED_FEATURE_TARGET_ABS_CORR = c.leakage_audit.max_allowed_feature_target_abs_corr
+
+    config.STRESS_TESTS = c.stress_tests.model_dump()
+    config.STRESS_TESTS_ENABLED = c.stress_tests.enabled
+    config.STRESS_TESTS_REPORT_DIR = c.stress_tests.report_dir
+    config.STRESS_COST_MULTIPLIERS = list(c.stress_tests.cost_multipliers)
+    config.STRESS_DELAYED_ENTRY_BARS = list(c.stress_tests.delayed_entry_bars)
+    config.STRESS_ADVERSE_FILL_TICKS = list(c.stress_tests.adverse_fill_ticks)
+    config.STRESS_REMOVE_TOP_TRADE_PERCENTILES = list(c.stress_tests.remove_top_trade_percentiles)
+
+    config.ACCEPTANCE_GATE = c.acceptance_gate.model_dump()
+    config.ACCEPTANCE_GATE_ENABLED = c.acceptance_gate.enabled
+    config.ACCEPTANCE_GATE_REPORT_DIR = c.acceptance_gate.report_dir
+    config.ACCEPTANCE_MIN_OOS_SHARPE = c.acceptance_gate.min_oos_sharpe
+    config.ACCEPTANCE_MIN_TRADES = c.acceptance_gate.min_trades
+    config.ACCEPTANCE_MAX_DRAWDOWN_PCT = c.acceptance_gate.max_drawdown_pct
+    config.ACCEPTANCE_MIN_PROFIT_FACTOR = c.acceptance_gate.min_profit_factor
+    config.ACCEPTANCE_MAX_TURNOVER_PER_BAR = c.acceptance_gate.max_turnover_per_bar
+    config.ACCEPTANCE_GATE_REQUIRED = c.acceptance_gate.required
+
+    config.DEPLOYMENT = c.deployment.model_dump()
+    config.DEPLOYMENT_ENABLED = c.deployment.enabled
+    config.DEPLOYMENT_MODE = c.deployment.mode
+    config.DEPLOYMENT_MAX_DAILY_LOSS = c.deployment.max_daily_loss
+    config.DEPLOYMENT_MAX_DRAWDOWN_PCT = c.deployment.max_drawdown_pct
 
     # -- session -------------------------------------------------------------
     config.TIMEZONE = c.session.timezone
@@ -439,6 +592,16 @@ def _populate_simple_namespace(cfg: RootConfig, active_profile: str = "", config
     config.COMMISSION_PER_TRADE = c.execution.commission_per_trade
     config.TX_COST_PER_ROUNDTURN = c.execution.tx_cost_per_roundturn
     config.COMMISSION_PER_CONTRACT = c.execution.commission_per_contract
+    config.EXCHANGE_FEES_PER_CONTRACT = c.execution.exchange_fees_per_contract
+    config.EXECUTION_ENTRY_LAG_BARS = c.execution.entry_lag_bars
+    config.SLIPPAGE_TICKS = c.execution.slippage_ticks
+    config.SPREAD_TICKS = c.execution.spread_ticks
+    config.PARTICIPATION_RATE_LIMIT = c.execution.participation_rate_limit
+    config.EXECUTION_MAX_CONTRACTS = c.execution.max_contracts
+    config.EXECUTION_LATENCY_BARS = c.execution.latency_bars
+    config.REJECT_SAME_BAR_FILL = c.execution.reject_same_bar_fill
+    config.WRITE_EXECUTION_TRACE = c.execution.write_execution_trace
+    config.EXECUTION_TRACE_ROWS = c.execution.execution_trace_rows
     config.TARGET_VOL = c.execution.target_vol
     config.MAX_LEVERAGE = c.execution.max_leverage
     config.MAX_POS_CHANGE_PER_MIN = c.execution.max_pos_change_per_min

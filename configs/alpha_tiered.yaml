@@ -20,8 +20,44 @@ base:
   log_level: "INFO"
 
   data:
-    # Must match your Databento downloader output folder.
-    root: "data/raw"
+    root: "data/validated"
+    raw_root: "data/raw"
+    validated_root: "data/validated"
+    session_normalized_root: "data/session_normalized"
+    causally_gated_root: "data/causally_gated_normalized"
+    require_validated_files: true
+    forbid_raw_fallback_after_validation: true
+    manifest_required: true
+
+  roll_policy:
+    method: "volume_or_days_before_expiry"
+    days_before_expiry: 5
+    volume_ratio_threshold: 1.0
+    open_interest_ratio_threshold: null
+    adjustment: "back_adjusted"
+    trade_actual_contracts: false
+    allow_missing_roll_metadata: false
+
+  point_in_time:
+    enabled: true
+    timestamp_col: "ts_event"
+    prediction_time_col: "prediction_time"
+    availability_time_suffix: "_available_at"
+    fail_on_missing_availability_for:
+      - settlement
+      - open_interest
+      - economic_release
+      - roll_metadata
+    allow_same_bar_execution: false
+    minimum_execution_lag_bars: 1
+
+  leakage_audit:
+    enabled: true
+    fail_on_error: true
+    report_dir: "reports/leakage"
+    forbidden_feature_prefixes: ["target_", "future_", "label_"]
+    forbidden_model_metadata_prefixes: ["continuous_", "roll_", "front_contract", "back_contract"]
+    max_allowed_feature_target_abs_corr: 0.999
 
   session:
     timezone: "America/New_York"
@@ -88,14 +124,24 @@ base:
 
   execution:
     execute_at: "open[t+1]"
+    entry_lag_bars: 1
     # Keep tier_0/tier_1 mostly clean. Higher tiers add conservative costs.
     slippage_k: 0.0
+    slippage_ticks: 1.0
+    spread_ticks: 1.0
     vol_penalty: 0.0
     commission_per_trade: 0.0
     tx_cost_per_roundturn: 0.0
     commission_per_contract: 0.0
+    exchange_fees_per_contract: 0.0
+    participation_rate_limit: 0.05
+    max_contracts: 1
     target_vol: 0.01
     max_leverage: 1.0
+    latency_bars: 0
+    reject_same_bar_fill: true
+    write_execution_trace: true
+    execution_trace_rows: 200
     max_pos_change_per_min: 1.0
     flat_before_close_minutes: 5
     htf_trend_alignment: false
@@ -124,6 +170,41 @@ base:
   pipeline:
     enable_discovery: true
     enable_expansion: false
+
+  stress_tests:
+    enabled: true
+    report_dir: "reports/stress"
+    cost_multipliers: [1.0, 2.0, 3.0]
+    delayed_entry_bars: [0, 1]
+    adverse_fill_ticks: [0, 1]
+    remove_top_trade_percentiles: [0.0, 0.05]
+    market_ablation: true
+    year_ablation: true
+
+  acceptance_gate:
+    enabled: true
+    report_dir: "reports/acceptance"
+    min_oos_sharpe: 0.25
+    min_trades: 30
+    max_drawdown_pct: -0.20
+    min_profit_factor: 1.05
+    max_turnover_per_bar: 10.0
+    require_positive_after_2x_costs: true
+    require_positive_after_1bar_delay: true
+    max_single_market_pnl_concentration: 0.60
+    max_single_year_pnl_concentration: 0.60
+    fail_on_leakage: true
+    fail_on_execution_trace_error: true
+
+  deployment:
+    enabled: false
+    mode: "research_only"
+    paper_trading_required: true
+    live_shadow_required: true
+    require_kill_switch: true
+    require_post_trade_reconciliation: true
+    max_daily_loss: 1000.0
+    max_drawdown_pct: -0.10
 
   hmm:
     # Keep disabled until the simple model is clearly positive out-of-sample.

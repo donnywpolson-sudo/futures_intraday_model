@@ -22,6 +22,9 @@ import numpy as np
 from pipeline.common.config import load_config, RootConfig, config as _ns_cfg
 from pipeline.common.market import get_contract_multiplier
 from pipeline.data_gate.manifest import DatasetGateError, validate_dataset_gate
+from pipeline.data_gate.preflight import DatasetPreflightError, validate_research_data_preflight
+from pipeline.audit.run_manifest import write_run_manifest
+from pipeline.gates.deployment import run_deployment_readiness_gate
 
 _LOG_MODE = os.environ.get('LOG_MODE', 'clean').strip().lower()
 if _LOG_MODE not in {'clean', 'verbose', 'debug'}:
@@ -1295,6 +1298,11 @@ if __name__ == '__main__':
     config = load_config(os.environ.get('CONFIG_ENV') or os.environ.get('QUANT_ENV'))
     _PROGRESS.rename_for_config(_ns_cfg.ACTIVE_PROFILE, config.symbols)
     data_dir = getattr(_ns_cfg, 'DATA_ROOT', 'data/L0_ohlcv_1m')
+    try:
+        preflight = validate_research_data_preflight(config)
+        _stage(1, f"data_preflight={preflight['status']} root={preflight['data_root']}")
+    except DatasetPreflightError as exc:
+        raise SystemExit(f"DATA PREFLIGHT FAIL: {exc}") from exc
     files = get_files(data_dir, config)
     if not files:
         logger.warning('No files found after filtering')
@@ -1310,6 +1318,12 @@ if __name__ == '__main__':
             )
         except DatasetGateError as exc:
             raise SystemExit(str(exc)) from exc
+    write_run_manifest(
+        _RUN_ID,
+        config,
+        files,
+        audit_paths={"research_data_preflight": "reports/validation/research_data_preflight.json"},
+    )
     splits = generate_walkforward_splits(files, config)
     total = len(splits)
     print(
@@ -1334,6 +1348,7 @@ if __name__ == '__main__':
             process_split(train, test, files, config, i, total, train_start, train_end, test_start, test_end)
     finally:
         _print_final_summary_table()
+        run_deployment_readiness_gate(config)
         _PROGRESS.close()
     logging.getLogger().setLevel(logging.INFO)
     logger.info('Done')

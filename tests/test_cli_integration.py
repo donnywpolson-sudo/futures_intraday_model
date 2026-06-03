@@ -1,0 +1,101 @@
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import polars as pl
+
+
+REPO = Path(__file__).resolve().parents[1]
+
+
+def _run(args, cwd=None):
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(REPO)
+    return subprocess.run(
+        [sys.executable, "-m", "pipeline.cli", *args],
+        cwd=cwd or REPO,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+
+
+def test_pipeline_cli_imports():
+    import pipeline.cli  # noqa: F401
+
+
+def test_pipeline_cli_help_returns_zero():
+    result = _run(["--help"])
+    assert result.returncode == 0, result.stderr
+
+
+def test_pipeline_cli_subcommand_help_returns_zero():
+    for cmd in ["discover", "run", "aggregate"]:
+        result = _run([cmd, "--help"])
+        assert result.returncode == 0, result.stderr
+
+
+def test_run_py_references_existing_pipeline_cli():
+    assert (REPO / "pipeline" / "cli.py").exists()
+    assert "pipeline.cli" in (REPO / "run.py").read_text(encoding="utf-8")
+
+
+def test_minimal_synthetic_run_writes_audit_artifacts(tmp_path):
+    data_dir = tmp_path / "data" / "ES"
+    data_dir.mkdir(parents=True)
+    path = data_dir / "2024.parquet"
+    n = 40
+    df = pl.DataFrame(
+        {
+            "ts_event": pl.datetime_range(
+                pl.datetime(2024, 1, 1, 9, 30),
+                pl.datetime(2024, 1, 1, 10, 9),
+                "1m",
+                eager=True,
+            ),
+            "open": [100.0 + i * 0.1 for i in range(n)],
+            "high": [100.2 + i * 0.1 for i in range(n)],
+            "low": [99.8 + i * 0.1 for i in range(n)],
+            "close": [100.05 + i * 0.1 for i in range(n)],
+            "volume": [100 + i for i in range(n)],
+        }
+    )
+    df.write_parquet(path)
+    manifest = tmp_path / "manifest.json"
+    out = tmp_path / "out"
+    discover = _run(["discover", "--data", str(path), "--out", str(manifest)], cwd=tmp_path)
+    assert discover.returncode == 0, discover.stderr
+    run = _run(["run", "--data", str(path), "--manifest", str(manifest), "--out", str(out)], cwd=tmp_path)
+    assert run.returncode == 0, run.stderr
+
+    assert (out / "backtest_results.parquet").exists()
+    assert (out / "oos_predictions.parquet").exists()
+    assert (out / "execution_trace_report.json").exists()
+    assert list((tmp_path / "reports" / "metrics").glob("*_metrics_report.json"))
+    assert list((tmp_path / "reports" / "leakage").glob("*.json"))
+    assert list((tmp_path / "reports" / "stress").glob("*_stress_report.json"))
+    assert list((tmp_path / "reports" / "acceptance").glob("*_acceptance_gate.json"))
+
+
+def test_synthetic_forbidden_future_feature_fails_before_modeling(tmp_path):
+    path = tmp_path / "ES" / "2024.parquet"
+    path.parent.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "ts_event": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+            "open": [1.0] * 17,
+            "high": [1.0] * 17,
+            "low": [1.0] * 17,
+            "close": [1.0] * 17,
+            "volume": [1] * 17,
+            "future_bad": [1.0] * 17,
+        }
+    ).write_parquet(path)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"selected_features": ["future_bad"]}), encoding="utf-8")
+    result = _run(["run", "--data", str(path), "--manifest", str(manifest), "--out", str(tmp_path / "out")], cwd=tmp_path)
+    assert result.returncode != 0
+    assert "LEAKAGE FAIL" in result.stderr or "LEAKAGE FAIL" in result.stdout
