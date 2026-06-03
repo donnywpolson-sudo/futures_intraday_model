@@ -11,3 +11,4 @@ def test_config_schema_has_professional_sections():
     assert cfg.stress_tests.cost_multipliers == [1.0, 2.0, 3.0]
     assert cfg.acceptance_gate.min_oos_sharpe == 0.25
     assert cfg.deployment.mode == "research_only"
+    assert cfg.pipeline.modeling_mode == "minimal_compatible"

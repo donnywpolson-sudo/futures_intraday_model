@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -24,6 +25,8 @@ EXCLUDE_COLS = {
     "prediction_time", "execution_time", "pnl", "gross_pnl", "net_pnl", "fees", "slippage",
     "position_before", "position_after", "position_delta", "raw_signal", "prediction_prob",
 }
+
+MINIMAL_MODELING_WARNING = "minimal_compatible modeling validates pipeline wiring only; it is not strategy evidence"
 
 
 def _load_cfg() -> RootConfig:
@@ -160,7 +163,7 @@ def _load_manifest_features(path: str | None) -> list[str]:
         return []
 
 
-def _make_result(df: pl.DataFrame, features: list[str], target_col: str, cfg: RootConfig) -> pl.DataFrame:
+def _run_minimal_compatible_modeling(df: pl.DataFrame, features: list[str], target_col: str, cfg: RootConfig) -> pl.DataFrame:
     if not features:
         raise ValueError("no model features available after safe feature selection")
     score_expr = sum([pl.col(c).fill_null(0).cast(pl.Float64) for c in features]) / float(len(features))
@@ -206,6 +209,49 @@ def _make_result(df: pl.DataFrame, features: list[str], target_col: str, cfg: Ro
     return df.drop_nulls([target_col, "prediction_prob", "pnl"])
 
 
+def _run_full_research_modeling(df: pl.DataFrame, features: list[str], target_col: str, cfg: RootConfig, context: dict[str, Any]) -> pl.DataFrame:
+    required = [
+        "pipeline.ingest.ingest",
+        "pipeline.features.engine",
+        "pipeline.features.discovery",
+        "pipeline.walkforward.walkforward",
+    ]
+    missing = [mod for mod in required if importlib.util.find_spec(mod) is None]
+    if missing:
+        raise RuntimeError(
+            "FULL_RESEARCH MODELING FAIL: required legacy modules are missing: "
+            + ", ".join(missing)
+            + ". Restore these modules or set pipeline.modeling_mode='minimal_compatible'."
+        )
+    raise RuntimeError("FULL_RESEARCH MODELING FAIL: full research adapter is not wired yet.")
+
+
+def run_modeling_pipeline(
+    df: pl.DataFrame,
+    feature_cols: list[str],
+    target_col: str,
+    train_start: str | None,
+    train_end: str | None,
+    test_start: str | None,
+    test_end: str | None,
+    context: dict[str, Any],
+) -> pl.DataFrame:
+    cfg: RootConfig = context["config"]
+    mode = getattr(cfg.pipeline, "modeling_mode", "minimal_compatible")
+    if mode == "minimal_compatible":
+        return _run_minimal_compatible_modeling(df, feature_cols, target_col, cfg)
+    if mode == "full_research":
+        return _run_full_research_modeling(df, feature_cols, target_col, cfg, context)
+    raise ValueError(f"unsupported pipeline.modeling_mode={mode!r}; expected minimal_compatible or full_research")
+
+
+def _json_status(path: Path) -> str:
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("status", "UNKNOWN")
+    except Exception:
+        return "MISSING"
+
+
 def cmd_run(args: argparse.Namespace, hmm: bool = False) -> None:
     cfg = _load_cfg()
     command = "run-hmm" if hmm else "run"
@@ -214,6 +260,9 @@ def cmd_run(args: argparse.Namespace, hmm: bool = False) -> None:
     symbol = _symbol_from_path(args.data)
     window = _window_name(args)
     profile = getattr(flat_config, "ACTIVE_PROFILE", cfg.__class__.__name__)
+    modeling_mode = getattr(cfg.pipeline, "modeling_mode", "minimal_compatible")
+    if modeling_mode == "minimal_compatible":
+        print(f"[CLI] WARNING modeling_mode=minimal_compatible: {MINIMAL_MODELING_WARNING}")
     df = _add_basic_features(_read_data(args.data, args.start, args.end))
     target_col = getattr(flat_config, "WALKFORWARD_TARGET", cfg.walkforward.walkforward_target)
     df = _ensure_target(df, target_col)
@@ -228,11 +277,23 @@ def cmd_run(args: argparse.Namespace, hmm: bool = False) -> None:
     leakage = run_leakage_audit(df, features, target_col, context={"out": str(leakage_path), "symbol": symbol, "command": command})
     if cfg.leakage_audit.fail_on_error and leakage["status"] == "FAIL":
         raise SystemExit(f"LEAKAGE FAIL: {leakage_path}")
-    result = _make_result(df, features, target_col, cfg)
+    result = run_modeling_pipeline(
+        df,
+        features,
+        target_col,
+        args.train_start,
+        args.train_end,
+        args.start,
+        args.end,
+        {"config": cfg, "symbol": symbol, "command": command},
+    )
     result_path = out_dir / ("backtest_results_hmm.parquet" if hmm else "backtest_results.parquet")
     result.write_parquet(result_path)
     result.select([c for c in ["ts_event", "prediction_time", "prediction_prob", "raw_signal", "pnl"] if c in result.columns]).write_parquet(out_dir / "oos_predictions.parquet")
     metrics = compute_backtest_metrics(result)
+    metrics["modeling_mode"] = modeling_mode
+    if modeling_mode == "minimal_compatible":
+        metrics["warnings"] = [MINIMAL_MODELING_WARNING]
     metrics_path = Path("reports/metrics") / f"{profile}_{symbol}_{command}_{window}_metrics_report.json"
     atomic_write_json(metrics_path, metrics)
     write_csv_rows(metrics_path.with_suffix(".csv"), [metrics])
@@ -248,11 +309,12 @@ def cmd_run(args: argparse.Namespace, hmm: bool = False) -> None:
         stress = run_stress_tests(result, cfg, stress_prefix)
         stress_path = stress_prefix.with_suffix(".json")
     acceptance_path = Path(cfg.acceptance_gate.report_dir) / f"{profile}_{symbol}_{command}_{window}_acceptance_gate.json"
-    acceptance = run_acceptance_gate(metrics, stress, leakage, exec_report, context={"config": cfg, "out": str(acceptance_path), "symbol": symbol, "command": command})
+    acceptance = run_acceptance_gate(metrics, stress, leakage, exec_report, context={"config": cfg, "out": str(acceptance_path), "symbol": symbol, "command": command, "modeling_mode": modeling_mode})
     if acceptance["status"] == "REJECT":
-        print(f"[CLI] ACCEPTANCE REJECT: {acceptance_path}")
+        failed = [g["name"] for g in acceptance.get("gates", []) if g.get("status") == "FAIL"]
+        print(f"[CLI] ACCEPTANCE REJECT: {acceptance_path} failed_gates={','.join(failed)}")
         if os.environ.get("QUANT_ACCEPTANCE_GATE_REQUIRED") == "1" or cfg.acceptance_gate.required:
-            raise SystemExit(f"ACCEPTANCE GATE REJECT: {acceptance_path}")
+            raise SystemExit(f"ACCEPTANCE GATE REJECT: {acceptance_path} failed_gates={','.join(failed)}")
     print(f"[CLI] Running {'HMM-aware ' if hmm else ''}walkforward")
     print(f"[CLI] {'HMM ' if hmm else ''}walkforward result: {result.height:,} rows")
     print(f"[CLI] wrote {result_path}")
@@ -270,6 +332,27 @@ def cmd_run(args: argparse.Namespace, hmm: bool = False) -> None:
             "oos_predictions": str(out_dir / "oos_predictions.parquet"),
             "cli_command": command,
         },
+        splits=[
+            {
+                "symbol": symbol,
+                "train_start": args.train_start,
+                "train_end": args.train_end,
+                "test_start": args.start,
+                "test_end": args.end,
+                "backtest_results": str(result_path),
+                "oos_predictions": str(out_dir / "oos_predictions.parquet"),
+                "leakage_report": str(leakage_path),
+                "leakage_status": leakage.get("status"),
+                "execution_trace_report": str(out_dir / "execution_trace_report.json"),
+                "execution_trace_status": exec_report.get("status"),
+                "metrics_report": str(metrics_path),
+                "metrics_status": "PASS",
+                "stress_report": str(stress_path) if stress_path else "",
+                "stress_status": stress.get("status") if stress else "MISSING",
+                "acceptance_report": str(acceptance_path),
+                "acceptance_status": acceptance.get("status"),
+            }
+        ],
     )
 
 

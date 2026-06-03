@@ -10,9 +10,11 @@ import polars as pl
 REPO = Path(__file__).resolve().parents[1]
 
 
-def _run(args, cwd=None):
+def _run(args, cwd=None, extra_env=None):
     env = os.environ.copy()
     env["PYTHONPATH"] = str(REPO)
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         [sys.executable, "-m", "pipeline.cli", *args],
         cwd=cwd or REPO,
@@ -78,6 +80,13 @@ def test_minimal_synthetic_run_writes_audit_artifacts(tmp_path):
     assert list((tmp_path / "reports" / "leakage").glob("*.json"))
     assert list((tmp_path / "reports" / "stress").glob("*_stress_report.json"))
     assert list((tmp_path / "reports" / "acceptance").glob("*_acceptance_gate.json"))
+    manifest_path = tmp_path / "artifacts" / "run_manifests" / "out.json"
+    assert manifest_path.exists()
+    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest_data["modeling_mode"] == "minimal_compatible"
+    split = manifest_data["splits"][0]
+    for key in ["backtest_results", "oos_predictions", "leakage_report", "execution_trace_report", "metrics_report", "stress_report", "acceptance_report"]:
+        assert (tmp_path / split[key]).exists() if not Path(split[key]).is_absolute() else Path(split[key]).exists()
 
 
 def test_synthetic_forbidden_future_feature_fails_before_modeling(tmp_path):
@@ -99,3 +108,30 @@ def test_synthetic_forbidden_future_feature_fails_before_modeling(tmp_path):
     result = _run(["run", "--data", str(path), "--manifest", str(manifest), "--out", str(tmp_path / "out")], cwd=tmp_path)
     assert result.returncode != 0
     assert "LEAKAGE FAIL" in result.stderr or "LEAKAGE FAIL" in result.stdout
+
+
+def test_hard_fail_mode_preserves_reports_on_reject(tmp_path):
+    path = tmp_path / "ES" / "2024.parquet"
+    path.parent.mkdir(parents=True)
+    n = 40
+    pl.DataFrame(
+        {
+            "ts_event": list(range(n)),
+            "open": [100.0 + i for i in range(n)],
+            "high": [101.0 + i for i in range(n)],
+            "low": [99.0 + i for i in range(n)],
+            "close": [100.0 + i for i in range(n)],
+            "volume": [100 + i for i in range(n)],
+        }
+    ).write_parquet(path)
+    manifest = tmp_path / "manifest.json"
+    discover = _run(["discover", "--data", str(path), "--out", str(manifest)], cwd=tmp_path)
+    assert discover.returncode == 0, discover.stderr
+    result = _run(
+        ["run", "--data", str(path), "--manifest", str(manifest), "--out", str(tmp_path / "out")],
+        cwd=tmp_path,
+        extra_env={"QUANT_ACCEPTANCE_GATE_REQUIRED": "1"},
+    )
+    assert result.returncode != 0
+    assert "ACCEPTANCE GATE REJECT" in result.stderr
+    assert list((tmp_path / "reports" / "acceptance").glob("*_acceptance_gate.json"))

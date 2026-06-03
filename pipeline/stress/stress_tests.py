@@ -42,7 +42,9 @@ def run_stress_tests(df: pl.DataFrame, config: Any | None = None, out_prefix: st
             cutoff = df[col].quantile(1.0 - float(pct))
             trimmed = df.with_columns(pl.when(pl.col(col) >= cutoff).then(0).otherwise(pl.col(col)).alias(col))
             rows.append(_summary(trimmed, f"remove_top_{pct:g}"))
-    report = {"status": "PASS", "warnings": [], "scenarios": rows}
+    modeling_mode = getattr(getattr(config, "pipeline", object()), "modeling_mode", "unknown")
+    warnings = ["minimal_compatible modeling is not strategy evidence"] if modeling_mode == "minimal_compatible" else []
+    report = {"status": "PASS", "modeling_mode": modeling_mode, "warnings": warnings, "scenarios": rows}
     if out_prefix:
         out_prefix = Path(out_prefix)
         atomic_write_json(out_prefix.with_suffix(".json"), report)

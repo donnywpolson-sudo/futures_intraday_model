@@ -247,6 +247,7 @@ class IOConfig(BaseModel):
 class PipelineConfig(BaseModel):
     enable_discovery: bool = True
     enable_expansion: bool = True
+    modeling_mode: str = "minimal_compatible"
 
 
 class DataSectionConfig(BaseModel):
@@ -637,6 +638,7 @@ def _populate_simple_namespace(cfg: RootConfig, active_profile: str = "", config
     # -- pipeline ------------------------------------------------------------
     config.ENABLE_DISCOVERY = c.pipeline.enable_discovery
     config.ENABLE_EXPANSION = c.pipeline.enable_expansion
+    config.MODELING_MODE = c.pipeline.modeling_mode
 
     # -- legacy flat keys ----------------------------------------------------
     config.MARKETS = list(c.markets)

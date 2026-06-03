@@ -170,6 +170,7 @@ base:
   pipeline:
     enable_discovery: true
     enable_expansion: false
+    modeling_mode: "minimal_compatible"
 
   stress_tests:
     enabled: true

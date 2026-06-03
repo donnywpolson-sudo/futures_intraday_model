@@ -114,6 +114,7 @@ def compute_backtest_metrics(df: pl.DataFrame) -> dict[str, Any]:
 
 def write_metrics_report(df: pl.DataFrame, profile: str, report_dir: str = "reports/metrics") -> dict[str, Any]:
     metrics = compute_metrics(df)
+    metrics.setdefault("modeling_mode", "unknown")
     path = Path(report_dir) / f"{profile}_metrics_report.json"
     atomic_write_json(path, metrics)
     write_csv_rows(Path(report_dir) / f"{profile}_metrics_summary.csv", [metrics])

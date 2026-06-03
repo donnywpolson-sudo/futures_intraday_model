@@ -9,15 +9,18 @@ def run_deployment_readiness(config: Any, out: str = "reports/acceptance/deploym
     d = config.deployment
     failures = []
     warnings = []
+    modeling_mode = getattr(getattr(config, "pipeline", object()), "modeling_mode", "unknown")
     if d.mode == "research_only":
         warnings.append("research_only mode: live deployment intentionally NOT_READY")
+    if modeling_mode == "minimal_compatible":
+        warnings.append("minimal_compatible modeling is not deployable")
     for name in ["paper_trading_required", "live_shadow_required", "require_kill_switch", "require_post_trade_reconciliation"]:
         if not getattr(d, name):
             failures.append(f"{name}=false")
     if d.max_daily_loss <= 0:
         failures.append("max_daily_loss must be positive")
     status = "FAIL" if failures else ("NOT_READY" if warnings or not d.enabled else "READY")
-    report = {"status": status, "failures": failures, "warnings": warnings, "deployment": d.model_dump()}
+    report = {"status": status, "modeling_mode": modeling_mode, "failures": failures, "warnings": warnings, "deployment": d.model_dump()}
     atomic_write_json(out, report)
     return report
 

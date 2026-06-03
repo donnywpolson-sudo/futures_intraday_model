@@ -46,6 +46,7 @@ _RUN_FILE_TS = _RUN_DT.strftime('%Y-%m-%d_%H-%M-%S')
 _RUN_ID = hashlib.sha256(str(_RUN_START).encode()).hexdigest()[:8]
 _PER_SYMBOL_PNL_CS = {}  # {symbol: {split_id: pnl_cs}}
 _VERIFICATION_TABLE = []  # rows for the verification table printed per split
+_RUN_SPLIT_ARTIFACTS = []
 
 
 class PipelineProgressLogger:
@@ -803,6 +804,95 @@ def _print_clean_split_result(row: dict) -> None:
 
 def _record_split_result(row: dict) -> None:
     _VERIFICATION_TABLE.append(row)
+
+
+def _safe_window_name(start, end) -> str:
+    raw = "_".join(str(x or "none") for x in [start, end])
+    return "".join(ch if ch.isalnum() else "-" for ch in raw)[:80]
+
+
+def _read_report_status(path: Path) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f).get("status", "UNKNOWN")
+    except Exception:
+        return "MISSING"
+
+
+def _expected_artifact_paths(symbol: str, split_idx: int, command: str, out_dir: Path, test_start, test_end) -> dict:
+    window = _safe_window_name(
+        test_start.isoformat() if test_start else None,
+        test_end.isoformat() if test_end else None,
+    )
+    profile = _ns_cfg.ACTIVE_PROFILE
+    return {
+        "backtest_results": str(out_dir / ("backtest_results_hmm.parquet" if command == "run-hmm" else "backtest_results.parquet")),
+        "oos_predictions": str(out_dir / "oos_predictions.parquet"),
+        "leakage_report": str(Path("reports") / "leakage" / f"{profile}_{symbol}_{command}_{window}.json"),
+        "execution_trace_report": str(out_dir / "execution_trace_report.json"),
+        "metrics_report": str(Path("reports") / "metrics" / f"{profile}_{symbol}_{command}_{window}_metrics_report.json"),
+        "stress_report": str(Path("reports") / "stress" / f"{profile}_{symbol}_{command}_{window}_stress_report.json"),
+        "acceptance_report": str(Path("reports") / "acceptance" / f"{profile}_{symbol}_{command}_{window}_acceptance_gate.json"),
+    }
+
+
+def _record_split_artifacts(symbol: str, split_idx: int, command: str, out_dir: Path, train_start, train_end, test_start, test_end, status: str) -> None:
+    paths = _expected_artifact_paths(symbol, split_idx, command, out_dir, test_start, test_end)
+    row = {
+        "split": split_idx,
+        "symbol": symbol,
+        "train_start": train_start.isoformat() if train_start else None,
+        "train_end": train_end.isoformat() if train_end else None,
+        "test_start": test_start.isoformat() if test_start else None,
+        "test_end": test_end.isoformat() if test_end else None,
+        "cli_command": command,
+        "status": status,
+        **paths,
+        "leakage_status": _read_report_status(Path(paths["leakage_report"])),
+        "execution_trace_status": _read_report_status(Path(paths["execution_trace_report"])),
+        "metrics_status": "PASS" if Path(paths["metrics_report"]).exists() else "MISSING",
+        "stress_status": _read_report_status(Path(paths["stress_report"])),
+        "acceptance_status": _read_report_status(Path(paths["acceptance_report"])),
+    }
+    _RUN_SPLIT_ARTIFACTS.append(row)
+
+
+def _final_safety_summary(config: RootConfig, total_splits: int, deployment_report: dict) -> dict:
+    counts = {"ACCEPT": 0, "REJECT": 0, "WARN": 0, "MISSING": 0}
+    for row in _RUN_SPLIT_ARTIFACTS:
+        status = row.get("acceptance_status", "MISSING")
+        counts[status if status in counts else "MISSING"] += 1
+    successful = sum(1 for r in _RUN_SPLIT_ARTIFACTS if r.get("status") == "OK")
+    failed = max(total_splits - successful, 0)
+    summary = {
+        "run_id": _RUN_ID,
+        "profile": _ns_cfg.ACTIVE_PROFILE,
+        "symbols": list(config.symbols),
+        "splits": total_splits,
+        "successful": successful,
+        "failed": failed,
+        "total_reports_written": sum(
+            1
+            for row in _RUN_SPLIT_ARTIFACTS
+            for key in ["leakage_report", "execution_trace_report", "metrics_report", "stress_report", "acceptance_report"]
+            if Path(row.get(key, "")).exists()
+        ),
+        "acceptance": counts,
+        "deployment": deployment_report.get("status", "MISSING"),
+        "deployment_mode": deployment_report.get("deployment", {}).get("mode"),
+    }
+    print("\n[FINAL SAFETY SUMMARY]", flush=True)
+    print(f"run_id={summary['run_id']}", flush=True)
+    print(f"profile={summary['profile']}", flush=True)
+    print(f"symbols={','.join(summary['symbols'])}", flush=True)
+    print(f"splits={summary['splits']} successful={summary['successful']} failed={summary['failed']}", flush=True)
+    print(
+        "acceptance: "
+        f"ACCEPT={counts['ACCEPT']} REJECT={counts['REJECT']} WARN={counts['WARN']} MISSING={counts['MISSING']}",
+        flush=True,
+    )
+    print(f"deployment={summary['deployment']} mode={summary['deployment_mode']}", flush=True)
+    return summary
     if _PROGRESS.verbose:
         _PROGRESS.flush_stages()
         _print_split_result(row)
@@ -1116,6 +1206,9 @@ def process_split(train_years: list[int], test_years: list[int], files: list[Pat
                 _record_split_result(_failed_result_row(
                     split_idx, symbol, out_dir, error=run_error
                 ))
+                _record_split_artifacts(symbol, split_idx, cli_action, out_dir, train_start, train_end, test_start, test_end, 'FAILED')
+                if os.environ.get('QUANT_ACCEPTANCE_GATE_REQUIRED') == '1':
+                    raise RuntimeError(f'ACCEPTANCE REQUIRED FAIL: {run_error}') from e
                 subprocess_failed = True
                 continue
             if _DEBUG:
@@ -1175,6 +1268,9 @@ def process_split(train_years: list[int], test_years: list[int], files: list[Pat
                 _record_split_result(_failed_result_row(
                     split_idx, symbol, out_dir, error=fallback_error
                 ))
+                _record_split_artifacts(symbol, split_idx, 'run', out_dir, train_start, train_end, test_start, test_end, 'FAILED')
+                if os.environ.get('QUANT_ACCEPTANCE_GATE_REQUIRED') == '1':
+                    raise RuntimeError(f'ACCEPTANCE REQUIRED FAIL: {fallback_error}') from e2
                 subprocess_failed = True
         if subprocess_failed:
             continue
@@ -1263,6 +1359,7 @@ def process_split(train_years: list[int], test_years: list[int], files: list[Pat
                     'position_change_events': metrics['position_change_events'],
                     'position_turnover': metrics['position_turnover'],
                 }
+                _record_split_artifacts(symbol, split_idx, cli_action, out_dir, train_start, train_end, test_start, test_end, 'OK')
                 # HMM delta: compare with raw (non-HMM) baseline if available
                 hmm_delta = 0.0
                 raw_path = out_dir / 'backtest_results.parquet'
@@ -1287,11 +1384,13 @@ def process_split(train_years: list[int], test_years: list[int], files: list[Pat
                 _record_split_result(_failed_result_row(
                     split_idx, symbol, bt_path, mtime=_bt_mtime, error=result_error
                 ))
+                _record_split_artifacts(symbol, split_idx, cli_action, out_dir, train_start, train_end, test_start, test_end, 'FAILED')
         else:
             _stage(13, _tracking_summary(failed=f'missing_output={out_dir} status=FAILED'))
             _record_split_result(_failed_result_row(
                 split_idx, symbol, out_dir, error='missing_output'
             ))
+            _record_split_artifacts(symbol, split_idx, cli_action, out_dir, train_start, train_end, test_start, test_end, 'FAILED')
     # ---- Master dashboard ----
     _print_split_dashboard(split_idx, total_splits, per_symbol)
 if __name__ == '__main__':
@@ -1348,7 +1447,23 @@ if __name__ == '__main__':
             process_split(train, test, files, config, i, total, train_start, train_end, test_start, test_end)
     finally:
         _print_final_summary_table()
-        run_deployment_readiness_gate(config)
+        deployment_report = run_deployment_readiness_gate(config)
+        final_summary = _final_safety_summary(config, total, deployment_report)
+        write_run_manifest(
+            _RUN_ID,
+            config,
+            files,
+            audit_paths={
+                "research_data_preflight": "reports/validation/research_data_preflight.json",
+                "deployment_readiness": "reports/acceptance/deployment_readiness.json",
+            },
+            splits=_RUN_SPLIT_ARTIFACTS,
+            final_acceptance_summary=final_summary,
+            deployment_readiness={
+                "path": "reports/acceptance/deployment_readiness.json",
+                "status": deployment_report.get("status"),
+            },
+        )
         _PROGRESS.close()
     logging.getLogger().setLevel(logging.INFO)
     logger.info('Done')

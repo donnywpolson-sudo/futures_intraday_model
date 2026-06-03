@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from pipeline.common.io_safe import atomic_write_json
+from pipeline.common.config import config as flat_config
 
 
 def _sha256(path: Path) -> str | None:
@@ -27,15 +28,29 @@ def _git_commit() -> str | None:
         return None
 
 
-def write_run_manifest(run_id: str, config: Any, files: list[Path], audit_paths: dict[str, str] | None = None, out: str | Path | None = None) -> dict:
+def write_run_manifest(
+    run_id: str,
+    config: Any,
+    files: list[Path],
+    audit_paths: dict[str, str] | None = None,
+    out: str | Path | None = None,
+    splits: list[dict[str, Any]] | None = None,
+    final_acceptance_summary: dict[str, Any] | None = None,
+    deployment_readiness: dict[str, Any] | None = None,
+) -> dict:
     out = Path(out or f"artifacts/run_manifests/{run_id}.json")
     payload = {
         "run_id": run_id,
-        "profile": getattr(config, "active_profile", None),
+        "profile": getattr(config, "active_profile", None) or getattr(flat_config, "ACTIVE_PROFILE", None),
+        "config_source": getattr(flat_config, "CONFIG_SOURCE", None),
         "symbols": list(getattr(config, "symbols", [])),
         "data_root": getattr(getattr(config, "data", object()), "root", None),
+        "modeling_mode": getattr(getattr(config, "pipeline", object()), "modeling_mode", "unknown"),
         "files": [{"path": str(p), "sha256": _sha256(p)} for p in files],
         "audit_paths": audit_paths or {},
+        "splits": splits or [],
+        "final_acceptance_summary": final_acceptance_summary or {},
+        "deployment_readiness": deployment_readiness or {},
         "git_commit": _git_commit(),
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
     }

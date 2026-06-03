@@ -7,6 +7,9 @@ python -m pip install -r requirements.txt
 # Active config
 $env:CONFIG_ENV="tier_0_smoke_pipeline"
 # config file: configs/alpha_tiered.yaml
+# Current modeling mode: minimal_compatible
+# This validates pipeline wiring/safety gates only. It is not strategy evidence
+# and deployment readiness remains NOT_READY.
 
 # Phase 1 data/report workflow
 python scripts/validate_databento_continuous.py --audit-only
