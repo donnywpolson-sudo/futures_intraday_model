@@ -21,6 +21,7 @@ import shutil
 import polars as pl
 import numpy as np
 from pipeline.common.config import load_config, RootConfig, config as _ns_cfg
+from pipeline.common.io_safe import atomic_write_json, write_csv_rows
 from pipeline.common.market import get_contract_multiplier
 from pipeline.data_gate.manifest import DatasetGateError, validate_dataset_gate
 from pipeline.data_gate.preflight import DatasetPreflightError, validate_research_data_preflight
@@ -35,6 +36,8 @@ from pipeline.orchestration.artifact_contract import (
 from pipeline.orchestration.child_runner import build_child_env, build_discovery_command, build_run_command  # builds pipeline.cli child commands
 from pipeline.orchestration.split_plan import assert_execution_plan_unique, split_window_parts
 from pipeline.orchestration.stage_plan import START_STAGE_NUM, build_stage_plan, normalize_start_stage
+from pipeline.stage_contract import assert_wfa_ready_root, validate_stage_order_contract
+from pipeline.stage_status import build_pipeline_status, print_pipeline_status, write_pipeline_flow_audit
 from pipeline.audit.pipeline_coverage import stage_catalog
 from pipeline.audit.run_manifest import write_run_manifest
 from pipeline.gates.deployment import run_deployment_readiness_gate
@@ -42,6 +45,8 @@ from pipeline.walkforward.split_plan import write_wfa_split_plan
 from pipeline.walkforward.contract_debug import build_wfa_contract_debug_row, write_wfa_contract_debug_row
 from pipeline.validation.target_integrity import validate_target_integrity_root
 from pipeline.validation.final_diagnostics import run_final_diagnostics
+from pipeline.validation.alpha_evidence import write_alpha_evidence_report
+from pipeline.validation.leakage_report import write_leakage_audit_report
 from pipeline.validation.final_summary import build_final_safety_summary, print_final_safety_summary
 from pipeline.validation.threshold_used import threshold_used_row_count
 
@@ -67,27 +72,17 @@ _RUN_ID = _RUN_CONTEXT.run_id
 _PER_SYMBOL_PNL_CS = {}  # {symbol: {split_id: pnl_cs}}
 _VERIFICATION_TABLE = []  # rows for the verification table printed per split
 _RUN_SPLIT_ARTIFACTS = []
+_CURRENT_STAGE = "startup"
+_ACTIVE_SYMBOL = ""
+_ACTIVE_SPLIT = ""
+_LAST_CHILD_INTERRUPT: dict = {}
 
 
 class PipelineProgressLogger:
-    # Per-split runtime diagnostics. This intentionally tracks what the runner
-    # can observe from subprocess logs; it is close to, but not a strict copy of,
-    # project_layout.md.
-    STAGES = {
-        1: 'RAW DATA',
-        2: 'INGEST / CANONICAL',
-        3: 'CONTINUOUS CONTRACTS',
-        4: 'SESSION NORMALIZATION',
-        5: 'ALIGNMENT',
-        6: 'FEATURES / MANIFEST',
-        7: 'TARGET CONTRACT',
-        8: 'REGIME / HMM',
-        9: 'META LABEL',
-        10: 'EXECUTION',
-        11: 'WALKFORWARD / OOS',
-        12: 'METRICS',
-        13: 'ARTIFACTS',
-    }
+    # Keep progress output aligned to project_layout.md via the shared stage catalog.
+    # Runtime-only child messages are attached to the nearest authoritative stage.
+    STAGES = {s.number: s.name for s in stage_catalog()}
+    STAGE_TOTAL = len(STAGES)
     ERROR_PATTERNS = (
         'Traceback', 'RuntimeError', 'ValueError', 'Exception',
         '[TIMEOUT]', '[ERROR]', 'failed', 'FAILED', 'rc!=0',
@@ -100,9 +95,13 @@ class PipelineProgressLogger:
         self.stage_state = {}
         self.flushed = False
         self.stage_start = time.time()
-        self.log_path = Path('output') / 'logs' / f'{_RUN_FILE_TS}_UNKNOWN_{run_id}.log'
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        self._fh = open(self.log_path, 'a', encoding='utf-8')
+        if "--status" in sys.argv:
+            self.log_path = Path("")
+            self._fh = None
+        else:
+            self.log_path = Path('output') / 'logs' / f'{_RUN_FILE_TS}_UNKNOWN_{run_id}.log'
+            self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._fh = open(self.log_path, 'a', encoding='utf-8')
 
     @staticmethod
     def _safe_name(value: str) -> str:
@@ -110,6 +109,8 @@ class PipelineProgressLogger:
         return cleaned.strip('._-') or 'unknown'
 
     def rename_for_config(self, profile: str, symbols: list[str]) -> None:
+        if self._fh is None:
+            return
         symbols_safe = '-'.join(self._safe_name(s).upper() for s in symbols) if symbols else 'unknown'
         profile_safe = self._safe_name(profile)
         dest = self.log_path.parent / f'{_RUN_FILE_TS}_{symbols_safe}_{profile_safe}_{self.run_id}.log'
@@ -144,7 +145,8 @@ class PipelineProgressLogger:
 
     def close(self) -> None:
         try:
-            self._fh.close()
+            if self._fh is not None:
+                self._fh.close()
         except Exception:
             pass
 
@@ -155,8 +157,9 @@ class PipelineProgressLogger:
         self.stage_start = time.time()
 
     def raw(self, text: str) -> None:
-        self._fh.write(text + '\n')
-        self._fh.flush()
+        if self._fh is not None:
+            self._fh.write(text + '\n')
+            self._fh.flush()
         if self.verbose:
             print(text, flush=True)
 
@@ -169,21 +172,55 @@ class PipelineProgressLogger:
     def flush_stages(self) -> None:
         if self.flushed:
             return
-        for idx in range(1, 14):
+        for idx in sorted(self.STAGES):
             message, elapsed = self.stage_state.get(idx, ('not_observed', time.time() - self.stage_start))
             self._print_stage(idx, message, elapsed)
         self.flushed = True
 
     def _print_stage(self, idx: int, message: str, elapsed: float) -> None:
         lines = str(message).splitlines() or ['']
-        print(f'[{idx:02d}/13 {self.STAGES[idx]}] {lines[0]} elapsed={elapsed:.1f}s', flush=True)
+        print(f'[{idx:02d}/{self.STAGE_TOTAL} {self.STAGES[idx]}] {lines[0]} elapsed={elapsed:.1f}s', flush=True)
         for line in lines[1:]:
             print(line, flush=True)
 
+    def input_stage(self) -> int:
+        start_stage = str(self.context.get('start_stage') or '').strip().lower()
+        return {
+            'raw': 1,
+            'validated': 4,
+            'session_normalized': 6,
+            'causally_gated_normalized': 8,
+            'labeled': 10,
+            'baseline_feature_matrix': 12,
+            'expanded_feature_matrix': 20,
+        }.get(start_stage, 14)
+
+    def final_flow(self) -> bool:
+        return str(self.context.get('start_stage') or '').strip().lower() == 'expanded_feature_matrix'
+
+    def wfa_stage(self) -> int:
+        return 24 if self.final_flow() else 15
+
+    def oos_stage(self) -> int:
+        return 25 if self.final_flow() else 16
+
+    def execution_stage(self) -> int:
+        return 17
+
+    def metrics_stage(self) -> int:
+        return 26 if self.final_flow() else 18
+
+    def acceptance_stage(self) -> int:
+        return 27 if self.final_flow() else 19
+
+    def feature_registry_stage(self) -> int:
+        return 22 if self.final_flow() else 13
+
     def child_line(self, prefix: str, line: str) -> None:
         raw = f'[{prefix}] {line}'
-        self._fh.write(raw + '\n')
-        self._fh.flush()
+        if self._fh is not None:
+            self._fh.write(raw + '\n')
+            self._fh.flush()
         if self.verbose:
             print(raw, flush=True)
             return
@@ -200,70 +237,71 @@ class PipelineProgressLogger:
     def _summarize_child_line(self, line: str) -> None:
         m = re.search(r'\[CLI\] Data loaded\. Rows: ([\d,]+)', line)
         if m:
-            self.stage(2, f'rows_out={m.group(1)}')
+            self.stage(self.input_stage(), f'rows_out={m.group(1)}')
             self._stage_contract_once()
             return
         m = re.search(r'\[CLI\] Aligned data: ([\d,]+) rows', line)
         if m:
-            if 2 not in self.stage_state:
-                self.stage(2, f'cache_or_ingest rows_out={m.group(1)}', once=True)
+            input_stage = self.input_stage()
+            if input_stage not in self.stage_state:
+                self.stage(input_stage, f'cache_or_ingest rows_out={m.group(1)}', once=True)
                 self._stage_contract_once()
-            self.stage(5, f'rows_out={m.group(1)}', once=True)
+            self.stage(self.wfa_stage(), f'aligned_rows={m.group(1)}', once=True)
             return
         m = re.search(r'\[SESSION\] (\S+) stream has ([\d,]+) rows', line)
         if m:
-            self.stage(4, f'freq={m.group(1)} rows={m.group(2)}')
+            self.stage(5, f'freq={m.group(1)} rows={m.group(2)}')
             return
         if '[INGEST] No cache found' in line or '[INGEST] Loading aligned data from cache' in line:
-            self.stage(2, 'loading aligned data')
+            self.stage(self.input_stage(), 'loading aligned data')
             return
         if '[INGEST] Aligning HTF streams' in line:
             self._stage_contract_once()
-            self.stage(5, 'aligning HTF streams', once=True)
+            self.stage(self.wfa_stage(), 'aligning HTF streams', once=True)
             return
         m = re.search(r'\[CLI\] Date filter \(([^)]*)\): ([\d,]+) -> ([\d,]+) rows', line)
         if m:
-            self.stage(5, f'window={m.group(1)} rows_in={m.group(2)} rows_out={m.group(3)}')
+            self.stage(self.wfa_stage(), f'window={m.group(1)} rows_in={m.group(2)} rows_out={m.group(3)}')
             return
         m = re.search(r'\[CLI\] Feature matrix: ([\d,]+) rows, ([\d,]+) cols', line)
         if m:
             self.context['feature_total'] = m.group(2)
-            self.stage(6, f'rows={m.group(1)} total={m.group(2)}')
+            self.stage(self.input_stage(), f'feature_matrix rows={m.group(1)} total={m.group(2)}')
             return
         m = re.search(r'\[CLI\] After manifest: ([\d,]+) rows, ([\d,]+) cols', line)
         if m:
             total = self.context.get('feature_total', 'NA')
-            self.stage(6, f'selected={m.group(2)} total={total} rows={m.group(1)}')
+            self.stage(self.feature_registry_stage(), f'selected={m.group(2)} total={total} rows={m.group(1)}')
             return
         m = re.search(r'\[TARGET\] ([^:]+): rows=([\d,]+) NaN=([\d,]+)', line)
         if m:
-            self.stage(7, f'target={m.group(1)} rows={m.group(2)} nan={m.group(3)}')
+            self.stage(13, f'target={m.group(1)} rows={m.group(2)} nan={m.group(3)}')
             return
         m = re.search(r'\[HMM-TIMING\] step=hmm_features rows=([\d,]+) cols=([\d,]+)', line)
         if m:
-            self.stage(8, f'HMM rows={m.group(1)} features={m.group(2)}')
+            self.stage(self.wfa_stage(), f'HMM rows={m.group(1)} features={m.group(2)}')
             return
         m = re.search(r'\[HMM-TIMING\] iter=([^ ]+)', line)
         if m:
-            self.stage(8, f'HMM iter={m.group(1)}')
+            self.stage(self.wfa_stage(), f'HMM iter={m.group(1)}')
             return
         if '[CLI] HMM FALLBACK ACTIVE' in line:
-            self.stage(8, 'fallback active')
+            self.stage(self.wfa_stage(), 'HMM fallback active')
             return
         if '[CLI] Running HMM-aware walkforward' in line or '[CLI] Running walkforward' in line:
-            self.stage(9, 'active' if 'meta' in line.lower() else 'skipped')
+            self.stage(self.wfa_stage(), 'walkforward active')
             return
         m = re.search(r'\[OUTER-TRUE\] train filter .* -> ([\d,]+) rows', line)
         if m:
-            self.stage(11, f'train_rows={m.group(1)}')
+            self.stage(self.wfa_stage(), f'train_rows={m.group(1)}')
             return
         m = re.search(r'\[OUTER-TRUE\] test filter .* -> ([\d,]+) rows', line)
         if m:
-            self.stage(11, f'test_rows={m.group(1)}')
+            self.stage(self.wfa_stage(), f'test_rows={m.group(1)}')
             return
         m = re.search(r'\[HEARTBEAT\] train rows=([\d,]+) test rows=([\d,]+)', line)
         if m:
-            self.stage(11, f'train_rows={m.group(1)} test_rows={m.group(2)}')
+            self.stage(self.wfa_stage(), f'train_rows={m.group(1)} test_rows={m.group(2)}')
             return
         m = re.search(r'\[OUTER-TRUE(?:-HMM)?\] train_rows=([\d,]+)', line)
         if m:
@@ -277,44 +315,88 @@ class PipelineProgressLogger:
             return
         m = re.search(r'\[OUTER-TRUE(?:-HMM)?\] feature_cols=([\d,]+)', line)
         if m:
-            self.stage(6, f'selected={m.group(1)} total={self.context.get("feature_total", "NA")}')
+            self.stage(self.feature_registry_stage(), f'selected={m.group(1)} total={self.context.get("feature_total", "NA")}')
             return
         m = re.search(r'\[CLI\] HMM walkforward result: ([\d,]+) rows', line)
         if m:
-            self.stage(11, f'output_rows={m.group(1)}')
+            self.stage(self.oos_stage(), f'output_rows={m.group(1)}')
             return
         m = re.search(r'\[CLI\] Walkforward result: ([\d,]+) rows', line)
         if m:
-            self.stage(11, f'output_rows={m.group(1)}')
+            self.stage(self.oos_stage(), f'output_rows={m.group(1)}')
             return
         if '[CLI] Running aggregation' in line:
-            self.stage(12, 'aggregation')
+            self.stage(self.metrics_stage(), 'aggregation')
             return
         m = re.search(r'(?:HMM-filtered results|Results) saved to (.+)', line)
         if m:
-            self.stage(13, f'saved={m.group(1)}')
+            self.stage(self.acceptance_stage(), f'saved={m.group(1)}')
 
     def _stage_contract_once(self) -> None:
         msg = self.context.get('contract_summary')
-        if msg and 3 not in self.stage_state:
-            self.stage(3, msg, once=True)
+        stage = self.execution_stage()
+        if msg and stage not in self.stage_state:
+            self.stage(stage, msg, once=True)
 
     def _stage_walkforward_rows(self) -> None:
         train_rows = self.context.get('train_rows')
         test_rows = self.context.get('test_rows')
         if train_rows and test_rows:
-            self.stage(11, f'train_rows={train_rows} test_rows={test_rows}')
+            self.stage(self.wfa_stage(), f'train_rows={train_rows} test_rows={test_rows}')
 
 
 _PROGRESS = PipelineProgressLogger(_LOG_MODE, _RUN_ID)
 
 
 def _stage(idx: int, message: str) -> None:
+    global _CURRENT_STAGE
+    _CURRENT_STAGE = f"{idx} {_PROGRESS.STAGES.get(idx, 'UNKNOWN')}"
     _PROGRESS.stage(idx, message)
 
 
 def _raw_log(text: str) -> None:
     _PROGRESS.raw(text)
+
+
+def _stage_span(rows: list[dict], status: str) -> str:
+    nums = [int(r["stage_num"]) for r in rows if r.get("status") == status]
+    if not nums:
+        return "none"
+    return f"{min(nums)}-{max(nums)}" if len(nums) > 1 else str(nums[0])
+
+
+def _print_run_resolution(*, config: RootConfig, start_stage: str, data_root: str, checkpoint_mode: bool, stage_plan: list[dict]) -> None:
+    print(
+        "[RUN RESOLUTION]\n"
+        f"config_env={os.environ.get('CONFIG_ENV') or os.environ.get('QUANT_ENV') or ''}\n"
+        f"profile={getattr(_ns_cfg, 'ACTIVE_PROFILE', '')}\n"
+        f"start_stage={start_stage}\n"
+        f"data_root={data_root}\n"
+        f"checkpoint_mode={checkpoint_mode}\n"
+        f"stages_to_run={_stage_span(stage_plan, 'PENDING')}\n"
+        f"stages_skipped={_stage_span(stage_plan, 'SKIPPED_CHECKPOINT')}",
+        flush=True,
+    )
+
+
+def _default_run_requested(args: argparse.Namespace) -> bool:
+    return (
+        not args.from_stage
+        and not args.data_root
+        and not os.environ.get("QUANT_START_STAGE")
+        and not os.environ.get("QUANT_DATA_ROOT")
+    )
+
+
+def _default_run_fail_message(config: RootConfig, data_root: str) -> str:
+    return (
+        "DEFAULT RUN FAIL: no explicit WFA-ready start stage/data root resolved. "
+        f"configured_start_stage={getattr(config.pipeline, 'start_stage', 'raw')} "
+        f"configured_data_root={data_root}. "
+        "Use --from-stage baseline_feature_matrix --data-root data\\feature_matrices\\baseline "
+        "or configure pipeline.start_stage to a supported checkpoint. "
+        "Default raw/full-pipeline orchestration is not enabled in run.py."
+    )
 
 
 def _reset_current_run_validation_diagnostics(run_id: str) -> None:
@@ -694,6 +776,31 @@ def _run_subprocess_streaming(cmd: list, env: dict, timeout_idle: int = 120) -> 
 
     try:
         ret = proc.wait(timeout=3600)
+    except KeyboardInterrupt:
+        _PROGRESS.timeout("\n[INTERRUPT] KeyboardInterrupt received; terminating child process")
+        _PROGRESS.timeout(f'[INTERRUPT] cmd={" ".join(full_cmd)}')
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+        done.set()
+        t_stdout.join(timeout=2)
+        t_stderr.join(timeout=2)
+        stdout_text = '\n'.join(stdout_lines)
+        stderr_text = '\n'.join(stderr_lines)
+        _LAST_CHILD_INTERRUPT.clear()
+        _LAST_CHILD_INTERRUPT.update({
+            "command": " ".join(full_cmd),
+            "stdout_tail": "\n".join(stdout_lines[-20:]),
+            "stderr_tail": "\n".join(stderr_lines[-20:]),
+            "returncode": proc.returncode,
+        })
+        raise
     except subprocess.TimeoutExpired:
         proc.kill()
         ret = -1
@@ -1237,6 +1344,80 @@ def _failed_result_row(
     }
 
 
+def _interrupted_result_row(split_idx: int, symbol: str, path: Path | str, *, error: str = "KeyboardInterrupt") -> dict:
+    row = _failed_result_row(split_idx, symbol, path, error=error)
+    row["status"] = "INTERRUPTED"
+    row["exception_type"] = "KeyboardInterrupt"
+    row["exception_message"] = error
+    if _LAST_CHILD_INTERRUPT:
+        row["command"] = _LAST_CHILD_INTERRUPT.get("command", row.get("command"))
+        row["stdout_tail"] = _LAST_CHILD_INTERRUPT.get("stdout_tail", "")
+        row["stderr_tail"] = _LAST_CHILD_INTERRUPT.get("stderr_tail", "")
+        row["rc"] = _LAST_CHILD_INTERRUPT.get("returncode")
+    return row
+
+
+def _mark_interrupted_pending(config: RootConfig, splits: list, files: list[Path]) -> dict:
+    expected = _expected_runtime_rows(config, splits, files)
+    expected_by_key = {(r["symbol"], int(r["split"])): r for r in expected}
+    existing = {(r.get("symbol"), int(r.get("split", 0))) for r in _VERIFICATION_TABLE}
+    pending = [r for key, r in expected_by_key.items() if key not in existing]
+    for exp in pending:
+        row = _interrupted_result_row(exp["split"], exp["symbol"], exp.get("backtest_results") or exp.get("out_dir") or "")
+        row.update({k: exp.get(k) for k in ["backtest_results", "oos_predictions", "metrics_report", "acceptance_report"]})
+        _record_split_result(row)
+        _record_split_artifacts(
+            exp["symbol"],
+            exp["split"],
+            exp.get("cli_command", "run"),
+            Path(exp.get("out_dir", "")),
+            exp.get("train_start"),
+            exp.get("train_end"),
+            exp.get("test_start"),
+            exp.get("test_end"),
+            "INTERRUPTED",
+            error="KeyboardInterrupt",
+            rc=_LAST_CHILD_INTERRUPT.get("returncode"),
+            command_line=_LAST_CHILD_INTERRUPT.get("command"),
+            stdout_tail=_LAST_CHILD_INTERRUPT.get("stdout_tail"),
+            stderr_tail=_LAST_CHILD_INTERRUPT.get("stderr_tail"),
+        )
+    return {
+        "expected_rows": len(expected),
+        "completed_splits": len(existing),
+        "pending_splits": len(pending),
+    }
+
+
+def _write_run_interrupted_artifact(
+    *,
+    config: RootConfig,
+    start_stage: str,
+    data_root: str,
+    checkpoint_mode: bool,
+    completed_splits: int,
+    pending_splits: int,
+) -> dict:
+    row = {
+        "run_id": str(_RUN_ID),
+        "profile": str(getattr(_ns_cfg, "ACTIVE_PROFILE", "")),
+        "config_env": str(os.environ.get("CONFIG_ENV") or os.environ.get("QUANT_ENV") or ""),
+        "start_stage": str(start_stage),
+        "data_root": str(data_root),
+        "checkpoint_mode": str(bool(checkpoint_mode)),
+        "current_stage": str(_CURRENT_STAGE),
+        "completed_splits": str(completed_splits),
+        "pending_splits": str(pending_splits),
+        "interrupted_at": datetime.now().astimezone().isoformat(),
+        "active_symbol": str(_ACTIVE_SYMBOL),
+        "active_split": str(_ACTIVE_SPLIT),
+        "reason": "KeyboardInterrupt",
+    }
+    atomic_write_json("reports/validation/run_interrupted.json", row)
+    write_csv_rows("reports/validation/run_interrupted.csv", [row])
+    return row
+
+
 def _tracking_summary(*, saved: Path | str | None = None, failed: str | None = None) -> str:
     lines = []
     for path in _PROGRESS.context.get('stale_artifacts', []):
@@ -1398,7 +1579,9 @@ def _verify_threshold_used_post_child(config: RootConfig, symbol: str, split_idx
 
 def process_split(train_years: list[int], test_years: list[int], files: list[Path],
                    config: RootConfig, split_idx: int, total_splits: int,
-                   train_start=None, train_end=None, test_start=None, test_end=None) -> None:
+                   train_start=None, train_end=None, test_start=None, test_end=None,
+                   wfa_input_stage: str | None = None) -> None:
+    global _ACTIVE_SYMBOL, _ACTIVE_SPLIT
     train_files = [f for f in files if int(f.stem) in train_years]
     test_files = [f for f in files if int(f.stem) in test_years]
     _raw_log(
@@ -1431,6 +1614,8 @@ def process_split(train_years: list[int], test_years: list[int], files: list[Pat
     env = build_child_env(os.environ, run_id=_RUN_ID, profile=getattr(_ns_cfg, 'ACTIVE_PROFILE', ''))
     per_symbol = {}
     for symbol in config.symbols:
+        _ACTIVE_SYMBOL = str(symbol)
+        _ACTIVE_SPLIT = str(split_idx)
         symbol_test_files = sorted([p for p in test_files if p.parent.name == symbol])
         test_year_label = "_".join(str(p.stem) for p in symbol_test_files) or "missing"
         test_data_arg = str(test_dir / symbol / '*.parquet')
@@ -1442,14 +1627,15 @@ def process_split(train_years: list[int], test_years: list[int], files: list[Pat
             symbol=symbol,
             split=split_idx,
             total_splits=total_splits,
+            start_stage=wfa_input_stage or getattr(getattr(config, 'pipeline', None), 'start_stage', ''),
             contract_summary=_contract_summary(symbol),
         )
         print(f'\n[SPLIT {split_idx}/{total_splits}] {symbol} test={test_label}', flush=True)
-        _stage(1, f'{test_data_arg} found files={len(symbol_test_files)}')
+        _stage(_PROGRESS.input_stage(), f'{test_data_arg} found files={len(symbol_test_files)}')
         invalid_file = next((p for p in symbol_test_files if not _validate_symbol_data(p, config)), None)
         if not symbol_test_files or invalid_file is not None:
             err = 'missing_test_file' if not symbol_test_files else f'invalid_or_empty_raw_data: {invalid_file}'
-            _stage(13, 'FAILED invalid_or_empty_raw_data')
+            _stage(_PROGRESS.input_stage(), 'FAILED invalid_or_empty_input_data')
             _record_split_result(_failed_result_row(
                 split_idx, symbol, test_data_arg,
                 mtime=invalid_file.stat().st_mtime if invalid_file and invalid_file.exists() else 0.0,
@@ -1488,7 +1674,7 @@ def process_split(train_years: list[int], test_years: list[int], files: list[Pat
             _stale_path = out_dir / _stale_name
             if _stale_path.exists() and _stale_path.stat().st_mtime < _RUN_START:
                 _PROGRESS.context.setdefault('stale_artifacts', []).append(str(_stale_path))
-                _stage(13, _tracking_summary())
+                _stage(_PROGRESS.acceptance_stage(), _tracking_summary())
                 logger.warning('[STALE] Removing pre-existing file: %s (mtime=%.0f < run_start=%.0f)',
                                _stale_path, _stale_path.stat().st_mtime, _RUN_START)
                 _stale_path.unlink()
@@ -1531,7 +1717,7 @@ def process_split(train_years: list[int], test_years: list[int], files: list[Pat
                 if isinstance(stdout_text, bytes):
                     stdout_text = stdout_text.decode(errors='replace')
                 run_error = _extract_error_summary(stderr_text, stdout_text)
-                _stage(13, _tracking_summary(failed=f'FAILED\n{run_error}'))
+                _stage(_PROGRESS.wfa_stage(), _tracking_summary(failed=f'FAILED\n{run_error}'))
                 if _log_failures:
                     _log_subprocess_failure(cmd, getattr(e, 'returncode', -1), stderr_text, stdout_text,
                                             Path('output') / 'logs', symbol, split_idx, 'run')
@@ -1565,7 +1751,7 @@ def process_split(train_years: list[int], test_years: list[int], files: list[Pat
                 stdout_text = stdout_text.decode(errors='replace')
             err_lines = stderr_text.strip().split('\n') if stderr_text else ['(no stderr)']
             hmm_error = _extract_error_summary(stderr_text, stdout_text)
-            _stage(8, f'FAILED\n{hmm_error}\nFallback=non-HMM')
+            _stage(_PROGRESS.wfa_stage(), f'FAILED\n{hmm_error}\nFallback=non-HMM')
             if _PROGRESS.verbose:
                 print(f'[WARNING] HMM failed on split {split_idx} ({symbol}). Last 3 lines of stderr:')
                 for line in err_lines[-3:]:
@@ -1604,7 +1790,7 @@ def process_split(train_years: list[int], test_years: list[int], files: list[Pat
                     stdout2 = stdout2.decode(errors='replace')
                 err2_lines = stderr2.strip().split('\n') if stderr2 else ['(no stderr)']
                 fallback_error = _extract_error_summary(stderr2, stdout2)
-                _stage(13, _tracking_summary(failed=f'FAILED\n{fallback_error}'))
+                _stage(_PROGRESS.wfa_stage(), _tracking_summary(failed=f'FAILED\n{fallback_error}'))
                 if _PROGRESS.verbose:
                     print(f'[ERROR] Fallback also failed on split {split_idx} ({symbol}). Last 3 lines:')
                     for line in err2_lines[-3:]:
@@ -1694,10 +1880,10 @@ def process_split(train_years: list[int], test_years: list[int], files: list[Pat
                 trades = int(metrics['position_change_events'])
                 turnover = float(metrics['position_turnover'])
                 ic = _summary_ic(bt)
-                _stage(10, f'position_change_events={trades} position_turnover={turnover:.6g}')
-                _stage(11, f'rows={bt.height}')
-                _stage(12, f'sharpe_annualized={sharpe:.3f} pnl={pnl:.2f} ic={ic} bar_hit_rate_active={hit:.2%}')
-                _stage(13, _tracking_summary(saved=bt_path))
+                _stage(_PROGRESS.execution_stage(), f'position_change_events={trades} position_turnover={turnover:.6g}')
+                _stage(_PROGRESS.oos_stage(), f'rows={bt.height}')
+                _stage(_PROGRESS.metrics_stage(), f'sharpe_annualized={sharpe:.3f} pnl={pnl:.2f} ic={ic} bar_hit_rate_active={hit:.2%}')
+                _stage(_PROGRESS.acceptance_stage(), _tracking_summary(saved=bt_path))
                 result_row = {
                     'split': split_idx, 'symbol': symbol, 'path': str(bt_path),
                     'mtime': _bt_mtime, 'run_id': _RUN_ID, 'rows': bt.height,
@@ -1737,13 +1923,13 @@ def process_split(train_years: list[int], test_years: list[int], files: list[Pat
                     traceback.print_exc()
                 per_symbol[symbol] = (0.0, 0.0, 0.0, 0.0)
                 result_error = _extract_error_summary(str(e))
-                _stage(13, _tracking_summary(failed=f'FAILED\n{result_error}'))
+                _stage(_PROGRESS.metrics_stage(), _tracking_summary(failed=f'FAILED\n{result_error}'))
                 _record_split_result(_failed_result_row(
                     split_idx, symbol, bt_path, mtime=_bt_mtime, error=result_error
                 ))
                 _record_split_artifacts(symbol, split_idx, cli_action, out_dir, train_start, train_end, test_start, test_end, 'FAILED', error=result_error)
         else:
-            _stage(13, _tracking_summary(failed=f'missing_output={out_dir} status=FAILED'))
+            _stage(_PROGRESS.wfa_stage(), _tracking_summary(failed=f'missing_output={out_dir} status=FAILED'))
             _record_split_result(_failed_result_row(
                 split_idx, symbol, out_dir, error='missing_output'
             ))
@@ -1754,13 +1940,21 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--from-stage", dest="from_stage")
     parser.add_argument("--data-root", dest="data_root")
+    parser.add_argument("--status", action="store_true")
     args, _unknown = parser.parse_known_args()
     config = load_config(os.environ.get('CONFIG_ENV') or os.environ.get('QUANT_ENV'))
-    start_stage = normalize_start_stage(args.from_stage or os.environ.get("QUANT_START_STAGE") or getattr(config.pipeline, "start_stage", "raw"))
     data_root_override = args.data_root or os.environ.get("QUANT_DATA_ROOT")
     if data_root_override:
         config.data.root = data_root_override
         config.pipeline.checkpoint_root = data_root_override
+    if args.status:
+        rows = build_pipeline_status(config, data_root=data_root_override)
+        write_pipeline_flow_audit(rows)
+        print_pipeline_status(rows)
+        raise SystemExit(0)
+    target_col = getattr(config.walkforward, "walkforward_target", "target_15m_ret")
+    validate_stage_order_contract(target_col)
+    start_stage = normalize_start_stage(args.from_stage or os.environ.get("QUANT_START_STAGE") or getattr(config.pipeline, "start_stage", "raw"))
     auto_report = None
     if start_stage == "auto":
         source = data_root_override or config.data.root
@@ -1783,6 +1977,18 @@ if __name__ == '__main__':
     data_dir = config.data.root if start_stage != "raw" else getattr(_ns_cfg, 'DATA_ROOT', 'data/L0_ohlcv_1m')
     checkpoint_report = None
     stage_plan = build_stage_plan(start_stage, config)
+    checkpoint_mode = start_stage != "raw"
+    full_research_mode = getattr(config.pipeline, "modeling_mode", "minimal_compatible") == "full_research"
+    _print_run_resolution(
+        config=config,
+        start_stage=start_stage,
+        data_root=data_dir,
+        checkpoint_mode=checkpoint_mode,
+        stage_plan=stage_plan,
+    )
+    if _default_run_requested(args) and start_stage == "raw":
+        raise SystemExit(_default_run_fail_message(config, data_dir))
+    wfa_input_stage = start_stage
     if start_stage == "raw":
         try:
             preflight = validate_research_data_preflight(config)
@@ -1830,23 +2036,37 @@ if __name__ == '__main__':
             label_root(data_dir, "data/labeled", config)
             baseline_feature_root("data/labeled", "data/feature_matrices/baseline", config)
             expanded_feature_root("data/feature_matrices/baseline", "data/feature_matrices/expanded", config)
+            if full_research_mode:
+                data_dir = "data/feature_matrices/baseline"
+                wfa_input_stage = "baseline_feature_matrix"
         elif start_stage == "labeled":
             from pipeline.features.baseline import baseline_feature_root
             from pipeline.features.expansion import expanded_feature_root
             baseline_feature_root(data_dir, "data/feature_matrices/baseline", config)
             expanded_feature_root("data/feature_matrices/baseline", "data/feature_matrices/expanded", config)
+            if full_research_mode:
+                data_dir = "data/feature_matrices/baseline"
+                wfa_input_stage = "baseline_feature_matrix"
         elif start_stage == "baseline_feature_matrix":
             from pipeline.features.expansion import expanded_feature_root
             expanded_feature_root(data_dir, "data/feature_matrices/expanded", config)
+            wfa_input_stage = "baseline_feature_matrix"
         config.data.root = data_dir
         _ns_cfg.DATA_ROOT = data_dir
     files = get_files(data_dir, config)
     if not files:
         logger.warning('No files found after filtering')
         sys.exit(0)
-    if "feature_matrices" in str(data_dir).replace("\\", "/") and "baseline" in str(data_dir).replace("\\", "/"):
+    wfa_contract_required = full_research_mode or wfa_input_stage in {"baseline_feature_matrix", "expanded_feature_matrix"}
+    if wfa_contract_required:
         try:
-            validate_target_integrity_root(data_dir, config, fail_prefix="CHECKPOINT TARGET INTEGRITY FAIL")
+            assert_wfa_ready_root(
+                start_stage=wfa_input_stage,
+                root=data_dir,
+                config=config,
+                checkpoint_mode=checkpoint_mode,
+                fail_prefix="CHECKPOINT TARGET INTEGRITY FAIL" if checkpoint_mode else "WFA INPUT CONTRACT FAIL",
+            )
         except RuntimeError as exc:
             raise SystemExit(str(exc)) from exc
     if os.environ.get('QUANT_SKIP_DATASET_GATE', '0') != '1':
@@ -1871,8 +2091,9 @@ if __name__ == '__main__':
     execution_plan_rows = _expected_runtime_rows(config, splits, files)
     _assert_execution_plan_unique(execution_plan_rows, list(config.symbols), splits)
     write_wfa_split_plan(splits, files, config)
+    _stage(14, f"splits={len(splits)} expected_rows={len(config.symbols) * len(splits)}")
     _reset_current_run_validation_diagnostics(_RUN_ID)
-    if getattr(config.pipeline, "modeling_mode", "minimal_compatible") == "full_research":
+    if full_research_mode:
         feasibility = _check_wfa_feasibility(config, splits, files)
         if feasibility["status"] != "PASS":
             expected_rows = len(config.symbols) * len(splits)
@@ -1900,58 +2121,103 @@ if __name__ == '__main__':
         logging.getLogger('quant').setLevel(logging.ERROR)
     elif _LOG_MODE == 'debug':
         logging.getLogger().setLevel(logging.DEBUG)
+    interrupted = False
     try:
+        if os.environ.get("QUANT_TEST_INTERRUPT_AT") == "before_loop":
+            raise KeyboardInterrupt()
         for i, split_data in enumerate(splits, 1):
             train, test, train_start, train_end, test_start, test_end = split_window_parts(split_data)
-            process_split(train, test, files, config, i, total, train_start, train_end, test_start, test_end)
-    finally:
-        artifact_completeness = _prepare_final_artifact_completeness(config, splits, files)
-        _print_final_summary_table()
-        if artifact_completeness["status"] != "PASS":
-            expected_rows = len(config.symbols) * len(splits)
-            print(
-                f"[FINAL SAFETY SUMMARY]\nrun_id={_RUN_ID}\nprofile={_ns_cfg.ACTIVE_PROFILE}\n"
-                f"symbols={','.join(config.symbols)}\nsplits={len(splits)} expected_rows={expected_rows} "
-                f"successful={sum(1 for r in _RUN_SPLIT_ARTIFACTS if r.get('status') == 'OK')} "
-                f"failed={artifact_completeness['failure_count']}",
-                flush=True,
-            )
-            print(
-                f"ARTIFACT COMPLETENESS FAIL: failures={artifact_completeness['failure_count']} "
-                f"details={artifact_completeness['failure_reasons_csv']}",
-                flush=True,
-            )
-            raise RuntimeError(
-                f"ARTIFACT COMPLETENESS FAIL: see {artifact_completeness['failure_reasons_csv']}"
-            )
-        expected_rows = len(config.symbols) * len(splits)
-        run_final_diagnostics(
+            process_split(train, test, files, config, i, total, train_start, train_end, test_start, test_end, wfa_input_stage=wfa_input_stage)
+    except KeyboardInterrupt:
+        interrupted = True
+        counts = _mark_interrupted_pending(config, splits, files)
+        interrupt_row = _write_run_interrupted_artifact(
             config=config,
-            run_id=_RUN_ID,
-            profile=getattr(_ns_cfg, "ACTIVE_PROFILE", ""),
-            expected_rows=expected_rows,
-            require_threshold_used=_threshold_used_required(config),
-            verification_rows=_VERIFICATION_TABLE,
-            artifact_rows=_RUN_SPLIT_ARTIFACTS,
+            start_stage=start_stage,
+            data_root=data_dir,
+            checkpoint_mode=checkpoint_mode,
+            completed_splits=counts["completed_splits"],
+            pending_splits=counts["pending_splits"],
         )
-        deployment_report = run_deployment_readiness_gate(config)
-        final_summary = _final_safety_summary(config, total, deployment_report)
-        write_run_manifest(
-            _RUN_ID,
-            config,
-            files,
-            audit_paths={
-                "research_data_preflight": "reports/validation/research_data_preflight.json",
-                "deployment_readiness": "reports/acceptance/deployment_readiness.json",
-            },
-            splits=_RUN_SPLIT_ARTIFACTS,
-            final_acceptance_summary=final_summary,
-            deployment_readiness={
-                "path": "reports/acceptance/deployment_readiness.json",
-                "status": deployment_report.get("status"),
-            },
-            checkpoint_start={"start_stage": start_stage, "checkpoint_root": data_dir, "checkpoint_gate": checkpoint_report, "stage_plan": stage_plan},
+        print(
+            "RUN INTERRUPTED: user/system interrupted "
+            f"run_id={_RUN_ID} stage={interrupt_row['current_stage']} "
+            f"completed_splits={interrupt_row['completed_splits']} "
+            f"pending_splits={interrupt_row['pending_splits']}",
+            flush=True,
         )
-        _PROGRESS.close()
+        print("deployment=NOT_READY mode=interrupted", flush=True)
+        print(
+            "resume_command=python run.py --from-stage baseline_feature_matrix --data-root data\\feature_matrices\\baseline",
+            flush=True,
+        )
+        sys.exit(130)
+    finally:
+        if interrupted:
+            _PROGRESS.close()
+        else:
+            artifact_completeness = _prepare_final_artifact_completeness(config, splits, files)
+            _print_final_summary_table()
+            if artifact_completeness["status"] != "PASS":
+                expected_rows = len(config.symbols) * len(splits)
+                print(
+                    f"[FINAL SAFETY SUMMARY]\nrun_id={_RUN_ID}\nprofile={_ns_cfg.ACTIVE_PROFILE}\n"
+                    f"symbols={','.join(config.symbols)}\nsplits={len(splits)} expected_rows={expected_rows} "
+                    f"successful={sum(1 for r in _RUN_SPLIT_ARTIFACTS if r.get('status') == 'OK')} "
+                    f"failed={artifact_completeness['failure_count']}",
+                    flush=True,
+                )
+                print(
+                    f"ARTIFACT COMPLETENESS FAIL: failures={artifact_completeness['failure_count']} "
+                    f"details={artifact_completeness['failure_reasons_csv']}",
+                    flush=True,
+                )
+                raise RuntimeError(
+                    f"ARTIFACT COMPLETENESS FAIL: see {artifact_completeness['failure_reasons_csv']}"
+                )
+            expected_rows = len(config.symbols) * len(splits)
+            write_leakage_audit_report(
+                run_id=_RUN_ID,
+                profile=getattr(_ns_cfg, "ACTIVE_PROFILE", ""),
+                config=config,
+                splits=splits,
+                verification_rows=_VERIFICATION_TABLE,
+            )
+            run_final_diagnostics(
+                config=config,
+                run_id=_RUN_ID,
+                profile=getattr(_ns_cfg, "ACTIVE_PROFILE", ""),
+                expected_rows=expected_rows,
+                require_threshold_used=_threshold_used_required(config),
+                verification_rows=_VERIFICATION_TABLE,
+                artifact_rows=_RUN_SPLIT_ARTIFACTS,
+            )
+            write_alpha_evidence_report(
+                run_id=_RUN_ID,
+                profile=getattr(_ns_cfg, "ACTIVE_PROFILE", ""),
+                stage_scope="baseline",
+                expected_rows=expected_rows,
+                verification_rows=_VERIFICATION_TABLE,
+                artifact_rows=_RUN_SPLIT_ARTIFACTS,
+            )
+            deployment_report = run_deployment_readiness_gate(config)
+            final_summary = _final_safety_summary(config, total, deployment_report)
+            write_run_manifest(
+                _RUN_ID,
+                config,
+                files,
+                audit_paths={
+                    "research_data_preflight": "reports/validation/research_data_preflight.json",
+                    "deployment_readiness": "reports/acceptance/deployment_readiness.json",
+                },
+                splits=_RUN_SPLIT_ARTIFACTS,
+                final_acceptance_summary=final_summary,
+                deployment_readiness={
+                    "path": "reports/acceptance/deployment_readiness.json",
+                    "status": deployment_report.get("status"),
+                },
+                checkpoint_start={"start_stage": start_stage, "checkpoint_root": data_dir, "checkpoint_gate": checkpoint_report, "stage_plan": stage_plan},
+            )
+            _PROGRESS.close()
     logging.getLogger().setLevel(logging.INFO)
     logger.info('Done')

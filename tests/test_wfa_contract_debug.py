@@ -67,6 +67,20 @@ def test_target_all_null_reason():
     assert row["reason"] == "target column all null"
 
 
+def test_missing_target_required_for_wfa_contract():
+    row = build_wfa_contract_debug_row(
+        _df().drop("target_15m_ret"),
+        feature_cols=["x"],
+        target_col="target_15m_ret",
+        train_start=0,
+        train_end=5,
+        test_start=5,
+        test_end=10,
+        context=_ctx(),
+    )
+    assert row["reason"] == "missing required columns: target_15m_ret"
+
+
 def test_purge_removes_train_rows_reason():
     cfg = RootConfig(
         walkforward=WalkforwardConfig(embargo_bars=10, purge_target_overlap=False),

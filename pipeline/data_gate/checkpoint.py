@@ -164,6 +164,14 @@ def _remediation(stage: str, failures: list[str] | None = None) -> str:
         )
     if stage == "causally_gated_normalized" and "future_" in text:
         return "Recommended: remove future/label/target columns or start from a pre-label stage and regenerate causal labels."
+    if stage == "baseline_feature_matrix" and ("missing configured target column" in text or "target integrity" in text):
+        return (
+            "Baseline matrix is not WFA-ready. Regenerate labels/features, then resume from the baseline matrix.\n"
+            "Regenerate:\n"
+            "  python run.py --from-stage causally_gated_normalized --data-root data\\causally_gated_normalized\n"
+            "Resume:\n"
+            "  python run.py --from-stage baseline_feature_matrix --data-root data\\feature_matrices\\baseline"
+        )
     if stage == "session_normalized":
         return "python -m pipeline.causal.gate --in-root data/session_normalized --out-root data/causally_gated_normalized"
     if stage == "causally_gated_normalized":
