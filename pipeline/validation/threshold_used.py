@@ -10,6 +10,8 @@ from typing import Any
 import numpy as np
 import polars as pl
 
+from pipeline.validation.diagnostic_io import stringify_diagnostic_keys
+
 
 REPORT_CSV = Path("reports/validation/threshold_used.csv")
 REPORT_JSON = Path("reports/validation/threshold_used.json")
@@ -93,6 +95,7 @@ def write_threshold_used(
         "test_short_bars": int((pos < 0).sum() or 0) if len(pos) else 0,
         "test_turnover": float(delta.sum() or 0.0) if len(delta) else 0.0,
     }
+    row = stringify_diagnostic_keys(row)
     _append(row)
     return row
 
@@ -103,7 +106,7 @@ def _finite_array(values: Any) -> np.ndarray:
 
 
 def _append(row: dict[str, Any]) -> None:
-    row = {**_metadata(), **row}
+    row = stringify_diagnostic_keys({**_metadata(), **row})
     REPORT_CSV.parent.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, Any]] = []
     run_id = str(row.get("run_id", "manual"))
@@ -119,7 +122,7 @@ def _append(row: dict[str, Any]) -> None:
         r for r in rows
         if (str(r.get("run_id", "")), str(r.get("symbol", "")), str(r.get("split", ""))) != key
     ]
-    rows.append({k: row.get(k, "") for k in FIELDS})
+    rows.append(stringify_diagnostic_keys({k: row.get(k, "") for k in FIELDS}))
     with REPORT_CSV.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=FIELDS, extrasaction="ignore")
         writer.writeheader()

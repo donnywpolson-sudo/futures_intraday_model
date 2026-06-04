@@ -9,6 +9,8 @@ from typing import Any
 
 import polars as pl
 
+from pipeline.validation.diagnostic_io import stringify_diagnostic_keys
+
 
 REPORT_CSV = Path("reports/validation/signal_activation_debug.csv")
 REPORT_JSON = Path("reports/validation/signal_activation_debug.json")
@@ -128,7 +130,7 @@ def classify_flat_reason(df: pl.DataFrame, row: dict[str, Any]) -> str:
 
 
 def write_signal_activation_row(row: dict[str, Any]) -> None:
-    row = {**_metadata(), **row}
+    row = stringify_diagnostic_keys({**_metadata(), **row})
     _upsert_csv_json(REPORT_CSV, REPORT_JSON, FIELDS, row, key_fields=["run_id", "symbol", "split"])
 
 
@@ -161,7 +163,7 @@ def _upsert_csv_json(csv_path: Path, json_path: Path, fields: list[str], row: di
     rows = [r for r in rows if str(r.get("run_id", "manual")) == run_id]
     key = tuple(str(row.get(k, "")) for k in key_fields)
     rows = [r for r in rows if tuple(str(r.get(k, "")) for k in key_fields) != key]
-    rows.append({k: row.get(k, "") for k in fields})
+    rows.append(stringify_diagnostic_keys({k: row.get(k, "") for k in fields}))
     with csv_path.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()

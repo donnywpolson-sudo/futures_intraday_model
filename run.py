@@ -55,7 +55,7 @@ _MIN_TRAIN_DAYS = 90
 _RUN_START = time.time()
 _RUN_DT = datetime.now()
 _RUN_FILE_TS = _RUN_DT.strftime('%Y-%m-%d_%H-%M-%S')
-_RUN_ID = hashlib.sha256(str(_RUN_START).encode()).hexdigest()[:8]
+_RUN_ID = "run_" + hashlib.sha256(str(_RUN_START).encode()).hexdigest()[:8]
 _PER_SYMBOL_PNL_CS = {}  # {symbol: {split_id: pnl_cs}}
 _VERIFICATION_TABLE = []  # rows for the verification table printed per split
 _RUN_SPLIT_ARTIFACTS = []
@@ -309,7 +309,8 @@ def _raw_log(text: str) -> None:
     _PROGRESS.raw(text)
 
 
-def _reset_current_run_validation_diagnostics() -> None:
+def _reset_current_run_validation_diagnostics(run_id: str) -> None:
+    _raw_log(f"[DIAG-RESET] run_id={run_id}")
     for p in [
         "reports/validation/threshold_used.csv",
         "reports/validation/threshold_used.json",
@@ -1974,7 +1975,7 @@ if __name__ == '__main__':
     execution_plan_rows = _expected_runtime_rows(config, splits, files)
     _assert_execution_plan_unique(execution_plan_rows, list(config.symbols), splits)
     write_wfa_split_plan(splits, files, config)
-    _reset_current_run_validation_diagnostics()
+    _reset_current_run_validation_diagnostics(_RUN_ID)
     if getattr(config.pipeline, "modeling_mode", "minimal_compatible") == "full_research":
         feasibility = _check_wfa_feasibility(config, splits, files)
         if feasibility["status"] != "PASS":
@@ -2036,8 +2037,14 @@ if __name__ == '__main__':
             validate_current_run_diagnostics(
                 expected_rows=expected_rows,
                 require_threshold_used=_threshold_used_required(config),
+                expected_run_id=_RUN_ID,
+                allow_env_fallback=False,
             )
-            print_threshold_diagnostic_summary(expected_splits=expected_rows)
+            print_threshold_diagnostic_summary(
+                expected_splits=expected_rows,
+                expected_run_id=_RUN_ID,
+                allow_env_fallback=False,
+            )
             _, threshold_outliers = write_experiment_reports(
                 run_id=_RUN_ID,
                 profile=getattr(_ns_cfg, "ACTIVE_PROFILE", ""),

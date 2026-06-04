@@ -10,6 +10,8 @@ from typing import Any
 
 import polars as pl
 
+from pipeline.validation.diagnostic_io import stringify_diagnostic_keys
+
 
 DIAG_CSV = Path("reports/validation/prediction_threshold_diagnostics.csv")
 DIAG_JSON = Path("reports/validation/prediction_threshold_diagnostics.json")
@@ -125,8 +127,8 @@ def write_prediction_threshold_diagnostics(
     return row, grid
 
 
-def print_threshold_diagnostic_summary(expected_splits: int | None = None) -> None:
-    run_id = _metadata()["run_id"]
+def print_threshold_diagnostic_summary(expected_splits: int | None = None, expected_run_id: str | None = None, allow_env_fallback: bool = False) -> None:
+    run_id = _resolve_expected_run_id(expected_run_id, allow_env_fallback=allow_env_fallback)
     rows = [r for r in _read_json_list(DIAG_JSON) if str(r.get("run_id", "manual")) == run_id]
     grid = [r for r in _read_json_list(GRID_JSON) if str(r.get("run_id", "manual")) == run_id]
     denom = expected_splits or len(rows)
@@ -149,8 +151,14 @@ def print_threshold_diagnostic_summary(expected_splits: int | None = None) -> No
         )
 
 
-def validate_current_run_diagnostics(expected_rows: int, candidate_threshold_count: int = CANDIDATE_THRESHOLD_COUNT, require_threshold_used: bool = True) -> dict[str, Any]:
-    run_id = _metadata()["run_id"]
+def validate_current_run_diagnostics(
+    expected_rows: int,
+    candidate_threshold_count: int = CANDIDATE_THRESHOLD_COUNT,
+    require_threshold_used: bool = True,
+    expected_run_id: str | None = None,
+    allow_env_fallback: bool = False,
+) -> dict[str, Any]:
+    run_id = _resolve_expected_run_id(expected_run_id, allow_env_fallback=allow_env_fallback)
     threshold_used = [r for r in _read_json_list(Path("reports/validation/threshold_used.json")) if str(r.get("run_id", "manual")) == run_id]
     signal = [r for r in _read_json_list(Path("reports/validation/signal_activation_debug.json")) if str(r.get("run_id", "manual")) == run_id]
     grid = [r for r in _read_json_list(GRID_JSON) if str(r.get("run_id", "manual")) == run_id]
@@ -161,6 +169,7 @@ def validate_current_run_diagnostics(expected_rows: int, candidate_threshold_cou
             expected_rows,
             ["run_id", "symbol", "split"],
             Path("reports/validation/threshold_used.json"),
+            run_id,
         )
     _assert_count_unique(
         "signal_activation_debug",
@@ -168,6 +177,7 @@ def validate_current_run_diagnostics(expected_rows: int, candidate_threshold_cou
         expected_rows,
         ["run_id", "symbol", "split"],
         Path("reports/validation/signal_activation_debug.json"),
+        run_id,
     )
     _assert_count_unique(
         "threshold_candidate_grid",
@@ -175,6 +185,7 @@ def validate_current_run_diagnostics(expected_rows: int, candidate_threshold_cou
         expected_rows * candidate_threshold_count,
         ["run_id", "symbol", "split", "threshold_type", "threshold_value"],
         GRID_JSON,
+        run_id,
     )
     active_rows = [r for r in _read_json_list(DIAG_JSON) if str(r.get("run_id", "manual")) == run_id and float(r.get("active_pct_at_current_threshold") or 0.0) > 0.0]
     if len(active_rows) > expected_rows:
@@ -229,11 +240,12 @@ def _current_threshold(df: pl.DataFrame, config: Any | None) -> float | str:
 def _append_csv_json(csv_path: Path, json_path: Path, fields: list[str], rows: list[dict[str, Any]], key_fields: list[str]) -> None:
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     run_id = _metadata()["run_id"]
+    rows = [stringify_diagnostic_keys(r) for r in rows]
     existing = _read_json_list(json_path)
     existing = [r for r in existing if str(r.get("run_id", "manual")) == run_id]
     new_keys = {tuple(str(r.get(k, "")) for k in key_fields) for r in rows}
     existing = [r for r in existing if tuple(str(r.get(k, "")) for k in key_fields) not in new_keys]
-    existing.extend({k: r.get(k, "") for k in fields} for r in rows)
+    existing.extend(stringify_diagnostic_keys({k: r.get(k, "") for k in fields}) for r in rows)
     with csv_path.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
@@ -265,8 +277,15 @@ def _metadata() -> dict[str, str]:
     }
 
 
-def _assert_count_unique(name: str, rows: list[dict[str, Any]], expected: int, key_fields: list[str], path: Path) -> None:
-    run_id = _metadata()["run_id"]
+def _resolve_expected_run_id(expected_run_id: str | None, *, allow_env_fallback: bool) -> str:
+    if expected_run_id:
+        return str(expected_run_id)
+    if not allow_env_fallback:
+        raise RuntimeError("THRESHOLD DIAG INTEGRITY FAIL: expected_run_id is required")
+    return _metadata()["run_id"]
+
+
+def _assert_count_unique(name: str, rows: list[dict[str, Any]], expected: int, key_fields: list[str], path: Path, run_id: str) -> None:
     if len(rows) != expected:
         raise RuntimeError(
             "THRESHOLD DIAG INTEGRITY FAIL: "

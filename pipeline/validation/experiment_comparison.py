@@ -8,6 +8,8 @@ from typing import Any
 
 import polars as pl
 
+from pipeline.validation.diagnostic_io import stringify_diagnostic_keys
+
 
 COMPARISON_CSV = Path("reports/validation/experiment_comparison.csv")
 COMPARISON_JSON = Path("reports/validation/experiment_comparison.json")
@@ -122,11 +124,12 @@ def _write_single(csv_path: Path, json_path: Path, fields: list[str], row: dict[
 
 def _write_rows(csv_path: Path, json_path: Path, fields: list[str], rows: list[dict[str, Any]]) -> None:
     csv_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [stringify_diagnostic_keys(r) for r in rows]
     with csv_path.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
-        writer.writerows([{k: r.get(k, "") for k in fields} for r in rows])
-    json_path.write_text(json.dumps([{k: r.get(k, "") for k in fields} for r in rows], indent=2, default=str), encoding="utf-8")
+        writer.writerows([stringify_diagnostic_keys({k: r.get(k, "") for k in fields}) for r in rows])
+    json_path.write_text(json.dumps([stringify_diagnostic_keys({k: r.get(k, "") for k in fields}) for r in rows], indent=2, default=str), encoding="utf-8")
 
 
 def _read_json_list(path: Path) -> list[dict[str, Any]]:

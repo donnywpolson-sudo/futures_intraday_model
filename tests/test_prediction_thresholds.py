@@ -44,7 +44,7 @@ def test_threshold_reports_and_summary_print(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     df = pl.DataFrame({"prediction": [i / 1000 for i in range(-100, 101)]})
     write_prediction_threshold_diagnostics(df, symbol="CL", split=1, config=RootConfig())
-    print_threshold_diagnostic_summary(expected_splits=1)
+    print_threshold_diagnostic_summary(expected_splits=1, expected_run_id="manual")
     out = capsys.readouterr().out
     assert "[THRESHOLD DIAG] current threshold active splits=" in out
     assert "candidate threshold p99" in out
