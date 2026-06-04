@@ -11,6 +11,7 @@ from pipeline.features.preprocessing import fit_apply_train_scaler
 from pipeline.execution.cost_model import attach_execution_cost_model
 from pipeline.walkforward.contract_debug import diagnose_and_write_wfa_contract_failure
 from pipeline.walkforward.walkforward import apply_walkforward_contract
+from pipeline.validation.threshold_used import resolve_threshold_from_train, write_threshold_used
 
 
 def run_full_research_modeling(
@@ -67,14 +68,30 @@ def run_full_research_modeling(
         {**context, "train_start": train_start, "train_end": train_end, "test_start": test_start, "test_end": test_end},
     )
     beta, intercept = _fit_ridge(train_s, selected, target_col, float(cfg.walkforward.ridge_params.get("alpha", 1.0)))
+    train_pred = _predict(train_s, selected, beta, intercept)
+    threshold, _, _, train_pred_n, train_abs_q = resolve_threshold_from_train(
+        train_pred,
+        cfg,
+        calibration_source="train",
+    )
     pred = _predict(test_s, selected, beta, intercept)
-    result = _attach_execution(test_s, pred, target_col, cfg, feature_set_id=_feature_set_id(selected), symbol=context.get("symbol"))
+    result = _attach_execution(test_s, pred, target_col, cfg, feature_set_id=_feature_set_id(selected), symbol=context.get("symbol"), threshold=threshold)
+    threshold_artifact = write_threshold_used(
+        symbol=str(context.get("symbol") or ""),
+        split=str(context.get("split_id") or ""),
+        config=cfg,
+        train_predictions=train_pred,
+        test_result=result,
+        threshold=threshold,
+        train_abs_prediction_quantile=train_abs_q,
+    )
     artifacts = {
         "feature_registry": registry,
         "selector_path": selector_artifact["path"],
         "scaler_path": scaler_artifact["path"],
         "selected_features": selected,
         "feature_set_id": _feature_set_id(selected),
+        "threshold_used": threshold_artifact,
     }
     return result, artifacts
 
@@ -99,14 +116,15 @@ def _predict(test: pl.DataFrame, features: list[str], beta: np.ndarray, intercep
     return x @ beta + intercept
 
 
-def _attach_execution(df: pl.DataFrame, pred: np.ndarray, target_col: str, cfg: Any, feature_set_id: str, symbol: str | None = None) -> pl.DataFrame:
+def _attach_execution(df: pl.DataFrame, pred: np.ndarray, target_col: str, cfg: Any, feature_set_id: str, symbol: str | None = None, threshold: float | None = None) -> pl.DataFrame:
+    threshold = float(cfg.execution.prediction_entry_threshold) if threshold is None else float(threshold)
     out = df.with_columns(pl.Series("prediction", pred))
     out = out.with_columns(
         (1.0 / (1.0 + (-pl.col("prediction")).exp())).alias("prediction_prob"),
-        pl.when(pl.col("prediction") > float(cfg.execution.prediction_entry_threshold)).then(1)
-        .when(pl.col("prediction") < -float(cfg.execution.prediction_entry_threshold)).then(-1)
+        pl.when(pl.col("prediction") > threshold).then(1)
+        .when(pl.col("prediction") < -threshold).then(-1)
         .otherwise(0).alias("raw_signal"),
-        pl.lit(float(cfg.execution.prediction_entry_threshold)).alias("signal_entry_threshold"),
+        pl.lit(threshold).alias("signal_entry_threshold"),
     )
     return attach_execution_cost_model(out, target_col=target_col, config=cfg, symbol=symbol, feature_set_id=feature_set_id)
 

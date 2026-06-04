@@ -33,6 +33,10 @@ from pipeline.audit.run_manifest import write_run_manifest
 from pipeline.gates.deployment import run_deployment_readiness_gate
 from pipeline.walkforward.split_plan import write_wfa_split_plan
 from pipeline.walkforward.contract_debug import build_wfa_contract_debug_row, write_wfa_contract_debug_row
+from pipeline.validation.target_integrity import validate_target_integrity_root
+from pipeline.validation.prediction_thresholds import print_threshold_diagnostic_summary, validate_current_run_diagnostics
+from pipeline.validation.experiment_comparison import print_threshold_outlier_summary, write_experiment_reports
+from pipeline.validation.threshold_used import threshold_used_row_count
 
 _LOG_MODE = os.environ.get('LOG_MODE', 'clean').strip().lower()
 if _LOG_MODE not in {'clean', 'verbose', 'debug'}:
@@ -303,6 +307,20 @@ def _stage(idx: int, message: str) -> None:
 
 def _raw_log(text: str) -> None:
     _PROGRESS.raw(text)
+
+
+def _reset_current_run_validation_diagnostics() -> None:
+    for p in [
+        "reports/validation/threshold_used.csv",
+        "reports/validation/threshold_used.json",
+        "reports/validation/signal_activation_debug.csv",
+        "reports/validation/signal_activation_debug.json",
+        "reports/validation/prediction_threshold_diagnostics.csv",
+        "reports/validation/prediction_threshold_diagnostics.json",
+        "reports/validation/threshold_candidate_grid.csv",
+        "reports/validation/threshold_candidate_grid.json",
+    ]:
+        Path(p).unlink(missing_ok=True)
 
 
 def get_files(data_dir: str, config: RootConfig) -> list[Path]:
@@ -1471,6 +1489,21 @@ def load_all_splits_for_year(year: int) -> list:
     return summaries
 
 
+def _threshold_used_required(config: RootConfig) -> bool:
+    return str(getattr(config.execution, "threshold_mode", "fixed")) == "prediction_abs_quantile"
+
+
+def _verify_threshold_used_post_child(config: RootConfig, symbol: str, split_idx: int) -> None:
+    if not _threshold_used_required(config):
+        return
+    count = threshold_used_row_count(_RUN_ID, symbol, split_idx)
+    if count != 1:
+        raise RuntimeError(
+            "THRESHOLD_USED POST-CHILD FAIL: "
+            f"run_id={_RUN_ID} symbol={symbol} split={split_idx} rows={count} expected=1"
+        )
+
+
 def process_split(train_years: list[int], test_years: list[int], files: list[Path],
                    config: RootConfig, split_idx: int, total_splits: int,
                    train_start=None, train_end=None, test_start=None, test_end=None) -> None:
@@ -1504,6 +1537,9 @@ def process_split(train_years: list[int], test_years: list[int], files: list[Pat
         dst = test_dir / f.parent.name / f.name
         _stage_file(f, dst)
     env = os.environ.copy()
+    env['PARENT_RUN_ID'] = _RUN_ID
+    env['QUANT_RUN_ID'] = _RUN_ID
+    env['QUANT_RUN_PROFILE'] = getattr(_ns_cfg, 'ACTIVE_PROFILE', '')
     env['TQDM_DISABLE'] = '1'
     env['PYTHONIOENCODING'] = 'utf-8'
     per_symbol = {}
@@ -1589,6 +1625,7 @@ def process_split(train_years: list[int], test_years: list[int], files: list[Pat
         subprocess_failed = False
         try:
             _run_subprocess_streaming(cmd, env)
+            _verify_threshold_used_post_child(config, symbol, split_idx)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
             if not hmm_enabled:
                 if _DEBUG:
@@ -1657,6 +1694,7 @@ def process_split(train_years: list[int], test_years: list[int], files: list[Pat
                 cmd_fb.extend(['--start', test_start.isoformat(), '--end', test_end.isoformat()])
             try:
                 _run_subprocess_streaming(cmd_fb, env)
+                _verify_threshold_used_post_child(config, symbol, split_idx)
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e2:
                 if _DEBUG:
                     import traceback
@@ -1909,6 +1947,11 @@ if __name__ == '__main__':
     if not files:
         logger.warning('No files found after filtering')
         sys.exit(0)
+    if "feature_matrices" in str(data_dir).replace("\\", "/") and "baseline" in str(data_dir).replace("\\", "/"):
+        try:
+            validate_target_integrity_root(data_dir, config, fail_prefix="CHECKPOINT TARGET INTEGRITY FAIL")
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from exc
     if os.environ.get('QUANT_SKIP_DATASET_GATE', '0') != '1':
         try:
             validate_dataset_gate(
@@ -1931,6 +1974,7 @@ if __name__ == '__main__':
     execution_plan_rows = _expected_runtime_rows(config, splits, files)
     _assert_execution_plan_unique(execution_plan_rows, list(config.symbols), splits)
     write_wfa_split_plan(splits, files, config)
+    _reset_current_run_validation_diagnostics()
     if getattr(config.pipeline, "modeling_mode", "minimal_compatible") == "full_research":
         feasibility = _check_wfa_feasibility(config, splits, files)
         if feasibility["status"] != "PASS":
@@ -1987,6 +2031,21 @@ if __name__ == '__main__':
             raise RuntimeError(
                 f"ARTIFACT COMPLETENESS FAIL: see {artifact_completeness['failure_reasons_csv']}"
             )
+        expected_rows = len(config.symbols) * len(splits)
+        if getattr(config.pipeline, "modeling_mode", "minimal_compatible") == "full_research":
+            validate_current_run_diagnostics(
+                expected_rows=expected_rows,
+                require_threshold_used=_threshold_used_required(config),
+            )
+            print_threshold_diagnostic_summary(expected_splits=expected_rows)
+            _, threshold_outliers = write_experiment_reports(
+                run_id=_RUN_ID,
+                profile=getattr(_ns_cfg, "ACTIVE_PROFILE", ""),
+                expected_rows=expected_rows,
+                verification_rows=_VERIFICATION_TABLE,
+                artifact_rows=_RUN_SPLIT_ARTIFACTS,
+            )
+            print_threshold_outlier_summary(threshold_outliers)
         deployment_report = run_deployment_readiness_gate(config)
         final_summary = _final_safety_summary(config, total, deployment_report)
         write_run_manifest(

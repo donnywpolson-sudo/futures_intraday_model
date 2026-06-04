@@ -8,6 +8,12 @@ from pipeline.common.io_safe import atomic_write_json
 from pipeline.common.cache import build_cache_metadata, cache_is_fresh, write_cache_metadata
 from pipeline.data_gate.manifest import build_data_manifest
 from pipeline.features.registry import write_column_registry
+from pipeline.validation.target_integrity import (
+    inspect_target_integrity,
+    target_col_from_config,
+    validate_target_integrity_row,
+    write_target_integrity_report,
+)
 
 
 def build_baseline_features(df: pl.DataFrame) -> pl.DataFrame:
@@ -37,8 +43,12 @@ def baseline_feature_root(in_root: str | Path = "data/labeled", out_root: str | 
     in_root = Path(in_root)
     out_root = Path(out_root)
     rows = []
+    integrity_rows = []
     sample = None
     src_manifest = in_root / "manifest.json"
+    target_col = target_col_from_config(config)
+    if target_col != "target_15m_ret":
+        raise RuntimeError(f"TARGET CONFIG DRIFT FAIL: active target_col={target_col!r}; expected 'target_15m_ret'")
     for p in sorted(in_root.glob("*/*.parquet")):
         out = out_root / p.parent.name / p.name
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -56,9 +66,15 @@ def baseline_feature_root(in_root: str | Path = "data/labeled", out_root: str | 
         fresh, _ = cache_is_fresh(out, meta, config) if meta else (False, "no config")
         if fresh:
             sample = pl.read_parquet(out)
+            row = inspect_target_integrity(sample, symbol=p.parent.name, file=str(out), target_col=target_col)
+            validate_target_integrity_row(row)
+            integrity_rows.append(row)
             rows.append({"input": str(p), "output": str(out), "status": "COMPLETED_CACHED"})
             continue
         mat = build_baseline_features(pl.read_parquet(p))
+        row = inspect_target_integrity(mat, symbol=p.parent.name, file=str(out), target_col=target_col)
+        validate_target_integrity_row(row)
+        integrity_rows.append(row)
         mat.write_parquet(out)
         if meta:
             write_cache_metadata(out, meta)
@@ -66,6 +82,7 @@ def baseline_feature_root(in_root: str | Path = "data/labeled", out_root: str | 
         rows.append({"input": str(p), "output": str(out), "status": "PASS"})
     report = {"status": "PASS", "files": rows}
     atomic_write_json("reports/metrics/baseline_feature_matrix_report.json", report)
+    write_target_integrity_report(integrity_rows)
     build_data_manifest(out_root, stage="baseline_feature_matrix")
     if sample is not None:
         write_column_registry(sample, out_root / "column_registry.json", source_stage="baseline", config=config, source_paths=[out_root / "manifest.json"])

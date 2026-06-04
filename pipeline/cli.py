@@ -24,6 +24,9 @@ from pipeline.gates.deployment import run_deployment_readiness
 from pipeline.stress.stress_tests import run_stress_tests
 from pipeline.data_gate.checkpoint import validate_checkpoint_stage
 from pipeline.orchestration.stage_plan import normalize_start_stage
+from pipeline.validation.signal_activation import write_signal_activation_debug
+from pipeline.validation.prediction_thresholds import write_prediction_threshold_diagnostics
+from pipeline.validation.threshold_used import threshold_used_row_count
 
 
 EXCLUDE_COLS = {
@@ -407,6 +410,14 @@ def cmd_run(args: argparse.Namespace, hmm: bool = False) -> None:
         test_end=args.end,
     )
     fresh_result, _ = cache_is_fresh(result_path, result_meta, cfg)
+    if (
+        fresh_result
+        and modeling_mode == "full_research"
+        and str(getattr(cfg.execution, "threshold_mode", "fixed")) == "prediction_abs_quantile"
+    ):
+        parent_run_id = os.environ.get("PARENT_RUN_ID") or os.environ.get("QUANT_RUN_ID") or "manual"
+        if threshold_used_row_count(parent_run_id, symbol, split_id) != 1:
+            fresh_result = False
     if fresh_result:
         result = pl.read_parquet(result_path)
     else:
@@ -461,6 +472,13 @@ def cmd_run(args: argparse.Namespace, hmm: bool = False) -> None:
         code_paths=[__file__], symbol=symbol, split_id=split_id,
         train_start=args.train_start, train_end=args.train_end, test_start=args.start, test_end=args.end,
     ))
+    signal_debug = write_signal_activation_debug(result, symbol=symbol, split=split_id, config=cfg)
+    write_prediction_threshold_diagnostics(result, symbol=symbol, split=split_id, config=cfg)
+    if int(signal_debug.get("prediction_nonnull") or 0) > 0 and float(signal_debug.get("active_bar_pct") or 0.0) == 0.0:
+        print(
+            f"[SIGNAL ACTIVATION WARN] symbol={symbol} split={split_id} reason={signal_debug.get('reason_if_flat')}",
+            flush=True,
+        )
     metrics = compute_backtest_metrics(result)
     metrics["status"] = "PASS"
     metrics["modeling_mode"] = modeling_mode
@@ -532,10 +550,12 @@ def cmd_run(args: argparse.Namespace, hmm: bool = False) -> None:
     print(f"[CLI] Running {'HMM-aware ' if hmm else ''}walkforward")
     print(f"[CLI] {'HMM ' if hmm else ''}walkforward result: {result.height:,} rows")
     print(f"[CLI] wrote {result_path}")
+    parent_run_id = os.environ.get("PARENT_RUN_ID") or os.environ.get("QUANT_RUN_ID")
     write_run_manifest(
         run_id=Path(out_dir).name,
         config=cfg,
         files=[Path(args.data)],
+        out=(Path("artifacts/run_manifests/children") / f"{Path(out_dir).name}.json") if parent_run_id else None,
         audit_paths={
             "leakage": str(leakage_path),
             "execution_trace": str(out_dir / "execution_trace_report.json"),
@@ -543,6 +563,7 @@ def cmd_run(args: argparse.Namespace, hmm: bool = False) -> None:
             "failure_attribution": str(diag_prefix.with_suffix(".json")),
             "stress": str(stress_path) if stress_path else "",
             "acceptance": str(acceptance_path),
+            "signal_activation_debug": "reports/validation/signal_activation_debug.csv",
             "output": str(result_path),
             "oos_predictions": str(out_dir / "oos_predictions.parquet"),
             "stage_oos_predictions": str(out_dir / stage_oos_name),
@@ -574,6 +595,7 @@ def cmd_run(args: argparse.Namespace, hmm: bool = False) -> None:
                 "stress_status": stress.get("status") if stress else "MISSING",
                 "acceptance_report": str(acceptance_path),
                 "acceptance_status": acceptance.get("status"),
+                "signal_activation_debug": "reports/validation/signal_activation_debug.csv",
                 "selector_artifact": str(modeling_artifacts.get("selector_path", "")),
                 "scaler_artifact": str(modeling_artifacts.get("scaler_path", "")),
             }

@@ -8,6 +8,7 @@ import polars as pl
 
 from pipeline.common.io_safe import atomic_write_json, write_csv_rows
 from pipeline.data_gate.manifest import build_data_manifest
+from pipeline.validation.target_integrity import inspect_target_integrity, target_col_from_config
 
 
 SUPPORTED_START_STAGES = {
@@ -113,12 +114,17 @@ def validate_checkpoint_stage(stage: str, root: str, config: Any, symbols: list[
             df = pl.read_parquet(p)
             f = _check_common(df, stage)
             if stage == "baseline_feature_matrix":
-                targets = [c for c in df.columns if c.startswith("target_")]
+                target_col = target_col_from_config(config)
+                targets = [c for c in df.columns if c == target_col]
                 features = [c for c, t in zip(df.columns, df.dtypes) if t.is_numeric() and not c.startswith(("target_", "label_", "future_"))]
                 if not targets:
-                    f.append("missing target column")
+                    f.append(f"missing configured target column: {target_col}")
                 if not features:
                     f.append("missing model feature columns")
+                if targets:
+                    trow = inspect_target_integrity(df, symbol=p.parent.name, file=str(p), target_col=target_col)
+                    if trow.get("reason") != "PASS":
+                        f.append(f"target integrity: {trow['reason']}")
             status = "FAIL" if f else "PASS"
             failures.extend([f"{p}: {x}" for x in f])
             rows.append({"path": str(p), "stage": stage, "status": status, "rows": df.height, "failures": "; ".join(f)})

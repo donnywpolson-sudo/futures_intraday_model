@@ -217,6 +217,8 @@ class ExecutionConfig(BaseModel):
     latency_bars: int = 0
     reject_same_bar_fill: bool = True
     prediction_entry_threshold: float = 0.0
+    threshold_mode: str = "fixed"
+    threshold_quantile: float | None = None
     min_position_hold_bars: int = 0
     write_execution_trace: bool = True
     execution_trace_rows: int = 200
@@ -616,6 +618,8 @@ def _populate_simple_namespace(cfg: RootConfig, active_profile: str = "", config
     config.EXECUTION_LATENCY_BARS = c.execution.latency_bars
     config.REJECT_SAME_BAR_FILL = c.execution.reject_same_bar_fill
     config.PREDICTION_ENTRY_THRESHOLD = c.execution.prediction_entry_threshold
+    config.THRESHOLD_MODE = c.execution.threshold_mode
+    config.THRESHOLD_QUANTILE = c.execution.threshold_quantile
     config.MIN_POSITION_HOLD_BARS = c.execution.min_position_hold_bars
     config.WRITE_EXECUTION_TRACE = c.execution.write_execution_trace
     config.EXECUTION_TRACE_ROWS = c.execution.execution_trace_rows
