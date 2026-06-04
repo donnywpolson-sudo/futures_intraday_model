@@ -27,6 +27,24 @@ def test_experimental_profile_uses_p995_quantile_mode():
     assert cfg.execution.threshold_quantile == 0.995
 
 
+def test_experimental_profile_uses_p999_quantile_mode():
+    _reset_config_loader()
+    cfg = config_module.load_config("tier_1_threshold_p999_experiment")
+    assert cfg.execution.prediction_entry_threshold == 0.25
+    assert cfg.execution.threshold_mode == "prediction_abs_quantile"
+    assert cfg.execution.threshold_quantile == 0.999
+
+
+def test_cl_es_p999_experimental_profile_config_and_expected_rows():
+    _reset_config_loader()
+    cfg = config_module.load_config("tier_1_threshold_p999_CL_ES_experiment")
+    assert list(cfg.symbols) == ["CL", "ES"]
+    assert cfg.execution.prediction_entry_threshold == 0.25
+    assert cfg.execution.threshold_mode == "prediction_abs_quantile"
+    assert cfg.execution.threshold_quantile == 0.999
+    assert len(cfg.symbols) * 30 == 60
+
+
 def test_experimental_threshold_computed_from_train_predictions_only():
     cfg = RootConfig(
         execution=ExecutionConfig(
