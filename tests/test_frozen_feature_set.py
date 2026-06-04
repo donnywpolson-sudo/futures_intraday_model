@@ -86,6 +86,12 @@ def test_valid_frozen_feature_set_reports_pass_and_final_eligible(tmp_path, monk
     assert _stage(rows, 23)["status"] == "PASS"
     assert _stage(rows, 24)["status"] == "MISSING"
     assert _stage(rows, 24)["upstream_stage_status"] == "PASS"
+    stage22 = json.loads(Path("reports/validation/stage_22_train_only_selection_audit_report.json").read_text(encoding="utf-8"))
+    matrix_cols = set(pl.read_parquet(root / "ES" / "2025.parquet").columns)
+    assert {r["feature"] for r in stage22}.issubset(matrix_cols)
+    assert {"x_train", "x_noise", "test_only_edge"}.isdisjoint({r["feature"] for r in stage22})
+    manifest = json.loads(Path("data/frozen_features/phase5_v1/manifest.json").read_text(encoding="utf-8"))
+    assert manifest["source_ranking_artifact"] == "reports/validation/stage_22_train_only_selection_audit_report.json"
 
 
 def test_selected_features_cannot_include_target_metadata_or_excluded(tmp_path, monkeypatch):

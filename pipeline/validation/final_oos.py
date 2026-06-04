@@ -206,7 +206,7 @@ def _status(
         "available_columns": ",".join(available),
         "required_columns": ",".join(required),
         "producing_stage": "Stage 25 FINAL OOS PREDICTIONS from Stage 24 FINAL WFA WITH FROZEN FEATURES",
-        "regenerate_command": "no supported standalone final WFA regeneration command found; rerun the supported final pipeline when implemented",
+        "regenerate_command": "python run.py --from-stage final_wfa --data-root data\\frozen_features\\phase5_v1",
         "reason": reason,
         "row_count": row_count,
     }

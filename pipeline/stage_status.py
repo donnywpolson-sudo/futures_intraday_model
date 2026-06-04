@@ -74,6 +74,18 @@ def build_pipeline_status(config: Any, *, data_root: str | None = None) -> list[
             reason = str(frozen.get("reason"))
             outputs_present = status != "MISSING"
             freshness = "valid" if status == "PASS" else ("missing" if status == "MISSING" else "invalid")
+        if contract.stage_index == 20 and status == "PASS":
+            count = _stage20_candidate_count()
+            if count is not None:
+                reason = f"ok expanded_candidate_count={count}"
+        if contract.stage_index == 22 and upstream == "PASS" and outputs_present:
+            stage22 = _validate_stage22_features(config)
+            if stage22["status"] != "PASS":
+                status = str(stage22["status"])
+                reason = str(stage22["reason"])
+                freshness = "invalid"
+            elif stage22.get("eligible_candidate_count") is not None:
+                reason = f"ok eligible_candidate_count={stage22['eligible_candidate_count']}"
         if contract.stage_index == 25 and upstream == "PASS":
             final_oos = validate_final_oos_predictions(
                 target_col=target_col,
@@ -107,6 +119,13 @@ def build_pipeline_status(config: Any, *, data_root: str | None = None) -> list[
                 status = str(lineage["status"])
                 reason = f"{lineage['reason']}; repair_command={_repair_command(contract.stage_index, target_col)}"
                 freshness = "stale" if status == "STALE" else freshness
+            else:
+                gate = _read_json("reports/validation/stage_27_strategy_acceptance_audit_report.json")
+                gate_status = str(gate.get("strategy_acceptance_status") or gate.get("status") or "")
+                if gate_status == "REJECT":
+                    status = "FAIL"
+                    reason = "strategy gate rejected after costs"
+                    freshness = "valid"
         status_by_stage[contract.stage_index] = status
 
         row = {
@@ -368,7 +387,7 @@ def _repair_command(stage_index: int, target_col: str) -> str:
     if stage_index in {9, 10, 11}:
         return "python run.py --from-stage causally_gated_normalized --data-root data\\causally_gated_normalized"
     if stage_index >= 20:
-        return "no supported standalone final-stage regeneration command found; rerun the supported final pipeline when implemented"
+        return "python run.py --from-stage final_wfa --data-root data\\frozen_features\\phase5_v1"
     if target_col:
         return "regenerate upstream artifact for this stage"
     return ""
@@ -395,5 +414,51 @@ def _expected_split_count() -> int | None:
             rows = list(csv.DictReader(fh))
         splits = {str(r.get("split")) for r in rows if str(r.get("split") or "").isdigit()}
         return len(splits) or None
+    except Exception:
+        return None
+
+
+def _read_json(path: str | Path) -> dict[str, Any]:
+    try:
+        import json
+
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _stage20_candidate_count() -> int | None:
+    rows = _read_json_any("reports/validation/stage_20_feature_expansion_manifest.json")
+    return len(rows) if isinstance(rows, list) else None
+
+
+def _validate_stage22_features(config: Any) -> dict[str, Any]:
+    payload = _read_json_any("reports/validation/stage_22_train_only_selection_audit_report.json")
+    if not payload:
+        return {"status": "PASS", "eligible_candidate_count": None}
+    if isinstance(payload, list):
+        features = [str(r.get("feature")) for r in payload if r.get("feature")]
+    elif isinstance(payload, dict):
+        features = [str(x) for x in (payload.get("selected_features") or payload.get("feature_cols") or [])]
+        features.extend(str(x) for x in (payload.get("rejected_features") or []) if isinstance(x, str))
+    else:
+        features = []
+    if not features:
+        return {"status": "PASS", "eligible_candidate_count": None}
+    paths = _parquet_files([Path("data/feature_matrices/expanded")], config)
+    if not paths:
+        return {"status": "FAIL", "reason": "Stage 22 validation failed: no expanded matrix found"}
+    schema = pl.scan_parquet(paths[0]).collect_schema().names()
+    missing = sorted(set(features) - set(schema))
+    if missing:
+        return {"status": "FAIL", "reason": "Stage 22 report features missing from expanded matrix: " + ",".join(missing[:10])}
+    return {"status": "PASS", "eligible_candidate_count": len(set(features))}
+
+
+def _read_json_any(path: str | Path) -> Any:
+    try:
+        import json
+
+        return json.loads(Path(path).read_text(encoding="utf-8"))
     except Exception:
         return None

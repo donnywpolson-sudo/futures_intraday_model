@@ -48,6 +48,8 @@ from pipeline.validation.final_diagnostics import run_final_diagnostics
 from pipeline.validation.alpha_evidence import write_alpha_evidence_report
 from pipeline.validation.leakage_report import write_leakage_audit_report
 from pipeline.validation.final_summary import build_final_safety_summary, print_final_safety_summary
+from pipeline.final_wfa import run_final_wfa_pipeline
+from pipeline.validation.final_threshold_diagnostics import print_final_threshold_summary
 from pipeline.validation.threshold_used import threshold_used_row_count
 
 _LOG_MODE = os.environ.get('LOG_MODE', 'clean').strip().lower()
@@ -1986,6 +1988,39 @@ if __name__ == '__main__':
         checkpoint_mode=checkpoint_mode,
         stage_plan=stage_plan,
     )
+    if start_stage == "final_wfa":
+        frozen_root = Path(args.data_root or data_root_override or "data/frozen_features/phase5_v1")
+        try:
+            result = run_final_wfa_pipeline(
+                config=config,
+                run_id=_RUN_ID,
+                profile=getattr(_ns_cfg, "ACTIVE_PROFILE", ""),
+                frozen_root=frozen_root,
+                feature_matrix_root="data/feature_matrices/expanded",
+            )
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from exc
+        print_final_threshold_summary(result["threshold_diagnostics"])
+        trade_audit = result.get("trade_audit", {})
+        print(
+            "[FINAL TRADE AUDIT] "
+            f"profitable_min_trades_rejects={trade_audit.get('profitable_min_trades_rejects', 0)} "
+            f"median_shortfall={float(trade_audit.get('median_shortfall', 0.0)):.6g} "
+            f"best_net_pnl={float(trade_audit.get('best_net_pnl', 0.0)):.6g}",
+            flush=True,
+        )
+        print(
+            "[FINAL WFA COMPLETE]\n"
+            f"stage24={result['stage24_path']}\n"
+            f"stage25={result['stage25_path']} rows={result['stage25_rows']} "
+            f"split_slots={result['actual_split_slots']}/{result['expected_split_slots']}\n"
+            f"stage26={result['stage26_path']} source_checksum={result['stage26_source_checksum']}\n"
+            f"stage27={result['stage27_path']} source_checksum={result['stage27_source_checksum']}\n"
+            f"final_gate={result['final_gate_status']}\n"
+            f"deployment={'READY' if result['final_gate_status'] == 'ACCEPT' else 'NOT_READY'}",
+            flush=True,
+        )
+        raise SystemExit(0)
     if _default_run_requested(args) and start_stage == "raw":
         raise SystemExit(_default_run_fail_message(config, data_dir))
     wfa_input_stage = start_stage

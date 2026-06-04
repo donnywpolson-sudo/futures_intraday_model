@@ -10,6 +10,7 @@ import polars as pl
 
 from pipeline.common.io_safe import atomic_write_json, write_csv_rows
 from pipeline.features.registry import FORBIDDEN_PREFIXES, METADATA, SAFE_ROLL_FEATURE_PREFIXES, TARGET_PREFIXES
+from pipeline.validation.diagnostic_io import write_csv_json
 
 
 FROZEN_FEATURE_ROOT = Path("data/frozen_features/phase5_v1")
@@ -18,6 +19,17 @@ SELECTED_FEATURES_CSV = FROZEN_FEATURE_ROOT / "selected_features.csv"
 REJECTED_FEATURES_CSV = FROZEN_FEATURE_ROOT / "rejected_features.csv"
 MANIFEST_JSON = FROZEN_FEATURE_ROOT / "manifest.json"
 EXTRA_METADATA_COLS = {"session_bar_index"}
+STAGE22_AUDIT_CSV = Path("reports/validation/stage_22_train_only_selection_audit_report.csv")
+STAGE22_AUDIT_JSON = Path("reports/validation/stage_22_train_only_selection_audit_report.json")
+STAGE22_FIELDS = [
+    "run_id", "profile", "created_at", "source_feature_matrix", "source_feature_matrix_hash",
+    "target_col", "train_only", "ranking_method", "selected_candidate_count",
+    "rejected_candidate_count", "eligible_candidate_count", "leakage_rejected_count",
+    "metadata_rejected_count", "zero_variance_rejected_count", "correlation_rejected_count",
+    "stability_rejected_count", "feature", "eligible", "selected", "rank", "score",
+    "ic_mean", "ic_median", "ic_std", "stability_score", "fold_pass_count", "missing_pct",
+    "zero_variance_flag", "max_abs_corr_to_selected", "rejection_reason",
+]
 
 
 def create_frozen_feature_set(
@@ -44,6 +56,16 @@ def create_frozen_feature_set(
     selected = [r["feature"] for r in selected_rows]
     if not selected:
         raise RuntimeError("FROZEN FEATURE SET FAIL: selected_feature_count=0")
+    _write_stage22_audit(
+        run_id=run_id,
+        profile=profile,
+        paths=paths,
+        candidates=candidates,
+        selected_rows=selected_rows,
+        rejected_rows=rejected_rows,
+        target_col=target_col,
+        train_end=train_end,
+    )
     output_root.mkdir(parents=True, exist_ok=True)
     feature_cols_path = output_root / "feature_cols.json"
     selected_path = output_root / "selected_features.csv"
@@ -198,6 +220,65 @@ def _rank_train_only(paths: list[Path], candidates: list[str], target_col: str, 
     return selected, rejected
 
 
+def _write_stage22_audit(
+    *,
+    run_id: str,
+    profile: str,
+    paths: list[Path],
+    candidates: list[str],
+    selected_rows: list[dict[str, Any]],
+    rejected_rows: list[dict[str, Any]],
+    target_col: str,
+    train_end: Any,
+) -> None:
+    created_at = datetime.now(timezone.utc).isoformat()
+    selected_features = [str(r["feature"]) for r in selected_rows]
+    selected_meta = {str(r["feature"]): r for r in selected_rows}
+    rejected_meta = {str(r["feature"]): r for r in rejected_rows}
+    feature_rows = []
+    for feature in sorted(set(candidates) | set(selected_meta) | set(rejected_meta)):
+        ics = _feature_ics(feature, paths, target_col, train_end)
+        stats = _feature_stats(feature, paths, train_end)
+        selected = feature in selected_meta
+        feature_rows.append({
+            "feature": feature,
+            "eligible": feature in candidates,
+            "selected": selected,
+            "rank": selected_meta.get(feature, {}).get("rank", ""),
+            "score": selected_meta.get(feature, {}).get("score", rejected_meta.get(feature, {}).get("score", "")),
+            "ic_mean": _mean(ics),
+            "ic_median": _median(ics),
+            "ic_std": _std(ics),
+            "stability_score": _stability(ics),
+            "fold_pass_count": len(ics),
+            "missing_pct": stats["missing_pct"],
+            "zero_variance_flag": stats["zero_variance_flag"],
+            "max_abs_corr_to_selected": _max_abs_corr_to_selected(feature, selected_features, paths, train_end),
+            "rejection_reason": "" if selected else str(rejected_meta.get(feature, {}).get("reason") or "not_selected"),
+        })
+    zero_var_rejected = sum(1 for r in feature_rows if (not r["selected"]) and r["zero_variance_flag"])
+    summary = {
+        "run_id": run_id,
+        "profile": profile,
+        "created_at": created_at,
+        "source_feature_matrix": ";".join(str(p) for p in paths),
+        "source_feature_matrix_hash": _source_hash(paths),
+        "target_col": target_col,
+        "train_only": True,
+        "ranking_method": "train_only_abs_corr_first_wfa_train_window",
+        "selected_candidate_count": len(selected_rows),
+        "rejected_candidate_count": len(rejected_rows),
+        "eligible_candidate_count": len(candidates),
+        "leakage_rejected_count": 0,
+        "metadata_rejected_count": 0,
+        "zero_variance_rejected_count": zero_var_rejected,
+        "correlation_rejected_count": 0,
+        "stability_rejected_count": 0,
+    }
+    rows = [{**summary, **r} for r in sorted(feature_rows, key=lambda r: (not r["selected"], int(r["rank"] or 999999), r["feature"]))]
+    write_csv_json(rows, csv_path=STAGE22_AUDIT_CSV, json_path=STAGE22_AUDIT_JSON, fields=STAGE22_FIELDS)
+
+
 def _leakage_check(selected: list[str], matrix_cols: list[str], target_col: str) -> dict[str, Any]:
     missing = [c for c in selected if c not in matrix_cols]
     if missing:
@@ -206,6 +287,102 @@ def _leakage_check(selected: list[str], matrix_cols: list[str], target_col: str)
     if bad:
         return {"status": "FAIL", "reason": "selected features include forbidden columns: " + ",".join(bad)}
     return {"status": "PASS", "reason": "ok"}
+
+
+def _feature_ics(feature: str, paths: list[Path], target_col: str, train_end: Any) -> list[float]:
+    vals = []
+    for path in paths:
+        try:
+            val = (
+                pl.scan_parquet(path)
+                .filter(pl.col("ts_event") < train_end)
+                .filter(pl.col(target_col).is_not_null())
+                .select(pl.corr(feature, target_col).alias("ic"))
+                .collect()["ic"][0]
+            )
+            if val is not None and val == val:
+                vals.append(float(val))
+        except Exception:
+            continue
+    return vals
+
+
+def _feature_stats(feature: str, paths: list[Path], train_end: Any) -> dict[str, Any]:
+    try:
+        stats = (
+            pl.scan_parquet(paths)
+            .filter(pl.col("ts_event") < train_end)
+            .select(
+                pl.len().alias("n"),
+                pl.col(feature).null_count().alias("nulls"),
+                pl.col(feature).cast(pl.Float64, strict=False).std().alias("std"),
+            )
+            .collect()
+            .row(0, named=True)
+        )
+    except Exception:
+        return {"missing_pct": "", "zero_variance_flag": ""}
+    n = float(stats.get("n") or 0)
+    nulls = float(stats.get("nulls") or 0)
+    std = float(stats.get("std") or 0.0)
+    return {"missing_pct": 0.0 if n == 0 else nulls / n, "zero_variance_flag": bool(std == 0.0)}
+
+
+def _max_abs_corr_to_selected(feature: str, selected: list[str], paths: list[Path], train_end: Any) -> float:
+    vals = []
+    for other in selected:
+        if other == feature:
+            continue
+        try:
+            val = (
+                pl.scan_parquet(paths)
+                .filter(pl.col("ts_event") < train_end)
+                .select(pl.corr(feature, other).alias("corr"))
+                .collect()["corr"][0]
+            )
+            if val is not None and val == val:
+                vals.append(abs(float(val)))
+        except Exception:
+            continue
+    return max(vals) if vals else 0.0
+
+
+def _source_hash(paths: list[Path]) -> str:
+    h = hashlib.sha256()
+    for path in sorted(paths):
+        stat = path.stat()
+        h.update(str(path).encode("utf-8"))
+        h.update(str(stat.st_size).encode("utf-8"))
+        h.update(str(stat.st_mtime_ns).encode("utf-8"))
+    return h.hexdigest()
+
+
+def _mean(vals: list[float]) -> float:
+    return sum(vals) / len(vals) if vals else 0.0
+
+
+def _median(vals: list[float]) -> float:
+    if not vals:
+        return 0.0
+    vals = sorted(vals)
+    mid = len(vals) // 2
+    return vals[mid] if len(vals) % 2 else (vals[mid - 1] + vals[mid]) / 2.0
+
+
+def _std(vals: list[float]) -> float:
+    if len(vals) < 2:
+        return 0.0
+    mu = _mean(vals)
+    return (sum((v - mu) ** 2 for v in vals) / (len(vals) - 1)) ** 0.5
+
+
+def _stability(vals: list[float]) -> float:
+    if not vals:
+        return 0.0
+    med = _median(vals)
+    if med == 0:
+        return 0.0
+    return sum(1 for v in vals if (v > 0) == (med > 0)) / len(vals)
 
 
 def _config_hash(config: Any) -> str:
