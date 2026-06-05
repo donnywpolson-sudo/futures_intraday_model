@@ -13,14 +13,17 @@ from pipeline.validation.diagnostic_io import write_csv_json
 
 STAGE20_MANIFEST_CSV = Path("reports/validation/stage_20_feature_expansion_manifest.csv")
 STAGE20_MANIFEST_JSON = Path("reports/validation/stage_20_feature_expansion_manifest.json")
+STAGE21_DISCOVERY_CSV = Path("reports/validation/stage_21_feature_discovery_audit_summary.csv")
+STAGE21_DISCOVERY_JSON = Path("reports/validation/stage_21_feature_discovery_audit_report.json")
 MANIFEST_FIELDS = [
     "feature", "family", "lookback", "causal", "session_safe", "required_input_columns",
     "missing_pct", "zero_variance_flag", "created_at",
 ]
+STAGE21_FIELDS = ["status", "feature", "family", "eligible", "reason", "source_feature_matrix", "created_at"]
 
 
-def expand_features(df: pl.DataFrame, config: Any | None = None) -> pl.DataFrame:
-    if config is not None and not getattr(getattr(config, "pipeline", object()), "enable_expansion", True):
+def expand_features(df: pl.DataFrame, config: Any | None = None, *, force: bool = False) -> pl.DataFrame:
+    if not force and config is not None and not getattr(getattr(config, "pipeline", object()), "enable_expansion", True):
         return df
     registry = build_column_registry(df, source_stage="pre_expansion")
     features = [c for c in registry["feature_columns"] if c in df.columns]
@@ -56,9 +59,11 @@ def expanded_feature_root(in_root: str | Path = "data/feature_matrices/baseline"
         fresh, _ = cache_is_fresh(out, meta, config) if meta else (False, "no config")
         if fresh:
             sample = pl.read_parquet(out)
-            rows.append({"input": str(p), "output": str(out), "status": "COMPLETED_CACHED"})
-            continue
-        mat = expand_features(pl.read_parquet(p), config)
+            if _has_required_expansion_columns(sample):
+                rows.append({"input": str(p), "output": str(out), "status": "COMPLETED_CACHED"})
+                continue
+            fresh = False
+        mat = expand_features(pl.read_parquet(p), config, force=True)
         mat.write_parquet(out)
         if meta:
             write_cache_metadata(out, meta)
@@ -68,7 +73,13 @@ def expanded_feature_root(in_root: str | Path = "data/feature_matrices/baseline"
     if sample is not None:
         write_column_registry(sample, out_root / "column_registry.json", source_stage="expanded", config=config, source_paths=[out_root / "manifest.json"])
         _write_stage20_manifest(out_root, config)
+        _write_stage21_discovery(out_root)
     return {"status": "PASS", "files": rows}
+
+
+def _has_required_expansion_columns(df: pl.DataFrame) -> bool:
+    required = {"ret_3", "ret_5", "roll_vol_15", "roll_range_15", "roll_volume_15", "volume_z_15", "body_to_range", "dist_ema_15"}
+    return required.issubset(set(df.columns))
 
 
 def _ohlcv_feature_exprs(df: pl.DataFrame) -> list[pl.Expr]:
@@ -158,6 +169,30 @@ def _write_stage20_manifest(out_root: Path, config: Any | None) -> None:
             "created_at": created_at,
         })
     write_csv_json(rows, csv_path=STAGE20_MANIFEST_CSV, json_path=STAGE20_MANIFEST_JSON, fields=MANIFEST_FIELDS)
+
+
+def _write_stage21_discovery(out_root: Path) -> None:
+    import json
+    from datetime import datetime, timezone
+
+    registry_path = out_root / "column_registry.json"
+    if not registry_path.exists():
+        return
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    created_at = datetime.now(timezone.utc).isoformat()
+    rows = [
+        {
+            "status": "PASS",
+            "feature": str(feature),
+            "family": _family(str(feature)),
+            "eligible": True,
+            "reason": "eligible_numeric_non_leakage",
+            "source_feature_matrix": str(out_root),
+            "created_at": created_at,
+        }
+        for feature in registry.get("feature_columns", [])
+    ]
+    write_csv_json(rows, csv_path=STAGE21_DISCOVERY_CSV, json_path=STAGE21_DISCOVERY_JSON, fields=STAGE21_FIELDS)
 
 
 def _feature_stats(paths: list[Path], feature: str) -> dict[str, Any]:

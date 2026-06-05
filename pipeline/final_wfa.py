@@ -24,6 +24,7 @@ from pipeline.validation.final_experiment_diagnostics import (
 )
 from pipeline.validation.final_threshold_diagnostics import write_final_threshold_diagnostics
 from pipeline.validation.final_trade_audit import write_final_trade_count_audit
+from pipeline.validation.frozen_set_comparison import write_frozen_set_comparison
 from pipeline.validation.final_oos import (
     FINAL_OOS_PREDICTIONS,
     FINAL_WFA_BACKTEST,
@@ -172,6 +173,7 @@ def run_final_wfa_pipeline(
         config=config,
         trade_audit=trade_audit,
     )
+    frozen_set_comparison = write_frozen_set_comparison(current_run_id=run_id, frozen_root=frozen_root)
     return {
         "status": "PASS",
         "stage24_path": str(FINAL_WFA_BACKTEST),
@@ -189,6 +191,7 @@ def run_final_wfa_pipeline(
         "experiment": experiment,
         "trade_audit": trade_audit,
         "profile_comparison": profile_comparison,
+        "frozen_set_comparison": frozen_set_comparison,
     }
 
 

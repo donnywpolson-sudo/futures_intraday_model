@@ -50,6 +50,7 @@ from pipeline.validation.leakage_report import write_leakage_audit_report
 from pipeline.validation.final_summary import build_final_safety_summary, print_final_safety_summary
 from pipeline.final_wfa import run_final_wfa_pipeline
 from pipeline.validation.final_threshold_diagnostics import print_final_threshold_summary
+from pipeline.validation.frozen_set_comparison import print_frozen_set_comparison_summary
 from pipeline.validation.threshold_used import threshold_used_row_count
 
 _LOG_MODE = os.environ.get('LOG_MODE', 'clean').strip().lower()
@@ -2009,6 +2010,7 @@ if __name__ == '__main__':
             f"best_net_pnl={float(trade_audit.get('best_net_pnl', 0.0)):.6g}",
             flush=True,
         )
+        print_frozen_set_comparison_summary(result.get("frozen_set_comparison", {}))
         print(
             "[FINAL WFA COMPLETE]\n"
             f"stage24={result['stage24_path']}\n"
