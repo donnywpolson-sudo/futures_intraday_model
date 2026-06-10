@@ -1,0 +1,58 @@
+default_profile: tier_1_core
+
+paths:
+  raw_root: data/raw
+  causal_base_root: data/causally_gated_normalized
+  labeled_root: data/labeled
+  reports_root: reports
+
+defaults:
+  years: [2023, 2024, 2025]
+
+  research_years: [2023, 2024]
+  final_holdout_years: [2025]
+
+  entry_lag_bars: 1
+  target_horizon_bars: 15
+  trend_horizon_bars: 30
+
+  train_days: 365
+  test_days: 30
+  step_days: 30
+  purge_bars: 15
+
+  roll_window_bars: 15
+  max_synthetic_gap_minutes: 120
+
+  atr_window_bars: 60
+  profit_atr_mult: 0.50
+  stop_atr_mult: 1.00
+  trend_adverse_atr_mult: 1.50
+
+profiles:
+  tier_0_smoke:
+    description: "Fastest code test: ES only, one year."
+    markets: ["ES"]
+    years: [2025]
+
+  tier_1_core:
+    description: "Core proof set: three different market types."
+    markets: ["CL", "ES", "ZN"]
+    years: [2023, 2024, 2025]
+
+  tier_2_liquid:
+    description: "Broader liquid futures set."
+    markets: ["ES", "NQ", "RTY", "YM", "CL", "GC", "ZN", "ZB"]
+    years: [2023, 2024, 2025]
+
+  tier_3_full:
+    description: "Curated full research universe. Use only after gates work."
+    markets: ["ES", "NQ", "RTY", "YM", "CL", "NG", "GC", "HG", "ZN", "ZB", "ZC", "ZS", "ZW"]
+    years: [2023, 2024, 2025]
+
+  all_raw:
+    description: "Discovery mode: process every data/raw/{market}/{year}.parquet file."
+    discovery: true
+
+aliases:
+  tier_1_CL_ES_ZN: tier_1_core

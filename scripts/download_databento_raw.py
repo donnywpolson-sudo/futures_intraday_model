@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -17,7 +16,8 @@ from typing import Iterable, Protocol, TypedDict, cast
 import pandas as pd
 
 
-API_KEY_ENV_VAR = "DATABENTO_API_KEY"
+API_KEY_NAME = "DATABENTO_API_KEY"
+API_KEY_FILE = Path(__file__).resolve().parents[1] / "databento.env"
 CME_DATASET = "GLBX.MDP3"
 CFE_DATASET = "XCBF.PITCH"
 SCHEMA = "ohlcv-1m"
@@ -239,47 +239,30 @@ def normalize_api_key(value: str | None) -> str:
     return key
 
 
-def default_api_key_files() -> list[Path]:
-    home = Path.home()
-    repo_root = Path(__file__).resolve().parents[1]
-    return [
-        home / ".databento" / "env",
-        home / ".databento.env",
-        repo_root / "databento.env",
-        repo_root / ".env.local",
-        repo_root / ".env",
-    ]
-
-
-def load_databento_api_key_from_files(paths: Iterable[Path]) -> str:
-    for path in paths:
-        if not path.exists():
+def load_databento_api_key_from_file(path: Path) -> str:
+    if not path.exists():
+        return ""
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
+        text = line.strip()
+        if not text or text.startswith("#"):
             continue
-        for line in path.read_text(encoding="utf-8").splitlines():
-            text = line.strip()
-            if not text or text.startswith("#"):
-                continue
-            if text.startswith("export "):
-                text = text.removeprefix("export ").strip()
-            if "=" not in text:
-                return normalize_api_key(text)
-            name, value = text.split("=", 1)
-            if name.strip() == API_KEY_ENV_VAR:
-                return normalize_api_key(value)
+        if "=" not in text:
+            return normalize_api_key(text)
+        name, value = text.split("=", 1)
+        if name.strip() == API_KEY_NAME:
+            return normalize_api_key(value)
     return ""
 
 
 def resolve_databento_api_key() -> str:
-    return normalize_api_key(os.environ.get(API_KEY_ENV_VAR)) or load_databento_api_key_from_files(
-        default_api_key_files()
-    )
+    return load_databento_api_key_from_file(API_KEY_FILE)
 
 
 def get_client() -> DatabentoClient:
     key = resolve_databento_api_key()
     if not key:
         raise SystemExit(
-            "Set DATABENTO_API_KEY in the environment or in %USERPROFILE%\\.databento\\env."
+            f"Set {API_KEY_NAME} in {API_KEY_FILE.name} at the project root."
         )
     import databento as db
 
@@ -333,7 +316,7 @@ def preflight_auth(
             f"{task.product} {task.year} symbol={task.symbol} "
             f"{task.start}->{task.end}. "
             "The prior OK_EXISTING lines, if any, were local file checks only. "
-            f"{API_KEY_ENV_VAR} may be invalid for that dataset/symbol/date range. "
+            f"{API_KEY_NAME} may be invalid for that dataset/symbol/date range. "
             f"Databento error: {exc}"
         ) from exc
 
@@ -550,6 +533,24 @@ def range_midpoint(start: str, end: str) -> str | None:
     return (start_date + timedelta(days=span_days // 2)).isoformat()
 
 
+def next_month_start(value: date) -> date:
+    if value.month == 12:
+        return date(value.year + 1, 1, 1)
+    return date(value.year, value.month + 1, 1)
+
+
+def iter_month_ranges(start: str, end: str) -> list[tuple[str, str]]:
+    start_date = date.fromisoformat(start)
+    end_date = date.fromisoformat(end)
+    ranges: list[tuple[str, str]] = []
+    current = start_date
+    while current < end_date:
+        month_end = min(next_month_start(current), end_date)
+        ranges.append((current.isoformat(), month_end.isoformat()))
+        current = month_end
+    return ranges
+
+
 def concat_download_dataframes(frames: list[pd.DataFrame]) -> pd.DataFrame:
     if len(frames) == 1:
         return frames[0]
@@ -600,39 +601,28 @@ def download_dataframe_with_split_retry(
         return concat_download_dataframes([left, right])
 
 
-def download_dataframe_in_halves(
+def download_dataframe_in_months(
     client: DatabentoClient,
     task: DownloadTask,
     *,
     condition_by_date: dict[str, str],
 ) -> pd.DataFrame:
-    midpoint_text = range_midpoint(task.start, task.end)
-    if midpoint_text is None:
-        return download_dataframe_with_split_retry(
-            client,
-            task,
-            condition_by_date=condition_by_date,
+    frames: list[pd.DataFrame] = []
+    for month_start, month_end in iter_month_ranges(task.start, task.end):
+        print(
+            f"DOWNLOAD_MONTH {task.dataset} {task.product} {task.year} "
+            f"{month_start}->{month_end}"
         )
-
-    print(
-        f"DOWNLOAD_SPLIT {task.dataset} {task.product} {task.year} "
-        f"{task.start}->{task.end} at {midpoint_text}"
-    )
-    left = download_dataframe_with_split_retry(
-        client,
-        task,
-        condition_by_date=condition_by_date,
-        start=task.start,
-        end=midpoint_text,
-    )
-    right = download_dataframe_with_split_retry(
-        client,
-        task,
-        condition_by_date=condition_by_date,
-        start=midpoint_text,
-        end=task.end,
-    )
-    return concat_download_dataframes([left, right])
+        frames.append(
+            download_dataframe_with_split_retry(
+                client,
+                task,
+                condition_by_date=condition_by_date,
+                start=month_start,
+                end=month_end,
+            )
+        )
+    return concat_download_dataframes(frames)
 
 
 def estimate_cost(
@@ -704,7 +694,7 @@ def execute_download(
             if condition_key not in condition_cache:
                 condition_cache[condition_key] = fetch_dataset_conditions(client, task)
             condition_info = condition_cache[condition_key]
-            df = download_dataframe_in_halves(
+            df = download_dataframe_in_months(
                 client,
                 task,
                 condition_by_date=condition_info["conditions"],

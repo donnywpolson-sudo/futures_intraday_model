@@ -17,19 +17,14 @@ python -m pip install -r requirements.txt
 
 ## Databento API Key
 
-Preferred permanent setup: put the key in a user-level file outside this repo:
+Put the Databento API key in `databento.env` at the project root:
 
 ```powershell
-New-Item -ItemType Directory -Force "$env:USERPROFILE\.databento"
-Set-Content -Path "$env:USERPROFILE\.databento\env" -Value 'DATABENTO_API_KEY="YOUR_KEY"'
+Set-Content -Path .\databento.env -Value 'DATABENTO_API_KEY="YOUR_KEY"' -Encoding utf8
 ```
 
-The raw downloader reads `DATABENTO_API_KEY` from the shell first, then from that user-level file.
-For a temporary shell-only key:
-
-```powershell
-$env:DATABENTO_API_KEY="YOUR_KEY"
-```
+The raw downloader only reads `DATABENTO_API_KEY` from that file. `databento.env` is git-ignored.
+It also accepts a raw key as the only non-comment line in `databento.env`.
 
 ## Raw Data Download
 

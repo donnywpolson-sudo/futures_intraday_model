@@ -21,8 +21,9 @@ from scripts.download_databento_raw import (
     estimate_cost,
     first_pending_download,
     is_fatal_error,
+    iter_month_ranges,
     iter_year_tasks,
-    load_databento_api_key_from_files,
+    load_databento_api_key_from_file,
     normalize_api_key,
     parse_symbols,
     preflight_auth,
@@ -68,7 +69,7 @@ class SplitRetryTimeseries:
 
     def get_range(self, **kwargs: object) -> object:
         self.calls.append(kwargs)
-        if kwargs["start"] == "2014-01-01" and kwargs["end"] == "2014-07-02":
+        if kwargs["start"] == "2014-02-01" and kwargs["end"] == "2014-03-01":
             raise RuntimeError("Error streaming response: Response ended prematurely")
         start = str(kwargs["start"])
         df = pd.DataFrame(
@@ -155,36 +156,37 @@ def test_normalize_api_key_strips_wrapping_noise() -> None:
     assert normalize_api_key("'db-test'") == "db-test"
 
 
-def test_load_databento_api_key_from_dotenv_file(tmp_path: Path) -> None:
-    key_file = tmp_path / "env"
+def test_load_databento_api_key_from_project_databento_env(tmp_path: Path) -> None:
+    key_file = tmp_path / "databento.env"
     key_file.write_text(
         "# local Databento key\nDATABENTO_API_KEY='db-file-test'\n",
         encoding="utf-8",
     )
 
-    assert load_databento_api_key_from_files([key_file]) == "db-file-test"
+    assert load_databento_api_key_from_file(key_file) == "db-file-test"
 
 
-def test_load_databento_api_key_from_raw_key_file(tmp_path: Path) -> None:
-    key_file = tmp_path / "api_key"
+def test_load_databento_api_key_accepts_raw_key_in_project_databento_env(
+    tmp_path: Path,
+) -> None:
+    key_file = tmp_path / "databento.env"
     key_file.write_text("  db-raw-test  \n", encoding="utf-8")
 
-    assert load_databento_api_key_from_files([key_file]) == "db-raw-test"
+    assert load_databento_api_key_from_file(key_file) == "db-raw-test"
 
 
-def test_resolve_databento_api_key_prefers_environment(
+def test_resolve_databento_api_key_uses_project_databento_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    key_file = tmp_path / "env"
+    key_file = tmp_path / "databento.env"
     key_file.write_text("DATABENTO_API_KEY=db-file-test\n", encoding="utf-8")
-    monkeypatch.setenv("DATABENTO_API_KEY", "db-env-test")
     monkeypatch.setattr(
-        "scripts.download_databento_raw.default_api_key_files",
-        lambda: [key_file],
+        "scripts.download_databento_raw.API_KEY_FILE",
+        key_file,
     )
 
-    assert resolve_databento_api_key() == "db-env-test"
+    assert resolve_databento_api_key() == "db-file-test"
 
 
 def test_condition_is_degraded_classifies_quality_status() -> None:
@@ -252,6 +254,15 @@ def test_iter_year_tasks_clips_glbx_to_available_start(tmp_path: Path) -> None:
     assert len(tasks) == 1
     assert tasks[0].start == "2010-06-06"
     assert tasks[0].end == "2011-01-01"
+
+
+def test_iter_month_ranges_uses_calendar_months_and_clips_edges() -> None:
+    assert iter_month_ranges("2024-01-15", "2024-04-10") == [
+        ("2024-01-15", "2024-02-01"),
+        ("2024-02-01", "2024-03-01"),
+        ("2024-03-01", "2024-04-01"),
+        ("2024-04-01", "2024-04-10"),
+    ]
 
 
 def test_first_pending_download_skips_existing_files(tmp_path: Path) -> None:
@@ -568,7 +579,7 @@ def test_execute_download_stops_on_auth_failure(tmp_path: Path) -> None:
     assert results[0]["status"] == "download_error"
 
 
-def test_execute_download_downloads_halves_and_splits_retryable_half_failure(
+def test_execute_download_downloads_months_and_splits_retryable_month_failure(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "raw" / "6B" / "2014.parquet"
@@ -586,19 +597,18 @@ def test_execute_download_downloads_halves_and_splits_retryable_half_failure(
     results = execute_download(client, [task], overwrite=False)
 
     assert results[0]["status"] == "ok"
-    assert results[0]["validation"]["rows"] == 3
-    assert [(call["start"], call["end"]) for call in client.timeseries.calls] == [
-        ("2014-01-01", "2014-07-02"),
-        ("2014-01-01", "2014-04-02"),
-        ("2014-04-02", "2014-07-02"),
-        ("2014-07-02", "2015-01-01"),
+    assert results[0]["validation"]["rows"] == 13
+    call_ranges = [(call["start"], call["end"]) for call in client.timeseries.calls]
+    assert call_ranges[:4] == [
+        ("2014-01-01", "2014-02-01"),
+        ("2014-02-01", "2014-03-01"),
+        ("2014-02-01", "2014-02-15"),
+        ("2014-02-15", "2014-03-01"),
     ]
+    assert call_ranges[-1] == ("2014-12-01", "2015-01-01")
     df = pd.read_parquet(path)
-    assert df["ts_event"].tolist() == [
-        pd.Timestamp("2014-01-01T15:00:00Z"),
-        pd.Timestamp("2014-04-02T15:00:00Z"),
-        pd.Timestamp("2014-07-02T15:00:00Z"),
-    ]
+    assert df["ts_event"].iloc[0] == pd.Timestamp("2014-01-01T15:00:00Z")
+    assert df["ts_event"].iloc[-1] == pd.Timestamp("2014-12-01T15:00:00Z")
 
 
 def test_estimate_cost_stops_on_auth_failure(tmp_path: Path) -> None:
