@@ -22,10 +22,11 @@ from scripts.download_databento_raw import (
     first_pending_download,
     is_fatal_error,
     iter_year_tasks,
+    load_databento_api_key_from_files,
     normalize_api_key,
-    offline_mode_message,
     parse_symbols,
     preflight_auth,
+    resolve_databento_api_key,
     store_to_required_dataframe,
     validate_download,
     write_store_parquet,
@@ -59,6 +60,38 @@ class FailingMetadata:
 class FailingClient:
     metadata = FailingMetadata()
     timeseries = FailingTimeseries()
+
+
+class SplitRetryTimeseries:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def get_range(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        if kwargs["start"] == "2014-01-01" and kwargs["end"] == "2014-07-02":
+            raise RuntimeError("Error streaming response: Response ended prematurely")
+        start = str(kwargs["start"])
+        df = pd.DataFrame(
+            {
+                "ts_event": [pd.Timestamp(f"{start}T15:00:00Z")],
+                "open": [1.0],
+                "high": [2.0],
+                "low": [0.5],
+                "close": [1.5],
+                "volume": [10],
+                "rtype": [33],
+                "publisher_id": [1],
+                "instrument_id": [100],
+                "symbol": ["6BM4"],
+            }
+        )
+        return FakeStore(df)
+
+
+class SplitRetryClient:
+    def __init__(self) -> None:
+        self.metadata = FailingMetadata()
+        self.timeseries = SplitRetryTimeseries()
 
 
 class AuthFailingEstimateMetadata:
@@ -122,11 +155,36 @@ def test_normalize_api_key_strips_wrapping_noise() -> None:
     assert normalize_api_key("'db-test'") == "db-test"
 
 
-def test_offline_mode_message_says_nothing_downloaded() -> None:
-    assert "Nothing downloaded" in offline_mode_message(key_set=True)
-    assert "--execute" in offline_mode_message(key_set=True)
-    assert "DATABENTO_API_KEY is set" in offline_mode_message(key_set=True)
-    assert "DATABENTO_API_KEY is not set" in offline_mode_message(key_set=False)
+def test_load_databento_api_key_from_dotenv_file(tmp_path: Path) -> None:
+    key_file = tmp_path / "env"
+    key_file.write_text(
+        "# local Databento key\nDATABENTO_API_KEY='db-file-test'\n",
+        encoding="utf-8",
+    )
+
+    assert load_databento_api_key_from_files([key_file]) == "db-file-test"
+
+
+def test_load_databento_api_key_from_raw_key_file(tmp_path: Path) -> None:
+    key_file = tmp_path / "api_key"
+    key_file.write_text("  db-raw-test  \n", encoding="utf-8")
+
+    assert load_databento_api_key_from_files([key_file]) == "db-raw-test"
+
+
+def test_resolve_databento_api_key_prefers_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key_file = tmp_path / "env"
+    key_file.write_text("DATABENTO_API_KEY=db-file-test\n", encoding="utf-8")
+    monkeypatch.setenv("DATABENTO_API_KEY", "db-env-test")
+    monkeypatch.setattr(
+        "scripts.download_databento_raw.default_api_key_files",
+        lambda: [key_file],
+    )
+
+    assert resolve_databento_api_key() == "db-env-test"
 
 
 def test_condition_is_degraded_classifies_quality_status() -> None:
@@ -237,7 +295,7 @@ def test_preflight_auth_fails_fast_on_auth_error(tmp_path: Path) -> None:
         (tmp_path / "raw" / "ES" / "2024.parquet").as_posix(),
     )
 
-    with pytest.raises(SystemExit, match="Databento rejected DATABENTO_API_KEY"):
+    with pytest.raises(SystemExit, match="Databento rejected preflight request for GLBX.MDP3"):
         preflight_auth(AuthFailingPreflightClient(), [task], overwrite=False)
 
 
@@ -508,6 +566,39 @@ def test_execute_download_stops_on_auth_failure(tmp_path: Path) -> None:
 
     assert len(results) == 1
     assert results[0]["status"] == "download_error"
+
+
+def test_execute_download_downloads_halves_and_splits_retryable_half_failure(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "raw" / "6B" / "2014.parquet"
+    client = SplitRetryClient()
+    task = DownloadTask(
+        dataset=CME_DATASET,
+        product="6B",
+        year=2014,
+        start="2014-01-01",
+        end="2015-01-01",
+        symbol="6B.v.0",
+        output_path=path.as_posix(),
+    )
+
+    results = execute_download(client, [task], overwrite=False)
+
+    assert results[0]["status"] == "ok"
+    assert results[0]["validation"]["rows"] == 3
+    assert [(call["start"], call["end"]) for call in client.timeseries.calls] == [
+        ("2014-01-01", "2014-07-02"),
+        ("2014-01-01", "2014-04-02"),
+        ("2014-04-02", "2014-07-02"),
+        ("2014-07-02", "2015-01-01"),
+    ]
+    df = pd.read_parquet(path)
+    assert df["ts_event"].tolist() == [
+        pd.Timestamp("2014-01-01T15:00:00Z"),
+        pd.Timestamp("2014-04-02T15:00:00Z"),
+        pd.Timestamp("2014-07-02T15:00:00Z"),
+    ]
 
 
 def test_estimate_cost_stops_on_auth_failure(tmp_path: Path) -> None:

@@ -17,7 +17,15 @@ python -m pip install -r requirements.txt
 
 ## Databento API Key
 
-Set the key in your shell only. Do not write it to repo files.
+Preferred permanent setup: put the key in a user-level file outside this repo:
+
+```powershell
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.databento"
+Set-Content -Path "$env:USERPROFILE\.databento\env" -Value 'DATABENTO_API_KEY="YOUR_KEY"'
+```
+
+The raw downloader reads `DATABENTO_API_KEY` from the shell first, then from that user-level file.
+For a temporary shell-only key:
 
 ```powershell
 $env:DATABENTO_API_KEY="YOUR_KEY"
@@ -34,13 +42,13 @@ data/raw/{market}/{year}.parquet
 Smoke test:
 
 ```powershell
-python scripts\download_databento_raw.py --symbols ES --start-year 2026 --end-year 2026 --end-date 2026-01-03 --out data\raw_api_test --execute --overwrite
+python scripts\download_databento_raw.py --symbols ES --start-year 2026 --end-year 2026 --end-date 2026-01-03 --out data\raw_api_test --overwrite
 ```
 
 Full L0/OHLCV archive:
 
 ```powershell
-python scripts\download_databento_raw.py --universe extended_cme_vix --start-year 2010 --end-year 2026 --end-date 2026-06-10 --execute
+python scripts\download_databento_raw.py --universe extended_cme_vix --start-year 2010 --end-year 2026 --end-date 2026-06-10
 ```
 
 The downloader does not replace existing files unless `--overwrite` is passed.

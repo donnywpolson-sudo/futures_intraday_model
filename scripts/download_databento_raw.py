@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """One-time Databento raw OHLCV download helper.
 
-Default mode is offline plan only. It does not spend credits unless
---estimate-cost or --execute is passed.
+Default mode downloads raw data. Use --estimate-cost to estimate cost without downloading.
 """
 
 from __future__ import annotations
@@ -18,6 +17,7 @@ from typing import Iterable, Protocol, TypedDict, cast
 import pandas as pd
 
 
+API_KEY_ENV_VAR = "DATABENTO_API_KEY"
 CME_DATASET = "GLBX.MDP3"
 CFE_DATASET = "XCBF.PITCH"
 SCHEMA = "ohlcv-1m"
@@ -31,6 +31,16 @@ FATAL_ERROR_MARKERS = (
     "401",
     "auth_authentication_failed",
     "authentication failed",
+)
+RETRYABLE_STREAM_ERROR_MARKERS = (
+    "response ended prematurely",
+    "streaming response",
+    "connection reset",
+    "read timed out",
+    "timeout",
+    "temporarily unavailable",
+    "503",
+    "504",
 )
 
 CURRENT_20 = [
@@ -229,27 +239,63 @@ def normalize_api_key(value: str | None) -> str:
     return key
 
 
+def default_api_key_files() -> list[Path]:
+    home = Path.home()
+    repo_root = Path(__file__).resolve().parents[1]
+    return [
+        home / ".databento" / "env",
+        home / ".databento.env",
+        repo_root / "databento.env",
+        repo_root / ".env.local",
+        repo_root / ".env",
+    ]
+
+
+def load_databento_api_key_from_files(paths: Iterable[Path]) -> str:
+    for path in paths:
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            text = line.strip()
+            if not text or text.startswith("#"):
+                continue
+            if text.startswith("export "):
+                text = text.removeprefix("export ").strip()
+            if "=" not in text:
+                return normalize_api_key(text)
+            name, value = text.split("=", 1)
+            if name.strip() == API_KEY_ENV_VAR:
+                return normalize_api_key(value)
+    return ""
+
+
+def resolve_databento_api_key() -> str:
+    return normalize_api_key(os.environ.get(API_KEY_ENV_VAR)) or load_databento_api_key_from_files(
+        default_api_key_files()
+    )
+
+
 def get_client() -> DatabentoClient:
-    key = normalize_api_key(os.environ.get("DATABENTO_API_KEY"))
+    key = resolve_databento_api_key()
     if not key:
-        raise SystemExit("Set DATABENTO_API_KEY in the environment. Do not store it in files.")
+        raise SystemExit(
+            "Set DATABENTO_API_KEY in the environment or in %USERPROFILE%\\.databento\\env."
+        )
     import databento as db
 
     return cast(DatabentoClient, db.Historical(key))
 
 
-def offline_mode_message(*, key_set: bool) -> str:
-    key_status = "set" if key_set else "not set"
-    return (
-        "Nothing downloaded. A plain run only writes the download plan. "
-        f"DATABENTO_API_KEY is {key_status}. Rerun with --execute to download raw data. "
-        "Use --estimate-cost first if you want to review Databento cost before downloading."
-    )
-
-
 def is_fatal_error(exc: Exception) -> bool:
     text = str(exc).lower()
     return any(marker in text for marker in FATAL_ERROR_MARKERS)
+
+
+def is_retryable_stream_error(exc: Exception) -> bool:
+    if is_fatal_error(exc):
+        return False
+    text = str(exc).lower()
+    return any(marker in text for marker in RETRYABLE_STREAM_ERROR_MARKERS)
 
 
 def first_pending_download(tasks: list[DownloadTask], *, overwrite: bool) -> DownloadTask | None:
@@ -283,9 +329,12 @@ def preflight_auth(
         if not is_fatal_error(exc):
             raise
         raise SystemExit(
-            "Databento rejected DATABENTO_API_KEY before download. "
+            f"Databento rejected preflight request for {task.dataset} "
+            f"{task.product} {task.year} symbol={task.symbol} "
+            f"{task.start}->{task.end}. "
             "The prior OK_EXISTING lines, if any, were local file checks only. "
-            "Set a valid key in this PowerShell session and rerun with --execute."
+            f"{API_KEY_ENV_VAR} may be invalid for that dataset/symbol/date range. "
+            f"Databento error: {exc}"
         ) from exc
 
 
@@ -377,8 +426,12 @@ def write_store_parquet(
     path: Path,
     condition_by_date: dict[str, str] | None = None,
 ) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     df = store_to_required_dataframe(store, condition_by_date)
+    write_required_dataframe_parquet(df, path)
+
+
+def write_required_dataframe_parquet(df: pd.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f"{path.name}.tmp")
     df.to_parquet(tmp_path, index=False)
     check = validate_download(tmp_path)
@@ -468,6 +521,120 @@ def validate_download(path: Path) -> dict[str, object]:
     }
 
 
+def request_range_dataframe(
+    client: DatabentoClient,
+    task: DownloadTask,
+    *,
+    start: str,
+    end: str,
+    condition_by_date: dict[str, str],
+) -> pd.DataFrame:
+    data = client.timeseries.get_range(
+        dataset=task.dataset,
+        symbols=task.symbol,
+        schema=SCHEMA,
+        stype_in=STYPE_IN,
+        stype_out=STYPE_OUT,
+        start=start,
+        end=end,
+    )
+    return store_to_required_dataframe(cast(DatabentoStore, data), condition_by_date)
+
+
+def range_midpoint(start: str, end: str) -> str | None:
+    start_date = date.fromisoformat(start)
+    end_date = date.fromisoformat(end)
+    span_days = (end_date - start_date).days
+    if span_days <= 1:
+        return None
+    return (start_date + timedelta(days=span_days // 2)).isoformat()
+
+
+def concat_download_dataframes(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    if len(frames) == 1:
+        return frames[0]
+    return pd.concat(frames, ignore_index=True).sort_values("ts_event", kind="mergesort")
+
+
+def download_dataframe_with_split_retry(
+    client: DatabentoClient,
+    task: DownloadTask,
+    *,
+    condition_by_date: dict[str, str],
+    start: str | None = None,
+    end: str | None = None,
+) -> pd.DataFrame:
+    range_start = start or task.start
+    range_end = end or task.end
+    try:
+        return request_range_dataframe(
+            client,
+            task,
+            start=range_start,
+            end=range_end,
+            condition_by_date=condition_by_date,
+        )
+    except Exception as exc:
+        midpoint_text = range_midpoint(range_start, range_end)
+        if not is_retryable_stream_error(exc) or midpoint_text is None:
+            raise
+
+        print(
+            f"RETRY_SPLIT {task.dataset} {task.product} {task.year} "
+            f"{range_start}->{range_end} at {midpoint_text}: {exc}"
+        )
+        left = download_dataframe_with_split_retry(
+            client,
+            task,
+            condition_by_date=condition_by_date,
+            start=range_start,
+            end=midpoint_text,
+        )
+        right = download_dataframe_with_split_retry(
+            client,
+            task,
+            condition_by_date=condition_by_date,
+            start=midpoint_text,
+            end=range_end,
+        )
+        return concat_download_dataframes([left, right])
+
+
+def download_dataframe_in_halves(
+    client: DatabentoClient,
+    task: DownloadTask,
+    *,
+    condition_by_date: dict[str, str],
+) -> pd.DataFrame:
+    midpoint_text = range_midpoint(task.start, task.end)
+    if midpoint_text is None:
+        return download_dataframe_with_split_retry(
+            client,
+            task,
+            condition_by_date=condition_by_date,
+        )
+
+    print(
+        f"DOWNLOAD_SPLIT {task.dataset} {task.product} {task.year} "
+        f"{task.start}->{task.end} at {midpoint_text}"
+    )
+    left = download_dataframe_with_split_retry(
+        client,
+        task,
+        condition_by_date=condition_by_date,
+        start=task.start,
+        end=midpoint_text,
+    )
+    right = download_dataframe_with_split_retry(
+        client,
+        task,
+        condition_by_date=condition_by_date,
+        start=midpoint_text,
+        end=task.end,
+    )
+    return concat_download_dataframes([left, right])
+
+
 def estimate_cost(
     client: DatabentoMetadataHolder,
     tasks: list[DownloadTask],
@@ -537,16 +704,12 @@ def execute_download(
             if condition_key not in condition_cache:
                 condition_cache[condition_key] = fetch_dataset_conditions(client, task)
             condition_info = condition_cache[condition_key]
-            data = client.timeseries.get_range(
-                dataset=task.dataset,
-                symbols=task.symbol,
-                schema=SCHEMA,
-                stype_in=STYPE_IN,
-                stype_out=STYPE_OUT,
-                start=task.start,
-                end=task.end,
+            df = download_dataframe_in_halves(
+                client,
+                task,
+                condition_by_date=condition_info["conditions"],
             )
-            write_store_parquet(cast(DatabentoStore, data), out, condition_info["conditions"])
+            write_required_dataframe_parquet(df, out)
             check = validate_download(out)
             status = "ok" if check["valid"] else "bad_schema"
             results.append(
@@ -593,7 +756,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", default="data/raw")
     parser.add_argument("--plan-out", default="reports/databento_download_plan.json")
     parser.add_argument("--estimate-cost", action="store_true")
-    parser.add_argument("--execute", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     return parser
 
@@ -623,10 +785,6 @@ def main() -> int:
     write_json(Path(args.plan_out), plan)
     print(f"PLAN products={len(products)} tasks={len(tasks)} out={args.out}")
 
-    if not args.estimate_cost and not args.execute:
-        print(offline_mode_message(key_set=bool(os.environ.get("DATABENTO_API_KEY"))))
-        return 0
-
     client = get_client()
     if args.estimate_cost:
         estimates = estimate_cost(client, tasks)
@@ -635,15 +793,13 @@ def main() -> int:
         errors = sum(1 for item in estimates if item.get("status") == "estimate_error")
         print(f"TOTAL_ESTIMATED_COST_USD {total:.4f}")
         print(f"TOTAL_ESTIMATE_ERRORS {errors}")
+        return 0
 
-    if args.execute:
-        preflight_auth(client, tasks, overwrite=args.overwrite)
-        results = execute_download(client, tasks, overwrite=args.overwrite)
-        write_json(Path(args.plan_out).with_name("databento_download_results.json"), results)
-        failed = [item for item in results if item.get("status") not in {"ok", "ok_existing"}]
-        return 1 if failed else 0
-
-    return 0
+    preflight_auth(client, tasks, overwrite=args.overwrite)
+    results = execute_download(client, tasks, overwrite=args.overwrite)
+    write_json(Path(args.plan_out).with_name("databento_download_results.json"), results)
+    failed = [item for item in results if item.get("status") not in {"ok", "ok_existing"}]
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
