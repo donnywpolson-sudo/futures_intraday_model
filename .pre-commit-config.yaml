@@ -3,6 +3,6 @@ repos:
     hooks:
       - id: block-generated-artifacts
         name: block generated artifacts
-        entry: python scripts/precommit_block_generated_artifacts.py
+        entry: python -m scripts.utilities.precommit_block_generated_artifacts
         language: system
         pass_filenames: true

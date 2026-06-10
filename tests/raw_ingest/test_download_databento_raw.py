@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
-from scripts.download_databento_raw import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.raw_ingest.download_databento_raw import (
     CFE_DATASET,
     CFE_VIX,
     CME_DATASET,
@@ -182,7 +185,7 @@ def test_resolve_databento_api_key_uses_project_databento_env(
     key_file = tmp_path / "databento.env"
     key_file.write_text("DATABENTO_API_KEY=db-file-test\n", encoding="utf-8")
     monkeypatch.setattr(
-        "scripts.download_databento_raw.API_KEY_FILE",
+        "scripts.raw_ingest.download_databento_raw.API_KEY_FILE",
         key_file,
     )
 

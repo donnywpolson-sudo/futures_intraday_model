@@ -28,6 +28,8 @@ It also accepts a raw key as the only non-comment line in `databento.env`.
 
 ## Raw Data Download
 
+Canonical implementation: `scripts/raw_ingest/download_databento_raw.py`.
+
 Raw files are written as:
 
 ```text
@@ -37,23 +39,25 @@ data/raw/{market}/{year}.parquet
 Smoke test:
 
 ```powershell
-python scripts\download_databento_raw.py --symbols ES --start-year 2026 --end-year 2026 --end-date 2026-01-03 --out data\raw_api_test --overwrite
+python -m scripts.raw_ingest.download_databento_raw --symbols ES --start-year 2026 --end-year 2026 --end-date 2026-01-03 --out data\raw_api_test --overwrite
 ```
 
 Full L0/OHLCV archive:
 
 ```powershell
-python scripts\download_databento_raw.py --universe extended_cme_vix --start-year 2010 --end-year 2026 --end-date 2026-06-10
+python -m scripts.raw_ingest.download_databento_raw --universe extended_cme_vix --start-year 2010 --end-year 2026 --end-date 2026-06-10
 ```
 
 The downloader does not replace existing files unless `--overwrite` is passed.
 
 ## Causal Base
 
+Canonical implementation: `scripts/phase2_causal_base/build_causal_base_data.py`.
+
 Build the normalized causal base from every raw market/year file:
 
 ```powershell
-python scripts\build_causal_base_data.py --profile all_raw
+python -m scripts.phase2_causal_base.build_causal_base_data --profile all_raw
 ```
 
 Output:
@@ -61,6 +65,17 @@ Output:
 ```text
 data/causally_gated_normalized/{market}/{year}.parquet
 reports/causal_base/
+```
+
+## Labels
+
+Canonical implementation: `scripts/phase3_labels/build_labels.py`.
+
+Output:
+
+```text
+data/labeled/{market}/{year}.parquet
+reports/labels/
 ```
 
 ## Tests

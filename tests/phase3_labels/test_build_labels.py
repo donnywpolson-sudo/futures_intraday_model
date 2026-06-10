@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.build_labels import (
+from scripts.phase3_labels.build_labels import (
     LABEL_COLUMNS,
     add_labels,
     load_market_config,

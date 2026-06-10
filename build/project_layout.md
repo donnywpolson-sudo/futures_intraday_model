@@ -90,6 +90,15 @@ configs/costs.yaml
 configs/prop_rules.yaml
 ```
 
+Current implementation organization:
+
+```text
+scripts/raw_ingest/              raw data download
+scripts/phase2_causal_base/      validation, session normalization, causal gating
+scripts/phase3_labels/           target and label generation
+scripts/utilities/               repo safety utilities
+```
+
 Each market config should include:
 
 ```text
@@ -431,7 +440,7 @@ time remaining is insufficient for entry and exit
 Causal base:
 
 ```bash
-python scripts/build_causal_base_data.py --profile tier_1_CL_ES_ZN
+python -m scripts.phase2_causal_base.build_causal_base_data --profile tier_1_core
 ```
 
 Baseline pipeline:
@@ -531,7 +540,7 @@ This phase replaces separate materialized stages for raw manifest, validation, v
 ## Script
 
 ```bash
-python scripts/build_causal_base_data.py --profile tier_1_CL_ES_ZN
+python -m scripts.phase2_causal_base.build_causal_base_data --profile tier_1_core
 ```
 
 ## Input
@@ -685,7 +694,7 @@ Create forward-looking labels while preserving realistic intraday execution alig
 ## Script
 
 ```bash
-python scripts/build_labels.py --profile tier_1_CL_ES_ZN
+python -m scripts.phase3_labels.build_labels --profile tier_1_core
 ```
 
 ## Input
@@ -2093,7 +2102,7 @@ Primary changes to implement now:
 ```text
 1. Add or update the Pipeline Structure Overview section in project_layout.md.
 2. Keep raw input as data/raw/{market}/{year}.parquet with Databento OHLCV schema.
-3. Keep build_causal_base_data.py as the single validation/session-normalization/causal-gating script.
+3. Keep `scripts.phase2_causal_base.build_causal_base_data` as the single validation/session-normalization/causal-gating module.
 4. Add roll-window flags and roll-window label invalidation.
 5. Add cost-aware target columns in ticks and dollars.
 6. Add research/final-holdout separation: 2023-2024 research, 2025 final holdout.
