@@ -1,0 +1,41 @@
+version: 1
+
+markets:
+  CL:
+    tick_size: 0.01
+    tick_value: 10.0
+    point_value: 1000.0
+    min_profit_ticks: 2.0
+    min_stop_ticks: 4.0
+    commission_per_contract_dollars: 0.0
+    slippage_ticks_per_side: 1.5
+    round_turn_cost_ticks: 3.0
+    round_turn_cost_dollars: 30.0
+    cost_source: provisional_placeholder_cl
+    provisional: true
+
+  ES:
+    tick_size: 0.25
+    tick_value: 12.5
+    point_value: 50.0
+    min_profit_ticks: 2.0
+    min_stop_ticks: 4.0
+    commission_per_contract_dollars: 0.0
+    slippage_ticks_per_side: 1.5
+    round_turn_cost_ticks: 3.0
+    round_turn_cost_dollars: 37.5
+    cost_source: provisional_placeholder_es
+    provisional: true
+
+  ZN:
+    tick_size: 0.015625
+    tick_value: 15.625
+    point_value: 1000.0
+    min_profit_ticks: 2.0
+    min_stop_ticks: 4.0
+    commission_per_contract_dollars: 0.0
+    slippage_ticks_per_side: 1.5
+    round_turn_cost_ticks: 3.0
+    round_turn_cost_dollars: 46.875
+    cost_source: provisional_placeholder_zn
+    provisional: true

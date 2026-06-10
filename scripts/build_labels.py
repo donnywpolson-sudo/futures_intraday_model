@@ -129,6 +129,8 @@ class MarketConfig:
     estimated_cost_ticks: float
     estimated_cost_dollars: float
     source: str
+    cost_source: str
+    provisional: bool
     defaults_used: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
@@ -142,6 +144,8 @@ class MarketConfig:
             "estimated_cost_ticks": self.estimated_cost_ticks,
             "estimated_cost_dollars": self.estimated_cost_dollars,
             "source": self.source,
+            "cost_source": self.cost_source,
+            "provisional": self.provisional,
             "defaults_used": self.defaults_used,
         }
 
@@ -318,6 +322,7 @@ def _cost_ticks(
         "estimated_cost_ticks",
         "target_estimated_cost_ticks",
         "round_trip_cost_ticks",
+        "round_turn_cost_ticks",
         "cost_ticks",
         "total_cost_ticks",
     ):
@@ -328,6 +333,7 @@ def _cost_ticks(
         "estimated_cost_dollars",
         "target_estimated_cost_dollars",
         "round_trip_cost_dollars",
+        "round_turn_cost_dollars",
         "cost_dollars",
         "total_cost_dollars",
     ):
@@ -335,7 +341,10 @@ def _cost_ticks(
             return float(data[field_name]) / tick_value
 
     slippage = float(data.get("slippage_ticks_per_side", 0.0) or 0.0)
-    commission = float(data.get("commission_per_side_dollars", 0.0) or 0.0)
+    commission = float(
+        data.get("commission_per_side_dollars", data.get("commission_per_contract_dollars", 0.0))
+        or 0.0
+    )
     fees = float(data.get("fees_per_side_dollars", 0.0) or 0.0)
     if slippage or commission or fees:
         return (2.0 * slippage) + (2.0 * (commission + fees) / tick_value)
@@ -355,6 +364,8 @@ def load_market_config(market: str, costs_config: Path) -> MarketConfig:
         if isinstance(raw, Mapping):
             data = _market_config_blob(raw, market)
             source = relative_path(costs_config)
+            if not data:
+                defaults_used.append("market_cost_missing")
         else:
             defaults_used.append("invalid_costs_config_shape")
     else:
@@ -382,6 +393,8 @@ def load_market_config(market: str, costs_config: Path) -> MarketConfig:
         estimated_cost_ticks=estimated_cost_ticks,
         estimated_cost_dollars=estimated_cost_ticks * tick_value,
         source=source,
+        cost_source=str(data.get("cost_source", source)),
+        provisional=bool(data.get("provisional", bool(defaults_used))),
         defaults_used=sorted(set(defaults_used)),
     )
 
@@ -675,8 +688,14 @@ def process_file(
 
     if config.defaults_used:
         result.warnings.append("market config defaults used: " + ",".join(config.defaults_used))
-    if "costs_config_missing" in config.defaults_used or "estimated_cost_ticks" in config.defaults_used:
+    if (
+        "costs_config_missing" in config.defaults_used
+        or "market_cost_missing" in config.defaults_used
+        or "estimated_cost_ticks" in config.defaults_used
+    ):
         result.warnings.append("placeholder costs used")
+    if config.provisional:
+        result.warnings.append(f"provisional costs used: {config.cost_source}")
 
     if not input_path.exists():
         result.failures.append("input file missing")

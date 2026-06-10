@@ -53,6 +53,20 @@ def _write_causal(path: Path, rows: list[dict[str, object]]) -> None:
     pd.DataFrame(rows).to_parquet(path, index=False)
 
 
+def _write_costs(path: Path, markets_blob: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "markets:",
+                markets_blob,
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
 def _rows_with_gross_ticks(gross_ticks: float) -> list[dict[str, object]]:
     rows = _base_rows()
     entry_price = 100.0
@@ -162,6 +176,72 @@ def test_tick_dollar_cost_and_deadzone_conversion() -> None:
     assert row["target_sign_15m"] == 1
     assert row["target_sign_with_deadzone"] == 0
     assert row["target_tradeable_after_cost"] == True
+
+
+def test_explicit_cost_config_is_loaded_and_reported(tmp_path: Path) -> None:
+    costs_path = tmp_path / "configs" / "costs.yaml"
+    _write_costs(
+        costs_path,
+        "\n".join(
+            [
+                "  ES:",
+                "    tick_size: 0.25",
+                "    tick_value: 12.5",
+                "    point_value: 50.0",
+                "    min_profit_ticks: 2.0",
+                "    min_stop_ticks: 4.0",
+                "    commission_per_contract_dollars: 0.0",
+                "    slippage_ticks_per_side: 1.5",
+                "    round_turn_cost_ticks: 3.0",
+                "    round_turn_cost_dollars: 37.5",
+                "    cost_source: test_provisional_costs",
+                "    provisional: true",
+            ]
+        ),
+    )
+
+    config = load_market_config("ES", costs_path)
+
+    assert config.estimated_cost_ticks == 3.0
+    assert config.estimated_cost_dollars == 37.5
+    assert config.cost_source == "test_provisional_costs"
+    assert config.provisional == True
+    assert config.defaults_used == []
+
+
+def test_present_cost_config_missing_market_warns(tmp_path: Path) -> None:
+    input_path = tmp_path / "data" / "causally_gated_normalized" / "ES" / "2024.parquet"
+    output_path = tmp_path / "data" / "labeled" / "ES" / "2024.parquet"
+    costs_path = tmp_path / "configs" / "costs.yaml"
+    _write_causal(input_path, _base_rows())
+    _write_costs(
+        costs_path,
+        "\n".join(
+            [
+                "  CL:",
+                "    tick_size: 0.01",
+                "    tick_value: 10.0",
+                "    point_value: 1000.0",
+                "    min_profit_ticks: 2.0",
+                "    min_stop_ticks: 4.0",
+                "    round_turn_cost_ticks: 3.0",
+                "    cost_source: cl_only_costs",
+                "    provisional: true",
+            ]
+        ),
+    )
+
+    result = process_file(
+        input_path,
+        output_path,
+        profile="tier_1_CL_ES_ZN",
+        costs_config=costs_path,
+    )
+
+    assert result.status == "WARN"
+    assert "market_cost_missing" in result.config["defaults_used"]
+    assert any("market config defaults used" in warning for warning in result.warnings)
+    assert "placeholder costs used" in result.warnings
 
 
 def test_net_ticks_after_cost_semantics() -> None:
