@@ -3,6 +3,8 @@ __pycache__/
 .pytest_cache/
 .env
 .env.*
+!.env.example
+!.env.template
 databento.env
 databento_api_key*
 .databento_api_key*
