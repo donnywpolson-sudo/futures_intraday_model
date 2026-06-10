@@ -184,6 +184,8 @@ def test_reports_are_written(tmp_path: Path) -> None:
                 "low": 99.0,
                 "close": 100.5,
                 "volume": 10,
+                "data_quality_status": "available",
+                "data_quality_degraded": False,
             }
         ],
     )
@@ -220,6 +222,8 @@ def test_all_raw_discovery_uses_top_level_market_year_files_only(tmp_path: Path)
                 "low": 99.0,
                 "close": 100.5,
                 "volume": 10,
+                "data_quality_status": "available",
+                "data_quality_degraded": False,
             }
         ],
     )
@@ -233,6 +237,8 @@ def test_all_raw_discovery_uses_top_level_market_year_files_only(tmp_path: Path)
                 "low": 69.0,
                 "close": 70.5,
                 "volume": 10,
+                "data_quality_status": "available",
+                "data_quality_degraded": False,
             }
         ],
     )
@@ -299,6 +305,8 @@ def test_metadata_with_timestamp_index_file_passes(tmp_path: Path) -> None:
                 "low": 99.0,
                 "close": 100.5,
                 "volume": 10,
+                "data_quality_status": "available",
+                "data_quality_degraded": False,
             }
         ],
     )
@@ -332,6 +340,8 @@ def test_full_databento_schema_file_passes(tmp_path: Path) -> None:
                 "low": 69.0,
                 "close": 70.5,
                 "volume": 10,
+                "data_quality_status": "available",
+                "data_quality_degraded": False,
             }
         ],
     )
@@ -429,3 +439,51 @@ def test_symbol_change_without_instrument_id_does_not_activate_roll_window(
     assert output["roll_boundary_flag"].sum() == 0
     assert output["roll_window_flag"].sum() == 0
     assert output["roll_detection_available"].eq(False).all()
+
+
+def test_degraded_data_quality_blocks_whole_session_from_causal_valid(tmp_path: Path) -> None:
+    raw_path = tmp_path / "data" / "raw" / "ES" / "2024.parquet"
+    out_path = tmp_path / "data" / "causally_gated_normalized" / "ES" / "2024.parquet"
+    _write_raw(
+        raw_path,
+        [
+            {
+                "rtype": 33,
+                "publisher_id": 1,
+                "instrument_id": 100,
+                "symbol": "ES.v.0",
+                "ts_event": "2024-01-02T15:00:00Z",
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.5,
+                "volume": 10,
+                "data_quality_status": "available",
+                "data_quality_degraded": False,
+            },
+            {
+                "rtype": 33,
+                "publisher_id": 1,
+                "instrument_id": 100,
+                "symbol": "ES.v.0",
+                "ts_event": "2024-01-02T15:01:00Z",
+                "open": 100.5,
+                "high": 101.5,
+                "low": 100.0,
+                "close": 101.0,
+                "volume": 12,
+                "data_quality_status": "degraded",
+                "data_quality_degraded": True,
+            },
+        ],
+    )
+
+    result = process_file(raw_path, out_path, profile="tier_1_CL_ES_ZN")
+
+    output = pd.read_parquet(out_path)
+    raw_rows = output[output["raw_row_present"]]
+    assert result.degraded_bar_rows == 1
+    assert result.degraded_session_rows == 1
+    assert raw_rows["session_data_quality_degraded"].all()
+    assert not raw_rows["trainable_data_quality"].any()
+    assert not raw_rows["causal_valid"].any()

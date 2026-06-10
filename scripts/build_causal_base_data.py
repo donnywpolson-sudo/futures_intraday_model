@@ -46,6 +46,10 @@ OUTPUT_COLUMNS = [
     "raw_row_present",
     "is_synthetic",
     "valid_ohlcv",
+    "data_quality_status",
+    "data_quality_degraded",
+    "session_data_quality_degraded",
+    "trainable_data_quality",
     "inside_session",
     "causal_valid",
     "session_id",
@@ -111,6 +115,8 @@ class ValidationResult:
     null_ts: int = 0
     invalid_ohlcv_rows: int = 0
     negative_volume_rows: int = 0
+    degraded_bar_rows: int = 0
+    degraded_session_rows: int = 0
     warnings: list[str] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
 
@@ -318,6 +324,8 @@ def _build_synthetic_rows(
                         "raw_row_present": False,
                         "is_synthetic": True,
                         "valid_ohlcv": True,
+                        "data_quality_status": getattr(prev, "data_quality_status"),
+                        "data_quality_degraded": getattr(prev, "data_quality_degraded"),
                         "source_path": source_path,
                         "source_file_hash": source_hash,
                         "source_row_number": pd.NA,
@@ -413,6 +421,9 @@ def _coerce_output_types(df: pd.DataFrame) -> pd.DataFrame:
         "raw_row_present",
         "is_synthetic",
         "valid_ohlcv",
+        "data_quality_degraded",
+        "session_data_quality_degraded",
+        "trainable_data_quality",
         "inside_session",
         "causal_valid",
         "is_session_open",
@@ -444,6 +455,7 @@ def _coerce_output_types(df: pd.DataFrame) -> pd.DataFrame:
     df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
     for col in ["open", "high", "low", "close"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
+    df["data_quality_status"] = df["data_quality_status"].fillna("unknown").astype(str)
 
     return df[OUTPUT_COLUMNS]
 
@@ -539,6 +551,19 @@ def process_file(
     if non_integer_volume:
         result.warnings.append(f"non-integer-like volume rows={non_integer_volume}")
 
+    if "data_quality_status" not in raw.columns:
+        raw["data_quality_status"] = "unknown"
+        result.warnings.append("missing data_quality_status; assuming trainable data quality")
+    else:
+        raw["data_quality_status"] = raw["data_quality_status"].fillna("unknown").astype(str)
+
+    if "data_quality_degraded" not in raw.columns:
+        raw["data_quality_degraded"] = False
+        result.warnings.append("missing data_quality_degraded; assuming no degraded bars")
+    else:
+        raw["data_quality_degraded"] = raw["data_quality_degraded"].fillna(False).astype(bool)
+    result.degraded_bar_rows = int(raw["data_quality_degraded"].sum())
+
     raw = raw.sort_values("ts", kind="mergesort").reset_index(drop=True)
     raw_meta = _session_metadata(raw["ts"])
     df = pd.concat([raw, raw_meta], axis=1)
@@ -571,6 +596,8 @@ def process_file(
         "raw_row_present",
         "is_synthetic",
         "valid_ohlcv",
+        "data_quality_status",
+        "data_quality_degraded",
         "inside_session",
         "session_id",
         "session_date",
@@ -606,11 +633,23 @@ def process_file(
 
     df = _add_roll_fields(df, roll_window_bars)
     df = _add_session_edge_flags(df)
+    df["data_quality_degraded"] = df["data_quality_degraded"].fillna(False).astype(bool)
+    df["session_data_quality_degraded"] = False
+    session_mask = df["session_id"].notna()
+    if session_mask.any():
+        df.loc[session_mask, "session_data_quality_degraded"] = (
+            df.loc[session_mask]
+            .groupby("session_id", sort=False)["data_quality_degraded"]
+            .transform("any")
+            .astype(bool)
+        )
+    df["trainable_data_quality"] = ~df["session_data_quality_degraded"].astype(bool)
     df["causal_valid"] = (
         df["raw_row_present"]
         & ~df["is_synthetic"]
         & df["valid_ohlcv"]
         & df["inside_session"]
+        & df["trainable_data_quality"]
         & ~df["roll_window_flag"]
     ).astype(bool)
 
@@ -619,6 +658,9 @@ def process_file(
     result.outside_session_rows = int((~df["inside_session"]).sum())
     result.roll_boundary_rows = int(df["roll_boundary_flag"].sum())
     result.roll_window_rows = int(df["roll_window_flag"].sum())
+    result.degraded_session_rows = int(
+        df.loc[df["is_session_open"], "session_data_quality_degraded"].sum()
+    )
 
     if result.synthetic_rows:
         missing_minutes = result.synthetic_rows
@@ -629,6 +671,11 @@ def process_file(
         result.warnings.append(f"roll boundary rows={result.roll_boundary_rows}")
     if result.roll_window_rows:
         result.warnings.append(f"roll exclusion rows={result.roll_window_rows}")
+    if result.degraded_bar_rows:
+        result.warnings.append(
+            "degraded data quality excluded from causal_valid: "
+            f"bars={result.degraded_bar_rows} sessions={result.degraded_session_rows}"
+        )
 
     output = _coerce_output_types(df.sort_values("ts", kind="mergesort").reset_index(drop=True))
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -660,6 +707,8 @@ def write_reports(results: Iterable[ValidationResult], reports_root: Path, profi
             "roll_window_rows": int(sum(r["roll_window_rows"] for r in rows)),
             "roll_boundary_count": int(sum(r["roll_boundary_rows"] for r in rows)),
             "roll_window_count": int(sum(r["roll_window_rows"] for r in rows)),
+            "degraded_bar_rows": int(sum(r["degraded_bar_rows"] for r in rows)),
+            "degraded_session_rows": int(sum(r["degraded_session_rows"] for r in rows)),
         },
     }
 
@@ -688,6 +737,8 @@ def write_reports(results: Iterable[ValidationResult], reports_root: Path, profi
                 "instrument_id_nunique": row["instrument_id_nunique"],
                 "roll_boundary_count": row["roll_boundary_count"],
                 "roll_window_count": row["roll_window_count"],
+                "degraded_bar_rows": row["degraded_bar_rows"],
+                "degraded_session_rows": row["degraded_session_rows"],
                 "warnings": row["warnings"],
                 "status": row["status"],
             }

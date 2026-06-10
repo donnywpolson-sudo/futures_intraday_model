@@ -63,6 +63,16 @@ RISKY_SUFFIXES = (
     ".db",
     ".csv",
     ".parquet",
+    ".dbn",
+    ".zst",
+    ".pkl",
+    ".joblib",
+    ".npy",
+    ".npz",
+    ".arrow",
+    ".feather",
+    ".h5",
+    ".hdf5",
 )
 
 RISKY_DIR_PARTS = (
@@ -71,7 +81,11 @@ RISKY_DIR_PARTS = (
     "/logs/",
     "/output/",
     "/outputs/",
+    "/reports/",
     "/backtests/",
+    "/models/",
+    "/model_artifacts/",
+    "/cache/",
     "/secrets/",
 )
 
@@ -291,7 +305,7 @@ def current_branch(repo: Path) -> str:
 
 
 def status_lines(repo: Path) -> list[str]:
-    result = run_git(repo, ["status", "--porcelain=v1"])
+    result = run_git(repo, ["status", "--porcelain=v1", "--untracked-files=all"])
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
@@ -379,17 +393,20 @@ def ensure_origin_remote(repo: Path, remote_url: str | None) -> None:
     target_url = remote_url or DEFAULT_REMOTE_URL
 
     if existing_url:
-        if remote_url and not same_remote_url(existing_url, remote_url):
-            print(f"Origin exists: {existing_url}")
-            print(f"Updating origin to: {remote_url}")
-            run_git(repo, ["remote", "set-url", "origin", remote_url])
+        if remote_url:
+            if not same_remote_url(existing_url, remote_url):
+                print(f"Origin exists: {existing_url}")
+                print(f"Updating origin to: {remote_url}")
+                run_git(repo, ["remote", "set-url", "origin", remote_url])
+            else:
+                print(f"Origin: {existing_url}")
             return
 
         if not same_remote_url(existing_url, DEFAULT_REMOTE_URL):
             print(f"\nSTOP: origin points somewhere else: {existing_url}")
             print(f"Expected: {DEFAULT_REMOTE_URL}")
-            print("If this is intentional, update it explicitly:")
-            print(f"  python sync_vm.py --remote-url {DEFAULT_REMOTE_URL}")
+            print("If this is intentional, rerun with:")
+            print(f"  python sync_vm.py --remote-url {existing_url}")
             sys.exit(1)
 
         print(f"Origin: {existing_url}")

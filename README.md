@@ -1,23 +1,67 @@
-# 1) Clone
-git clone https://github.com/<your-username>/<your-repo>.git
-cd <your-repo>
+# Quant Project
 
-# 2) Create & activate env, install requirements
+Intraday futures research pipeline using Databento continuous-contract 1-minute OHLCV data.
 
-# Powershell (line by line)
+## Environment
+
+Use Python 3.11.
+
+PowerShell:
+
+```powershell
 python -m venv .venv
 .\.venv\Scripts\activate
-pip install --upgrade pip
-pip install -r requirements.txt
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
 
-# Codespaces
-python -m venv .venv && \
-source .venv/bin/activate && \
-pip install --upgrade pip && \
-pip install -r requirements.txt
+## Databento API Key
 
-# 3) Run pipeline / backtest
-python -m <package>.pipeline
+Set the key in your shell only. Do not write it to repo files.
 
-# 4) Tests
-pytest -q
+```powershell
+$env:DATABENTO_API_KEY="YOUR_KEY"
+```
+
+## Raw Data Download
+
+Raw files are written as:
+
+```text
+data/raw/{market}/{year}.parquet
+```
+
+Smoke test:
+
+```powershell
+python scripts\download_databento_raw.py --symbols ES --start-year 2026 --end-year 2026 --end-date 2026-01-03 --out data\raw_api_test --execute --overwrite
+```
+
+Full L0/OHLCV archive:
+
+```powershell
+python scripts\download_databento_raw.py --universe extended_cme_vix --start-year 2010 --end-year 2026 --end-date 2026-06-10 --execute
+```
+
+The downloader does not replace existing files unless `--overwrite` is passed.
+
+## Causal Base
+
+Build the normalized causal base from every raw market/year file:
+
+```powershell
+python scripts\build_causal_base_data.py --profile all_raw
+```
+
+Output:
+
+```text
+data/causally_gated_normalized/{market}/{year}.parquet
+reports/causal_base/
+```
+
+## Tests
+
+```powershell
+python -m pytest -q
+```
