@@ -403,6 +403,9 @@ def estimate_cost(client, tasks: list[DownloadTask]) -> list[dict[str, object]]:
         except Exception as exc:
             estimates.append({**asdict(task), "status": "estimate_error", "error": str(exc)})
             print(f"ESTIMATE_ERROR {task.dataset} {task.product} {task.year}: {exc}")
+            if is_fatal_error(exc):
+                print("FATAL authentication error. Stopping cost estimate run.")
+                break
             continue
         estimates.append(
             {

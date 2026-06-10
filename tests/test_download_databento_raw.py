@@ -18,6 +18,7 @@ from scripts.download_databento_raw import (
     condition_is_degraded,
     dataset_for_product,
     execute_download,
+    estimate_cost,
     is_fatal_error,
     iter_year_tasks,
     parse_symbols,
@@ -48,6 +49,18 @@ class FailingMetadata:
 class FailingClient:
     metadata = FailingMetadata()
     timeseries = FailingTimeseries()
+
+
+class AuthFailingEstimateMetadata:
+    def get_cost(self, **kwargs):
+        raise RuntimeError("401 auth_authentication_failed Authentication failed.")
+
+    def get_billable_size(self, **kwargs):
+        raise AssertionError("get_billable_size should not be called after auth failure")
+
+
+class AuthFailingEstimateClient:
+    metadata = AuthFailingEstimateMetadata()
 
 
 def test_parse_symbols_current_and_extended() -> None:
@@ -408,6 +421,34 @@ def test_execute_download_stops_on_auth_failure(tmp_path: Path) -> None:
 
     assert len(results) == 1
     assert results[0]["status"] == "download_error"
+
+
+def test_estimate_cost_stops_on_auth_failure(tmp_path: Path) -> None:
+    tasks = [
+        DownloadTask(
+            dataset=CME_DATASET,
+            product="ES",
+            year=2024,
+            start="2024-01-01",
+            end="2025-01-01",
+            symbol="ES.v.0",
+            output_path=(tmp_path / "raw" / "ES" / "2024.parquet").as_posix(),
+        ),
+        DownloadTask(
+            dataset=CME_DATASET,
+            product="ES",
+            year=2025,
+            start="2025-01-01",
+            end="2026-01-01",
+            symbol="ES.v.0",
+            output_path=(tmp_path / "raw" / "ES" / "2025.parquet").as_posix(),
+        ),
+    ]
+
+    results = estimate_cost(AuthFailingEstimateClient(), tasks)
+
+    assert len(results) == 1
+    assert results[0]["status"] == "estimate_error"
 
 
 def REQUIRED_TEST_COLUMNS() -> list[str]:

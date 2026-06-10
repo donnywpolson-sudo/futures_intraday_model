@@ -68,7 +68,7 @@ python -m pytest -q
 
 ## Simple GitHub Sync
 
-Push this computer's code changes to GitHub:
+Stage, commit, rebase, and push all non-risky local changes from this computer to GitHub:
 
 ```powershell
 python push_github.py
@@ -80,4 +80,4 @@ Pull GitHub changes onto this computer before working:
 python pull_github.py
 ```
 
-These scripts are for code/config/docs/tests only. Raw data and generated reports stay out of GitHub.
+`push_github.py` prints changed files, blocks risky data/secret/output paths, runs tests, creates backup branches, stages with `git add -A`, commits, pulls with `--rebase`, and pushes. Raw data and generated reports stay out of GitHub.

@@ -14,10 +14,8 @@ from typing import Iterable
 DEFAULT_MESSAGE = "sync updates"
 DEFAULT_REMOTE_URL = "https://github.com/donnywpolson-sudo/quant_project.git"
 RISKY_SUFFIXES = (
-    ".env",
     ".pem",
     ".key",
-    ".csv",
     ".parquet",
     ".dbn",
     ".zst",
@@ -28,7 +26,15 @@ RISKY_SUFFIXES = (
     ".duckdb",
     ".sqlite",
 )
+RISKY_FILENAMES = {
+    ".env",
+    ".env.local",
+    ".envrc",
+    "credentials.json",
+    "secrets.json",
+}
 RISKY_DIRS = (
+    "/cache/",
     "/data/",
     "/reports/",
     "/logs/",
@@ -80,8 +86,10 @@ def changed_paths(lines: Iterable[str]) -> list[str]:
 def looks_risky(path: str) -> bool:
     normalized = "/" + path.replace("\\", "/").lstrip("/").lower()
     name = Path(path).name.lower()
-    return any(name.endswith(suffix) for suffix in RISKY_SUFFIXES) or any(
-        marker in normalized for marker in RISKY_DIRS
+    return (
+        name in RISKY_FILENAMES
+        or any(name.endswith(suffix) for suffix in RISKY_SUFFIXES)
+        or any(marker in normalized for marker in RISKY_DIRS)
     )
 
 
@@ -128,7 +136,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("-m", "--message", default=DEFAULT_MESSAGE)
     parser.add_argument("--skip-tests", action="store_true")
-    parser.add_argument("--allow-risky", action="store_true")
     args = parser.parse_args()
 
     root = repo_root()
@@ -144,11 +151,11 @@ def main() -> None:
         for path in paths:
             print(f"  - {path}")
         risky = [path for path in paths if looks_risky(path)]
-        if risky and not args.allow_risky:
+        if risky:
             print("STOP: risky data/secret/output files detected:")
             for path in risky:
                 print(f"  - {path}")
-            print("Add them to .gitignore or rerun with --allow-risky only if intentional.")
+            print("Add them to .gitignore or remove them before pushing.")
             sys.exit(1)
     else:
         print("No local changes.")

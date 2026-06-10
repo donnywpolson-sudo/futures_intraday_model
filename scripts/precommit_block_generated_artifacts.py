@@ -9,14 +9,16 @@ from pathlib import PurePosixPath
 
 
 BLOCKED_SUFFIXES = {".parquet", ".dbn", ".zst", ".pkl"}
-BLOCKED_DIRS = {"reports", "logs", "cache"}
+BLOCKED_FILENAMES = {".env", ".env.local", ".envrc", "credentials.json", "secrets.json"}
+BLOCKED_DIRS = {"cache", "data", "reports", "logs"}
 
 
 def is_blocked(path: str) -> bool:
     normalized = path.replace("\\", "/").lstrip("/")
     parts = PurePosixPath(normalized).parts
     return (
-        PurePosixPath(normalized).suffix.lower() in BLOCKED_SUFFIXES
+        PurePosixPath(normalized).name.lower() in BLOCKED_FILENAMES
+        or PurePosixPath(normalized).suffix.lower() in BLOCKED_SUFFIXES
         or any(part in BLOCKED_DIRS for part in parts[:-1])
     )
 
