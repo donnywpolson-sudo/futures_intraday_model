@@ -10,14 +10,16 @@ Use --estimate-cost to estimate cost without downloading.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import shutil
 import time
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol, TypedDict, cast
+from uuid import uuid4
 
 import pandas as pd
 
@@ -562,6 +564,7 @@ def fetch_dataset_conditions(
 def store_to_required_dataframe(
     store: DatabentoStore,
     condition_by_date: dict[str, str] | None = None,
+    default_quality_status: str = "available",
 ) -> pd.DataFrame:
     df = store.to_df(price_type="float", pretty_ts=True, map_symbols=True)
     if not isinstance(df, pd.DataFrame):
@@ -583,7 +586,7 @@ def store_to_required_dataframe(
 
     condition_by_date = condition_by_date or {}
     event_dates = pd.to_datetime(df["ts_event"], utc=True, errors="coerce").dt.date.astype(str)
-    df["data_quality_status"] = event_dates.map(condition_by_date).fillna("available")
+    df["data_quality_status"] = event_dates.map(condition_by_date).fillna(default_quality_status)
     df["data_quality_degraded"] = df["data_quality_status"].map(condition_is_degraded).astype(bool)
 
     return df[ORDERED_OUTPUT_COLUMNS].sort_values("ts_event", kind="mergesort")
@@ -818,6 +821,22 @@ def is_dbn_file(path: Path) -> bool:
     return path.is_file() and (path.name.endswith(".dbn.zst") or path.name.endswith(".dbn"))
 
 
+def non_empty_dbn_files(root: Path) -> list[Path]:
+    if not root.exists():
+        return []
+    if root.is_file():
+        return [root] if is_dbn_file(root) and path_size_bytes(root) > 0 else []
+    return sorted(
+        path
+        for path in root.rglob("*")
+        if is_dbn_file(path) and path_size_bytes(path) > 0
+    )
+
+
+def has_non_empty_dbn_output(path: Path) -> bool:
+    return bool(non_empty_dbn_files(path))
+
+
 def iter_dbn_files(root: Path) -> list[Path]:
     if not root.exists():
         raise FileNotFoundError(f"DBN input root does not exist: {root}")
@@ -830,20 +849,61 @@ def dbn_parquet_path(path: Path) -> Path:
     return path.with_suffix(path.suffix + ".parquet")
 
 
-def convert_dbn_files_to_parquet(paths: list[Path], *, overwrite: bool = False) -> list[Path]:
+def validate_converted_parquet(
+    path: Path,
+    *,
+    required_quality_status: str | None = None,
+) -> None:
+    check = validate_download(path)
+    if not check["valid"]:
+        raise ValueError(f"converted parquet failed validation: {check['errors']}")
+    if required_quality_status is not None:
+        df = pd.read_parquet(path, columns=["data_quality_status"])
+        statuses = set(df["data_quality_status"].dropna().astype(str))
+        if statuses != {required_quality_status}:
+            raise ValueError(
+                "existing converted parquet has ambiguous data_quality_status; "
+                "rerun conversion with --overwrite"
+            )
+
+
+def convert_dbn_files_to_parquet(
+    paths: list[Path],
+    *,
+    overwrite: bool = False,
+    condition_by_date: dict[str, str] | None = None,
+    default_quality_status: str = "available",
+) -> list[Path]:
     import databento as db
 
     converted: list[Path] = []
+    required_quality_status = (
+        default_quality_status
+        if condition_by_date is None and default_quality_status != "available"
+        else None
+    )
     for path in paths:
-        if not is_dbn_file(path):
+        if not is_dbn_file(path) or path_size_bytes(path) <= 0:
             continue
         parquet_path = dbn_parquet_path(path)
         if has_non_empty_output(parquet_path) and not overwrite:
+            validate_converted_parquet(
+                parquet_path,
+                required_quality_status=required_quality_status,
+            )
             converted.append(parquet_path)
             continue
         store = db.DBNStore.from_file(path)
-        df = store_to_required_dataframe(cast(DatabentoStore, store))
+        df = store_to_required_dataframe(
+            cast(DatabentoStore, store),
+            condition_by_date,
+            default_quality_status=default_quality_status,
+        )
         write_required_dataframe_parquet(df, parquet_path)
+        validate_converted_parquet(
+            parquet_path,
+            required_quality_status=required_quality_status,
+        )
         converted.append(parquet_path)
     return converted
 
@@ -856,7 +916,11 @@ def convert_existing_dbn_tree(root: Path, *, overwrite: bool = False) -> list[di
         started = time.monotonic()
         try:
             skipped = has_non_empty_output(out) and not overwrite
-            converted = convert_dbn_files_to_parquet([path], overwrite=overwrite)
+            converted = convert_dbn_files_to_parquet(
+                [path],
+                overwrite=overwrite,
+                default_quality_status="metadata_unavailable",
+            )
             status = "ok_existing" if skipped else "ok"
             bytes_count = path_size_bytes(converted[0]) if converted else 0
             elapsed = time.monotonic() - started
@@ -1201,14 +1265,20 @@ def execute_batch_task(
 ) -> dict[str, object]:
     out = Path(task.output_path)
     started = time.monotonic()
-    if has_non_empty_output(out) and not overwrite:
+    if has_non_empty_dbn_output(out) and not overwrite:
         log_chunk_result(
             status="ok_existing",
             task=task,
             output_path=out,
             elapsed_seconds=time.monotonic() - started,
         )
-        return {**asdict(task), "status": "ok_existing", "bytes": path_size_bytes(out)}
+        return {
+            **asdict(task),
+            "status": "ok_existing",
+            "output_role": "archive_only",
+            "pipeline_raw_ready": False,
+            "bytes": path_size_bytes(out),
+        }
 
     encoding, compression = batch_encoding_and_compression(task.raw_format)
     tmp_dir = out.with_name(f"{out.name}.tmp-{time.time_ns()}")
@@ -1239,9 +1309,16 @@ def execute_batch_task(
         )
         downloaded = client.batch.download(job_id=job_id, output_dir=tmp_dir)
         downloaded_paths = [Path(path) for path in downloaded]
-        dbn_paths = [path for path in downloaded_paths if is_dbn_file(path)]
+        dbn_paths = [path for path in downloaded_paths if is_dbn_file(path) and path_size_bytes(path) > 0]
+        if not dbn_paths:
+            raise RuntimeError("Databento batch download produced no non-empty DBN files")
+        condition_info = fetch_dataset_conditions(client, task) if convert_parquet else None
         converted_paths = (
-            convert_dbn_files_to_parquet(dbn_paths, overwrite=True)
+            convert_dbn_files_to_parquet(
+                dbn_paths,
+                overwrite=True,
+                condition_by_date=condition_info["conditions"] if condition_info else None,
+            )
             if convert_parquet
             else []
         )
@@ -1267,11 +1344,23 @@ def execute_batch_task(
         return {
             **asdict(task),
             "status": "ok",
+            "output_role": "archive_only",
+            "pipeline_raw_ready": False,
             "job": waited_job or job,
             "job_id": job_id,
             "downloaded_files": [path.as_posix() for path in downloaded_paths],
             "downloaded_dbn_files": [path.as_posix() for path in dbn_paths],
-            "converted_parquet_files": [path.as_posix() for path in converted_paths],
+            "converted_parquet_files": [
+                (out / path.relative_to(tmp_dir)).as_posix() for path in converted_paths
+            ],
+            "dataset_condition": (
+                {
+                    "degraded_dates": condition_info["degraded_dates"],
+                    "degraded_date_count": len(condition_info["degraded_dates"]),
+                }
+                if condition_info
+                else None
+            ),
             "bytes": bytes_count,
             "elapsed_seconds": elapsed,
         }
@@ -1349,6 +1438,62 @@ def execute_batch_downloads(
 def write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def canonical_json_hash(payload: object) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def output_role_for_run(mode: str, raw_format: str, output_root: Path) -> str:
+    if mode == "stream" and raw_format == "parquet" and output_root == Path(DEFAULT_STREAM_OUT):
+        return "pipeline_raw_parquet"
+    if mode == "stream" and raw_format == "parquet":
+        return "stream_parquet_noncanonical"
+    return "archive_only"
+
+
+def pipeline_raw_ready_for_run(mode: str, raw_format: str, output_root: Path) -> bool:
+    return output_role_for_run(mode, raw_format, output_root) == "pipeline_raw_parquet"
+
+
+def dry_run_plan_path(plan_out: Path) -> Path:
+    return plan_out.with_name(f"{plan_out.stem}_dry_run{plan_out.suffix}")
+
+
+def finalize_plan_provenance(plan: dict[str, object], *, run_kind: str) -> dict[str, object]:
+    plan["generated_at"] = datetime.now(timezone.utc).isoformat()
+    plan["run_id"] = uuid4().hex
+    plan["run_kind"] = run_kind
+    plan["plan_hash"] = canonical_json_hash(
+        {key: value for key, value in plan.items() if key != "plan_hash"}
+    )
+    return plan
+
+
+def add_result_provenance(
+    results: list[dict[str, object]],
+    plan: dict[str, object],
+) -> list[dict[str, object]]:
+    return [
+        {
+            **item,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "run_id": plan["run_id"],
+            "plan_hash": plan["plan_hash"],
+            "mode": plan.get("mode"),
+            "chunk": plan.get("chunk"),
+            "raw_format": plan.get("raw_format"),
+            "output_role": plan.get("output_role"),
+            "pipeline_raw_ready": plan.get("pipeline_raw_ready"),
+        }
+        for item in results
+    ]
 
 
 def effective_date_range(args: argparse.Namespace) -> tuple[str, str]:
@@ -1463,6 +1608,8 @@ def main() -> int:
         raise SystemExit("--mode batch currently requires --raw-format dbn-zstd")
 
     output_root = effective_output_root(args)
+    output_role = output_role_for_run(args.mode, raw_format, output_root)
+    pipeline_raw_ready = pipeline_raw_ready_for_run(args.mode, raw_format, output_root)
     tasks = iter_range_tasks(
         products,
         start=start,
@@ -1494,21 +1641,32 @@ def main() -> int:
         "workers": args.workers,
         "resume": args.resume,
         "overwrite": args.overwrite,
+        "output_role": output_role,
+        "pipeline_raw_ready": pipeline_raw_ready,
+        "archive_only": output_role == "archive_only",
         "tasks": [asdict(task) for task in tasks],
     }
-    write_json(Path(args.plan_out), plan)
+    plan = finalize_plan_provenance(
+        plan,
+        run_kind="dry_run" if args.dry_run else ("estimate" if args.estimate_cost else "download"),
+    )
     print(
         f"PLAN mode={args.mode} chunk={args.chunk} products={len(products)} "
-        f"tasks={len(tasks)} out={output_root.as_posix()} workers={args.workers}"
+        f"tasks={len(tasks)} out={output_root.as_posix()} workers={args.workers} "
+        f"output_role={output_role} pipeline_raw_ready={pipeline_raw_ready}"
     )
 
     if args.dry_run:
+        write_json(dry_run_plan_path(Path(args.plan_out)), plan)
         print_dry_run(tasks)
         return 0
+
+    write_json(Path(args.plan_out), plan)
 
     client = get_client()
     if args.estimate_cost:
         estimates = estimate_cost(client, tasks)
+        estimates = add_result_provenance(estimates, plan)
         write_json(Path(args.plan_out).with_name("databento_cost_estimate.json"), estimates)
         total = sum(float(item.get("estimated_cost_usd", 0.0)) for item in estimates)
         errors = sum(1 for item in estimates if item.get("status") == "estimate_error")
@@ -1547,6 +1705,7 @@ def main() -> int:
             batch_wait_timeout_seconds=args.batch_wait_timeout_seconds,
             batch_poll_seconds=args.batch_poll_seconds,
         )
+    results = add_result_provenance(results, plan)
     write_json(Path(args.plan_out).with_name("databento_download_results.json"), results)
     failed = [item for item in results if item.get("status") not in {"ok", "ok_existing"}]
     return 1 if failed else 0

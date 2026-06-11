@@ -138,6 +138,33 @@ def test_rolling_features_do_not_cross_session_or_invalid_rows() -> None:
     assert pd.isna(out2.loc[25, "feature_realized_range_30"])
 
 
+def test_invalid_lookback_makes_inside_bar_count_nan() -> None:
+    df = _frame(40)
+    df.loc[10, "is_synthetic"] = True
+    out = add_base_market_features(df, tick_size=0.25)
+    assert pd.isna(out.loc[25, "feature_inside_bar_count_20"])
+    assert pd.notna(out.loc[31, "feature_inside_bar_count_20"])
+
+
+def test_invalid_lookback_makes_large_bar_count_nan() -> None:
+    df = _frame(140)
+    df.loc[100, "valid_ohlcv"] = False
+    out = add_base_market_features(df, tick_size=0.25)
+    assert pd.isna(out.loc[120, "feature_large_bar_count_30"])
+
+
+def test_count_style_rolling_features_do_not_treat_invalid_rows_as_zero() -> None:
+    df = _frame(140)
+    df.loc[100, "roll_window_flag"] = True
+    out = add_base_market_features(df, tick_size=0.25)
+    assert pd.isna(out.loc[110, "feature_directional_bar_ratio_15"])
+    assert pd.isna(out.loc[120, "feature_directional_bar_ratio_30"])
+    assert pd.isna(out.loc[120, "feature_bars_above_vwap_30"])
+    assert pd.isna(out.loc[120, "feature_bars_below_vwap_30"])
+    assert pd.isna(out.loc[120, "feature_session_acceptance_above_mid"])
+    assert pd.isna(out.loc[120, "feature_session_acceptance_below_mid"])
+
+
 def test_breakout_uses_prior_range_excluding_current_bar() -> None:
     df = _frame(25)
     df.loc[:19, "high"] = 105.0
@@ -207,12 +234,29 @@ def test_intermarket_features_use_exact_timestamps_and_no_self_target_columns(tm
     assert out["feature_rel_ret_vs_CL_15"].isna().all()
 
 
+def test_tier1_risk_score_is_usable_without_zero_filling_self_market(tmp_path: Path) -> None:
+    root = tmp_path / "labeled"
+    for market in ("CL", "ES", "ZN"):
+        path = root / market / "2024.parquet"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _frame(90, market=market).to_parquet(path, index=False)
+
+    base = add_base_market_features(_frame(90, market="CL"), tick_size=0.01)
+    out, missing = add_intermarket_features(base, market="CL", year=2024, input_root=root)
+    assert out["feature_tier1_risk_on_score_30"].notna().any()
+    assert missing["feature_tier1_risk_on_score_30"] < 1.0
+    assert out["feature_rel_ret_vs_CL_15"].isna().all()
+
+
 def test_registry_excludes_targets_audit_source_and_forbidden_columns() -> None:
     assert validate_registry(FEATURE_COLS) == []
     assert all(col.startswith("feature_") for col in FEATURE_COLS)
     assert not any(col.startswith("target_") for col in FEATURE_COLS)
     assert "instrument_id" not in FEATURE_COLS
     assert "feature_input_valid" not in FEATURE_COLS
+    injected = validate_registry([*FEATURE_COLS, "target_ret_15m"])
+    assert injected
+    assert any("forbidden columns" in failure for failure in injected)
 
 
 def test_process_file_writes_matrix_registries_and_reports(tmp_path: Path) -> None:

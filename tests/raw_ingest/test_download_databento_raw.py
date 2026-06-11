@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import sys
+import types
 from pathlib import Path
 
 import pandas as pd
@@ -17,19 +19,29 @@ from scripts.raw_ingest.download_databento_raw import (
     STYPE_IN,
     STYPE_OUT,
     DownloadTask,
+    add_result_provenance,
     build_arg_parser,
     condition_is_degraded,
+    convert_dbn_files_to_parquet,
     dataset_for_product,
+    dbn_parquet_path,
+    dry_run_plan_path,
+    effective_output_root,
+    effective_raw_format,
     execute_download,
     execute_batch_downloads,
     estimate_cost,
+    finalize_plan_provenance,
     first_pending_download,
     iter_range_tasks,
     is_fatal_error,
     iter_month_ranges,
     iter_year_tasks,
+    main,
     load_databento_api_key_from_file,
     normalize_api_key,
+    output_role_for_run,
+    pipeline_raw_ready_for_run,
     parse_symbols,
     preflight_auth,
     resolve_databento_api_key,
@@ -152,11 +164,50 @@ class FakeBatch:
         return [path]
 
 
+class EmptyBatch(FakeBatch):
+    def download(self, **kwargs: object) -> list[Path]:
+        self.downloads.append(kwargs)
+        output_dir = Path(str(kwargs["output_dir"]))
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return []
+
+
+class NonDbnBatch(FakeBatch):
+    def download(self, **kwargs: object) -> list[Path]:
+        self.downloads.append(kwargs)
+        output_dir = Path(str(kwargs["output_dir"]))
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / "job-test.txt"
+        path.write_text("not dbn", encoding="utf-8")
+        return [path]
+
+
 class FakeBatchClient:
     def __init__(self) -> None:
         self.batch = FakeBatch()
         self.metadata = FailingMetadata()
         self.timeseries = FailingTimeseries()
+
+
+class DegradedMetadata(FailingMetadata):
+    def get_dataset_condition(self, **kwargs: object) -> list[dict[str, object]]:
+        return [{"date": "2024-01-03", "condition": "degraded"}]
+
+
+def install_fake_databento_store(
+    monkeypatch: pytest.MonkeyPatch,
+    df: pd.DataFrame,
+) -> None:
+    class FakeDBNStore:
+        @classmethod
+        def from_file(cls, path: Path) -> FakeStore:
+            return FakeStore(df.copy())
+
+    monkeypatch.setitem(
+        sys.modules,
+        "databento",
+        types.SimpleNamespace(DBNStore=FakeDBNStore),
+    )
 
 
 def test_parse_symbols_current_and_extended() -> None:
@@ -176,6 +227,17 @@ def test_parse_symbols_custom_normalizes_and_sorts() -> None:
 def test_default_output_is_pipeline_raw_root() -> None:
     args = build_arg_parser().parse_args([])
     assert args.out == "data/raw"
+
+
+def test_default_batch_plan_is_archive_only_not_pipeline_ready() -> None:
+    args = build_arg_parser().parse_args([])
+    raw_format = effective_raw_format(args)
+    output_root = effective_output_root(args)
+
+    assert args.mode == "batch"
+    assert raw_format == "dbn-zstd"
+    assert output_role_for_run(args.mode, raw_format, output_root) == "archive_only"
+    assert pipeline_raw_ready_for_run(args.mode, raw_format, output_root) is False
 
 
 def test_new_speedup_args_parse_without_breaking_existing_defaults() -> None:
@@ -520,6 +582,70 @@ def test_store_to_required_dataframe_marks_degraded_dates() -> None:
     assert out["data_quality_degraded"].tolist() == [False, True]
 
 
+def test_store_to_required_dataframe_can_mark_unknown_conversion_quality() -> None:
+    df = pd.DataFrame(
+        {
+            "ts_event": [pd.Timestamp("2024-01-02T15:00:00Z")],
+            "open": [1.0],
+            "high": [2.0],
+            "low": [0.5],
+            "close": [1.5],
+            "volume": [10],
+            "rtype": [33],
+            "publisher_id": [1],
+            "instrument_id": [100],
+            "symbol": ["ESH4"],
+        }
+    )
+
+    out = store_to_required_dataframe(
+        FakeStore(df),
+        default_quality_status="metadata_unavailable",
+    )
+
+    assert out.loc[0, "data_quality_status"] == "metadata_unavailable"
+    assert out.loc[0, "data_quality_degraded"] == True
+
+
+def test_convert_dbn_files_validates_existing_converted_parquet(tmp_path: Path) -> None:
+    dbn_path = tmp_path / "job-test.dbn.zst"
+    dbn_path.write_bytes(b"dbn")
+    pd.DataFrame({"bad": [1]}).to_parquet(dbn_parquet_path(dbn_path), index=False)
+
+    with pytest.raises(ValueError, match="converted parquet failed validation"):
+        convert_dbn_files_to_parquet([dbn_path], overwrite=False)
+
+
+def test_convert_existing_requires_non_available_quality_on_skipped_parquet(
+    tmp_path: Path,
+) -> None:
+    dbn_path = tmp_path / "job-test.dbn.zst"
+    dbn_path.write_bytes(b"dbn")
+    pd.DataFrame(
+        {
+            "ts_event": [pd.Timestamp("2024-01-02T15:00:00Z")],
+            "open": [1.0],
+            "high": [2.0],
+            "low": [0.5],
+            "close": [1.5],
+            "volume": [10],
+            "rtype": [33],
+            "publisher_id": [1],
+            "instrument_id": [100],
+            "symbol": ["ESH4"],
+            "data_quality_status": ["available"],
+            "data_quality_degraded": [False],
+        }
+    ).to_parquet(dbn_parquet_path(dbn_path), index=False)
+
+    with pytest.raises(ValueError, match="ambiguous data_quality_status"):
+        convert_dbn_files_to_parquet(
+            [dbn_path],
+            overwrite=False,
+            default_quality_status="metadata_unavailable",
+        )
+
+
 def test_store_to_required_dataframe_fails_missing_metadata() -> None:
     df = pd.DataFrame(
         {
@@ -791,6 +917,154 @@ def test_execute_batch_download_writes_temp_dir_then_final_output(tmp_path: Path
     assert client.batch.submissions[0]["split_duration"] == "month"
 
 
+def test_existing_batch_directory_without_dbn_is_not_ok_existing(tmp_path: Path) -> None:
+    client = FakeBatchClient()
+    final_dir = tmp_path / "raw_databento" / CME_DATASET / "ES" / "2024-01"
+    final_dir.mkdir(parents=True)
+    (final_dir / "note.txt").write_text("not dbn", encoding="utf-8")
+    task = DownloadTask(
+        dataset=CME_DATASET,
+        product="ES",
+        year=2024,
+        start="2024-01-01",
+        end="2024-02-01",
+        symbol="ES.v.0",
+        output_path=final_dir.as_posix(),
+        chunk="month",
+        raw_format="dbn-zstd",
+    )
+
+    results = execute_batch_downloads(
+        [task],
+        overwrite=False,
+        workers=1,
+        client_factory=lambda: client,
+        convert_parquet=False,
+        max_retries=0,
+        batch_wait_timeout_seconds=1.0,
+        batch_poll_seconds=0.01,
+    )
+
+    assert results[0]["status"] == "ok"
+    assert client.batch.submissions
+    assert (final_dir / "job-test.dbn.zst").exists()
+
+
+def test_batch_download_without_non_empty_dbn_files_is_not_ok(tmp_path: Path) -> None:
+    client = FakeBatchClient()
+    client.batch = NonDbnBatch()
+    task = DownloadTask(
+        dataset=CME_DATASET,
+        product="ES",
+        year=2024,
+        start="2024-01-01",
+        end="2024-02-01",
+        symbol="ES.v.0",
+        output_path=(tmp_path / "raw_databento" / CME_DATASET / "ES" / "2024-01").as_posix(),
+        chunk="month",
+        raw_format="dbn-zstd",
+    )
+
+    results = execute_batch_downloads(
+        [task],
+        overwrite=False,
+        workers=1,
+        client_factory=lambda: client,
+        convert_parquet=False,
+        max_retries=0,
+        batch_wait_timeout_seconds=1.0,
+        batch_poll_seconds=0.01,
+    )
+
+    assert results[0]["status"] == "download_error"
+    assert "no non-empty DBN files" in str(results[0]["error"])
+
+
+def test_empty_batch_download_is_not_ok(tmp_path: Path) -> None:
+    client = FakeBatchClient()
+    client.batch = EmptyBatch()
+    task = DownloadTask(
+        dataset=CME_DATASET,
+        product="ES",
+        year=2024,
+        start="2024-01-01",
+        end="2024-02-01",
+        symbol="ES.v.0",
+        output_path=(tmp_path / "raw_databento" / CME_DATASET / "ES" / "2024-01").as_posix(),
+        chunk="month",
+        raw_format="dbn-zstd",
+    )
+
+    results = execute_batch_downloads(
+        [task],
+        overwrite=False,
+        workers=1,
+        client_factory=lambda: client,
+        convert_parquet=False,
+        max_retries=0,
+        batch_wait_timeout_seconds=1.0,
+        batch_poll_seconds=0.01,
+    )
+
+    assert results[0]["status"] == "download_error"
+    assert "no non-empty DBN files" in str(results[0]["error"])
+
+
+def test_batch_convert_parquet_preserves_degraded_dataset_condition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    converted_df = pd.DataFrame(
+        {
+            "ts_event": [
+                pd.Timestamp("2024-01-02T15:00:00Z"),
+                pd.Timestamp("2024-01-03T15:00:00Z"),
+            ],
+            "open": [1.0, 1.0],
+            "high": [2.0, 2.0],
+            "low": [0.5, 0.5],
+            "close": [1.5, 1.5],
+            "volume": [10, 10],
+            "rtype": [33, 33],
+            "publisher_id": [1, 1],
+            "instrument_id": [100, 100],
+            "symbol": ["ESH4", "ESH4"],
+        }
+    )
+    install_fake_databento_store(monkeypatch, converted_df)
+    client = FakeBatchClient()
+    client.metadata = DegradedMetadata()
+    task = DownloadTask(
+        dataset=CME_DATASET,
+        product="ES",
+        year=2024,
+        start="2024-01-01",
+        end="2024-02-01",
+        symbol="ES.v.0",
+        output_path=(tmp_path / "raw_databento" / CME_DATASET / "ES" / "2024-01").as_posix(),
+        chunk="month",
+        raw_format="dbn-zstd",
+    )
+
+    results = execute_batch_downloads(
+        [task],
+        overwrite=False,
+        workers=1,
+        client_factory=lambda: client,
+        convert_parquet=True,
+        max_retries=0,
+        batch_wait_timeout_seconds=1.0,
+        batch_poll_seconds=0.01,
+    )
+
+    assert results[0]["status"] == "ok"
+    final_parquet = Path(task.output_path) / "job-test.dbn.zst.parquet"
+    out = pd.read_parquet(final_parquet)
+    assert out["data_quality_status"].tolist() == ["available", "degraded"]
+    assert out["data_quality_degraded"].tolist() == [False, True]
+    assert results[0]["dataset_condition"]["degraded_date_count"] == 1
+
+
 def test_estimate_cost_stops_on_auth_failure(tmp_path: Path) -> None:
     tasks = [
         DownloadTask(
@@ -817,6 +1091,65 @@ def test_estimate_cost_stops_on_auth_failure(tmp_path: Path) -> None:
 
     assert len(results) == 1
     assert results[0]["status"] == "estimate_error"
+
+
+def test_plan_and_results_share_run_id_and_plan_hash() -> None:
+    plan = finalize_plan_provenance(
+        {
+            "mode": "stream",
+            "chunk": "year",
+            "raw_format": "parquet",
+            "output_role": "pipeline_raw_parquet",
+            "pipeline_raw_ready": True,
+            "tasks": [],
+        },
+        run_kind="download",
+    )
+
+    results = add_result_provenance([{"status": "ok"}], plan)
+
+    assert plan["run_id"]
+    assert plan["plan_hash"]
+    assert results[0]["run_id"] == plan["run_id"]
+    assert results[0]["plan_hash"] == plan["plan_hash"]
+    assert results[0]["output_role"] == "pipeline_raw_parquet"
+    assert results[0]["pipeline_raw_ready"] is True
+
+
+def test_dry_run_uses_separate_plan_path_and_no_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_out = tmp_path / "reports" / "databento_download_plan.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "download_databento_raw.py",
+            "--markets",
+            "ES",
+            "--start",
+            "2024-01-01",
+            "--end",
+            "2024-01-02",
+            "--dry-run",
+            "--plan-out",
+            plan_out.as_posix(),
+        ],
+    )
+
+    assert main() == 0
+
+    dry_plan = dry_run_plan_path(plan_out)
+    assert not plan_out.exists()
+    assert dry_plan.exists()
+    assert not (plan_out.parent / "databento_download_results.json").exists()
+    payload = json.loads(dry_plan.read_text(encoding="utf-8"))
+    assert payload["run_kind"] == "dry_run"
+    assert payload["run_id"]
+    assert payload["plan_hash"]
+    assert payload["output_role"] == "archive_only"
+    assert payload["pipeline_raw_ready"] is False
 
 
 def REQUIRED_TEST_COLUMNS() -> list[str]:

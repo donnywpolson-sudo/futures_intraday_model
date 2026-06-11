@@ -480,6 +480,37 @@ def valid_window_mask(valid: pd.Series, segment: pd.Series, window: int) -> pd.S
     return rolling_sum(valid.astype(float), segment, window).eq(float(window))
 
 
+def rolling_sum_full_valid(
+    series: pd.Series,
+    valid: pd.Series,
+    segment: pd.Series,
+    window: int,
+) -> pd.Series:
+    return rolling_sum(series.where(valid), segment, window).where(
+        valid_window_mask(valid, segment, window)
+    )
+
+
+def rolling_mean_full_valid(
+    series: pd.Series,
+    valid: pd.Series,
+    segment: pd.Series,
+    window: int,
+) -> pd.Series:
+    return rolling_mean(series.where(valid), segment, window).where(
+        valid_window_mask(valid, segment, window)
+    )
+
+
+def rolling_true_count_full_valid(
+    condition: pd.Series,
+    valid: pd.Series,
+    segment: pd.Series,
+    window: int,
+) -> pd.Series:
+    return rolling_sum_full_valid(condition.where(valid).astype(float), valid, segment, window)
+
+
 def bars_since(flag: pd.Series, valid: pd.Series, segment: pd.Series) -> pd.Series:
     output = pd.Series(np.nan, index=flag.index, dtype=float)
     for _, idx in flag.groupby(segment, sort=False).groups.items():
@@ -635,8 +666,14 @@ def add_base_market_features(df: pd.DataFrame, tick_size: float) -> pd.DataFrame
         out[f"feature_efficiency_ratio_{window}"] = safe_div(move, path)
     direction = np.sign(safe_close - prev_close).where(valid)
     for window in (15, 30):
-        same_direction = direction.eq(lag(direction, segment, 1)).where(valid).astype(float)
-        out[f"feature_directional_bar_ratio_{window}"] = rolling_mean(same_direction, segment, window)
+        previous_direction = lag(direction, segment, 1)
+        same_direction = direction.eq(previous_direction).where(previous_direction.notna())
+        out[f"feature_directional_bar_ratio_{window}"] = rolling_mean_full_valid(
+            same_direction.astype(float),
+            valid,
+            segment,
+            window,
+        )
     out["feature_consecutive_up_bars"] = consecutive_bars(safe_close.gt(prev_close), valid, segment)
     out["feature_consecutive_down_bars"] = consecutive_bars(safe_close.lt(prev_close), valid, segment)
     out["feature_trend_persistence_30"] = out["feature_efficiency_ratio_30"]
@@ -667,8 +704,15 @@ def add_base_market_features(df: pd.DataFrame, tick_size: float) -> pd.DataFrame
     out["feature_chop_ratio_30"] = safe_div(rolling_sum(true_range, segment, 30), (safe_close - lag(safe_close, segment, 30)).abs())
     prev_high = lag(safe_high, segment, 1)
     prev_low = lag(safe_low, segment, 1)
-    inside = ((safe_high <= prev_high) & (safe_low >= prev_low) & valid).astype(float)
-    out["feature_inside_bar_count_20"] = rolling_sum(inside, segment, 20)
+    inside = ((safe_high <= prev_high) & (safe_low >= prev_low)).where(
+        prev_high.notna() & prev_low.notna()
+    )
+    out["feature_inside_bar_count_20"] = rolling_true_count_full_valid(
+        inside,
+        valid,
+        segment,
+        20,
+    )
     overlap = (pd.concat([safe_high, prev_high], axis=1).min(axis=1) - pd.concat([safe_low, prev_low], axis=1).max(axis=1)).clip(lower=0)
     union = (pd.concat([safe_high, prev_high], axis=1).max(axis=1) - pd.concat([safe_low, prev_low], axis=1).min(axis=1))
     out["feature_overlap_ratio_20"] = rolling_mean(safe_div(overlap, union), segment, 20)
@@ -701,7 +745,15 @@ def add_base_market_features(df: pd.DataFrame, tick_size: float) -> pd.DataFrame
     tr_mean_60 = rolling_mean(true_range, segment, 60)
     tr_std_60 = rolling_std(true_range, segment, 60)
     large_bar = (true_range > tr_mean_60 + 2.0 * tr_std_60) & valid
-    out["feature_large_bar_count_30"] = rolling_sum(large_bar.astype(float), segment, 30)
+    large_bar_signal = (true_range > tr_mean_60 + 2.0 * tr_std_60).where(
+        valid & tr_mean_60.notna() & tr_std_60.notna()
+    )
+    out["feature_large_bar_count_30"] = rolling_true_count_full_valid(
+        large_bar_signal,
+        valid,
+        segment,
+        30,
+    )
     shock = (true_range > tr_mean_60 + 3.0 * tr_std_60) & valid_window_mask(valid, segment, 60)
     out["feature_shock_bar_flag"] = shock
     out["feature_bars_since_shock"] = bars_since(shock, valid, segment)
@@ -753,8 +805,18 @@ def add_base_market_features(df: pd.DataFrame, tick_size: float) -> pd.DataFrame
     out["feature_session_one_wayness"] = safe_div((safe_close - session_open).abs(), session_range.clip(lower=tick_size))
     above_vwap = (safe_close > session_vwap).where(valid)
     below_vwap = (safe_close < session_vwap).where(valid)
-    out["feature_bars_above_vwap_30"] = rolling_sum(above_vwap.astype(float), segment, 30)
-    out["feature_bars_below_vwap_30"] = rolling_sum(below_vwap.astype(float), segment, 30)
+    out["feature_bars_above_vwap_30"] = rolling_true_count_full_valid(
+        above_vwap,
+        valid,
+        segment,
+        30,
+    )
+    out["feature_bars_below_vwap_30"] = rolling_true_count_full_valid(
+        below_vwap,
+        valid,
+        segment,
+        30,
+    )
     out["feature_vwap_side_persistence"] = pd.concat([out["feature_bars_above_vwap_30"], out["feature_bars_below_vwap_30"]], axis=1).max(axis=1) / 30.0
     extension = (safe_close - session_open).abs()
     adverse_from_extreme = np.where(safe_close >= session_open, session_high - safe_close, safe_close - session_low)
@@ -762,8 +824,18 @@ def add_base_market_features(df: pd.DataFrame, tick_size: float) -> pd.DataFrame
 
     out["feature_session_range_extension_up"] = ((safe_close - prior["high"]).clip(lower=0.0) / tick_size).where(prior["high"].notna())
     out["feature_session_range_extension_down"] = ((prior["low"] - safe_close).clip(lower=0.0) / tick_size).where(prior["low"].notna())
-    out["feature_session_acceptance_above_mid"] = rolling_mean((safe_close > session_mid).where(valid).astype(float), segment, 30)
-    out["feature_session_acceptance_below_mid"] = rolling_mean((safe_close < session_mid).where(valid).astype(float), segment, 30)
+    out["feature_session_acceptance_above_mid"] = rolling_mean_full_valid(
+        (safe_close > session_mid).where(valid).astype(float),
+        valid,
+        segment,
+        30,
+    )
+    out["feature_session_acceptance_below_mid"] = rolling_mean_full_valid(
+        (safe_close < session_mid).where(valid).astype(float),
+        valid,
+        segment,
+        30,
+    )
     prior_session_high_so_far = session_high.groupby(segment, sort=False).shift(1)
     prior_session_low_so_far = session_low.groupby(segment, sort=False).shift(1)
     out["feature_failed_retest_session_high"] = (safe_high > prior_session_high_so_far) & (safe_close < prior_session_high_so_far) & valid
@@ -929,11 +1001,21 @@ def add_intermarket_features(
     out["feature_cl_es_divergence_30"] = (cl - es) if cl is not None and es is not None else np.nan
     out["feature_es_zn_risk_regime_30"] = out["feature_es_zn_divergence_30"]
     out["feature_cl_es_macro_divergence_30"] = out["feature_cl_es_divergence_30"]
-    out["feature_tier1_risk_on_score_30"] = (
-        es.fillna(0.0) - zn.fillna(0.0) + 0.5 * cl.fillna(0.0)
-        if es is not None and zn is not None and cl is not None
-        else np.nan
-    )
+    risk_components: list[pd.Series] = []
+    if market != "ES" and es is not None:
+        risk_components.append(es.rename("ES"))
+    if market != "ZN" and zn is not None:
+        risk_components.append((-zn).rename("ZN"))
+    if market != "CL" and cl is not None:
+        risk_components.append((0.5 * cl).rename("CL"))
+    if risk_components:
+        risk_frame = pd.concat(risk_components, axis=1)
+        out["feature_tier1_risk_on_score_30"] = risk_frame.sum(
+            axis=1,
+            min_count=len(risk_components),
+        )
+    else:
+        out["feature_tier1_risk_on_score_30"] = np.nan
 
     signs = []
     for other in TIER1_MARKETS:

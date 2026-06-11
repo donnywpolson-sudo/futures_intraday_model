@@ -116,63 +116,74 @@ PASS / WARN / FAIL / NOT AUDITABLE
 
 # Can I continue?
 
-YES / NO / YES, but only with these limits: ...
+YES / NO / YES, with limits
 
 # Problems to fix now
 
-For each blocking/current issue:
+Use this table only:
 
-## Problem N - <plain English title>
+|  # | Severity                    | Problem                                 | Fix                      |
+| -: | --------------------------- | --------------------------------------- | ------------------------ |
+|  1 | BLOCKER / IMPORTANT / LATER | Plain-English problem in 1-3 sentences. | Direct fix in 1-5 steps. |
 
-Severity: BLOCKER / IMPORTANT / LATER
+Rules:
 
-What is wrong:
-<1-3 plain English sentences>
-
-Why it matters:
-<1-2 plain English sentences>
-
-Where:
-<exact file/function/line if available>
-
-How to fix:
-<direct patch plan, not theory>
-
-How to verify:
-<exact command or diagnostic>
+* Include only current/blocking issues.
+* Keep problems plain English.
+* Keep fixes patch-oriented.
+* No theory.
 
 # Problems to ignore for now
 
-List only real issues that do not block the next phase.
+Use this table only:
 
-# Exact next Codex prompt
+| Severity | Problem                                        | Fix later              |
+| -------- | ---------------------------------------------- | ---------------------- |
+| LATER    | Real issue that does not block the next phase. | When/how to fix later. |
 
-Give one paste-ready Codex prompt that fixes only the blocking/current issues.
+Rules:
+
+* Include only real non-blocking issues.
+* Omit this section on FAIL unless it affects the immediate patch.
+
+# Codex prompt to fix the problems
+
+Give one paste-ready Codex prompt that fixes all BLOCKER and IMPORTANT issues.
+
+The patch prompt must include:
+
+* exact files
+* exact problems
+* what not to modify
+* tests/diagnostics
+* expected pass criteria
+* git status check
+
+Do not include LATER issues unless required to fix a BLOCKER.
 
 # Stop
 
-FAIL output rule:
+FAIL rule:
 
-If the audit verdict is FAIL, output only:
+If verdict is FAIL, output only:
 
-* the blocking problems
-* the minimum fixes
-* the verification commands
-* one exact patch prompt
-
-Do not include future-phase commentary unless it changes the immediate fix.
+* Verdict
+* Can I continue?
+* Problems to fix now table
+* Codex prompt to fix the problems
+* Stop
 
 Do not include:
 
-* long scientific-method sections
 * null hypothesis tables
+* long scientific-method sections
 * broad future-phase warnings
 * generic quant advice
 * repeated context
+* large findings tables beyond the simple problem/fix table
 * theoretical issues that do not block the next phase
-* large findings tables unless the user explicitly asks for the full audit report
 
-Example output shape:
+Example:
 
 # Verdict
 
@@ -184,28 +195,14 @@ NO.
 
 # Problems to fix now
 
-## Problem 1 - Rolling features use invalid lookbacks
+|  # | Severity  | Problem                                                                                                                   | Fix                                                                                                      |
+| -: | --------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+|  1 | BLOCKER   | Rolling count features compute through invalid or synthetic lookback rows. Invalid rows become false/zero instead of NaN. | Require full valid lookback windows. If any row in the window has feature_input_valid=false, output NaN. |
+|  2 | IMPORTANT | A feature is 100% NaN but still appears in feature_cols.                                                                  | Make it computable or exclude it from feature_cols and report it unavailable.                            |
 
-Severity: BLOCKER
+# Codex prompt to fix the problems
 
-What is wrong:
-Some rolling features compute through synthetic or invalid rows.
-
-Why it matters:
-Invalid rows can become false/zero instead of NaN, creating fake regime features.
-
-Where:
-scripts/phase4_features/build_baseline_features.py
-
-How to fix:
-Require full valid lookback windows. If any row in the lookback is invalid, output NaN.
-
-How to verify:
-Run the invalid-lookback artifact diagnostic and require contaminated row counts to be 0.
-
-# Exact next Codex prompt
-
-<patch prompt>
+<paste-ready patch prompt>
 
 # Stop
 
