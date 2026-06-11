@@ -6,7 +6,8 @@ Primary rule: do exactly the requested task with the smallest safe change.
 
 Hard safety rules:
 
-* Do not create, commit, or preserve generated artifacts: parquet, dbn, zst, csv reports, logs, cache files, model pickles, or large data outputs.
+* Do not stage, commit, or intentionally preserve generated artifacts: parquet, dbn, zst, generated csv/json reports, logs, cache files, model pickles, or large data outputs.
+* Validation commands may regenerate ignored `data/` and `reports/` artifacts. That is allowed, but they must remain untracked.
 * Do not change public contracts unless explicitly asked: CLI args, config keys, column names, file paths, output schemas, report fields, manifests, or test expectations.
 * Do not tune model hyperparameters until data integrity, target construction, leakage checks, purge/embargo, and cost modeling are verified.
 * Do not change trading/data semantics unless explicitly asked.
@@ -36,3 +37,12 @@ Validation:
 
 * Run the narrowest relevant test/check after edits.
 * For data/model/WFA changes, report exact commands, files changed, metrics changed, row-count changes, and warnings.
+* After validation, run `git status --short` and confirm generated artifacts are not tracked.
+
+## Codex command sandbox handling
+
+If a command fails before Python starts due to sandbox/spawn/permission handling, retry once with scoped approval.
+
+Do not treat pre-launch sandbox/spawn failures as project failures.
+
+Only report validation failure if Python actually launches and returns a traceback, failed assertion, failed test, or nonzero exit code.
