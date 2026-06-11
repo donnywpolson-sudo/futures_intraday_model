@@ -36,17 +36,23 @@ data/raw/{market}/{year}.parquet
 Required raw schema:
 
 ```text
-rtype
-publisher_id
-instrument_id
+ts_event
 open
 high
 low
 close
 volume
+rtype
+publisher_id
+instrument_id
 symbol
-ts_event
+data_quality_status
+data_quality_degraded
 ```
+
+Production and research profiles fail when strict raw fields are missing. The
+`metadata_optional_test` profile is relaxed for test fixtures only; missing
+strict raw fields are FAIL, not WARN.
 
 Timestamp policy:
 
@@ -96,7 +102,14 @@ Current implementation organization:
 scripts/raw_ingest/              raw data download
 scripts/phase2_causal_base/      validation, session normalization, causal gating
 scripts/phase3_labels/           target and label generation
+scripts/phase4_features/         baseline features; will be created later
 scripts/utilities/               repo safety utilities
+```
+
+Active profile alias:
+
+```text
+tier_1_core -> tier_1_core_recent
 ```
 
 Each market config should include:
@@ -119,20 +132,29 @@ ES
 ZN
 ```
 
-Initial years:
+Year/profile policy:
 
 ```text
-2023
-2024
-2025
+downloaded_years = 2010-2026
+recent_research = 2023-2025
+long_research = 2010-2025
+forward_years = 2026
 ```
 
-Recommended split with only these years:
+Profiles:
 
 ```text
-2023-2024 = research / feature discovery / policy selection
-2025      = final holdout evaluation
+tier_0_smoke
+tier_1_core_recent
+tier_1_core_long
+tier_2_liquid_recent
+tier_2_liquid_long
+tier_3_full_long
+tier_forward_2026
+all_raw inventory only
 ```
+
+2026 is forward/incomplete-year validation, not normal training history.
 
 Do not add new markets, alternative data, order book data, or hyperparameter tuning until the baseline pipeline is structurally correct and the strategy gates are honest.
 
@@ -147,7 +169,7 @@ This is the realistic operational pipeline. The old 27-stage checklist is preser
 | 1 | Raw Data | `data/raw/{market}/{year}.parquet` | Immutable Databento OHLCV input. |
 | 2 | Causal Base Builder | `data/causally_gated_normalized/{market}/{year}.parquet` | Validate, session-normalize, roll-flag, synthetic-mark, and causally gate raw bars. |
 | 3 | Target / Label Generation | `data/labeled/{market}/{year}.parquet` | Build next-bar-entry 15-minute labels with cost-aware and intraday validity flags. |
-| 4 | Baseline Feature Matrix | `data/feature_matrices/baseline/{market}/{year}.parquet` | Build OHLCV-only baseline features plus metadata and target columns. |
+| 4 | Baseline + L0 Regime Feature Matrix | `data/feature_matrices/baseline/{market}/{year}.parquet` | Build OHLCV-only baseline and L0 regime features plus metadata and target columns. |
 | 5 | Column Registry | `feature_cols.json`, `target_cols.json`, `metadata_cols.json` | Hard-gate feature/target/metadata separation. |
 | 6 | WFA Split Plan | `reports/wfa/split_plan.json` | Build deterministic train/test folds with purge and final-holdout awareness. |
 | 7 | Baseline WFA Train/Test | `reports/wfa/baseline_wfa_report.json` | Train baseline model using train-only preprocessing and test-only prediction. |
@@ -208,24 +230,27 @@ data/raw/{market}/{year}.parquet
 
 ---
 
-### Research, validation, and final holdout policy
+### Research, validation, and forward policy
 
 A walk-forward split alone is not enough if feature selection, policy selection, and human iteration keep using the same period.
 
-Minimum policy for current data:
+Current year policy:
 
 ```text
-research period: 2023-2024
-final holdout:   2025
+downloaded_years = 2010-2026
+recent_research = 2023-2025
+long_research = 2010-2025
+forward_years = 2026
 ```
 
 Rules:
 
 - Feature discovery and feature selection may use only research-period train folds.
 - Execution policy selection may use only research-period train/validation folds.
-- Final holdout may be evaluated only after features and policy are frozen.
-- Do not change features, thresholds, policy rules, or costs after inspecting final holdout results.
-- If final holdout fails, mark the strategy rejected; do not tune on the final holdout.
+- Forward years may be evaluated only after features and policy are frozen.
+- Do not change features, thresholds, policy rules, or costs after inspecting forward-year results.
+- 2026 is forward/incomplete-year validation, not normal training history.
+- If forward validation fails, mark the strategy rejected; do not tune on forward results.
 
 When more history is available, prefer:
 
@@ -407,6 +432,7 @@ The exact price convention must match the execution-cost model.
 Required target fields:
 
 ```text
+target_invalid_reason
 target_ret_15m
 target_ret_ticks_15m
 target_gross_dollars_15m
@@ -418,7 +444,28 @@ target_sign_15m
 target_sign_with_deadzone
 target_tradeable_after_cost
 target_valid
+mae_ticks_15m
+mfe_ticks_15m
+fade_long_success_15m
+fade_short_success_15m
+trend_danger_up_30m
+trend_danger_down_30m
+revert_to_vwap_30m
+revert_to_session_mid_30m
+label_semantics
+cost_source
+cost_provisional
 ```
+
+Net-cost arithmetic:
+
+```text
+net_magnitude = max(abs(target_ret_ticks_15m) - target_estimated_cost_ticks, 0)
+target_net_ticks_after_est_cost = sign(target_ret_ticks_15m) * net_magnitude
+```
+
+`target_tradeable_after_cost` means the absolute forward move exceeds estimated
+cost; it is not guaranteed profitability.
 
 `target_valid` must be false if:
 
@@ -427,6 +474,10 @@ current row is not causal_valid
 entry row is missing
 exit row is missing
 entry or exit touches a synthetic row
+path touches valid_ohlcv false
+path touches boundary_session_flag true
+path touches roll_window_flag true
+entry/exit price invalid
 future path crosses session_segment_id
 future path crosses configured intraday cutoff
 future path crosses suspicious roll boundary
@@ -443,22 +494,22 @@ Causal base:
 python -m scripts.phase2_causal_base.build_causal_base_data --profile tier_1_core
 ```
 
-Baseline pipeline:
+Labels:
 
 ```bash
-python scripts/run_pipeline.py --profile tier_1_CL_ES_ZN --from-stage labels --to-stage baseline_gate
+python -m scripts.phase3_labels.build_labels --profile tier_1_core
 ```
 
-Feature expansion and final pipeline:
+Baseline + L0 regime features:
 
 ```bash
-python scripts/run_pipeline.py --profile tier_1_CL_ES_ZN --from-stage feature_expansion --to-stage strategy_gate
+python -m scripts.phase4_features.build_baseline_features --profile tier_1_core
 ```
 
 Tests:
 
 ```bash
-pytest -q
+python -m pytest -q
 ```
 
 Git check:
@@ -490,17 +541,22 @@ data/raw/{market}/{year}.parquet
 ## Required raw schema
 
 ```text
-rtype
-publisher_id
-instrument_id
+ts_event
 open
 high
 low
 close
 volume
+rtype
+publisher_id
+instrument_id
 symbol
-ts_event
+data_quality_status
+data_quality_degraded
 ```
+
+Production and research profiles require every field above. The
+`metadata_optional_test` schema variant is relaxed for test fixtures only.
 
 ## Build requirements
 
@@ -513,7 +569,7 @@ ts_event
 
 ## Breakpoints
 
-- Missing required columns.
+- Missing required columns in production or research profiles.
 - Bad timestamp type.
 - Duplicate `ts_event` rows.
 - Mixed or unexpected symbols without roll reporting.
@@ -524,7 +580,7 @@ ts_event
 
 - File exists for each configured market/year.
 - File is non-empty.
-- Required columns exist.
+- Required columns exist; missing strict raw fields are FAIL, not WARN.
 - Path market/year matches configured profile.
 
 ---
@@ -578,12 +634,27 @@ high
 low
 close
 volume
+valid_ohlcv
+causal_invalid_reason
 raw_row_present
 is_synthetic
+synthetic_gap_id
+synthetic_gap_size_minutes
+synthetic_gap_reason
+data_quality_status
+data_quality_degraded
+session_data_quality_degraded
+trainable_data_quality
 causal_valid
 session_id
 session_date
 session_segment_id
+inside_session
+boundary_session_flag
+session_calendar_status
+holiday_calendar_available
+early_close_calendar_available
+calendar_coverage_status
 is_session_open
 is_session_close
 minutes_since_session_open
@@ -594,6 +665,19 @@ roll_boundary_flag
 bars_since_roll
 bars_until_roll
 roll_window_flag
+metadata_available
+roll_detection_available
+roll_detection_source
+roll_policy_status
+source_path
+source_file_hash
+source_row_number
+raw_schema_variant
+raw_schema_policy
+required_raw_schema_cols
+raw_schema_missing_cols
+missing_required_raw_cols
+timestamp_source
 ```
 
 ## Required logic
@@ -616,6 +700,7 @@ mark synthetic rows
 assign session_id
 assign session_segment_id
 compute session metadata
+compute calendar coverage status
 flag roll boundaries using symbol/instrument_id changes
 flag roll exclusion windows
 compute causal_valid
@@ -638,13 +723,41 @@ Never forward-fill across `session_segment_id`.
 ## Causal validity policy
 
 ```text
-causal_valid = raw_row_present and not is_synthetic and valid_ohlcv and inside_valid_session
+causal_valid =
+raw_row_present
+and not is_synthetic
+and valid_ohlcv
+and inside_session
+and trainable_data_quality
+and not roll_window_flag
+and not boundary_session_flag
+```
+
+## Calendar coverage policy
+
+```text
+calendar_coverage_status values:
+regular_session_only
+config_backed
+hardcoded_regular_session
+```
+
+Empty `holidays`, `closed_dates`, or `early_closes` configuration is WARN, not
+FAIL. `regular_session_only` is structurally usable but is not full
+holiday/early-close proof.
+
+## Raw schema policy
+
+```text
+production/research profiles require strict raw schema fields
+metadata_optional_test is relaxed/test-only
+missing strict raw fields are FAIL, not WARN
 ```
 
 ## Hard failures
 
 ```text
-missing required columns
+missing required columns in production/research profiles
 unparseable ts_event
 null ts_event
 empty file
@@ -670,6 +783,8 @@ instrument_id changes
 roll boundary rows
 roll exclusion rows
 low session coverage
+empty holidays/closed_dates/early_closes calendar config
+regular_session_only calendar coverage
 ```
 
 ## Acceptance checks
@@ -729,6 +844,7 @@ target_entry_ts
 target_exit_ts
 target_entry_price
 target_exit_price
+target_invalid_reason
 target_ret_15m
 target_ret_ticks_15m
 target_gross_dollars_15m
@@ -741,6 +857,17 @@ target_sign_with_deadzone
 target_tradeable_after_cost
 target_valid
 target_horizon_bars
+mae_ticks_15m
+mfe_ticks_15m
+fade_long_success_15m
+fade_short_success_15m
+trend_danger_up_30m
+trend_danger_down_30m
+revert_to_vwap_30m
+revert_to_session_mid_30m
+label_semantics
+cost_source
+cost_provisional
 ```
 
 ## Required validity logic
@@ -752,9 +879,12 @@ current row causal_valid is false
 entry row is unavailable
 exit row is unavailable
 future path touches synthetic rows
+future path touches `valid_ohlcv == false`
+future path touches `boundary_session_flag == true`
 future path crosses session_segment_id
 future path crosses roll_boundary_flag or roll_window_flag
 future path crosses intraday flatten cutoff
+entry/exit price is invalid
 minutes_until_session_close is insufficient
 ```
 
@@ -763,7 +893,14 @@ minutes_until_session_close is insufficient
 - Directional labels alone are not enough.
 - A tiny positive move that cannot beat costs should not be treated as a tradeable long opportunity.
 - `target_sign_with_deadzone` should be neutral when absolute target move is below estimated round-trip cost plus configured buffer.
-- `target_tradeable_after_cost` should be true only when the forward move exceeds estimated costs.
+- Corrected net cost arithmetic:
+
+```text
+net_magnitude = max(abs(target_ret_ticks_15m) - target_estimated_cost_ticks, 0)
+target_net_ticks_after_est_cost = sign(target_ret_ticks_15m) * net_magnitude
+```
+
+- `target_tradeable_after_cost` means the absolute forward move exceeds estimated cost, not guaranteed profitability.
 
 ## Build requirements
 
@@ -792,16 +929,16 @@ minutes_until_session_close is insufficient
 
 ---
 
-# Phase 4 — Baseline Feature Matrix
+# Phase 4 — Baseline + L0 Regime Feature Matrix
 
 ## Purpose
 
-Create the initial OHLCV-only modeling matrix with baseline features, metadata columns, target columns, and validity columns.
+Create the initial OHLCV-only modeling matrix with baseline features, L0 regime context, metadata columns, target columns, and validity columns.
 
 ## Script
 
 ```bash
-python scripts/build_baseline_features.py --profile tier_1_CL_ES_ZN
+python -m scripts.phase4_features.build_baseline_features --profile tier_1_core
 ```
 
 ## Input
@@ -814,63 +951,56 @@ data/labeled/{market}/{year}.parquet
 
 ```text
 data/feature_matrices/baseline/{market}/{year}.parquet
-reports/features/baseline_feature_report.json
+reports/features_baseline/baseline_feature_manifest.json
+reports/features_baseline/baseline_feature_report.json
+reports/features_baseline/feature_registry.json
+reports/features_baseline/feature_correlation_report.csv
 ```
 
-## Baseline feature families
+## Feature goal
+
+The first useful goal is not predicting every 15-minute direction. The first useful goal is identifying when fading is unsafe.
+
+## Feature families
 
 ```text
-returns / momentum
-range / volatility
-bar shape / candle structure
-volume / participation
-VWAP / fair-value distance
-position in recent range
-EMA / trend state
-time of day / session state
-opening range
-session state so far
-compression / expansion
-liquidity / friction proxies
+trend-danger / path shape
+failed breakout / rejection
+range / chop state
+session structure
+volatility regime
+volume behavior
+higher-timeframe context from 1m bars
+time-of-day regime
+intermarket L0 context
 ```
 
-## Recommended candidate columns
+## Representative features
 
 ```text
-ret_1
-ret_5
-ret_30
-realized_vol_15
-volatility_ratio_15_60
-range_z_60
-close_position_in_bar
-body_to_range
-wick_imbalance
-volume_z_60
-volume_ratio_15_60
-volume_rel_to_tod
-dist_session_vwap
-dist_rolling_vwap_15
-dist_rolling_vwap_60
-pos_in_15m_range
-pos_in_60m_range
-dist_ema_15
-slope_ema_60
-ema_stack_15_60
-minute_of_session_sin
-minute_of_session_cos
-session_progress
-minutes_until_session_close
-opening_range_width
-dist_from_opening_range_high
-dist_from_opening_range_low
-session_return_from_open
-position_in_session_range
-range_ratio_5_60
-inside_bar_flag
-outside_bar_flag
-range_per_volume
-abs_return_per_volume
+feature_efficiency_ratio_15
+feature_efficiency_ratio_30
+feature_efficiency_ratio_60
+feature_failed_breakout_above_20
+feature_failed_breakout_below_20
+feature_session_high_dist
+feature_session_low_dist
+feature_session_mid_dist
+feature_opening_range_30_high_dist
+feature_opening_range_30_low_dist
+feature_vol_expansion_15_vs_60
+feature_large_bar_count_30
+feature_bars_since_shock
+feature_volume_surge_with_range
+feature_volume_surge_without_progress
+feature_prior_session_high_dist
+feature_prior_session_low_dist
+feature_prior_session_close_dist
+feature_overnight_gap_ticks
+feature_rel_ret_vs_ES_15
+feature_corr_vs_ES_60
+feature_es_zn_divergence_30
+feature_cl_es_divergence_30
 ```
 
 ## Required logic
@@ -909,7 +1039,7 @@ Freeze column roles for modeling and prevent obvious leakage.
 ## Script
 
 ```bash
-python scripts/build_column_registry.py --profile tier_1_CL_ES_ZN --matrix baseline
+python -m scripts.build_column_registry --profile tier_1_core --matrix baseline
 ```
 
 ## Output
@@ -941,10 +1071,24 @@ roll_boundary_flag
 bars_since_roll
 bars_until_roll
 roll_window_flag
+valid_ohlcv
+causal_invalid_reason
+data_quality_status
+data_quality_degraded
+session_data_quality_degraded
+trainable_data_quality
+inside_session
+boundary_session_flag
+session_calendar_status
+calendar_coverage_status
+metadata_available
+raw_schema_variant
+raw_schema_policy
 target_entry_ts
 target_exit_ts
 target_entry_price
 target_exit_price
+target_invalid_reason
 target_ret_15m
 target_ret_ticks_15m
 target_gross_dollars_15m
@@ -957,6 +1101,17 @@ target_sign_with_deadzone
 target_tradeable_after_cost
 target_valid
 target_horizon_bars
+mae_ticks_15m
+mfe_ticks_15m
+fade_long_success_15m
+fade_short_success_15m
+trend_danger_up_30m
+trend_danger_down_30m
+revert_to_vwap_30m
+revert_to_session_mid_30m
+label_semantics
+cost_source
+cost_provisional
 ```
 
 ## Build requirements
@@ -986,7 +1141,7 @@ Create deterministic walk-forward train/test folds with research/final-holdout s
 ## Script
 
 ```bash
-python scripts/build_wfa_splits.py --profile tier_1_CL_ES_ZN
+python -m scripts.build_wfa_splits --profile tier_1_core
 ```
 
 ## Output
@@ -999,12 +1154,15 @@ reports/wfa/split_plan.json
 ## Default research policy
 
 ```text
-research_years = 2023-2024
-final_holdout_years = 2025
+recent_research = 2023-2025
+long_research = 2010-2025
+forward_years = 2026
 train_days = 365
 test_days = 30
 step_days = 30
-purge_bars = 15
+purge_bars = auto
+resolved_purge_bars = entry_lag_bars + target_horizon_bars
+default resolved value = 16
 ```
 
 ## Required fold fields
@@ -1022,6 +1180,7 @@ train_rows_before_purge
 train_rows_after_purge
 test_rows
 purge_bars
+resolved_purge_bars
 is_final_holdout
 ```
 
@@ -1053,7 +1212,7 @@ Train the baseline model on each train fold and generate out-of-sample predictio
 ## Script
 
 ```bash
-python scripts/run_wfa.py --profile tier_1_CL_ES_ZN --matrix baseline --run baseline
+python -m scripts.run_wfa --profile tier_1_core --matrix baseline --run baseline
 ```
 
 ## Input
@@ -1174,7 +1333,7 @@ Convert predictions into positions, compare deterministic position policies, cha
 ## Script
 
 ```bash
-python scripts/run_execution_costs.py --profile tier_1_CL_ES_ZN --run baseline
+python -m scripts.run_execution_costs --profile tier_1_core --run baseline
 ```
 
 ## Input
@@ -1292,7 +1451,7 @@ Evaluate baseline predictions, execution behavior, costs, cost stress, and net e
 ## Script
 
 ```bash
-python scripts/build_metrics.py --profile tier_1_CL_ES_ZN --run baseline
+python -m scripts.build_metrics --profile tier_1_core --run baseline
 ```
 
 ## Output
@@ -1367,7 +1526,7 @@ Decide whether the baseline pipeline is valid and whether the baseline strategy 
 ## Script
 
 ```bash
-python scripts/run_gate.py --profile tier_1_CL_ES_ZN --run baseline
+python -m scripts.run_gate --profile tier_1_core --run baseline
 ```
 
 ## Output
@@ -1422,7 +1581,7 @@ Generate a broader OHLCV-only candidate matrix for feature discovery and selecti
 ## Script
 
 ```bash
-python scripts/build_expanded_features.py --profile tier_1_CL_ES_ZN
+python -m scripts.build_expanded_features --profile tier_1_core
 ```
 
 ## Input
@@ -1483,7 +1642,7 @@ Analyze feature behavior, redundancy, stability, leakage risk, and economic usef
 ## Script
 
 ```bash
-python scripts/run_feature_discovery.py --profile tier_1_CL_ES_ZN
+python -m scripts.run_feature_discovery --profile tier_1_core
 ```
 
 ## Output
@@ -1538,7 +1697,7 @@ Select features without using OOS test information or final-holdout information.
 ## Script
 
 ```bash
-python scripts/run_feature_selection.py --profile tier_1_CL_ES_ZN
+python -m scripts.run_feature_selection --profile tier_1_core
 ```
 
 ## Output
@@ -1589,8 +1748,8 @@ Freeze selected features and the selected execution policy before final evaluati
 ## Script
 
 ```bash
-python scripts/freeze_features.py --profile tier_1_CL_ES_ZN
-python scripts/freeze_policy.py --profile tier_1_CL_ES_ZN
+python -m scripts.freeze_features --profile tier_1_core
+python -m scripts.freeze_policy --profile tier_1_core
 ```
 
 ## Output
@@ -1630,7 +1789,7 @@ Create the final evaluation split plan while ensuring final test windows are ent
 ## Script
 
 ```bash
-python scripts/build_final_splits.py --profile tier_1_CL_ES_ZN
+python -m scripts.build_final_splits --profile tier_1_core
 ```
 
 ## Output
@@ -1664,7 +1823,7 @@ Evaluate the frozen feature set through the same causal WFA process on final hol
 ## Script
 
 ```bash
-python scripts/run_wfa.py --profile tier_1_CL_ES_ZN --matrix expanded --features data/frozen_features/phase5_v1/feature_cols.json --split-plan reports/final_wfa/final_split_plan.json --run final
+python -m scripts.run_wfa --profile tier_1_core --matrix expanded --features data/frozen_features/phase5_v1/feature_cols.json --split-plan reports/final_wfa/final_split_plan.json --run final
 ```
 
 ## Input
@@ -1759,7 +1918,7 @@ Apply the frozen execution and cost policy to final predictions.
 ## Script
 
 ```bash
-python scripts/run_execution_costs.py --profile tier_1_CL_ES_ZN --run final --policy data/frozen_features/phase5_v1/policy_config.json
+python -m scripts.run_execution_costs --profile tier_1_core --run final --policy data/frozen_features/phase5_v1/policy_config.json
 ```
 
 ## Input
@@ -1803,8 +1962,8 @@ Evaluate final model economics and compare against baseline, placebo, simple-rul
 ## Script
 
 ```bash
-python scripts/build_metrics.py --profile tier_1_CL_ES_ZN --run final
-python scripts/run_placebo_baselines.py --profile tier_1_CL_ES_ZN --run final
+python -m scripts.build_metrics --profile tier_1_core --run final
+python -m scripts.run_placebo_baselines --profile tier_1_core --run final
 ```
 
 ## Output
@@ -1871,7 +2030,7 @@ Evaluate whether the strategy is usable for the user's real constraint set: intr
 ## Script
 
 ```bash
-python scripts/run_prop_simulation.py --profile tier_1_CL_ES_ZN --run final
+python -m scripts.run_prop_simulation --profile tier_1_core --run final
 ```
 
 ## Input
@@ -1944,7 +2103,7 @@ Make the final strategy decision.
 ## Script
 
 ```bash
-python scripts/run_gate.py --profile tier_1_CL_ES_ZN --run final
+python -m scripts.run_gate --profile tier_1_core --run final
 ```
 
 ## Output
@@ -2014,6 +2173,39 @@ payout target is not reached before drawdown in realistic scenarios
 - Gate does not accept a final-holdout-contaminated strategy.
 - Gate does not accept a prop-rule-violating strategy for the user's stated use case.
 - Gate separates pipeline validity from economic viability.
+
+---
+
+## Artifact Provenance Requirement
+
+Every phase report must include:
+
+```text
+generated_at
+git_commit
+script_path
+script_hash
+config_hash
+input_file_hashes
+output_file_hashes
+profile
+markets
+years
+warning_count
+failure_count
+failures
+```
+
+---
+
+## Known Limitations
+
+- Continuous contracts are research series, not directly live-tradable contracts.
+- Regular-session-only calendar coverage is not full holiday/early-close proof.
+- L0 OHLCV cannot model queue position, spread, order-book imbalance, or true fill probability.
+- Provisional costs are structural only, not economic evidence.
+- ZN synthetic-density warning must remain visible.
+- Prop-firm viability requires dollar path simulation, not just Sharpe/net return.
 
 ---
 

@@ -17,7 +17,7 @@ import pandas as pd
 
 
 API_KEY_NAME = "DATABENTO_API_KEY"
-API_KEY_FILE = Path(__file__).resolve().parents[1] / "databento.env"
+API_KEY_FILE = Path(__file__).resolve().parents[2] / "databento.env"
 CME_DATASET = "GLBX.MDP3"
 CFE_DATASET = "XCBF.PITCH"
 SCHEMA = "ohlcv-1m"
