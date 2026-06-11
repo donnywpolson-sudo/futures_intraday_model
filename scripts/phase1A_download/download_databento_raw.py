@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """One-time Databento raw OHLCV download helper.
 
-Default mode downloads raw Databento DBN/Zstd batch files under data/dbn. Use
---mode convert-parquet to stitch downloaded DBN files into data/raw, or --mode
-all to download and convert in one run. Use --mode stream only when you
+Default mode downloads raw Databento DBN/Zstd batch files under data/raw.
+Use --mode convert-parquet to stitch already-downloaded DBN files into data/raw.
+Use --mode stream only when you
 intentionally want immediate Parquet output from timeseries.get_range.
 Use --convert-existing only for the legacy adjacent DBN-to-Parquet conversion.
 Use --estimate-cost to estimate cost without downloading.
@@ -38,7 +38,7 @@ STYPE_OUT = "instrument_id"
 START_YEAR = 2010
 DEFAULT_RAW_OUT = "data/raw"
 DEFAULT_STREAM_OUT = DEFAULT_RAW_OUT
-DEFAULT_DBN_OUT = "data/dbn"
+DEFAULT_DBN_OUT = DEFAULT_RAW_OUT
 DEFAULT_BATCH_OUT = DEFAULT_DBN_OUT
 DEFAULT_REPORTS_ROOT = "reports/raw_ingest"
 DEFAULT_MAX_RETRIES = 3
@@ -308,6 +308,8 @@ def iter_year_ranges(start: str, end: str) -> list[tuple[str, str]]:
 
 
 def iter_chunk_ranges(start: str, end: str, chunk: str) -> list[tuple[str, str]]:
+    if chunk == "none":
+        return [(start, end)]
     if chunk == "day":
         return iter_day_ranges(start, end)
     if chunk == "month":
@@ -318,6 +320,8 @@ def iter_chunk_ranges(start: str, end: str, chunk: str) -> list[tuple[str, str]]
 
 
 def chunk_label(start: str, chunk: str) -> str:
+    if chunk == "none":
+        return start
     if chunk == "day":
         return start
     if chunk == "month":
@@ -333,16 +337,21 @@ def task_output_path(
     dataset: str,
     product: str,
     start: str,
+    end: str,
     chunk: str,
     mode: str,
     raw_format: str,
 ) -> str:
-    label = chunk_label(start, chunk)
     if mode in DBN_DOWNLOAD_MODES:
+        if chunk == "none":
+            label = f"{start}_to_{end}"
+            return (output_root / product / f"{label}.dbn.zst").as_posix()
+        label = chunk_label(start, chunk)
         year = str(date.fromisoformat(start).year)
         if chunk == "year":
-            return (output_root / product / year).as_posix()
-        return (output_root / product / year / label).as_posix()
+            return (output_root / product / f"{year}.dbn.zst").as_posix()
+        return (output_root / product / year / f"{label}.dbn.zst").as_posix()
+    label = chunk_label(start, chunk)
     suffix = ".parquet"
     return (output_root / product / f"{label}{suffix}").as_posix()
 
@@ -393,6 +402,7 @@ def iter_range_tasks(
                         dataset=task_dataset,
                         product=product,
                         start=task_start,
+                        end=task_end,
                         chunk=chunk,
                         mode=mode,
                         raw_format=raw_format,
@@ -818,7 +828,7 @@ def run_with_retries(
 
 
 def batch_split_duration_for_chunk(chunk: str) -> str:
-    if chunk in {"day", "month", "year"}:
+    if chunk in {"none", "day", "month", "year"}:
         return chunk
     return "day"
 
@@ -1021,13 +1031,14 @@ def infer_dbn_archive_entry(path: Path, dbn_root: Path) -> DbnArchiveEntry:
         parts = path.relative_to(dbn_root).parts
     except ValueError:
         parts = path.parts
-    if len(parts) >= 2 and parts[1][:4].isdigit():
-        return DbnArchiveEntry(path=path, product=parts[0], year=int(parts[1][:4]))
-    if len(parts) >= 3 and parts[0] in ALLOWED_DATASETS and parts[2][:4].isdigit():
-        return DbnArchiveEntry(path=path, product=parts[1], year=int(parts[2][:4]))
+    if len(parts) == 2:
+        product, filename = parts
+        year_text = filename.removesuffix(".dbn.zst").removesuffix(".dbn")
+        if year_text.isdigit():
+            return DbnArchiveEntry(path=path, product=product, year=int(year_text))
     raise ValueError(
         "cannot infer market/year from DBN path; expected "
-        "data/dbn/{market}/{year}/...dbn.zst"
+        "data/raw/{market}/{year}.dbn.zst"
     )
 
 
@@ -1634,16 +1645,11 @@ def execute_batch_task(
         dbn_paths = [path for path in downloaded_paths if is_dbn_file(path) and path_size_bytes(path) > 0]
         if not dbn_paths:
             raise RuntimeError("Databento batch download produced no non-empty DBN files")
-        condition_info = fetch_dataset_conditions(client, task) if convert_parquet else None
-        converted_paths = (
-            convert_dbn_files_to_parquet(
-                dbn_paths,
-                overwrite=True,
-                condition_by_date=condition_info["conditions"] if condition_info else None,
+        if len(dbn_paths) != 1:
+            raise RuntimeError(
+                f"Databento batch download produced {len(dbn_paths)} DBN files for one market/year task"
             )
-            if convert_parquet
-            else []
-        )
+        condition_info = fetch_dataset_conditions(client, task) if convert_parquet else None
 
         if out.exists():
             if out.is_dir():
@@ -1651,7 +1657,17 @@ def execute_batch_task(
             else:
                 out.unlink()
         out.parent.mkdir(parents=True, exist_ok=True)
-        tmp_dir.replace(out)
+        shutil.move(dbn_paths[0].as_posix(), out.as_posix())
+        converted_paths = (
+            convert_dbn_files_to_parquet(
+                [out],
+                overwrite=True,
+                condition_by_date=condition_info["conditions"] if condition_info else None,
+            )
+            if convert_parquet
+            else []
+        )
+        shutil.rmtree(tmp_dir)
 
         bytes_count = path_size_bytes(out)
         elapsed = time.monotonic() - started
@@ -1670,10 +1686,10 @@ def execute_batch_task(
             "pipeline_raw_ready": False,
             "job": waited_job or job,
             "job_id": job_id,
-            "downloaded_files": [path.as_posix() for path in downloaded_paths],
-            "downloaded_dbn_files": [path.as_posix() for path in dbn_paths],
+            "downloaded_files": [out.as_posix()],
+            "downloaded_dbn_files": [out.as_posix()],
             "converted_parquet_files": [
-                (out / path.relative_to(tmp_dir)).as_posix() for path in converted_paths
+                path.as_posix() for path in converted_paths
             ],
             "dataset_condition": (
                 {
@@ -1890,17 +1906,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
-  # Default raw DBN/Zstd batch output under data/dbn.
-  python scripts\\phase1A_download\\download_databento_raw.py --markets ES,NQ --start 2023-01-01 --end 2024-01-01 --chunk month --workers 1 --resume
+  # Default raw DBN/Zstd batch output under data/raw/{market}/{year}.dbn.zst.
+  python scripts\\phase1A_download\\download_databento_raw.py --markets ES,NQ --start 2023-01-01 --end 2024-01-01 --workers 1 --resume
 
   # Fast planning check with monthly chunks and no API calls.
   python scripts\\phase1A_download\\download_databento_raw.py --markets ES,NQ --start 2023-01-01 --end 2023-03-01 --chunk month --dry-run
 
-  # Convert already-downloaded DBN/Zstd files to data/raw/{market}/{year}.parquet.
-  python scripts\\phase1B_convert\\convert_databento_raw.py --dbn-root data/dbn --raw-root data/raw
-
-  # Download DBN/Zstd, then convert to canonical raw Parquet.
-  python scripts\\phase1A_download\\download_databento_raw.py --mode all --markets ES,NQ --start 2023-01-01 --end 2024-01-01
+  # Convert already-downloaded data/raw/{market}/{year}.dbn.zst to data/raw/{market}/{year}.parquet.
+  python scripts\\phase1B_convert\\convert_databento_raw.py --dbn-root data/raw --raw-root data/raw
 
   # Intentional old behavior: immediate yearly Parquet stream output under data/raw.
   python scripts\\phase1A_download\\download_databento_raw.py --mode stream --raw-format parquet --markets ES,NQ --start-year 2023 --end-year 2025
@@ -1926,7 +1939,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reports-root", default=DEFAULT_REPORTS_ROOT)
     parser.add_argument("--out", help="Legacy output root override; prefer --dbn-root or --raw-root.")
     parser.add_argument("--plan-out", help="Override download plan path; defaults under --reports-root.")
-    parser.add_argument("--chunk", choices=["day", "month", "year"], default="year")
+    parser.add_argument("--chunk", choices=["none", "day", "month", "year"], default="year")
     parser.add_argument(
         "--mode",
         choices=["download-dbn", "convert-parquet", "all", "stream", "batch"],

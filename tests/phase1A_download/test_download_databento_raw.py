@@ -20,6 +20,7 @@ from scripts.phase1A_download.download_databento_raw import (
     add_result_provenance,
     build_raw_ingest_manifest,
     build_arg_parser,
+    batch_split_duration_for_chunk,
     condition_is_degraded,
     convert_dbn_archive_to_raw,
     convert_dbn_files_to_parquet,
@@ -223,13 +224,14 @@ def test_parse_symbols_custom_normalizes_and_sorts() -> None:
 def test_default_roots_match_public_raw_ingest_contract() -> None:
     args = build_arg_parser().parse_args([])
     assert args.mode == "download-dbn"
-    assert args.dbn_root == "data/dbn"
+    assert args.chunk == "year"
+    assert args.dbn_root == "data/raw"
     assert args.raw_root == "data/raw"
     assert args.reports_root == "reports/raw_ingest"
-    assert effective_output_root(args) == Path("data/dbn")
+    assert effective_output_root(args) == Path("data/raw")
 
 
-def test_default_batch_plan_is_archive_only_not_pipeline_ready() -> None:
+def test_default_batch_plan_is_archive_only_market_year_dbn() -> None:
     args = build_arg_parser().parse_args([])
     raw_format = effective_raw_format(args)
     output_root = effective_output_root(args)
@@ -260,7 +262,7 @@ def test_phase1b_entry_defaults_to_convert_parquet(monkeypatch: pytest.MonkeyPat
         return 0
 
     monkeypatch.setattr(convert_databento_raw, "main", fake_main)
-    monkeypatch.setattr(sys, "argv", ["convert_databento_raw.py", "--dbn-root", "data/dbn"])
+    monkeypatch.setattr(sys, "argv", ["convert_databento_raw.py", "--dbn-root", "data/raw"])
 
     assert convert_databento_raw.phase1b_main() == 0
     assert captured["argv"][1:3] == ["--mode", "convert-parquet"]
@@ -468,6 +470,32 @@ def test_iter_range_tasks_builds_month_stream_jobs_without_daily_requests(
     ]
 
 
+def test_iter_range_tasks_builds_market_year_dbn_files(tmp_path: Path) -> None:
+    tasks = iter_range_tasks(
+        ["ES", "NQ"],
+        start="2024-01-01",
+        end="2025-01-01",
+        output_root=tmp_path / "raw",
+        chunk="year",
+        mode="download-dbn",
+        raw_format="dbn-zstd",
+        dataset="GLBX.MDP3",
+        stype_in="continuous",
+    )
+
+    assert len(tasks) == 2
+    assert [(task.product, task.start, task.end, task.chunk) for task in tasks] == [
+        ("ES", "2024-01-01", "2025-01-01", "year"),
+        ("NQ", "2024-01-01", "2025-01-01", "year"),
+    ]
+    assert Path(tasks[0].output_path).parts[-3:] == (
+        "raw",
+        "ES",
+        "2024.dbn.zst",
+    )
+    assert batch_split_duration_for_chunk("year") == "year"
+
+
 def test_iter_range_tasks_builds_batch_dbn_zstd_jobs_with_parent_symbols(
     tmp_path: Path,
 ) -> None:
@@ -487,11 +515,10 @@ def test_iter_range_tasks_builds_batch_dbn_zstd_jobs_with_parent_symbols(
     assert {task.dataset for task in tasks} == {"GLBX.MDP3"}
     assert tasks[0].symbol == "ES.FUT"
     assert tasks[0].raw_format == "dbn-zstd"
-    assert Path(tasks[0].output_path).parts[-4:] == (
-        "dbn",
+    assert Path(tasks[0].output_path).parts[-3:] == (
         "ES",
         "2024",
-        "2024-01",
+        "2024-01.dbn.zst",
     )
 
 
@@ -981,8 +1008,9 @@ def test_execute_download_downloads_months_and_splits_retryable_month_failure(
     assert df["ts_event"].iloc[-1] == pd.Timestamp("2014-12-01T15:00:00Z")
 
 
-def test_execute_batch_download_writes_temp_dir_then_final_output(tmp_path: Path) -> None:
+def test_execute_batch_download_writes_temp_dir_then_final_dbn_file(tmp_path: Path) -> None:
     client = FakeBatchClient()
+    final_file = tmp_path / "raw" / "ES" / "2024.dbn.zst"
     task = DownloadTask(
         dataset=CME_DATASET,
         product="ES",
@@ -990,7 +1018,7 @@ def test_execute_batch_download_writes_temp_dir_then_final_output(tmp_path: Path
         start="2024-01-01",
         end="2024-02-01",
         symbol="ES.v.0",
-        output_path=(tmp_path / "raw_databento" / CME_DATASET / "ES" / "2024-01").as_posix(),
+        output_path=final_file.as_posix(),
         chunk="month",
         raw_format="dbn-zstd",
     )
@@ -1005,10 +1033,9 @@ def test_execute_batch_download_writes_temp_dir_then_final_output(tmp_path: Path
         batch_poll_seconds=0.01,
     )
 
-    final_dir = Path(task.output_path)
     assert results[0]["status"] == "ok"
-    assert (final_dir / "job-test.dbn.zst").read_bytes() == b"dbn-zstd-placeholder"
-    assert not list(final_dir.parent.glob("*.tmp-*"))
+    assert final_file.read_bytes() == b"dbn-zstd-placeholder"
+    assert not list(final_file.parent.glob("*.tmp-*"))
     assert client.batch.submissions[0]["encoding"] == "dbn"
     assert client.batch.submissions[0]["compression"] == "zstd"
     assert client.batch.submissions[0]["delivery"] == "download"
@@ -1017,9 +1044,9 @@ def test_execute_batch_download_writes_temp_dir_then_final_output(tmp_path: Path
 
 def test_existing_batch_directory_without_dbn_is_not_ok_existing(tmp_path: Path) -> None:
     client = FakeBatchClient()
-    final_dir = tmp_path / "raw_databento" / CME_DATASET / "ES" / "2024-01"
-    final_dir.mkdir(parents=True)
-    (final_dir / "note.txt").write_text("not dbn", encoding="utf-8")
+    final_file = tmp_path / "raw" / "ES" / "2024.dbn.zst"
+    final_file.mkdir(parents=True)
+    (final_file / "note.txt").write_text("not dbn", encoding="utf-8")
     task = DownloadTask(
         dataset=CME_DATASET,
         product="ES",
@@ -1027,7 +1054,7 @@ def test_existing_batch_directory_without_dbn_is_not_ok_existing(tmp_path: Path)
         start="2024-01-01",
         end="2024-02-01",
         symbol="ES.v.0",
-        output_path=final_dir.as_posix(),
+        output_path=final_file.as_posix(),
         chunk="month",
         raw_format="dbn-zstd",
     )
@@ -1045,7 +1072,8 @@ def test_existing_batch_directory_without_dbn_is_not_ok_existing(tmp_path: Path)
 
     assert results[0]["status"] == "ok"
     assert client.batch.submissions
-    assert (final_dir / "job-test.dbn.zst").exists()
+    assert final_file.is_file()
+    assert final_file.read_bytes() == b"dbn-zstd-placeholder"
 
 
 def test_batch_download_without_non_empty_dbn_files_is_not_ok(tmp_path: Path) -> None:
@@ -1058,7 +1086,7 @@ def test_batch_download_without_non_empty_dbn_files_is_not_ok(tmp_path: Path) ->
         start="2024-01-01",
         end="2024-02-01",
         symbol="ES.v.0",
-        output_path=(tmp_path / "raw_databento" / CME_DATASET / "ES" / "2024-01").as_posix(),
+        output_path=(tmp_path / "raw" / "ES" / "2024.dbn.zst").as_posix(),
         chunk="month",
         raw_format="dbn-zstd",
     )
@@ -1088,7 +1116,7 @@ def test_empty_batch_download_is_not_ok(tmp_path: Path) -> None:
         start="2024-01-01",
         end="2024-02-01",
         symbol="ES.v.0",
-        output_path=(tmp_path / "raw_databento" / CME_DATASET / "ES" / "2024-01").as_posix(),
+        output_path=(tmp_path / "raw" / "ES" / "2024.dbn.zst").as_posix(),
         chunk="month",
         raw_format="dbn-zstd",
     )
@@ -1139,7 +1167,7 @@ def test_batch_convert_parquet_preserves_degraded_dataset_condition(
         start="2024-01-01",
         end="2024-02-01",
         symbol="ES.v.0",
-        output_path=(tmp_path / "raw_databento" / CME_DATASET / "ES" / "2024-01").as_posix(),
+        output_path=(tmp_path / "raw" / "ES" / "2024.dbn.zst").as_posix(),
         chunk="month",
         raw_format="dbn-zstd",
     )
@@ -1156,7 +1184,7 @@ def test_batch_convert_parquet_preserves_degraded_dataset_condition(
     )
 
     assert results[0]["status"] == "ok"
-    final_parquet = Path(task.output_path) / "job-test.dbn.zst.parquet"
+    final_parquet = Path(task.output_path).with_suffix(".zst.parquet")
     out = pd.read_parquet(final_parquet)
     assert out["data_quality_status"].tolist() == ["available", "degraded"]
     assert out["data_quality_degraded"].tolist() == [False, True]
@@ -1164,9 +1192,9 @@ def test_batch_convert_parquet_preserves_degraded_dataset_condition(
 
 
 def test_convert_dbn_archive_fails_without_quality_metadata(tmp_path: Path) -> None:
-    dbn_root = tmp_path / "dbn"
-    raw_root = tmp_path / "raw"
-    dbn_path = dbn_root / "ES" / "2024" / "2024-01" / "job-test.dbn.zst"
+    dbn_root = tmp_path / "raw"
+    raw_root = dbn_root
+    dbn_path = dbn_root / "ES" / "2024.dbn.zst"
     dbn_path.parent.mkdir(parents=True)
     dbn_path.write_bytes(b"dbn-zstd-placeholder")
 
@@ -1178,6 +1206,16 @@ def test_convert_dbn_archive_fails_without_quality_metadata(tmp_path: Path) -> N
     assert results[0]["data_quality_source"] == "metadata_unavailable"
     assert results[0]["vendor_quality_available"] is False
     assert not output_path.exists()
+
+
+def test_convert_dbn_archive_rejects_nested_chunk_layout(tmp_path: Path) -> None:
+    dbn_root = tmp_path / "raw"
+    dbn_path = dbn_root / "ES" / "2024" / "2024-01.dbn.zst"
+    dbn_path.parent.mkdir(parents=True)
+    dbn_path.write_bytes(b"dbn-zstd-placeholder")
+
+    with pytest.raises(ValueError, match=r"data/raw/\{market\}/\{year\}.dbn.zst"):
+        convert_dbn_archive_to_raw(dbn_root, dbn_root)
 
 
 def test_convert_dbn_archive_writes_canonical_raw_parquet_and_manifest(
@@ -1202,9 +1240,9 @@ def test_convert_dbn_archive_writes_canonical_raw_parquet_and_manifest(
         }
     )
     install_fake_databento_store(monkeypatch, converted_df)
-    dbn_root = tmp_path / "dbn"
-    raw_root = tmp_path / "raw"
-    dbn_path = dbn_root / "ES" / "2024" / "2024-01" / "job-test.dbn.zst"
+    dbn_root = tmp_path / "raw"
+    raw_root = dbn_root
+    dbn_path = dbn_root / "ES" / "2024.dbn.zst"
     dbn_path.parent.mkdir(parents=True)
     dbn_path.write_bytes(b"dbn-zstd-placeholder")
 

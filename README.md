@@ -34,7 +34,7 @@ Phase 1B implementation: `scripts/phase1B_convert/convert_databento_raw.py`.
 Phase 1A archives Databento DBN/DBN.ZST chunks:
 
 ```text
-data/dbn/{market}/{year}/...dbn.zst
+data/raw/{market}/{year}.dbn.zst
 ```
 
 Phase 1B converts and stitches DBN chunks into immutable raw parquet:
@@ -44,13 +44,13 @@ data/raw/{market}/{year}.parquet
 ```
 
 ```powershell
-python -m scripts.phase1B_convert.convert_databento_raw --dbn-root data\dbn --raw-root data\raw
+python -m scripts.phase1B_convert.convert_databento_raw --dbn-root data\raw --raw-root data\raw
 ```
 
 Smoke test:
 
 ```powershell
-python -m scripts.phase1A_download.download_databento_raw --symbols ES --start-year 2026 --end-year 2026 --end-date 2026-01-03 --out data\dbn_api_test --overwrite
+python -m scripts.phase1A_download.download_databento_raw --symbols ES --start-year 2026 --end-year 2026 --end-date 2026-01-03 --raw-root data\raw_api_test --overwrite
 ```
 
 Full L0/OHLCV archive:

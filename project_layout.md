@@ -28,13 +28,13 @@ The pipeline should first prove that the data, labels, features, walk-forward sp
 Phase 1 is a two-step raw-ingest workflow:
 
 - Phase 1A downloads and archives Databento DBN/DBN.ZST chunks.
-- Phase 1B converts and stitches one or many DBN chunks into immutable 1-minute OHLCV parquet.
+- Phase 1B converts market-year DBN chunks into immutable 1-minute OHLCV parquet.
 - Phase 2 validates, session-normalizes, roll-audits, synthetic-marks, and causally gates the parquet.
 
 DBN archive path pattern:
 
 ```text
-data/dbn/{market}/{year}/...dbn.zst
+data/raw/{market}/{year}.dbn.zst
 ```
 
 Raw parquet path pattern:
@@ -218,8 +218,8 @@ This is the realistic operational pipeline. The old 27-stage checklist is preser
 
 | Phase | Name | Main artifact | Purpose |
 |---:|---|---|---|
-| 1A | DBN Archive | `data/dbn/{market}/{year}/...dbn.zst` | Download and archive immutable Databento DBN/DBN.ZST chunks. |
-| 1B | Raw Parquet Stitch | `data/raw/{market}/{year}.parquet` | Convert/stitch DBN chunks into immutable OHLCV parquet. |
+| 1A | DBN Archive | `data/raw/{market}/{year}.dbn.zst` | Download and archive immutable Databento DBN/DBN.ZST market-year chunks. |
+| 1B | Raw Parquet Stitch | `data/raw/{market}/{year}.parquet` | Convert market-year DBN chunks into immutable OHLCV parquet. |
 | 2 | Causal Base Builder | `data/causally_gated_normalized/{market}/{year}.parquet` | Validate, session-normalize, roll-flag, synthetic-mark, and causally gate raw bars. |
 | 3 | Target / Label Generation | `data/labeled/{market}/{year}.parquet` | Build next-bar-entry 15-minute labels with cost-aware and intraday validity flags. |
 | 4 | Baseline + L0 Regime Feature Matrix | `data/feature_matrices/baseline/{market}/{year}.parquet` | Build OHLCV-only baseline and L0 regime features plus metadata, target, and initial registry columns. |
@@ -262,7 +262,7 @@ Old stages 24-27 -> Phase 16-22: final holdout, final WFA, final predictions, fi
 ### Core artifact flow
 
 ```text
-data/dbn/{market}/{year}/...dbn.zst
+data/raw/{market}/{year}.dbn.zst
 -> data/raw/{market}/{year}.parquet
 -> data/causally_gated_normalized/{market}/{year}.parquet
 -> data/labeled/{market}/{year}.parquet
@@ -652,7 +652,7 @@ Databento DBN or DBN.ZST chunks, one or many per market/year.
 DBN archive:
 
 ```text
-data/dbn/{market}/{year}/...dbn.zst
+data/raw/{market}/{year}.dbn.zst
 ```
 
 Raw parquet output:
@@ -683,7 +683,7 @@ Production and research profiles require every field above. The
 
 ## Build requirements
 
-- Support one or many DBN chunks per market/year.
+- Support one DBN chunk per market/year.
 - Hash every DBN chunk before conversion.
 - Convert all chunks, concatenate, sort by `ts_event`, and check duplicates.
 - Do not mutate raw files.
