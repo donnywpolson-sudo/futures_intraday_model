@@ -28,7 +28,8 @@ It also accepts a raw key as the only non-comment line in `databento.env`.
 
 ## Raw Data Ingest
 
-Canonical implementation: `scripts/raw_ingest/download_databento_raw.py`.
+Phase 1A implementation: `scripts/phase1A_download/download_databento_raw.py`.
+Phase 1B implementation: `scripts/phase1B_convert/convert_databento_raw.py`.
 
 Phase 1A archives Databento DBN/DBN.ZST chunks:
 
@@ -42,16 +43,20 @@ Phase 1B converts and stitches DBN chunks into immutable raw parquet:
 data/raw/{market}/{year}.parquet
 ```
 
+```powershell
+python -m scripts.phase1B_convert.convert_databento_raw --dbn-root data\dbn --raw-root data\raw
+```
+
 Smoke test:
 
 ```powershell
-python -m scripts.raw_ingest.download_databento_raw --symbols ES --start-year 2026 --end-year 2026 --end-date 2026-01-03 --out data\raw_api_test --overwrite
+python -m scripts.phase1A_download.download_databento_raw --symbols ES --start-year 2026 --end-year 2026 --end-date 2026-01-03 --out data\dbn_api_test --overwrite
 ```
 
 Full L0/OHLCV archive:
 
 ```powershell
-python -m scripts.raw_ingest.download_databento_raw --universe extended_cme --start-year 2010 --end-year 2026 --end-date 2026-06-10
+python -m scripts.phase1A_download.download_databento_raw --universe extended_cme --start-year 2010 --end-year 2026 --end-date 2026-06-10
 ```
 
 The downloader does not replace existing files unless `--overwrite` is passed.

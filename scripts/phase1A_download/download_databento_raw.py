@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """One-time Databento raw OHLCV download helper.
 
-Default mode downloads raw Databento DBN/Zstd batch files. Use --mode stream
-only when you intentionally want immediate Parquet output from timeseries.get_range.
-Use --convert-existing later to convert already-downloaded DBN files to Parquet.
+Default mode downloads raw Databento DBN/Zstd batch files under data/dbn. Use
+--mode convert-parquet to stitch downloaded DBN files into data/raw, or --mode
+all to download and convert in one run. Use --mode stream only when you
+intentionally want immediate Parquet output from timeseries.get_range.
+Use --convert-existing only for the legacy adjacent DBN-to-Parquet conversion.
 Use --estimate-cost to estimate cost without downloading.
 """
 
@@ -32,8 +34,11 @@ SCHEMA = "ohlcv-1m"
 STYPE_IN = "continuous"
 STYPE_OUT = "instrument_id"
 START_YEAR = 2010
-DEFAULT_STREAM_OUT = "data/raw"
-DEFAULT_BATCH_OUT = "data/raw_databento"
+DEFAULT_RAW_OUT = "data/raw"
+DEFAULT_STREAM_OUT = DEFAULT_RAW_OUT
+DEFAULT_DBN_OUT = "data/dbn"
+DEFAULT_BATCH_OUT = DEFAULT_DBN_OUT
+DEFAULT_REPORTS_ROOT = "reports/raw_ingest"
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_RETRY_BACKOFF_SECONDS = 1.0
 DATASET_AVAILABLE_START = {
@@ -63,6 +68,7 @@ RETRYABLE_STREAM_ERROR_MARKERS = (
     "503",
     "504",
 )
+DBN_DOWNLOAD_MODES = {"download-dbn", "all", "batch"}
 
 CURRENT_20 = [
     "6B",
@@ -150,6 +156,9 @@ ORDERED_OUTPUT_COLUMNS = [
     "data_quality_degraded",
 ]
 
+PRICE_TYPE = "float"
+PRICE_SCALE_POLICY = "databento_dbnstore_to_df_price_type_float"
+
 
 @dataclass(frozen=True)
 class DownloadTask:
@@ -165,6 +174,13 @@ class DownloadTask:
     stype_out: str = STYPE_OUT
     chunk: str = "year"
     raw_format: str = "parquet"
+
+
+@dataclass(frozen=True)
+class DbnArchiveEntry:
+    path: Path
+    product: str
+    year: int
 
 
 class DatasetConditionInfo(TypedDict):
@@ -320,8 +336,11 @@ def task_output_path(
     raw_format: str,
 ) -> str:
     label = chunk_label(start, chunk)
-    if mode == "batch":
-        return (output_root / dataset / product / label).as_posix()
+    if mode in DBN_DOWNLOAD_MODES:
+        year = str(date.fromisoformat(start).year)
+        if chunk == "year":
+            return (output_root / product / year).as_posix()
+        return (output_root / product / year / label).as_posix()
     suffix = ".parquet"
     return (output_root / product / f"{label}{suffix}").as_posix()
 
@@ -576,7 +595,7 @@ def store_to_required_dataframe(
     condition_by_date: dict[str, str] | None = None,
     default_quality_status: str = "available",
 ) -> pd.DataFrame:
-    df = store.to_df(price_type="float", pretty_ts=True, map_symbols=True)
+    df = store.to_df(price_type=PRICE_TYPE, pretty_ts=True, map_symbols=True)
     if not isinstance(df, pd.DataFrame):
         df = pd.concat(df, ignore_index=False)
 
@@ -710,6 +729,14 @@ def path_size_bytes(path: Path) -> int:
     return sum(int(item.stat().st_size) for item in path.rglob("*") if item.is_file())
 
 
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def has_non_empty_output(path: Path) -> bool:
     return path.exists() and path_size_bytes(path) > 0
 
@@ -776,7 +803,7 @@ def batch_encoding_and_compression(raw_format: str) -> tuple[str, str]:
     if raw_format == "dbn-zstd":
         return "dbn", "zstd"
     if raw_format == "parquet":
-        raise ValueError("Databento batch mode writes raw DBN/Zstd; use --convert-parquet separately")
+        raise ValueError("Databento DBN download writes raw DBN/Zstd; use --mode convert-parquet separately")
     raise ValueError(f"unsupported raw format: {raw_format}")
 
 
@@ -963,6 +990,263 @@ def convert_existing_dbn_tree(root: Path, *, overwrite: bool = False) -> list[di
                 }
             )
     return results
+
+
+def infer_dbn_archive_entry(path: Path, dbn_root: Path) -> DbnArchiveEntry:
+    try:
+        parts = path.relative_to(dbn_root).parts
+    except ValueError:
+        parts = path.parts
+    if len(parts) >= 2 and parts[1][:4].isdigit():
+        return DbnArchiveEntry(path=path, product=parts[0], year=int(parts[1][:4]))
+    if len(parts) >= 3 and parts[0] in ALLOWED_DATASETS and parts[2][:4].isdigit():
+        return DbnArchiveEntry(path=path, product=parts[1], year=int(parts[2][:4]))
+    raise ValueError(
+        "cannot infer market/year from DBN path; expected "
+        "data/dbn/{market}/{year}/...dbn.zst"
+    )
+
+
+def archive_entries_for_paths(
+    paths: Iterable[Path],
+    dbn_root: Path,
+    *,
+    products: set[str] | None = None,
+) -> list[DbnArchiveEntry]:
+    entries: list[DbnArchiveEntry] = []
+    for path in sorted(paths):
+        if not is_dbn_file(path) or path_size_bytes(path) <= 0:
+            continue
+        entry = infer_dbn_archive_entry(path, dbn_root)
+        if products is not None and entry.product not in products:
+            continue
+        entries.append(entry)
+    return entries
+
+
+def dbn_paths_for_tasks(tasks: Iterable[DownloadTask]) -> list[Path]:
+    paths: list[Path] = []
+    for task in tasks:
+        out = Path(task.output_path)
+        if out.exists():
+            paths.extend(non_empty_dbn_files(out))
+    return sorted(set(paths))
+
+
+def fetch_conditions_by_group(
+    client: DatabentoMetadataHolder,
+    tasks: Iterable[DownloadTask],
+) -> dict[tuple[str, int], dict[str, str]]:
+    conditions_by_group: dict[tuple[str, int], dict[str, str]] = {}
+    for task in tasks:
+        info = fetch_dataset_conditions(client, task)
+        key = (task.product, task.year)
+        conditions_by_group.setdefault(key, {}).update(info["conditions"])
+    return conditions_by_group
+
+
+def raw_parquet_summary(path: Path) -> dict[str, object]:
+    df = pd.read_parquet(
+        path,
+        columns=["ts_event", "symbol", "data_quality_status", "data_quality_degraded"],
+    )
+    ts = pd.to_datetime(df["ts_event"], utc=True, errors="coerce")
+    quality_counts = (
+        df["data_quality_status"].fillna("missing").astype(str).value_counts().to_dict()
+    )
+    return {
+        "row_count": int(len(df)),
+        "first_ts": ts.min().isoformat() if len(ts) and not pd.isna(ts.min()) else None,
+        "last_ts": ts.max().isoformat() if len(ts) and not pd.isna(ts.max()) else None,
+        "decoded_symbols": sorted(
+            str(value) for value in df["symbol"].dropna().unique().tolist()
+        ),
+        "data_quality_status_counts": {
+            str(key): int(value) for key, value in quality_counts.items()
+        },
+        "degraded_bar_count": int(
+            df["data_quality_degraded"].fillna(False).astype(bool).sum()
+        ),
+    }
+
+
+def convert_dbn_archive_to_raw(
+    dbn_root: Path,
+    raw_root: Path,
+    *,
+    overwrite: bool = False,
+    paths: Iterable[Path] | None = None,
+    products: set[str] | None = None,
+    condition_by_group: dict[tuple[str, int], dict[str, str]] | None = None,
+    default_quality_status: str = "metadata_unavailable",
+) -> list[dict[str, object]]:
+    source_paths = list(paths) if paths is not None else iter_dbn_files(dbn_root)
+    entries = archive_entries_for_paths(source_paths, dbn_root, products=products)
+    groups: dict[tuple[str, int], list[Path]] = {}
+    for entry in entries:
+        groups.setdefault((entry.product, entry.year), []).append(entry.path)
+
+    if not groups:
+        return []
+
+    import databento as db
+
+    results: list[dict[str, object]] = []
+    for (product, year), group_paths in sorted(groups.items()):
+        out = raw_root / product / f"{year}.parquet"
+        started = time.monotonic()
+        input_hashes = {path.as_posix(): file_sha256(path) for path in group_paths}
+        conditions = (condition_by_group or {}).get((product, year))
+        vendor_quality_available = conditions is not None
+        data_quality_source = (
+            "databento_metadata.get_dataset_condition"
+            if vendor_quality_available
+            else "metadata_unavailable"
+        )
+        quality_default = "available" if vendor_quality_available else default_quality_status
+        try:
+            skipped = has_non_empty_output(out) and not overwrite
+            if skipped:
+                check = validate_download(out)
+                if not check["valid"]:
+                    raise ValueError(f"existing raw parquet failed validation: {check['errors']}")
+            else:
+                frames = []
+                for path in group_paths:
+                    store = db.DBNStore.from_file(path)
+                    frames.append(
+                        store_to_required_dataframe(
+                            cast(DatabentoStore, store),
+                            conditions,
+                            default_quality_status=quality_default,
+                        )
+                    )
+                if not frames:
+                    raise ValueError("no DBN frames converted")
+                df = pd.concat(frames, ignore_index=True).sort_values(
+                    "ts_event",
+                    kind="mergesort",
+                )
+                write_required_dataframe_parquet(df[ORDERED_OUTPUT_COLUMNS], out)
+                check = validate_download(out)
+                if not check["valid"]:
+                    raise ValueError(f"raw parquet failed validation: {check['errors']}")
+
+            summary = raw_parquet_summary(out)
+            elapsed = time.monotonic() - started
+            status = "ok_existing" if skipped else "ok"
+            print(
+                f"CONVERT_{status.upper()} market={product} year={year} "
+                f"inputs={len(group_paths)} output={out.as_posix()} "
+                f"rows={summary['row_count']} elapsed_s={elapsed:.3f}"
+            )
+            results.append(
+                {
+                    "status": status,
+                    "market": product,
+                    "year": year,
+                    "input_paths": [path.as_posix() for path in group_paths],
+                    "input_hashes": input_hashes,
+                    "output_path": out.as_posix(),
+                    "output_hash": file_sha256(out),
+                    "schema": SCHEMA,
+                    "required_schema_columns": ORDERED_OUTPUT_COLUMNS,
+                    "raw_schema_variant": "databento_full",
+                    "price_type": PRICE_TYPE,
+                    "price_scale_policy": PRICE_SCALE_POLICY,
+                    "data_quality_source": data_quality_source,
+                    "vendor_quality_available": vendor_quality_available,
+                    "validation": check,
+                    "elapsed_seconds": elapsed,
+                    **summary,
+                }
+            )
+        except Exception as exc:
+            elapsed = time.monotonic() - started
+            print(
+                f"CONVERT_ERROR market={product} year={year} "
+                f"inputs={len(group_paths)} output={out.as_posix()} "
+                f"elapsed_s={elapsed:.3f}: {exc}"
+            )
+            results.append(
+                {
+                    "status": "convert_error",
+                    "market": product,
+                    "year": year,
+                    "input_paths": [path.as_posix() for path in group_paths],
+                    "input_hashes": input_hashes,
+                    "output_path": out.as_posix(),
+                    "schema": SCHEMA,
+                    "required_schema_columns": ORDERED_OUTPUT_COLUMNS,
+                    "price_type": PRICE_TYPE,
+                    "price_scale_policy": PRICE_SCALE_POLICY,
+                    "data_quality_source": data_quality_source,
+                    "vendor_quality_available": vendor_quality_available,
+                    "error": str(exc),
+                    "elapsed_seconds": elapsed,
+                }
+            )
+    return results
+
+
+def build_raw_ingest_manifest(
+    results: list[dict[str, object]],
+    *,
+    mode: str,
+    dbn_root: Path,
+    raw_root: Path,
+    run_id: object | None = None,
+    plan_hash: object | None = None,
+) -> dict[str, object]:
+    output_hashes = {
+        str(item["output_path"]): item.get("output_hash")
+        for item in results
+        if item.get("output_path")
+    }
+    input_hashes: dict[str, object] = {}
+    for item in results:
+        input_hashes.update(cast(dict[str, object], item.get("input_hashes", {})))
+    failed = [item for item in results if item.get("status") == "convert_error"]
+    data_quality_sources = sorted(
+        {
+            str(item.get("data_quality_source"))
+            for item in results
+            if item.get("data_quality_source")
+        }
+    )
+    decoded_symbols = sorted(
+        {
+            str(symbol)
+            for item in results
+            for symbol in cast(list[object], item.get("decoded_symbols", []))
+        }
+    )
+    return {
+        "stage": "raw_ingest",
+        "mode": mode,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "run_id": run_id,
+        "plan_hash": plan_hash,
+        "dbn_root": dbn_root.as_posix(),
+        "raw_root": raw_root.as_posix(),
+        "schema": SCHEMA,
+        "required_schema_columns": ORDERED_OUTPUT_COLUMNS,
+        "price_type": PRICE_TYPE,
+        "price_scale_policy": PRICE_SCALE_POLICY,
+        "data_quality_fields": QUALITY_OUTPUT_COLUMNS,
+        "data_quality_sources": data_quality_sources,
+        "vendor_quality_available": (
+            all(bool(item.get("vendor_quality_available")) for item in results)
+            if results
+            else False
+        ),
+        "decoded_symbols": decoded_symbols,
+        "input_hashes": input_hashes,
+        "output_hashes": output_hashes,
+        "output_count": len(output_hashes),
+        "failure_count": len(failed),
+        "outputs": results,
+    }
 
 
 def request_range_dataframe(
@@ -1461,6 +1745,12 @@ def canonical_json_hash(payload: object) -> str:
 
 
 def output_role_for_run(mode: str, raw_format: str, output_root: Path) -> str:
+    if mode in {"download-dbn", "batch"}:
+        return "dbn_archive"
+    if mode == "all":
+        return "dbn_archive_and_pipeline_raw_parquet"
+    if mode == "convert-parquet":
+        return "pipeline_raw_parquet"
     if mode == "stream" and raw_format == "parquet" and output_root == Path(DEFAULT_STREAM_OUT):
         return "pipeline_raw_parquet"
     if mode == "stream" and raw_format == "parquet":
@@ -1469,7 +1759,10 @@ def output_role_for_run(mode: str, raw_format: str, output_root: Path) -> str:
 
 
 def pipeline_raw_ready_for_run(mode: str, raw_format: str, output_root: Path) -> bool:
-    return output_role_for_run(mode, raw_format, output_root) == "pipeline_raw_parquet"
+    return output_role_for_run(mode, raw_format, output_root) in {
+        "pipeline_raw_parquet",
+        "dbn_archive_and_pipeline_raw_parquet",
+    }
 
 
 def dry_run_plan_path(plan_out: Path) -> Path:
@@ -1520,13 +1813,37 @@ def effective_date_range(args: argparse.Namespace) -> tuple[str, str]:
 def effective_raw_format(args: argparse.Namespace) -> str:
     if args.raw_format:
         return str(args.raw_format)
-    return "dbn-zstd" if args.mode == "batch" else "parquet"
+    return "parquet" if args.mode == "stream" else "dbn-zstd"
 
 
 def effective_output_root(args: argparse.Namespace) -> Path:
-    if args.mode == "batch" and args.out == DEFAULT_STREAM_OUT:
-        return Path(DEFAULT_BATCH_OUT)
-    return Path(args.out)
+    if args.out:
+        return Path(args.out)
+    if args.mode in DBN_DOWNLOAD_MODES:
+        return Path(args.dbn_root or DEFAULT_DBN_OUT)
+    if args.mode == "convert-parquet":
+        return Path(args.dbn_root or DEFAULT_DBN_OUT)
+    return Path(args.raw_root or DEFAULT_RAW_OUT)
+
+
+def effective_raw_root(args: argparse.Namespace) -> Path:
+    return Path(args.raw_root or DEFAULT_RAW_OUT)
+
+
+def effective_reports_root(args: argparse.Namespace) -> Path:
+    return Path(args.reports_root or DEFAULT_REPORTS_ROOT)
+
+
+def effective_plan_out(args: argparse.Namespace) -> Path:
+    if args.plan_out:
+        return Path(args.plan_out)
+    return effective_reports_root(args) / "databento_download_plan.json"
+
+
+def report_path(args: argparse.Namespace, name: str) -> Path:
+    if args.plan_out:
+        return Path(args.plan_out).with_name(name)
+    return effective_reports_root(args) / name
 
 
 def print_dry_run(tasks: list[DownloadTask]) -> None:
@@ -1545,17 +1862,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
-  # Default raw DBN/Zstd batch output under data/raw_databento.
-  python scripts\\raw_ingest\\download_databento_raw.py --markets ES,NQ --start 2023-01-01 --end 2024-01-01 --chunk month --workers 1 --resume
+  # Default raw DBN/Zstd batch output under data/dbn.
+  python scripts\\phase1A_download\\download_databento_raw.py --markets ES,NQ --start 2023-01-01 --end 2024-01-01 --chunk month --workers 1 --resume
 
   # Fast planning check with monthly chunks and no API calls.
-  python scripts\\raw_ingest\\download_databento_raw.py --markets ES,NQ --start 2023-01-01 --end 2023-03-01 --chunk month --dry-run
+  python scripts\\phase1A_download\\download_databento_raw.py --markets ES,NQ --start 2023-01-01 --end 2023-03-01 --chunk month --dry-run
 
-  # Convert already-downloaded DBN/Zstd files to adjacent Parquet files later.
-  python scripts\\raw_ingest\\download_databento_raw.py --convert-existing --convert-in data/raw_databento
+  # Convert already-downloaded DBN/Zstd files to data/raw/{market}/{year}.parquet.
+  python scripts\\phase1B_convert\\convert_databento_raw.py --dbn-root data/dbn --raw-root data/raw
+
+  # Download DBN/Zstd, then convert to canonical raw Parquet.
+  python scripts\\phase1A_download\\download_databento_raw.py --mode all --markets ES,NQ --start 2023-01-01 --end 2024-01-01
 
   # Intentional old behavior: immediate yearly Parquet stream output under data/raw.
-  python scripts\\raw_ingest\\download_databento_raw.py --mode stream --raw-format parquet --markets ES,NQ --start-year 2023 --end-year 2025
+  python scripts\\phase1A_download\\download_databento_raw.py --mode stream --raw-format parquet --markets ES,NQ --start-year 2023 --end-year 2025
 """,
     )
     parser.add_argument(
@@ -1573,10 +1893,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start-year", type=int, default=START_YEAR)
     parser.add_argument("--end-year", type=int, default=date.today().year)
     parser.add_argument("--end-date", default=date.today().isoformat())
-    parser.add_argument("--out", default=DEFAULT_STREAM_OUT)
-    parser.add_argument("--plan-out", default="reports/databento_download_plan.json")
+    parser.add_argument("--dbn-root", default=DEFAULT_DBN_OUT)
+    parser.add_argument("--raw-root", default=DEFAULT_RAW_OUT)
+    parser.add_argument("--reports-root", default=DEFAULT_REPORTS_ROOT)
+    parser.add_argument("--out", help="Legacy output root override; prefer --dbn-root or --raw-root.")
+    parser.add_argument("--plan-out", help="Override download plan path; defaults under --reports-root.")
     parser.add_argument("--chunk", choices=["day", "month", "year"], default="year")
-    parser.add_argument("--mode", choices=["stream", "batch"], default="batch")
+    parser.add_argument(
+        "--mode",
+        choices=["download-dbn", "convert-parquet", "all", "stream", "batch"],
+        default="download-dbn",
+    )
     parser.add_argument("--raw-format", choices=["parquet", "dbn-zstd"])
     parser.add_argument("--workers", type=int, default=1, help="Bounded concurrent market/chunk jobs. Use 3-4 for this machine.")
     parser.add_argument("--resume", action="store_true", help="Explicitly keep skip/resume behavior; existing non-empty final outputs are skipped unless --overwrite is set.")
@@ -1585,9 +1912,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--retry-backoff-seconds", type=float, default=DEFAULT_RETRY_BACKOFF_SECONDS)
     parser.add_argument("--batch-wait-timeout-seconds", type=float, default=3600.0)
     parser.add_argument("--batch-poll-seconds", type=float, default=30.0)
-    parser.add_argument("--convert-parquet", action="store_true", help="For batch DBN/Zstd downloads, also write adjacent parquet conversions after download.")
+    parser.add_argument("--convert-parquet", action="store_true", help="Legacy batch option: also write adjacent parquet conversions after DBN download.")
     parser.add_argument("--convert-existing", action="store_true", help="Convert existing local .dbn/.dbn.zst files to adjacent Parquet files and exit without API calls.")
-    parser.add_argument("--convert-in", default=DEFAULT_BATCH_OUT, help="Input file or root directory for --convert-existing.")
+    parser.add_argument("--convert-in", help="Input file or root directory for legacy --convert-existing. Defaults to --dbn-root.")
     parser.add_argument("--estimate-cost", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     return parser
@@ -1603,10 +1930,41 @@ def main() -> int:
         raise SystemExit("--batch-poll-seconds must be > 0")
 
     if args.convert_existing:
-        results = convert_existing_dbn_tree(Path(args.convert_in), overwrite=args.overwrite)
-        write_json(Path(args.plan_out).with_name("databento_convert_results.json"), results)
+        convert_in = Path(args.convert_in or args.dbn_root)
+        results = convert_existing_dbn_tree(convert_in, overwrite=args.overwrite)
+        write_json(report_path(args, "databento_convert_results.json"), results)
         failed = [item for item in results if item.get("status") == "convert_error"]
         print(f"CONVERT_EXISTING total={len(results)} failed={len(failed)}")
+        return 1 if failed else 0
+
+    if args.mode == "convert-parquet":
+        products = None
+        if args.symbols:
+            try:
+                products = set(parse_symbols(args.symbols, "custom"))
+                validate_allowed_products(products)
+            except ValueError as exc:
+                raise SystemExit(str(exc)) from exc
+        dbn_root = effective_output_root(args)
+        raw_root = effective_raw_root(args)
+        results = convert_dbn_archive_to_raw(
+            dbn_root,
+            raw_root,
+            overwrite=args.overwrite,
+            products=products,
+        )
+        write_json(report_path(args, "databento_convert_results.json"), results)
+        write_json(
+            report_path(args, "raw_ingest_manifest.json"),
+            build_raw_ingest_manifest(
+                results,
+                mode=args.mode,
+                dbn_root=dbn_root,
+                raw_root=raw_root,
+            ),
+        )
+        failed = [item for item in results if item.get("status") == "convert_error"]
+        print(f"CONVERT_PARQUET total={len(results)} failed={len(failed)}")
         return 1 if failed else 0
 
     try:
@@ -1620,10 +1978,13 @@ def main() -> int:
     raw_format = effective_raw_format(args)
     if args.mode == "stream" and raw_format != "parquet":
         raise SystemExit("--mode stream requires --raw-format parquet")
-    if args.mode == "batch" and raw_format != "dbn-zstd":
-        raise SystemExit("--mode batch currently requires --raw-format dbn-zstd")
+    if args.mode in DBN_DOWNLOAD_MODES and raw_format != "dbn-zstd":
+        raise SystemExit(f"--mode {args.mode} currently requires --raw-format dbn-zstd")
 
     output_root = effective_output_root(args)
+    raw_root = effective_raw_root(args)
+    reports_root = effective_reports_root(args)
+    plan_out = effective_plan_out(args)
     output_role = output_role_for_run(args.mode, raw_format, output_root)
     pipeline_raw_ready = pipeline_raw_ready_for_run(args.mode, raw_format, output_root)
     tasks = iter_range_tasks(
@@ -1657,9 +2018,16 @@ def main() -> int:
         "workers": args.workers,
         "resume": args.resume,
         "overwrite": args.overwrite,
+        "dbn_root": output_root.as_posix() if args.mode in DBN_DOWNLOAD_MODES else None,
+        "raw_root": raw_root.as_posix(),
+        "reports_root": reports_root.as_posix(),
+        "required_schema_columns": ORDERED_OUTPUT_COLUMNS,
+        "data_quality_fields": QUALITY_OUTPUT_COLUMNS,
+        "price_type": PRICE_TYPE,
+        "price_scale_policy": PRICE_SCALE_POLICY,
         "output_role": output_role,
         "pipeline_raw_ready": pipeline_raw_ready,
-        "archive_only": output_role == "archive_only",
+        "archive_only": output_role in {"archive_only", "dbn_archive"},
         "tasks": [asdict(task) for task in tasks],
     }
     plan = finalize_plan_provenance(
@@ -1673,17 +2041,17 @@ def main() -> int:
     )
 
     if args.dry_run:
-        write_json(dry_run_plan_path(Path(args.plan_out)), plan)
+        write_json(dry_run_plan_path(plan_out), plan)
         print_dry_run(tasks)
         return 0
 
-    write_json(Path(args.plan_out), plan)
+    write_json(plan_out, plan)
 
     client = get_client()
     if args.estimate_cost:
         estimates = estimate_cost(client, tasks)
         estimates = add_result_provenance(estimates, plan)
-        write_json(Path(args.plan_out).with_name("databento_cost_estimate.json"), estimates)
+        write_json(report_path(args, "databento_cost_estimate.json"), estimates)
         total = sum(float(item.get("estimated_cost_usd", 0.0)) for item in estimates)
         errors = sum(1 for item in estimates if item.get("status") == "estimate_error")
         print(f"TOTAL_ESTIMATED_COST_USD {total:.4f}")
@@ -1715,15 +2083,40 @@ def main() -> int:
             overwrite=args.overwrite,
             workers=args.workers,
             client_factory=get_client,
-            convert_parquet=args.convert_parquet,
+            convert_parquet=args.convert_parquet and args.mode != "all",
             max_retries=args.max_retries,
             retry_backoff_seconds=args.retry_backoff_seconds,
             batch_wait_timeout_seconds=args.batch_wait_timeout_seconds,
             batch_poll_seconds=args.batch_poll_seconds,
         )
     results = add_result_provenance(results, plan)
-    write_json(Path(args.plan_out).with_name("databento_download_results.json"), results)
+    write_json(report_path(args, "databento_download_results.json"), results)
     failed = [item for item in results if item.get("status") not in {"ok", "ok_existing"}]
+    if args.mode == "all" and not failed:
+        conditions = fetch_conditions_by_group(client, tasks)
+        convert_results = convert_dbn_archive_to_raw(
+            output_root,
+            raw_root,
+            overwrite=args.overwrite,
+            paths=dbn_paths_for_tasks(tasks),
+            condition_by_group=conditions,
+        )
+        convert_results = add_result_provenance(convert_results, plan)
+        write_json(report_path(args, "databento_convert_results.json"), convert_results)
+        write_json(
+            report_path(args, "raw_ingest_manifest.json"),
+            build_raw_ingest_manifest(
+                convert_results,
+                mode=args.mode,
+                dbn_root=output_root,
+                raw_root=raw_root,
+                run_id=plan["run_id"],
+                plan_hash=plan["plan_hash"],
+            ),
+        )
+        failed.extend(
+            item for item in convert_results if item.get("status") == "convert_error"
+        )
     return 1 if failed else 0
 
 

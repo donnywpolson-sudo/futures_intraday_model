@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.raw_ingest.download_databento_raw import (
+from scripts.phase1A_download.download_databento_raw import (
     CME_DATASET,
     CURRENT_20,
     EXTENDED_CME,
@@ -18,8 +18,10 @@ from scripts.raw_ingest.download_databento_raw import (
     STYPE_OUT,
     DownloadTask,
     add_result_provenance,
+    build_raw_ingest_manifest,
     build_arg_parser,
     condition_is_degraded,
+    convert_dbn_archive_to_raw,
     convert_dbn_files_to_parquet,
     dataset_for_product,
     dbn_parquet_path,
@@ -218,9 +220,13 @@ def test_parse_symbols_custom_normalizes_and_sorts() -> None:
     assert parse_symbols(" es,CL, es ", "custom") == ["CL", "ES"]
 
 
-def test_default_output_is_pipeline_raw_root() -> None:
+def test_default_roots_match_public_raw_ingest_contract() -> None:
     args = build_arg_parser().parse_args([])
-    assert args.out == "data/raw"
+    assert args.mode == "download-dbn"
+    assert args.dbn_root == "data/dbn"
+    assert args.raw_root == "data/raw"
+    assert args.reports_root == "reports/raw_ingest"
+    assert effective_output_root(args) == Path("data/dbn")
 
 
 def test_default_batch_plan_is_archive_only_not_pipeline_ready() -> None:
@@ -229,10 +235,35 @@ def test_default_batch_plan_is_archive_only_not_pipeline_ready() -> None:
     output_root = effective_output_root(args)
 
     assert args.universe == "extended_cme"
-    assert args.mode == "batch"
+    assert args.mode == "download-dbn"
     assert raw_format == "dbn-zstd"
-    assert output_role_for_run(args.mode, raw_format, output_root) == "archive_only"
+    assert output_role_for_run(args.mode, raw_format, output_root) == "dbn_archive"
     assert pipeline_raw_ready_for_run(args.mode, raw_format, output_root) is False
+
+
+def test_public_raw_ingest_modes_parse() -> None:
+    parser = build_arg_parser()
+    assert parser.parse_args(["--mode", "download-dbn"]).mode == "download-dbn"
+    assert parser.parse_args(["--mode", "convert-parquet"]).mode == "convert-parquet"
+    args = parser.parse_args(["--mode", "all"])
+    assert effective_raw_format(args) == "dbn-zstd"
+    assert pipeline_raw_ready_for_run(args.mode, effective_raw_format(args), effective_output_root(args)) is True
+
+
+def test_phase1b_entry_defaults_to_convert_parquet(monkeypatch: pytest.MonkeyPatch) -> None:
+    from scripts.phase1B_convert import convert_databento_raw
+
+    captured: dict[str, list[str]] = {}
+
+    def fake_main() -> int:
+        captured["argv"] = sys.argv.copy()
+        return 0
+
+    monkeypatch.setattr(convert_databento_raw, "main", fake_main)
+    monkeypatch.setattr(sys, "argv", ["convert_databento_raw.py", "--dbn-root", "data/dbn"])
+
+    assert convert_databento_raw.phase1b_main() == 0
+    assert captured["argv"][1:3] == ["--mode", "convert-parquet"]
 
 
 def test_new_speedup_args_parse_without_breaking_existing_defaults() -> None:
@@ -313,7 +344,7 @@ def test_resolve_databento_api_key_uses_project_databento_env(
     key_file = tmp_path / "databento.env"
     key_file.write_text("DATABENTO_API_KEY=db-file-test\n", encoding="utf-8")
     monkeypatch.setattr(
-        "scripts.raw_ingest.download_databento_raw.API_KEY_FILE",
+        "scripts.phase1A_download.download_databento_raw.API_KEY_FILE",
         key_file,
     )
 
@@ -423,9 +454,9 @@ def test_iter_range_tasks_builds_batch_dbn_zstd_jobs_with_parent_symbols(
         ["ES", "NQ"],
         start="2024-01-01",
         end="2024-03-01",
-        output_root=tmp_path / "raw_databento",
+        output_root=tmp_path / "dbn",
         chunk="month",
-        mode="batch",
+        mode="download-dbn",
         raw_format="dbn-zstd",
         dataset="GLBX.MDP3",
         stype_in="parent",
@@ -436,9 +467,9 @@ def test_iter_range_tasks_builds_batch_dbn_zstd_jobs_with_parent_symbols(
     assert tasks[0].symbol == "ES.FUT"
     assert tasks[0].raw_format == "dbn-zstd"
     assert Path(tasks[0].output_path).parts[-4:] == (
-        "raw_databento",
-        "GLBX.MDP3",
+        "dbn",
         "ES",
+        "2024",
         "2024-01",
     )
 
@@ -1079,6 +1110,71 @@ def test_batch_convert_parquet_preserves_degraded_dataset_condition(
     assert results[0]["dataset_condition"]["degraded_date_count"] == 1
 
 
+def test_convert_dbn_archive_writes_canonical_raw_parquet_and_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    converted_df = pd.DataFrame(
+        {
+            "ts_event": [
+                pd.Timestamp("2024-01-02T15:00:00Z"),
+                pd.Timestamp("2024-01-03T15:00:00Z"),
+            ],
+            "open": [1.0, 1.0],
+            "high": [2.0, 2.0],
+            "low": [0.5, 0.5],
+            "close": [1.5, 1.5],
+            "volume": [10, 10],
+            "rtype": [33, 33],
+            "publisher_id": [1, 1],
+            "instrument_id": [100, 100],
+            "symbol": ["ESH4", "ESH4"],
+        }
+    )
+    install_fake_databento_store(monkeypatch, converted_df)
+    dbn_root = tmp_path / "dbn"
+    raw_root = tmp_path / "raw"
+    dbn_path = dbn_root / "ES" / "2024" / "2024-01" / "job-test.dbn.zst"
+    dbn_path.parent.mkdir(parents=True)
+    dbn_path.write_bytes(b"dbn-zstd-placeholder")
+
+    results = convert_dbn_archive_to_raw(
+        dbn_root,
+        raw_root,
+        condition_by_group={("ES", 2024): {"2024-01-03": "degraded"}},
+    )
+
+    output_path = raw_root / "ES" / "2024.parquet"
+    assert results[0]["status"] == "ok"
+    assert output_path.exists()
+    out = pd.read_parquet(output_path)
+    assert out["data_quality_status"].tolist() == ["available", "degraded"]
+    assert out["data_quality_degraded"].tolist() == [False, True]
+    assert results[0]["output_path"] == output_path.as_posix()
+    assert results[0]["input_hashes"][dbn_path.as_posix()]
+    assert results[0]["output_hash"]
+    assert results[0]["schema"] == "ohlcv-1m"
+    assert results[0]["price_scale_policy"]
+    assert results[0]["data_quality_source"] == "databento_metadata.get_dataset_condition"
+    assert results[0]["vendor_quality_available"] is True
+
+    manifest = build_raw_ingest_manifest(
+        results,
+        mode="convert-parquet",
+        dbn_root=dbn_root,
+        raw_root=raw_root,
+    )
+    assert manifest["schema"] == "ohlcv-1m"
+    assert manifest["required_schema_columns"]
+    assert manifest["data_quality_fields"] == ["data_quality_status", "data_quality_degraded"]
+    assert manifest["data_quality_sources"] == ["databento_metadata.get_dataset_condition"]
+    assert manifest["vendor_quality_available"] is True
+    assert manifest["decoded_symbols"] == ["ESH4"]
+    assert manifest["price_scale_policy"]
+    assert manifest["input_hashes"][dbn_path.as_posix()]
+    assert manifest["output_hashes"][output_path.as_posix()]
+
+
 def test_estimate_cost_stops_on_auth_failure(tmp_path: Path) -> None:
     tasks = [
         DownloadTask(
@@ -1162,7 +1258,7 @@ def test_dry_run_uses_separate_plan_path_and_no_results(
     assert payload["run_kind"] == "dry_run"
     assert payload["run_id"]
     assert payload["plan_hash"]
-    assert payload["output_role"] == "archive_only"
+    assert payload["output_role"] == "dbn_archive"
     assert payload["pipeline_raw_ready"] is False
 
 

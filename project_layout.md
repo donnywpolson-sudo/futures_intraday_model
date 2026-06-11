@@ -116,7 +116,8 @@ configs/prop_rules.yaml
 Current implementation organization:
 
 ```text
-scripts/raw_ingest/              raw data download
+scripts/phase1A_download/        DBN archive download
+scripts/phase1B_convert/         DBN-to-raw-parquet conversion
 scripts/phase2_causal_base/      validation, session normalization, causal gating
 scripts/phase3_labels/           target and label generation
 scripts/phase4_features/         baseline features; will be created later
