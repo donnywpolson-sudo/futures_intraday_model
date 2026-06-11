@@ -16,6 +16,7 @@ import hashlib
 import shutil
 import time
 import json
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -25,12 +26,29 @@ from uuid import uuid4
 
 import pandas as pd
 
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.phase1_raw_contract import (
+    DEFINITION_METADATA_FIELDS,
+    EXPECTED_COMPRESSION,
+    EXPECTED_ENCODING,
+    REQUIRED_DATASET,
+    REQUIRED_DEFINITION_FIELDS,
+    REQUIRED_MANIFEST_FIELDS,
+    REQUIRED_OHLCV_FIELDS,
+    REQUIRED_SCHEMAS,
+    SCHEMA_PATHS,
+    VENDOR,
+)
+
 
 API_KEY_NAME = "DATABENTO_API_KEY"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 API_KEY_FILE = PROJECT_ROOT / "databento.env"
 API_KEY_FILES = [PROJECT_ROOT / "secrets" / "databento.env", API_KEY_FILE]
-CME_DATASET = "GLBX.MDP3"
+CME_DATASET = REQUIRED_DATASET
 ALLOWED_DATASETS = {CME_DATASET}
 SCHEMA = "ohlcv-1m"
 STYPE_IN = "continuous"
@@ -331,6 +349,12 @@ def chunk_label(start: str, chunk: str) -> str:
     raise ValueError(f"unsupported chunk: {chunk}")
 
 
+def schema_path_name(schema: str) -> str:
+    if schema not in SCHEMA_PATHS:
+        raise ValueError(f"unsupported raw schema: {schema}")
+    return SCHEMA_PATHS[schema]
+
+
 def task_output_path(
     output_root: Path,
     *,
@@ -338,19 +362,21 @@ def task_output_path(
     product: str,
     start: str,
     end: str,
+    schema: str,
     chunk: str,
     mode: str,
     raw_format: str,
 ) -> str:
     if mode in DBN_DOWNLOAD_MODES:
+        schema_root = output_root / VENDOR / schema_path_name(schema)
         if chunk == "none":
             label = f"{start}_to_{end}"
-            return (output_root / product / f"{label}.dbn.zst").as_posix()
+            return (schema_root / product / f"{label}.dbn.zst").as_posix()
         label = chunk_label(start, chunk)
         year = str(date.fromisoformat(start).year)
         if chunk == "year":
-            return (output_root / product / f"{year}.dbn.zst").as_posix()
-        return (output_root / product / year / f"{label}.dbn.zst").as_posix()
+            return (schema_root / product / f"{year}.dbn.zst").as_posix()
+        return (schema_root / product / year / f"{label}.dbn.zst").as_posix()
     label = chunk_label(start, chunk)
     suffix = ".parquet"
     return (output_root / product / f"{label}{suffix}").as_posix()
@@ -389,6 +415,7 @@ def iter_range_tasks(
             final_end.isoformat(),
             chunk,
         ):
+            task_stype_in = "parent" if schema == "definition" else stype_in
             tasks.append(
                 DownloadTask(
                     dataset=task_dataset,
@@ -396,19 +423,20 @@ def iter_range_tasks(
                     year=date.fromisoformat(task_start).year,
                     start=task_start,
                     end=task_end,
-                    symbol=symbol_for_product(product, stype_in),
+                    symbol=symbol_for_product(product, task_stype_in),
                     output_path=task_output_path(
                         output_root,
                         dataset=task_dataset,
                         product=product,
                         start=task_start,
                         end=task_end,
+                        schema=schema,
                         chunk=chunk,
                         mode=mode,
                         raw_format=raw_format,
                     ),
                     schema=schema,
-                    stype_in=stype_in,
+                    stype_in=task_stype_in,
                     stype_out=stype_out,
                     chunk=chunk,
                     raw_format=raw_format,
@@ -1031,14 +1059,25 @@ def infer_dbn_archive_entry(path: Path, dbn_root: Path) -> DbnArchiveEntry:
         parts = path.relative_to(dbn_root).parts
     except ValueError:
         parts = path.parts
-    if len(parts) == 2:
-        product, filename = parts
+    if len(parts) in {2, 3, 4}:
+        if len(parts) == 4 and parts[0] == VENDOR:
+            schema_dir, product, filename = parts[1], parts[2], parts[3]
+        elif len(parts) == 3:
+            schema_dir, product, filename = parts
+        else:
+            schema_dir = ""
+            product, filename = parts
+        if schema_dir and schema_dir != schema_path_name("ohlcv-1m"):
+            raise ValueError(
+                "cannot infer market/year from DBN path; expected "
+                "data/raw/databento/ohlcv_1m/{market}/{year}.dbn.zst"
+            )
         year_text = filename.removesuffix(".dbn.zst").removesuffix(".dbn")
         if year_text.isdigit():
             return DbnArchiveEntry(path=path, product=product, year=int(year_text))
     raise ValueError(
         "cannot infer market/year from DBN path; expected "
-        "data/raw/{market}/{year}.dbn.zst"
+        "data/raw/databento/ohlcv_1m/{market}/{year}.dbn.zst"
     )
 
 
@@ -1051,6 +1090,12 @@ def archive_entries_for_paths(
     entries: list[DbnArchiveEntry] = []
     for path in sorted(paths):
         if not is_dbn_file(path) or path_size_bytes(path) <= 0:
+            continue
+        try:
+            relative_parts = path.relative_to(dbn_root).parts
+        except ValueError:
+            relative_parts = path.parts
+        if schema_path_name("definition") in relative_parts:
             continue
         entry = infer_dbn_archive_entry(path, dbn_root)
         if products is not None and entry.product not in products:
@@ -1066,6 +1111,70 @@ def dbn_paths_for_tasks(tasks: Iterable[DownloadTask]) -> list[Path]:
         if out.exists():
             paths.extend(non_empty_dbn_files(out))
     return sorted(set(paths))
+
+
+def definition_path_for_group(dbn_root: Path, product: str, year: int) -> Path:
+    if dbn_root.name == schema_path_name("ohlcv-1m"):
+        base = dbn_root.parent / schema_path_name("definition")
+    elif dbn_root.name == VENDOR:
+        base = dbn_root / schema_path_name("definition")
+    else:
+        base = dbn_root / VENDOR / schema_path_name("definition")
+    return base / product / f"{year}.dbn.zst"
+
+
+def definition_frame_for_group(dbn_root: Path, product: str, year: int) -> tuple[pd.DataFrame, Path]:
+    path = definition_path_for_group(dbn_root, product, year)
+    if not path.exists():
+        raise ValueError(f"missing definition file: {path.as_posix()}")
+    manifest_failures = validate_raw_file_manifest(
+        path,
+        expected_schema="definition",
+        expected_market=product,
+        expected_year=year,
+    )
+    if manifest_failures:
+        raise ValueError("definition manifest validation failed: " + "; ".join(manifest_failures))
+    import databento as db
+
+    store = db.DBNStore.from_file(path)
+    df = cast(DatabentoStore, store).to_df()
+    missing = [field for field in REQUIRED_DEFINITION_FIELDS if field not in df.columns]
+    if missing:
+        raise ValueError("definition missing required fields: " + ",".join(missing))
+    if df["instrument_id"].isna().any():
+        raise ValueError("definition has null instrument_id")
+    raw_symbol = df["raw_symbol"].astype("string").fillna("").str.strip()
+    if raw_symbol.eq("").any():
+        raise ValueError("definition has missing raw_symbol mapping")
+    tick_size = pd.to_numeric(df["min_price_increment"], errors="coerce")
+    if tick_size.isna().any() or tick_size.le(0).any():
+        raise ValueError("definition has missing or nonpositive min_price_increment")
+    return df, path
+
+
+def latest_definition_metadata(definitions: pd.DataFrame) -> pd.DataFrame:
+    sort_cols = [col for col in ["instrument_id", "ts_event", "ts_recv"] if col in definitions.columns]
+    if sort_cols:
+        definitions = definitions.sort_values(sort_cols, kind="mergesort")
+    return definitions.drop_duplicates("instrument_id", keep="last")
+
+
+def enrich_with_definition_metadata(df: pd.DataFrame, definitions: pd.DataFrame) -> pd.DataFrame:
+    latest = latest_definition_metadata(definitions)
+    keep = [col for col in DEFINITION_METADATA_FIELDS if col in latest.columns]
+    latest = latest[keep].copy()
+    rename = {"raw_symbol": "raw_symbol", "min_price_increment": "tick_size"}
+    latest = latest.rename(columns=rename)
+    if "contract_multiplier" in latest.columns:
+        latest = latest.rename(columns={"contract_multiplier": "contract_multiplier_or_point_value"})
+    merged = df.merge(latest, on="instrument_id", how="left", suffixes=("", "_definition"))
+    if merged["raw_symbol"].isna().any():
+        missing = sorted(set(merged.loc[merged["raw_symbol"].isna(), "instrument_id"].astype(str)))
+        raise ValueError("missing definition coverage for OHLCV instruments: " + ",".join(missing))
+    merged["source_schema"] = SCHEMA
+    merged["source_dataset"] = CME_DATASET
+    return merged
 
 
 def fetch_conditions_by_group(
@@ -1138,10 +1247,21 @@ def convert_dbn_archive_to_raw(
         )
         quality_default = "available" if vendor_quality_available else default_quality_status
         try:
+            for path in group_paths:
+                manifest_failures = validate_raw_file_manifest(
+                    path,
+                    expected_schema=SCHEMA,
+                    expected_market=product,
+                    expected_year=year,
+                )
+                if manifest_failures:
+                    raise ValueError("OHLCV manifest validation failed: " + "; ".join(manifest_failures))
             if not vendor_quality_available:
                 raise ValueError(
                     "missing dataset-condition metadata for canonical raw conversion"
                 )
+            definitions, definition_path = definition_frame_for_group(dbn_root, product, year)
+            input_hashes[definition_path.as_posix()] = file_sha256(definition_path)
             skipped = has_non_empty_output(out) and not overwrite
             if skipped:
                 check = validate_download(out)
@@ -1166,7 +1286,31 @@ def convert_dbn_archive_to_raw(
                     "ts_event",
                     kind="mergesort",
                 )
-                write_required_dataframe_parquet(df[ORDERED_OUTPUT_COLUMNS], out)
+                df = enrich_with_definition_metadata(df, definitions)
+                df["datetime_utc"] = pd.to_datetime(df["ts_event"], utc=True, errors="coerce")
+                df["market"] = product
+                df["year"] = year
+                df["source_file"] = ";".join(path.as_posix() for path in group_paths)
+                df["source_sha256"] = ";".join(file_sha256(path) for path in group_paths)
+                readiness_cols = [
+                    "datetime_utc",
+                    "market",
+                    "year",
+                    "raw_symbol",
+                    "tick_size",
+                    "contract_multiplier_or_point_value",
+                    "expiration",
+                    "maturity_year",
+                    "maturity_month",
+                    "source_schema",
+                    "source_dataset",
+                    "source_file",
+                    "source_sha256",
+                ]
+                output_columns = ORDERED_OUTPUT_COLUMNS + [
+                    col for col in readiness_cols if col in df.columns and col not in ORDERED_OUTPUT_COLUMNS
+                ]
+                write_required_dataframe_parquet(df[output_columns], out)
                 check = validate_download(out)
                 if not check["valid"]:
                     raise ValueError(f"raw parquet failed validation: {check['errors']}")
@@ -1185,6 +1329,7 @@ def convert_dbn_archive_to_raw(
                     "market": product,
                     "year": year,
                     "input_paths": [path.as_posix() for path in group_paths],
+                    "definition_path": definition_path.as_posix(),
                     "input_hashes": input_hashes,
                     "output_path": out.as_posix(),
                     "output_hash": file_sha256(out),
@@ -1195,6 +1340,10 @@ def convert_dbn_archive_to_raw(
                     "price_scale_policy": PRICE_SCALE_POLICY,
                     "data_quality_source": data_quality_source,
                     "vendor_quality_available": vendor_quality_available,
+                    "definition_point_in_time_enforced": False,
+                    "warnings": [
+                        "definition metadata uses latest record per instrument; point-in-time selection is not fully enforced"
+                    ],
                     "validation": check,
                     "elapsed_seconds": elapsed,
                     **summary,
@@ -1599,6 +1748,18 @@ def execute_batch_task(
     out = Path(task.output_path)
     started = time.monotonic()
     if has_non_empty_dbn_output(out) and not overwrite:
+        manifest_failures = validate_raw_file_manifest(
+            out,
+            expected_schema=task.schema,
+            expected_market=task.product,
+            expected_year=task.year,
+        )
+        if manifest_failures:
+            return {
+                **asdict(task),
+                "status": "download_error",
+                "error": "; ".join(manifest_failures),
+            }
         log_chunk_result(
             status="ok_existing",
             task=task,
@@ -1658,6 +1819,13 @@ def execute_batch_task(
                 out.unlink()
         out.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(dbn_paths[0].as_posix(), out.as_posix())
+        raw_manifest = build_raw_file_manifest(
+            task,
+            out,
+            job_id=job_id,
+            request_status="ok",
+        )
+        write_json(raw_file_manifest_path(out), raw_manifest)
         converted_paths = (
             convert_dbn_files_to_parquet(
                 [out],
@@ -1686,6 +1854,7 @@ def execute_batch_task(
             "pipeline_raw_ready": False,
             "job": waited_job or job,
             "job_id": job_id,
+            "manifest_path": raw_file_manifest_path(out).as_posix(),
             "downloaded_files": [out.as_posix()],
             "downloaded_dbn_files": [out.as_posix()],
             "converted_parquet_files": [
@@ -1776,6 +1945,100 @@ def execute_batch_downloads(
 def write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def raw_file_manifest_path(path: Path) -> Path:
+    return path.with_name(f"{path.name}.manifest.json")
+
+
+def databento_client_version() -> str:
+    try:
+        import databento as db
+
+        return str(getattr(db, "__version__", "unknown"))
+    except Exception:
+        return "unknown"
+
+
+def build_raw_file_manifest(
+    task: DownloadTask,
+    path: Path,
+    *,
+    job_id: str | None,
+    request_status: str,
+) -> dict[str, object]:
+    manifest = {
+        "vendor": VENDOR,
+        "dataset": task.dataset,
+        "schema": task.schema,
+        "market": task.product,
+        "symbols_requested": [task.symbol],
+        "start": task.start,
+        "end": task.end,
+        "stype_in": task.stype_in,
+        "stype_out": task.stype_out,
+        "encoding": EXPECTED_ENCODING,
+        "compression": EXPECTED_COMPRESSION,
+        "downloaded_at": datetime.now(timezone.utc).isoformat(),
+        "path": path.as_posix(),
+        "file_size_bytes": path_size_bytes(path),
+        "file_sha256": file_sha256(path),
+        "job_id": job_id,
+        "api_client_version": databento_client_version(),
+        "request_status": request_status,
+    }
+    missing = [field for field in REQUIRED_MANIFEST_FIELDS if field not in manifest]
+    if missing:
+        raise ValueError("raw file manifest missing fields: " + ",".join(missing))
+    return manifest
+
+
+def validate_raw_file_manifest(
+    path: Path,
+    expected_schema: str | None = None,
+    *,
+    expected_market: str | None = None,
+    expected_year: int | None = None,
+) -> list[str]:
+    manifest_path = raw_file_manifest_path(path)
+    failures: list[str] = []
+    if not manifest_path.exists():
+        return [f"missing manifest: {manifest_path.as_posix()}"]
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return [f"unreadable manifest: {exc}"]
+    missing = [field for field in REQUIRED_MANIFEST_FIELDS if field not in manifest]
+    if missing:
+        failures.append("manifest missing fields: " + ",".join(missing))
+    if manifest.get("vendor") != VENDOR:
+        failures.append("manifest vendor mismatch")
+    if manifest.get("dataset") != CME_DATASET:
+        failures.append("manifest dataset mismatch")
+    if expected_schema is not None and manifest.get("schema") != expected_schema:
+        failures.append("manifest schema mismatch")
+    if expected_market is not None and manifest.get("market") != expected_market:
+        failures.append("manifest market mismatch")
+    if manifest.get("encoding") != EXPECTED_ENCODING:
+        failures.append("manifest encoding mismatch")
+    if manifest.get("compression") != EXPECTED_COMPRESSION:
+        failures.append("manifest compression mismatch")
+    if manifest.get("path") != path.as_posix():
+        failures.append("manifest path mismatch")
+    if int(manifest.get("file_size_bytes") or 0) <= 0:
+        failures.append("manifest file_size_bytes invalid")
+    if manifest.get("file_sha256") != file_sha256(path):
+        failures.append("checksum mismatch")
+    if expected_year is not None:
+        try:
+            start = date.fromisoformat(str(manifest.get("start")))
+            end = date.fromisoformat(str(manifest.get("end")))
+            max_end = date(expected_year + 1, 1, 1)
+            if start.year != expected_year or end <= start or end > max_end:
+                failures.append("manifest time range does not match path year")
+        except Exception:
+            failures.append("manifest time range invalid")
+    return failures
 
 
 def canonical_json_hash(payload: object) -> str:
@@ -1906,13 +2169,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
-  # Default raw DBN/Zstd batch output under data/raw/{market}/{year}.dbn.zst.
+  # Default raw DBN/Zstd batch output under data/raw/databento/{schema}/{market}/{year}.dbn.zst.
   python scripts\\phase1A_download\\download_databento_raw.py --markets ES,NQ --start 2023-01-01 --end 2024-01-01 --workers 1 --resume
 
   # Fast planning check with monthly chunks and no API calls.
   python scripts\\phase1A_download\\download_databento_raw.py --markets ES,NQ --start 2023-01-01 --end 2023-03-01 --chunk month --dry-run
 
-  # Convert already-downloaded data/raw/{market}/{year}.dbn.zst to data/raw/{market}/{year}.parquet.
+  # Convert already-downloaded data/raw/databento/ohlcv_1m/{market}/{year}.dbn.zst to data/raw/{market}/{year}.parquet.
   python scripts\\phase1B_convert\\convert_databento_raw.py --dbn-root data/raw --raw-root data/raw
 
   # Intentional old behavior: immediate yearly Parquet stream output under data/raw.
@@ -1926,7 +2189,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--symbols", "--markets", dest="symbols", help="Comma-separated product roots, e.g. ES,NQ,CL")
     parser.add_argument("--dataset", help=f"Override dataset for every requested market; only {CME_DATASET} is allowed")
-    parser.add_argument("--schema", default=SCHEMA)
+    parser.add_argument("--schema", choices=[*REQUIRED_SCHEMAS, "all"], default="all")
     parser.add_argument("--stype-in", default=STYPE_IN, help="Default continuous. Use parent for symbols like ES.FUT.")
     parser.add_argument("--stype-out", default=STYPE_OUT)
     parser.add_argument("--start", help="Inclusive start date, e.g. 2023-01-01. Overrides --start-year.")
@@ -2028,25 +2291,31 @@ def main() -> int:
     plan_out = effective_plan_out(args)
     output_role = output_role_for_run(args.mode, raw_format, output_root)
     pipeline_raw_ready = pipeline_raw_ready_for_run(args.mode, raw_format, output_root)
-    tasks = iter_range_tasks(
-        products,
-        start=start,
-        end=end,
-        output_root=output_root,
-        chunk=args.chunk,
-        mode=args.mode,
-        raw_format=raw_format,
-        dataset=args.dataset,
-        schema=args.schema,
-        stype_in=args.stype_in,
-        stype_out=args.stype_out,
-    )
+    requested_schemas = list(REQUIRED_SCHEMAS) if args.schema == "all" else [args.schema]
+    tasks: list[DownloadTask] = []
+    for schema in requested_schemas:
+        tasks.extend(
+            iter_range_tasks(
+                products,
+                start=start,
+                end=end,
+                output_root=output_root,
+                chunk=args.chunk,
+                mode=args.mode,
+                raw_format=raw_format,
+                dataset=args.dataset,
+                schema=schema,
+                stype_in=args.stype_in,
+                stype_out=args.stype_out,
+            )
+        )
 
     plan = {
         "mode": args.mode,
         "chunk": args.chunk,
         "raw_format": raw_format,
         "schema": args.schema,
+        "schemas": requested_schemas,
         "stype_in": args.stype_in,
         "stype_out": args.stype_out,
         "start": start,

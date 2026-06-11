@@ -27,14 +27,15 @@ The pipeline should first prove that the data, labels, features, walk-forward sp
 
 Phase 1 is a two-step raw-ingest workflow:
 
-- Phase 1A downloads and archives Databento DBN/DBN.ZST chunks.
-- Phase 1B converts market-year DBN chunks into immutable 1-minute OHLCV parquet.
+- Phase 1A downloads and archives immutable Databento DBN/DBN.ZST chunks.
+- Phase 1B validates OHLCV plus definition DBN chunks and converts market-year OHLCV chunks into immutable 1-minute OHLCV parquet.
 - Phase 2 validates, session-normalizes, roll-audits, synthetic-marks, and causally gates the parquet.
 
 DBN archive path pattern:
 
 ```text
-data/raw/{market}/{year}.dbn.zst
+data/raw/databento/ohlcv_1m/{market}/{year}.dbn.zst
+data/raw/databento/definition/{market}/{year}.dbn.zst
 ```
 
 Raw parquet path pattern:
@@ -46,6 +47,8 @@ data/raw/{market}/{year}.parquet
 Required raw schema:
 
 ```text
+source_dataset = GLBX.MDP3
+source_schema = ohlcv-1m
 ts_event
 open
 high
@@ -58,6 +61,10 @@ instrument_id
 symbol
 data_quality_status
 data_quality_degraded
+raw_symbol
+tick_size
+source_file
+source_sha256
 ```
 
 Production and research profiles fail when strict raw fields are missing. The
@@ -218,8 +225,8 @@ This is the realistic operational pipeline. The old 27-stage checklist is preser
 
 | Phase | Name | Main artifact | Purpose |
 |---:|---|---|---|
-| 1A | DBN Archive | `data/raw/{market}/{year}.dbn.zst` | Download and archive immutable Databento DBN/DBN.ZST market-year chunks. |
-| 1B | Raw Parquet Stitch | `data/raw/{market}/{year}.parquet` | Convert market-year DBN chunks into immutable OHLCV parquet. |
+| 1A | DBN Archive | `data/raw/databento/{ohlcv_1m,definition}/{market}/{year}.dbn.zst` | Download and archive immutable Databento OHLCV and definition DBN/DBN.ZST market-year chunks. |
+| 1B | Raw Parquet Stitch | `data/raw/{market}/{year}.parquet` | Validate OHLCV plus definition DBN chunks and convert market-year OHLCV chunks into immutable parquet. |
 | 2 | Causal Base Builder | `data/causally_gated_normalized/{market}/{year}.parquet` | Validate, session-normalize, roll-flag, synthetic-mark, and causally gate raw bars. |
 | 3 | Target / Label Generation | `data/labeled/{market}/{year}.parquet` | Build next-bar-entry 15-minute labels with cost-aware and intraday validity flags. |
 | 4 | Baseline + L0 Regime Feature Matrix | `data/feature_matrices/baseline/{market}/{year}.parquet` | Build OHLCV-only baseline and L0 regime features plus metadata, target, and initial registry columns. |
@@ -262,7 +269,8 @@ Old stages 24-27 -> Phase 16-22: final holdout, final WFA, final predictions, fi
 ### Core artifact flow
 
 ```text
-data/raw/{market}/{year}.dbn.zst
+data/raw/databento/ohlcv_1m/{market}/{year}.dbn.zst
+data/raw/databento/definition/{market}/{year}.dbn.zst
 -> data/raw/{market}/{year}.parquet
 -> data/causally_gated_normalized/{market}/{year}.parquet
 -> data/labeled/{market}/{year}.parquet
@@ -640,19 +648,22 @@ git status --short
 
 ## Purpose
 
-Archive immutable Databento DBN/DBN.ZST chunks and convert/stitch them into
-immutable continuous-contract 1-minute OHLCV parquet files.
+Archive immutable Databento OHLCV and point-in-time definition DBN/DBN.ZST
+chunks, then validate and convert/stitch OHLCV chunks into immutable
+continuous-contract 1-minute OHLCV parquet files.
 
 ## Input
 
-Databento DBN or DBN.ZST chunks, one or many per market/year.
+Databento `GLBX.MDP3` DBN or DBN.ZST chunks, one OHLCV and one definition file
+per market/year.
 
 ## Required paths
 
 DBN archive:
 
 ```text
-data/raw/{market}/{year}.dbn.zst
+data/raw/databento/ohlcv_1m/{market}/{year}.dbn.zst
+data/raw/databento/definition/{market}/{year}.dbn.zst
 ```
 
 Raw parquet output:
@@ -684,13 +695,16 @@ Production and research profiles require every field above. The
 ## Build requirements
 
 - Support one DBN chunk per market/year.
-- Hash every DBN chunk before conversion.
+- Request and manifest both `schema="ohlcv-1m"` and `schema="definition"`.
+- Hash every DBN chunk before conversion and verify the sidecar manifest.
 - Convert all chunks, concatenate, sort by `ts_event`, and check duplicates.
 - Do not mutate raw files.
 - Do not overwrite DBN archives or raw parquet files during pipeline runs.
 - Do not track raw files in git.
 - Ensure market and year can be inferred from the path.
 - Preserve `rtype`, `publisher_id`, `instrument_id`, and `symbol` for audit.
+- Require definition coverage for every OHLCV `instrument_id`.
+- Require `raw_symbol` mapping and positive tick-size metadata from definition rows.
 - Do not rename `ts_event` to `ts` in Phase 1.
 - Do not fill missing 1-minute bars in Phase 1.
 - Fail if required schema or metadata is missing or fake-filled.
@@ -715,6 +729,7 @@ Production and research profiles require every field above. The
 - File is non-empty.
 - Required columns exist; missing strict raw fields are FAIL, not WARN.
 - Each DBN input chunk is hashed and recorded.
+- Every OHLCV instrument has definition coverage.
 - Output hash, row counts, first timestamp, and last timestamp are reported.
 - Path market/year matches configured profile.
 

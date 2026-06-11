@@ -17,14 +17,15 @@ python -m pip install -r requirements.txt
 
 ## Databento API Key
 
-Put the Databento API key in `databento.env` at the project root:
+Put the Databento API key in `secrets/databento.env`:
 
 ```powershell
-Set-Content -Path .\databento.env -Value 'DATABENTO_API_KEY="YOUR_KEY"' -Encoding utf8
+Set-Content -Path .\secrets\databento.env -Value 'DATABENTO_API_KEY="YOUR_KEY"' -Encoding utf8
 ```
 
-The raw downloader only reads `DATABENTO_API_KEY` from that file. `databento.env` is git-ignored.
-It also accepts a raw key as the only non-comment line in `databento.env`.
+The raw downloader reads `secrets/databento.env` first, then `databento.env` at
+the project root. Both forms are git-ignored and may contain either
+`DATABENTO_API_KEY=...` or the raw key as the only non-comment line.
 
 ## Raw Data Ingest
 
@@ -34,7 +35,8 @@ Phase 1B implementation: `scripts/phase1B_convert/convert_databento_raw.py`.
 Phase 1A archives Databento DBN/DBN.ZST chunks:
 
 ```text
-data/raw/{market}/{year}.dbn.zst
+data/raw/databento/ohlcv_1m/{market}/{year}.dbn.zst
+data/raw/databento/definition/{market}/{year}.dbn.zst
 ```
 
 Phase 1B converts and stitches DBN chunks into immutable raw parquet:
@@ -50,10 +52,10 @@ python -m scripts.phase1B_convert.convert_databento_raw --dbn-root data\raw --ra
 Smoke test:
 
 ```powershell
-python -m scripts.phase1A_download.download_databento_raw --symbols ES --start-year 2026 --end-year 2026 --end-date 2026-01-03 --raw-root data\raw_api_test --overwrite
+python -m scripts.phase1A_download.download_databento_raw --symbols ES --start 2026-01-01 --end 2026-01-03 --dry-run
 ```
 
-Full L0/OHLCV archive:
+Full L0 archive:
 
 ```powershell
 python -m scripts.phase1A_download.download_databento_raw --universe extended_cme --start-year 2010 --end-year 2026 --end-date 2026-06-10

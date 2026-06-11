@@ -21,6 +21,7 @@ from scripts.phase1A_download.download_databento_raw import (
     build_raw_ingest_manifest,
     build_arg_parser,
     batch_split_duration_for_chunk,
+    build_raw_file_manifest,
     condition_is_degraded,
     convert_dbn_archive_to_raw,
     convert_dbn_files_to_parquet,
@@ -49,6 +50,8 @@ from scripts.phase1A_download.download_databento_raw import (
     symbol_for_product,
     store_to_required_dataframe,
     validate_download,
+    validate_raw_file_manifest,
+    write_json,
     write_store_parquet,
 )
 
@@ -208,6 +211,27 @@ def install_fake_databento_store(
         sys.modules,
         "databento",
         types.SimpleNamespace(DBNStore=FakeDBNStore),
+    )
+
+
+def _write_raw_manifest(path: Path, *, schema: str, market: str = "ES", year: int = 2024) -> None:
+    task = DownloadTask(
+        dataset=CME_DATASET,
+        product=market,
+        year=year,
+        start=f"{year}-01-01",
+        end=f"{year + 1}-01-01",
+        symbol=f"{market}.v.0" if schema == "ohlcv-1m" else f"{market}.FUT",
+        output_path=path.as_posix(),
+        schema=schema,
+        stype_in="continuous" if schema == "ohlcv-1m" else "parent",
+        stype_out="instrument_id",
+        chunk="year",
+        raw_format="dbn-zstd",
+    )
+    write_json(
+        path.with_name(f"{path.name}.manifest.json"),
+        build_raw_file_manifest(task, path, job_id="job-test", request_status="ok"),
     )
 
 
@@ -489,7 +513,7 @@ def test_iter_range_tasks_builds_market_year_dbn_files(tmp_path: Path) -> None:
         ("NQ", "2024-01-01", "2025-01-01", "year"),
     ]
     assert Path(tasks[0].output_path).parts[-3:] == (
-        "raw",
+        "ohlcv_1m",
         "ES",
         "2024.dbn.zst",
     )
@@ -1040,6 +1064,90 @@ def test_execute_batch_download_writes_temp_dir_then_final_dbn_file(tmp_path: Pa
     assert client.batch.submissions[0]["compression"] == "zstd"
     assert client.batch.submissions[0]["delivery"] == "download"
     assert client.batch.submissions[0]["split_duration"] == "month"
+    manifest_path = final_file.with_name(f"{final_file.name}.manifest.json")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["vendor"] == "databento"
+    assert manifest["dataset"] == "GLBX.MDP3"
+    assert manifest["schema"] == "ohlcv-1m"
+    assert manifest["encoding"] == "dbn"
+    assert manifest["compression"] == "zstd"
+    assert manifest["file_size_bytes"] == len(b"dbn-zstd-placeholder")
+    assert not validate_raw_file_manifest(
+        final_file,
+        expected_schema="ohlcv-1m",
+        expected_market="ES",
+        expected_year=2024,
+    )
+
+
+def test_raw_file_manifest_validation_fails_on_schema_mismatch(tmp_path: Path) -> None:
+    dbn_path = tmp_path / "raw" / "databento" / "ohlcv_1m" / "ES" / "2024.dbn.zst"
+    dbn_path.parent.mkdir(parents=True)
+    dbn_path.write_bytes(b"dbn-zstd-placeholder")
+    _write_raw_manifest(dbn_path, schema="definition")
+
+    failures = validate_raw_file_manifest(
+        dbn_path,
+        expected_schema="ohlcv-1m",
+        expected_market="ES",
+        expected_year=2024,
+    )
+
+    assert "manifest schema mismatch" in failures
+
+
+def test_raw_file_manifest_validation_fails_on_checksum_mismatch(tmp_path: Path) -> None:
+    dbn_path = tmp_path / "raw" / "databento" / "ohlcv_1m" / "ES" / "2024.dbn.zst"
+    dbn_path.parent.mkdir(parents=True)
+    dbn_path.write_bytes(b"dbn-zstd-placeholder")
+    _write_raw_manifest(dbn_path, schema="ohlcv-1m")
+    dbn_path.write_bytes(b"changed")
+
+    failures = validate_raw_file_manifest(
+        dbn_path,
+        expected_schema="ohlcv-1m",
+        expected_market="ES",
+        expected_year=2024,
+    )
+
+    assert "checksum mismatch" in failures
+
+
+def test_existing_batch_file_with_valid_manifest_is_not_overwritten(tmp_path: Path) -> None:
+    client = FakeBatchClient()
+    final_file = tmp_path / "raw" / "databento" / "ohlcv_1m" / "ES" / "2024.dbn.zst"
+    final_file.parent.mkdir(parents=True)
+    final_file.write_bytes(b"existing-dbn")
+    task = DownloadTask(
+        dataset=CME_DATASET,
+        product="ES",
+        year=2024,
+        start="2024-01-01",
+        end="2025-01-01",
+        symbol="ES.v.0",
+        output_path=final_file.as_posix(),
+        chunk="year",
+        raw_format="dbn-zstd",
+    )
+    write_json(
+        final_file.with_name(f"{final_file.name}.manifest.json"),
+        build_raw_file_manifest(task, final_file, job_id="job-existing", request_status="ok"),
+    )
+
+    results = execute_batch_downloads(
+        [task],
+        overwrite=False,
+        workers=1,
+        client_factory=lambda: client,
+        convert_parquet=False,
+        max_retries=0,
+        batch_wait_timeout_seconds=1.0,
+        batch_poll_seconds=0.01,
+    )
+
+    assert results[0]["status"] == "ok_existing"
+    assert final_file.read_bytes() == b"existing-dbn"
+    assert not client.batch.submissions
 
 
 def test_existing_batch_directory_without_dbn_is_not_ok_existing(tmp_path: Path) -> None:
@@ -1194,9 +1302,14 @@ def test_batch_convert_parquet_preserves_degraded_dataset_condition(
 def test_convert_dbn_archive_fails_without_quality_metadata(tmp_path: Path) -> None:
     dbn_root = tmp_path / "raw"
     raw_root = dbn_root
-    dbn_path = dbn_root / "ES" / "2024.dbn.zst"
+    dbn_path = dbn_root / "databento" / "ohlcv_1m" / "ES" / "2024.dbn.zst"
+    definition_path = dbn_root / "databento" / "definition" / "ES" / "2024.dbn.zst"
     dbn_path.parent.mkdir(parents=True)
+    definition_path.parent.mkdir(parents=True)
     dbn_path.write_bytes(b"dbn-zstd-placeholder")
+    definition_path.write_bytes(b"definition-placeholder")
+    _write_raw_manifest(dbn_path, schema="ohlcv-1m")
+    _write_raw_manifest(definition_path, schema="definition")
 
     results = convert_dbn_archive_to_raw(dbn_root, raw_root)
 
@@ -1208,13 +1321,71 @@ def test_convert_dbn_archive_fails_without_quality_metadata(tmp_path: Path) -> N
     assert not output_path.exists()
 
 
+def test_convert_dbn_archive_fails_when_definition_file_missing(tmp_path: Path) -> None:
+    dbn_root = tmp_path / "raw"
+    dbn_path = dbn_root / "databento" / "ohlcv_1m" / "ES" / "2024.dbn.zst"
+    dbn_path.parent.mkdir(parents=True)
+    dbn_path.write_bytes(b"dbn-zstd-placeholder")
+    _write_raw_manifest(dbn_path, schema="ohlcv-1m")
+
+    results = convert_dbn_archive_to_raw(
+        dbn_root,
+        dbn_root,
+        condition_by_group={("ES", 2024): {"2024-01-03": "available"}},
+    )
+
+    assert results[0]["status"] == "convert_error"
+    assert "missing definition file" in str(results[0]["error"])
+
+
+def test_convert_dbn_archive_fails_when_definition_mapping_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    converted_df = pd.DataFrame(
+        {
+            "ts_event": [pd.Timestamp("2024-01-02T15:00:00Z")],
+            "open": [1.0],
+            "high": [2.0],
+            "low": [0.5],
+            "close": [1.5],
+            "volume": [10],
+            "rtype": [33],
+            "publisher_id": [1],
+            "instrument_id": [100],
+            "symbol": ["ESH4"],
+            "min_price_increment": [0.25],
+        }
+    )
+    install_fake_databento_store(monkeypatch, converted_df)
+    dbn_root = tmp_path / "raw"
+    dbn_path = dbn_root / "databento" / "ohlcv_1m" / "ES" / "2024.dbn.zst"
+    definition_path = dbn_root / "databento" / "definition" / "ES" / "2024.dbn.zst"
+    dbn_path.parent.mkdir(parents=True)
+    definition_path.parent.mkdir(parents=True)
+    dbn_path.write_bytes(b"dbn-zstd-placeholder")
+    definition_path.write_bytes(b"definition-placeholder")
+    _write_raw_manifest(dbn_path, schema="ohlcv-1m")
+    _write_raw_manifest(definition_path, schema="definition")
+
+    results = convert_dbn_archive_to_raw(
+        dbn_root,
+        dbn_root,
+        condition_by_group={("ES", 2024): {"2024-01-02": "available"}},
+    )
+
+    assert results[0]["status"] == "convert_error"
+    assert "definition missing required fields: raw_symbol" in str(results[0]["error"])
+    assert not (dbn_root / "ES" / "2024.parquet").exists()
+
+
 def test_convert_dbn_archive_rejects_nested_chunk_layout(tmp_path: Path) -> None:
     dbn_root = tmp_path / "raw"
-    dbn_path = dbn_root / "ES" / "2024" / "2024-01.dbn.zst"
+    dbn_path = dbn_root / "databento" / "ohlcv_1m" / "ES" / "2024" / "2024-01.dbn.zst"
     dbn_path.parent.mkdir(parents=True)
     dbn_path.write_bytes(b"dbn-zstd-placeholder")
 
-    with pytest.raises(ValueError, match=r"data/raw/\{market\}/\{year\}.dbn.zst"):
+    with pytest.raises(ValueError, match=r"data/raw/databento/ohlcv_1m/\{market\}/\{year\}.dbn.zst"):
         convert_dbn_archive_to_raw(dbn_root, dbn_root)
 
 
@@ -1237,14 +1408,25 @@ def test_convert_dbn_archive_writes_canonical_raw_parquet_and_manifest(
             "publisher_id": [1, 1],
             "instrument_id": [100, 100],
             "symbol": ["ESH4", "ESH4"],
+            "raw_symbol": ["ESH4", "ESH4"],
+            "min_price_increment": [0.25, 0.25],
+            "contract_multiplier": [50.0, 50.0],
+            "expiration": ["2024-03-15", "2024-03-15"],
+            "maturity_year": [2024, 2024],
+            "maturity_month": [3, 3],
         }
     )
     install_fake_databento_store(monkeypatch, converted_df)
     dbn_root = tmp_path / "raw"
     raw_root = dbn_root
-    dbn_path = dbn_root / "ES" / "2024.dbn.zst"
+    dbn_path = dbn_root / "databento" / "ohlcv_1m" / "ES" / "2024.dbn.zst"
+    definition_path = dbn_root / "databento" / "definition" / "ES" / "2024.dbn.zst"
     dbn_path.parent.mkdir(parents=True)
+    definition_path.parent.mkdir(parents=True)
     dbn_path.write_bytes(b"dbn-zstd-placeholder")
+    definition_path.write_bytes(b"definition-placeholder")
+    _write_raw_manifest(dbn_path, schema="ohlcv-1m")
+    _write_raw_manifest(definition_path, schema="definition")
 
     results = convert_dbn_archive_to_raw(
         dbn_root,
@@ -1260,11 +1442,15 @@ def test_convert_dbn_archive_writes_canonical_raw_parquet_and_manifest(
     assert out["data_quality_degraded"].tolist() == [False, True]
     assert results[0]["output_path"] == output_path.as_posix()
     assert results[0]["input_hashes"][dbn_path.as_posix()]
+    assert results[0]["input_hashes"][definition_path.as_posix()]
     assert results[0]["output_hash"]
     assert results[0]["schema"] == "ohlcv-1m"
     assert results[0]["price_scale_policy"]
     assert results[0]["data_quality_source"] == "databento_metadata.get_dataset_condition"
     assert results[0]["vendor_quality_available"] is True
+    assert results[0]["definition_point_in_time_enforced"] is False
+    assert out["raw_symbol"].tolist() == ["ESH4", "ESH4"]
+    assert out["tick_size"].tolist() == [0.25, 0.25]
 
     manifest = build_raw_ingest_manifest(
         results,
@@ -1368,6 +1554,15 @@ def test_dry_run_uses_separate_plan_path_and_no_results(
     assert payload["plan_hash"]
     assert payload["output_role"] == "dbn_archive"
     assert payload["pipeline_raw_ready"] is False
+    assert payload["schema"] == "all"
+    assert payload["schemas"] == ["ohlcv-1m", "definition"]
+    assert payload["task_count"] == 2
+    planned = payload["tasks"]
+    assert [task["schema"] for task in planned] == ["ohlcv-1m", "definition"]
+    assert planned[0]["output_path"].endswith("databento/ohlcv_1m/ES/2024.dbn.zst")
+    assert planned[1]["output_path"].endswith("databento/definition/ES/2024.dbn.zst")
+    assert planned[1]["symbol"] == "ES.FUT"
+    assert planned[1]["stype_in"] == "parent"
 
 
 def REQUIRED_TEST_COLUMNS() -> list[str]:
