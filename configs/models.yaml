@@ -1,3 +1,4 @@
+# Guardrails for initial alpha-model research.
 policy:
   random_splits_allowed: false
   final_holdout_tuning_allowed: false
@@ -7,6 +8,7 @@ policy:
   hyperparameter_tuning_allowed_initially: false
   optional_external_model_dependencies_required: false
 
+# Purge/embargo sizing for target-aligned WFA.
 purge:
   entry_lag_bars: 1
   target_horizon_bars: 15
@@ -24,6 +26,7 @@ approved_initial_model_families:
   - lightgbm_direction_optional
   - xgboost_direction_optional
 
+# Label columns grouped by modeling purpose.
 target_groups:
   return_target:
     - target_ret_15m
@@ -46,6 +49,7 @@ target_groups:
     - target_trend_danger_short_30m
     - target_trend_danger_30m
 
+# Target-derived columns that must never become features.
 feature_exclusion:
   target_only_groups:
     - return_target
@@ -77,78 +81,61 @@ model_stages:
 
 models:
   ridge_return_v1:
-    stage: phase_7a_linear_controls
-    family: ridge_regression
-    task: regression
+    <<: &linear_control_regression
+      stage: phase_7a_linear_controls
+      family: ridge_regression
+      task: regression
+      enabled: true
+      requires_optional_dependency: false
     target: target_ret_15m
-    enabled: true
-    requires_optional_dependency: false
 
   logistic_direction_v1:
-    stage: phase_7a_linear_controls
-    family: logistic_regression
-    task: classification
+    <<: &linear_control_classifier
+      stage: phase_7a_linear_controls
+      family: logistic_regression
+      task: classification
+      enabled: true
+      requires_optional_dependency: false
     target: target_sign_with_deadzone
-    enabled: true
-    requires_optional_dependency: false
 
   logistic_fade_success_v1:
-    stage: phase_7a_linear_controls
-    family: logistic_regression
-    task: classification
+    <<: *linear_control_classifier
     target: target_fade_success_15m
-    enabled: true
-    requires_optional_dependency: false
 
   logistic_trend_danger_v1:
-    stage: phase_7a_linear_controls
-    family: logistic_regression
-    task: classification
+    <<: *linear_control_classifier
     target: target_trend_danger_30m
-    enabled: true
-    requires_optional_dependency: false
 
   histgb_direction_v1:
-    stage: phase_7b_sklearn_nonlinear
-    family: hist_gradient_boosting
-    task: classification
+    <<: &sklearn_nonlinear_classifier
+      stage: phase_7b_sklearn_nonlinear
+      family: hist_gradient_boosting
+      task: classification
+      enabled: false
+      requires_optional_dependency: false
     target: target_sign_with_deadzone
-    enabled: false
-    requires_optional_dependency: false
 
   histgb_fade_success_v1:
-    stage: phase_7b_sklearn_nonlinear
-    family: hist_gradient_boosting
-    task: classification
+    <<: *sklearn_nonlinear_classifier
     target: target_fade_success_15m
-    enabled: false
-    requires_optional_dependency: false
 
   histgb_trend_danger_v1:
-    stage: phase_7b_sklearn_nonlinear
-    family: hist_gradient_boosting
-    task: classification
+    <<: *sklearn_nonlinear_classifier
     target: target_trend_danger_30m
-    enabled: false
-    requires_optional_dependency: false
 
   lightgbm_direction_v1:
-    stage: phase_7c_optional_boosted_trees
+    <<: &optional_direction_boosted_tree
+      stage: phase_7c_optional_boosted_trees
+      task: classification
+      target: target_sign_with_deadzone
+      enabled: false
+      cpu_first: true
+      requires_optional_dependency: true
     family: lightgbm
-    task: classification
-    target: target_sign_with_deadzone
-    enabled: false
-    cpu_first: true
-    requires_optional_dependency: true
 
   xgboost_direction_v1:
-    stage: phase_7c_optional_boosted_trees
+    <<: *optional_direction_boosted_tree
     family: xgboost
-    task: classification
-    target: target_sign_with_deadzone
-    enabled: false
-    cpu_first: true
-    requires_optional_dependency: true
 
 prediction_schema:
   required_columns:
