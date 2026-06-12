@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import sys
@@ -129,17 +129,14 @@ def _write_costs(path: Path, market: str = "ES", tick_size: float = 0.25) -> Pat
 
 
 def test_profile_aliases_resolve_for_phase4() -> None:
-    inputs = resolve_profile_inputs("tier_1_core", ROOT / "data" / "labeled")
+    inputs = resolve_profile_inputs("tier_1", ROOT / "data" / "labeled")
     assert [(market, year) for market, year, _ in inputs] == [
         ("CL", 2023),
         ("CL", 2024),
-        ("CL", 2025),
         ("ES", 2023),
         ("ES", 2024),
-        ("ES", 2025),
         ("ZN", 2023),
         ("ZN", 2024),
-        ("ZN", 2025),
     ]
 
 
@@ -341,7 +338,7 @@ def _process_fixture(
     result = process_file(
         input_path,
         output_path,
-        profile="tier_1_core",
+        profile="tier_1",
         costs_config=costs_path,
         input_root=input_root,
     )
@@ -414,11 +411,11 @@ def test_process_file_writes_matrix_registries_and_reports(tmp_path: Path) -> No
     result = process_file(
         input_path,
         output_root / "ES" / "2024.parquet",
-        profile="tier_1_core",
+        profile="tier_1",
         costs_config=costs_path,
         input_root=input_root,
     )
-    write_reports([result], profile="tier_1_core", output_root=output_root, reports_root=reports_root)
+    write_reports([result], profile="tier_1", output_root=output_root, reports_root=reports_root)
 
     output = pd.read_parquet(output_root / "ES" / "2024.parquet")
     assert result.status in {"PASS", "WARN"}
@@ -442,3 +439,4 @@ def test_process_file_writes_matrix_registries_and_reports(tmp_path: Path) -> No
         assert payload["output_file_hashes"][
             (output_root / "ES" / "2024.parquet").as_posix()
         ] != "missing"
+

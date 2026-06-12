@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import sys
@@ -115,7 +115,7 @@ def test_entry_exit_alignment_uses_next_bar_open_not_close_t(tmp_path: Path) -> 
     result = process_file(
         input_path,
         output_path,
-        profile="tier_1_core",
+        profile="tier_1",
         costs_config=costs_path,
     )
 
@@ -138,17 +138,17 @@ def test_profile_resolution_uses_alpha_tier_aliases(tmp_path: Path) -> None:
         "\n".join(
             [
                 "profiles:",
-                "  tier_1_core_recent:",
+                "  tier_1:",
                 "    markets: [CL, ES, ZN]",
                 "    years: [2023, 2024, 2025]",
                 "aliases:",
-                "  tier_1_core: tier_1_core_recent",
+                "  tier_1_core: tier_1",
             ]
         ),
         encoding="utf-8",
     )
 
-    resolved = resolve_profile_inputs("tier_1_core", input_root, config_path)
+    resolved = resolve_profile_inputs("tier_1", input_root, config_path)
 
     assert resolved[0] == ("CL", 2023, input_root / "CL" / "2023.parquet")
     assert resolved[-1] == ("ZN", 2025, input_root / "ZN" / "2025.parquet")
@@ -256,7 +256,7 @@ def test_present_cost_config_missing_market_fails_without_output(tmp_path: Path)
     result = process_file(
         input_path,
         output_path,
-        profile="tier_1_core",
+        profile="tier_1",
         costs_config=costs_path,
     )
 
@@ -357,10 +357,10 @@ def test_output_schema_and_reports(tmp_path: Path) -> None:
     result = process_file(
         input_path,
         output_path,
-        profile="tier_1_core",
+        profile="tier_1",
         costs_config=costs_path,
     )
-    write_reports([result], reports_root, "tier_1_core")
+    write_reports([result], reports_root, "tier_1")
 
     output = pd.read_parquet(output_path)
     assert list(output.columns) == list(input_df.columns) + LABEL_COLUMNS
@@ -389,7 +389,7 @@ def test_output_schema_and_reports(tmp_path: Path) -> None:
     assert isinstance(manifest["output_file_hashes"][result.output_path], str)
     assert len(manifest["output_file_hashes"][result.output_path]) == 64
     assert manifest["input_file_hashes"][result.input_path] is not None
-    assert manifest["profile"] == "tier_1_core"
+    assert manifest["profile"] == "tier_1"
     assert manifest["markets"] == ["ES"]
     assert manifest["years"] == [2024]
     assert manifest["warning_count"] == len(result.warnings)
@@ -421,10 +421,10 @@ def test_mixed_roll_detection_availability_is_reported(tmp_path: Path) -> None:
     result = process_file(
         input_path,
         output_path,
-        profile="tier_1_core",
+        profile="tier_1",
         costs_config=costs_path,
     )
-    write_reports([result], reports_root, "tier_1_core")
+    write_reports([result], reports_root, "tier_1")
 
     manifest = json.loads((reports_root / "label_manifest.json").read_text())
     report = json.loads((reports_root / "label_report.json").read_text())
@@ -442,3 +442,4 @@ def test_mixed_roll_detection_availability_is_reported(tmp_path: Path) -> None:
     assert output_row["roll_detection_available_rows"] == len(rows) - 2
     assert output_row["roll_detection_unavailable_rows"] == 2
     assert report["summary"]["roll_detection_unavailable_rows"] == 2
+

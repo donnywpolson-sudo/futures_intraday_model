@@ -59,6 +59,7 @@ DEFAULT_STREAM_OUT = DEFAULT_RAW_OUT
 DEFAULT_DBN_OUT = DEFAULT_RAW_OUT
 DEFAULT_BATCH_OUT = DEFAULT_DBN_OUT
 DEFAULT_REPORTS_ROOT = "reports/raw_ingest"
+DEFAULT_WORKERS = 3
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_RETRY_BACKOFF_SECONDS = 1.0
 DATASET_AVAILABLE_START = {
@@ -900,6 +901,7 @@ def wait_for_batch_job(
     poll_seconds: float,
 ) -> dict[str, Any] | None:
     if timeout_seconds <= 0:
+        print(f"BATCH_WAIT_SKIP job_id={job_id} timeout_s={timeout_seconds}", flush=True)
         return None
     deadline = time.monotonic() + timeout_seconds
     while True:
@@ -907,10 +909,14 @@ def wait_for_batch_job(
         for job in jobs:
             if str(job.get("id") or job.get("job_id") or job.get("jobId")) == job_id:
                 state = batch_job_state(job)
+                print(f"BATCH_STATUS job_id={job_id} state={state or 'unknown'}", flush=True)
                 if state in {"done", "completed", "complete"}:
                     return job
                 if state in {"failed", "expired", "cancelled", "canceled"}:
                     raise RuntimeError(f"Databento batch job {job_id} ended in state {state}")
+                break
+        else:
+            print(f"BATCH_STATUS job_id={job_id} state=not_listed", flush=True)
         if time.monotonic() >= deadline:
             raise TimeoutError(f"Timed out waiting for Databento batch job {job_id}")
         time.sleep(poll_seconds)
@@ -1188,6 +1194,37 @@ def fetch_conditions_by_group(
         info = fetch_dataset_conditions(client, task)
         key = (task.product, task.year)
         conditions_by_group.setdefault(key, {}).update(info["conditions"])
+    return conditions_by_group
+
+
+def condition_task_for_archive_entry(entry: DbnArchiveEntry) -> DownloadTask:
+    manifest_path = raw_file_manifest_path(entry.path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+    return DownloadTask(
+        dataset=str(manifest.get("dataset") or CME_DATASET),
+        product=str(manifest.get("market") or entry.product),
+        year=entry.year,
+        start=str(manifest.get("start") or f"{entry.year}-01-01"),
+        end=str(manifest.get("end") or f"{entry.year + 1}-01-01"),
+        symbol=str((manifest.get("symbols_requested") or [symbol_for_product(entry.product, STYPE_IN)])[0]),
+        output_path=entry.path.as_posix(),
+        schema=str(manifest.get("schema") or SCHEMA),
+        stype_in=str(manifest.get("stype_in") or STYPE_IN),
+        stype_out=str(manifest.get("stype_out") or STYPE_OUT),
+        chunk="year",
+        raw_format="dbn-zstd",
+    )
+
+
+def fetch_conditions_for_archive_entries(
+    client: DatabentoMetadataHolder,
+    entries: Iterable[DbnArchiveEntry],
+) -> dict[tuple[str, int], dict[str, str]]:
+    conditions_by_group: dict[tuple[str, int], dict[str, str]] = {}
+    for entry in entries:
+        task = condition_task_for_archive_entry(entry)
+        info = fetch_dataset_conditions(client, task)
+        conditions_by_group[(entry.product, entry.year)] = info["conditions"]
     return conditions_by_group
 
 
@@ -1783,6 +1820,11 @@ def execute_batch_task(
     tmp_dir.mkdir(parents=True, exist_ok=False)
 
     try:
+        print(
+            f"BATCH_SUBMIT {task.dataset} {task.product} symbol={task.symbol} "
+            f"schema={task.schema} {task.start}->{task.end} output={out.as_posix()}",
+            flush=True,
+        )
         job = client.batch.submit_job(
             dataset=task.dataset,
             symbols=task.symbol,
@@ -1797,12 +1839,14 @@ def execute_batch_task(
             split_duration=batch_split_duration_for_chunk(task.chunk),
         )
         job_id = batch_job_id(job)
+        print(f"BATCH_SUBMITTED job_id={job_id}", flush=True)
         waited_job = wait_for_batch_job(
             client.batch,
             job_id=job_id,
             timeout_seconds=batch_wait_timeout_seconds,
             poll_seconds=batch_poll_seconds,
         )
+        print(f"BATCH_DOWNLOAD_START job_id={job_id} tmp_dir={tmp_dir.as_posix()}", flush=True)
         downloaded = client.batch.download(job_id=job_id, output_dir=tmp_dir)
         downloaded_paths = [Path(path) for path in downloaded]
         dbn_paths = [path for path in downloaded_paths if is_dbn_file(path) and path_size_bytes(path) > 0]
@@ -2191,14 +2235,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--symbols", "--markets", dest="symbols", help="Comma-separated product roots, e.g. ES,NQ,CL")
     parser.add_argument("--dataset", help=f"Override dataset for every requested market; only {CME_DATASET} is allowed")
-    parser.add_argument("--schema", choices=[*REQUIRED_SCHEMAS, "all"], default=SCHEMA)
+    parser.add_argument("--schema", choices=[*REQUIRED_SCHEMAS, "all"], default="all")
     parser.add_argument("--stype-in", default=STYPE_IN, help="Default continuous. Use parent for symbols like ES.FUT.")
     parser.add_argument("--stype-out", default=STYPE_OUT)
     parser.add_argument("--start", help="Inclusive start date, e.g. 2023-01-01. Overrides --start-year.")
     parser.add_argument("--end", help="Exclusive end date, e.g. 2026-01-01. Overrides --end-year/--end-date.")
     parser.add_argument("--start-year", type=int, default=START_YEAR)
     parser.add_argument("--end-year", type=int, default=date.today().year)
-    parser.add_argument("--end-date", default=date.today().isoformat())
+    parser.add_argument("--end-date", default=(date.today() - timedelta(days=1)).isoformat())
     parser.add_argument("--dbn-root", default=DEFAULT_DBN_OUT)
     parser.add_argument("--raw-root", default=DEFAULT_RAW_OUT)
     parser.add_argument("--reports-root", default=DEFAULT_REPORTS_ROOT)
@@ -2211,7 +2255,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="download-dbn",
     )
     parser.add_argument("--raw-format", choices=["parquet", "dbn-zstd"])
-    parser.add_argument("--workers", type=int, default=1, help="Bounded concurrent market/chunk jobs. Use 3-4 for this machine.")
+    parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS, help="Bounded concurrent market/chunk jobs. Use 3-4 for this machine.")
     parser.add_argument("--resume", action="store_true", help="Explicitly keep skip/resume behavior; existing non-empty final outputs are skipped unless --overwrite is set.")
     parser.add_argument("--dry-run", action="store_true", help="Print planned jobs and exit without API calls.")
     parser.add_argument("--max-retries", type=int, default=DEFAULT_MAX_RETRIES)
@@ -2253,11 +2297,20 @@ def main() -> int:
                 raise SystemExit(str(exc)) from exc
         dbn_root = effective_output_root(args)
         raw_root = effective_raw_root(args)
+        source_paths = list(iter_dbn_files(dbn_root))
+        entries = archive_entries_for_paths(source_paths, dbn_root, products=products)
+        condition_by_group = (
+            fetch_conditions_for_archive_entries(get_client(), entries)
+            if entries
+            else {}
+        )
         results = convert_dbn_archive_to_raw(
             dbn_root,
             raw_root,
             overwrite=args.overwrite,
+            paths=[entry.path for entry in entries],
             products=products,
+            condition_by_group=condition_by_group,
         )
         write_json(report_path(args, "databento_convert_results.json"), results)
         write_json(
@@ -2349,7 +2402,8 @@ def main() -> int:
     print(
         f"PLAN mode={args.mode} chunk={args.chunk} products={len(products)} "
         f"tasks={len(tasks)} out={output_root.as_posix()} workers={args.workers} "
-        f"output_role={output_role} pipeline_raw_ready={pipeline_raw_ready}"
+        f"output_role={output_role} pipeline_raw_ready={pipeline_raw_ready}",
+        flush=True,
     )
 
     if args.dry_run:
@@ -2359,6 +2413,7 @@ def main() -> int:
 
     write_json(plan_out, plan)
 
+    print("CLIENT_INIT Databento historical client", flush=True)
     client = get_client()
     if args.estimate_cost:
         estimates = estimate_cost(client, tasks)
@@ -2370,7 +2425,17 @@ def main() -> int:
         print(f"TOTAL_ESTIMATE_ERRORS {errors}")
         return 0
 
+    pending = first_pending_download(tasks, overwrite=args.overwrite)
+    if pending is None:
+        print("PREFLIGHT_SKIP no pending downloads", flush=True)
+    else:
+        print(
+            f"PREFLIGHT {pending.dataset} {pending.product} symbol={pending.symbol} "
+            f"schema={pending.schema} {pending.start}->{pending.end}",
+            flush=True,
+        )
     preflight_auth(client, tasks, overwrite=args.overwrite)
+    print("PREFLIGHT_OK", flush=True)
     if args.mode == "stream":
         if args.workers <= 1:
             results = execute_download(

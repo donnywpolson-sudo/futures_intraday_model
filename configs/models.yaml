@@ -1,5 +1,3 @@
-version: 1
-
 policy:
   random_splits_allowed: false
   final_holdout_tuning_allowed: false

@@ -32,7 +32,7 @@ the project root. Both forms are git-ignored and may contain either
 Phase 1A implementation: `scripts/phase1A_download/download_databento_raw.py`.
 Phase 1B implementation: `scripts/phase1B_convert/convert_databento_raw.py`.
 
-Phase 1A archives Databento DBN/DBN.ZST chunks:
+Phase 1A archives both required Databento DBN/DBN.ZST schemas by default:
 
 ```text
 data/raw/{market}/{year}.dbn.zst
@@ -55,7 +55,7 @@ Smoke test:
 python -m scripts.phase1A_download.download_databento_raw --symbols ES --start 2026-01-01 --end 2026-01-03 --dry-run
 ```
 
-Full L0 archive:
+Full Phase 1A archive:
 
 ```powershell
 python -m scripts.phase1A_download.download_databento_raw --universe extended_cme --start-year 2010 --end-year 2026 --end-date 2026-06-10
@@ -68,18 +68,19 @@ The downloader does not replace existing files unless `--overwrite` is passed.
 Operational profiles live in `configs/alpha_tiered.yaml`.
 
 ```text
-tier_0 = smoke test
-tier_1 = CL/ES/ZN machinery proof set
-tier_2 = exact 28-market GLBX-only real universe, including VX
+tier_0 = ES smoke test
+tier_1 = CL/ES/ZN recent core
+tier_2 = CL/ES/ZN long core
+tier_3 = exact 27-market GLBX-only long universe
 all_raw = inventory only
 metadata_optional_test = unit-test only
 ```
 
-Default profile: `tier_1_core_recent`.
+Default profile: `tier_1`.
 
-Use `tier_1_core` for current Phase 1-4 debugging. `tier_1` results do not
-prove `tier_2` performance; `tier_2` is the actual research universe. Missing
-Tier-2 data must fail stage validation clearly, not silently shrink the
+Use `tier_1` for current Phase 1-4 debugging. `tier_1` results do not
+prove `tier_3` performance; `tier_3` is the actual research universe. Missing
+Tier-3 data must fail stage validation clearly, not silently shrink the
 universe.
 
 ## Causal Base
@@ -89,7 +90,7 @@ Canonical implementation: `scripts/phase2_causal_base/build_causal_base_data.py`
 Build the normalized causal base for the tier-1 machinery proof set:
 
 ```powershell
-python -m scripts.phase2_causal_base.build_causal_base_data --profile tier_1_core
+python -m scripts.phase2_causal_base.build_causal_base_data --profile tier_1
 ```
 
 Output:
@@ -106,7 +107,7 @@ Canonical implementation: `scripts/phase3_labels/build_labels.py`.
 Build labels for the tier-1 machinery proof set:
 
 ```powershell
-python -m scripts.phase3_labels.build_labels --profile tier_1_core
+python -m scripts.phase3_labels.build_labels --profile tier_1
 ```
 
 Output:
@@ -128,7 +129,7 @@ tests/phase4_features/test_build_baseline_features.py
 Canonical command once implemented:
 
 ```powershell
-python -m scripts.phase4_features.build_baseline_features --profile tier_1_core
+python -m scripts.phase4_features.build_baseline_features --profile tier_1
 ```
 
 ## Tests

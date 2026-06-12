@@ -25,11 +25,13 @@ DEFAULT_SESSION_CONFIG = Path("configs/market_sessions.yaml")
 # Discovery profiles process every top-level data/raw/{market}/{year}.parquet file.
 # Static profiles are optional limited subsets for faster smoke tests.
 STATIC_PROFILE_MARKETS = {
-    "tier_1_core": ["CL", "ES", "ZN"],
+    "tier_1": ["CL", "ES", "ZN"],
+    "tier_2": ["CL", "ES", "ZN"],
 }
 
 STATIC_PROFILE_YEARS = {
-    "tier_1_core": [2023, 2024, 2025],
+    "tier_1": [2023, 2024, 2025],
+    "tier_2": list(range(2010, 2026)),
 }
 
 REQUIRED_OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
@@ -110,12 +112,9 @@ DEFAULT_MAX_SYNTHETIC_ROWS_PCT = 2.0
 DEFAULT_MAX_DEGRADED_ROWS_PCT = 1.0
 DEFAULT_MAX_ROLL_WINDOW_ROWS_PCT = 1.0
 DEFAULT_REQUIRE_ROLL_METADATA_PROFILES = {
-    "tier_1_core",
-    "tier_1_core_recent",
-    "tier_1_core_long",
-    "tier_2_universe_recent",
-    "tier_2_universe_long",
-    "tier_2_forward_2026",
+    "tier_1",
+    "tier_2",
+    "tier_3",
 }
 
 
@@ -1459,7 +1458,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=DEFAULT_PROFILE,
         help=(
             "Use all_raw to process every top-level raw market/year file, or "
-            "tier_1_core for the small machinery proof set."
+            "tier_1 for the small recent core proof set."
         ),
     )
     parser.add_argument("--raw-root", default="data/raw")

@@ -1,6 +1,6 @@
 version: 1
 
-default_profile: tier_1_core_recent
+default_profile: tier_1_research
 
 paths:
   raw_root: data/raw
@@ -13,14 +13,52 @@ paths:
   reports_root: reports
 
 defaults:
-  downloaded_years: [2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
+  downloaded_years: &downloaded_years [2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
 
   recent_years: [2023, 2024, 2025]
   long_years: [2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
-  forward_years: [2026]
+  long_research_years: &long_research_years [2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024]
+  forward_years: &forward_years [2026]
 
-  research_years: [2023, 2024]
-  final_holdout_years: [2025]
+  research_years: &research_years [2023, 2024]
+  final_holdout_years: &final_holdout_years [2025]
+
+  core_markets: &core_markets ["CL", "ES", "ZN"]
+  full_markets: &full_markets ["ES", "NQ", "RTY", "YM", "CL", "NG", "RB", "HO", "GC", "SI", "HG", "SR3", "ZN", "ZB", "6A", "6B", "6C", "6E", "6J", "6M", "6N", "6S", "ZC", "ZS", "ZW", "LE", "HE"]
+
+  core_market_families: &core_market_families
+    CL: energy
+    ES: equity_index
+    ZN: rates
+
+  full_market_families: &full_market_families
+    ES: equity_index
+    NQ: equity_index
+    RTY: equity_index
+    YM: equity_index
+    CL: energy
+    NG: energy
+    RB: energy
+    HO: energy
+    GC: metals
+    SI: metals
+    HG: metals
+    SR3: rates
+    ZN: rates
+    ZB: rates
+    6A: fx
+    6B: fx
+    6C: fx
+    6E: fx
+    6J: fx
+    6M: fx
+    6N: fx
+    6S: fx
+    ZC: ag_livestock
+    ZS: ag_livestock
+    ZW: ag_livestock
+    LE: ag_livestock
+    HE: ag_livestock
 
   entry_lag_bars: 1
   target_horizon_bars: 15
@@ -37,11 +75,15 @@ defaults:
   trend_adverse_atr_mult: 1.50
 
   require_roll_metadata_for_profiles:
-    - tier_1_core_recent
-    - tier_1_core_long
-    - tier_2_universe_recent
-    - tier_2_universe_long
-    - tier_2_forward_2026
+    - tier_1_research
+    - tier_1_holdout
+    - tier_1_forward
+    - tier_2_research
+    - tier_2_holdout
+    - tier_2_forward
+    - tier_3_research
+    - tier_3_holdout
+    - tier_3_forward
 
 profile_defaults:
   smoke:
@@ -114,203 +156,139 @@ profile_requirements:
     allow_metadata_optional: true
 
 profiles:
-  tier_0_smoke:
-    description: "Fastest code test: ES only, one year."
+  tier_0:
+    description: "Smoke test: ES, 2025."
     intent: smoke_test
     requirement_set: production_like
     settings_profile: smoke
     markets: ["ES"]
     years: [2025]
-    notes:
-      - "Use for quick code validation only."
-      - "Not enough markets or years for alpha claims."
 
   metadata_optional_test:
-    description: "Test-only profile that permits missing Databento metadata."
+    description: "Unit-test-only relaxed raw schema."
     intent: unit_test_only
     requirement_set: test_only
     settings_profile: smoke
     markets: ["ES"]
     years: [2024]
     forbid_research_use: true
-    notes:
-      - "Only for testing mixed raw schemas."
-      - "Never use for research gates, labels, or WFA."
 
-  tier_1_core_recent:
-    description: "Core proof set on recent data: equity index, energy, and rates."
+  tier_1_research:
+    description: "Core research: CL/ES/ZN, 2023-2024."
     intent: core_recent_research
     requirement_set: production_like
     settings_profile: recent_research
-    markets: ["CL", "ES", "ZN"]
-    years: [2023, 2024, 2025]
-    market_families:
-      CL: energy
-      ES: equity_index
-      ZN: rates
-    notes:
-      - "Primary current research profile."
-      - "Use before adding more markets."
+    markets: *core_markets
+    years: *research_years
+    market_families: *core_market_families
 
-  tier_1_core_long:
-    description: "Core proof set over long history."
+  tier_1_holdout:
+    description: "Core holdout: CL/ES/ZN, 2025."
+    intent: core_final_holdout
+    requirement_set: production_like
+    settings_profile: recent_research
+    markets: *core_markets
+    years: *final_holdout_years
+    forbid_research_use: true
+    market_families: *core_market_families
+
+  tier_1_forward:
+    description: "Core forward: CL/ES/ZN, 2026."
+    intent: core_forward_validation
+    requirement_set: production_like
+    settings_profile: recent_research
+    markets: *core_markets
+    years: *forward_years
+    forbid_research_use: true
+    market_families: *core_market_families
+
+  tier_2_research:
+    description: "Core long research: CL/ES/ZN, 2010-2024."
     intent: core_long_research
     requirement_set: production_like
     settings_profile: long_research
-    markets: ["CL", "ES", "ZN"]
-    years: [2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
-    market_families:
-      CL: energy
-      ES: equity_index
-      ZN: rates
-    notes:
-      - "Use after tier_1_core_recent passes causal base and labels."
-      - "Long history is for robustness, not faster iteration."
+    markets: *core_markets
+    years: *long_research_years
+    market_families: *core_market_families
 
-  tier_2_universe_recent:
-    description: "Exact 27-market GLBX-only real research universe on recent data."
-    intent: tier_2_universe_recent_research
-    requirement_set: production_like
-    settings_profile: recent_research
-    markets: ["ES", "NQ", "RTY", "YM", "CL", "NG", "RB", "HO", "GC", "SI", "HG", "SR3", "ZN", "ZB", "6A", "6B", "6C", "6E", "6J", "6M", "6N", "6S", "ZC", "ZS", "ZW", "LE", "HE"]
-    years: [2023, 2024, 2025]
-    requires_all_market_configs: true
-    requires_cost_configs: true
-    market_families:
-      ES: equity_index
-      NQ: equity_index
-      RTY: equity_index
-      YM: equity_index
-      CL: energy
-      NG: energy
-      RB: energy
-      HO: energy
-      GC: metals
-      SI: metals
-      HG: metals
-      SR3: rates
-      ZN: rates
-      ZB: rates
-      6A: fx
-      6B: fx
-      6C: fx
-      6E: fx
-      6J: fx
-      6M: fx
-      6N: fx
-      6S: fx
-      ZC: ag_livestock
-      ZS: ag_livestock
-      ZW: ag_livestock
-      LE: ag_livestock
-      HE: ag_livestock
-    notes:
-      - "Main real research universe after tier_1_core_recent passes."
-      - "Missing local data must fail stage validation clearly, not shrink the universe."
-
-  tier_2_universe_long:
-    description: "Exact 27-market GLBX-only real research universe over long history."
-    intent: tier_2_universe_long_research
+  tier_2_holdout:
+    description: "Core long holdout: CL/ES/ZN, 2025."
+    intent: core_long_final_holdout
     requirement_set: production_like
     settings_profile: long_research
-    markets: ["ES", "NQ", "RTY", "YM", "CL", "NG", "RB", "HO", "GC", "SI", "HG", "SR3", "ZN", "ZB", "6A", "6B", "6C", "6E", "6J", "6M", "6N", "6S", "ZC", "ZS", "ZW", "LE", "HE"]
-    years: [2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
-    requires_all_market_configs: true
-    requires_cost_configs: true
-    market_families:
-      ES: equity_index
-      NQ: equity_index
-      RTY: equity_index
-      YM: equity_index
-      CL: energy
-      NG: energy
-      RB: energy
-      HO: energy
-      GC: metals
-      SI: metals
-      HG: metals
-      SR3: rates
-      ZN: rates
-      ZB: rates
-      6A: fx
-      6B: fx
-      6C: fx
-      6E: fx
-      6J: fx
-      6M: fx
-      6N: fx
-      6S: fx
-      ZC: ag_livestock
-      ZS: ag_livestock
-      ZW: ag_livestock
-      LE: ag_livestock
-      HE: ag_livestock
-    notes:
-      - "Long-history robustness on the real universe."
-      - "Missing local data must fail stage validation clearly, not shrink the universe."
+    markets: *core_markets
+    years: *final_holdout_years
+    forbid_research_use: true
+    market_families: *core_market_families
 
-  tier_2_forward_2026:
-    description: "Exact 27-market GLBX-only forward/incomplete-year validation only."
-    intent: tier_2_forward_validation
+  tier_2_forward:
+    description: "Core long forward: CL/ES/ZN, 2026."
+    intent: core_long_forward_validation
     requirement_set: production_like
-    settings_profile: production_like
-    markets: ["ES", "NQ", "RTY", "YM", "CL", "NG", "RB", "HO", "GC", "SI", "HG", "SR3", "ZN", "ZB", "6A", "6B", "6C", "6E", "6J", "6M", "6N", "6S", "ZC", "ZS", "ZW", "LE", "HE"]
-    years: [2026]
+    settings_profile: long_research
+    markets: *core_markets
+    years: *forward_years
+    forbid_research_use: true
+    market_families: *core_market_families
+
+  tier_3_research:
+    description: "Full-universe research: 27 markets, 2010-2024."
+    intent: full_universe_long_research
+    requirement_set: production_like
+    settings_profile: long_research
+    markets: *full_markets
+    years: *long_research_years
     requires_all_market_configs: true
     requires_cost_configs: true
-    forbid_feature_selection: true
-    forbid_policy_selection: true
-    market_families:
-      ES: equity_index
-      NQ: equity_index
-      RTY: equity_index
-      YM: equity_index
-      CL: energy
-      NG: energy
-      RB: energy
-      HO: energy
-      GC: metals
-      SI: metals
-      HG: metals
-      SR3: rates
-      ZN: rates
-      ZB: rates
-      6A: fx
-      6B: fx
-      6C: fx
-      6E: fx
-      6J: fx
-      6M: fx
-      6N: fx
-      6S: fx
-      ZC: ag_livestock
-      ZS: ag_livestock
-      ZW: ag_livestock
-      LE: ag_livestock
-      HE: ag_livestock
-    notes:
-      - "Use only after features and policy are frozen."
-      - "Do not tune, select features, or select policy from 2026 results."
+    market_families: *full_market_families
+
+  tier_3_holdout:
+    description: "Full-universe holdout: 27 markets, 2025."
+    intent: full_universe_final_holdout
+    requirement_set: production_like
+    settings_profile: long_research
+    markets: *full_markets
+    years: *final_holdout_years
+    forbid_research_use: true
+    requires_all_market_configs: true
+    requires_cost_configs: true
+    market_families: *full_market_families
+
+  tier_3_forward:
+    description: "Full-universe forward: 27 markets, 2026."
+    intent: full_universe_forward_validation
+    requirement_set: production_like
+    settings_profile: long_research
+    markets: *full_markets
+    years: *forward_years
+    forbid_research_use: true
+    requires_all_market_configs: true
+    requires_cost_configs: true
+    market_families: *full_market_families
 
   all_raw:
-    description: "Discovery mode only: process every data/raw/{market}/{year}.parquet file."
+    description: "Inventory every discovered raw parquet file."
     intent: inventory_only
     requirement_set: inventory_only
     settings_profile: smoke
     discovery: true
     forbid_research_use: true
-    notes:
-      - "Use only to inventory or validate available raw files."
-      - "Never use for research gates, feature selection, or final strategy decisions."
 
 aliases:
-  tier_0: tier_0_smoke
-  tier_1: tier_1_core_recent
-  tier_1_core: tier_1_core_recent
-  tier_1_recent: tier_1_core_recent
-  tier_1_long: tier_1_core_long
-  tier_2: tier_2_universe_recent
-  tier_2_recent: tier_2_universe_recent
-  tier_2_long: tier_2_universe_long
-  tier_2_forward: tier_2_forward_2026
+  tier_0_smoke: tier_0
+  tier_1: tier_1_research
+  tier_1_core: tier_1_research
+  tier_1_core_recent: tier_1_research
+  tier_1_recent: tier_1_research
+  tier_1_final_holdout: tier_1_holdout
+  tier_1_forward_2026: tier_1_forward
+  tier_1_long: tier_2_research
+  tier_1_core_long: tier_2_research
+  tier_2: tier_2_research
+  tier_2_long: tier_2_research
+  tier_2_final_holdout: tier_2_holdout
+  tier_2_forward_2026: tier_2_forward
+  tier_3: tier_3_research
+  tier_3_final_holdout: tier_3_holdout
+  tier_3_forward_2026: tier_3_forward
   all_raw: all_raw

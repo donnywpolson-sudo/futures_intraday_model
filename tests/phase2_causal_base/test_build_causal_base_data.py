@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import sys
@@ -41,19 +41,19 @@ def _write_profile_config(path: Path, *, synthetic_pct: float = 2.0, degraded_pc
                 f"  max_synthetic_rows_pct: {synthetic_pct}",
                 f"  max_degraded_rows_pct: {degraded_pct}",
                 f"  max_roll_window_rows_pct: {roll_pct}",
-                "  require_roll_metadata_for_profiles: [tier_1_core, tier_2_universe_recent, tier_2_universe_long]",
+                "  require_roll_metadata_for_profiles: [tier_1, tier_2, tier_3]",
                 "profiles:",
-                "  tier_0_smoke:",
+                "  tier_0:",
                 "    markets: [ES]",
                 "    years: [2024]",
                 "  metadata_optional_test:",
                 "    markets: [ES]",
                 "    years: [2024]",
-                "  tier_1_core:",
+                "  tier_1:",
                 "    markets: [CL, ES, ZN]",
                 "    years: [2024]",
                 "aliases:",
-                "  tier_1: tier_1_core",
+                "  tier_1_core: tier_1",
             ]
         ),
         encoding="utf-8",
@@ -68,7 +68,7 @@ def _write_profile_defaults_config(path: Path) -> None:
                 "defaults:",
                 "  years: [2024]",
                 "  max_synthetic_gap_minutes: 77",
-                "  require_roll_metadata_for_profiles: [tier_1_core_recent, tier_2_forward_2026]",
+                "  require_roll_metadata_for_profiles: [tier_1, tier_3]",
                 "profile_defaults:",
                 "  smoke:",
                 "    max_synthetic_rows_pct: 5.0",
@@ -83,21 +83,21 @@ def _write_profile_defaults_config(path: Path) -> None:
                 "    max_degraded_rows_pct: 0.5",
                 "    max_roll_window_rows_pct: 1.0",
                 "profiles:",
-                "  tier_0_smoke:",
+                "  tier_0:",
                 "    settings_profile: smoke",
                 "    markets: [ES]",
                 "    years: [2024]",
-                "  tier_1_core_recent:",
+                "  tier_1:",
                 "    settings_profile: recent_research",
                 "    markets: [CL, ES, ZN]",
                 "    years: [2024]",
-                "  tier_2_forward_2026:",
+                "  tier_3:",
                 "    settings_profile: production_like",
                 "    markets: [ES]",
                 "    years: [2026]",
                 "aliases:",
-                "  tier_1: tier_1_core_recent",
-                "  tier_2_forward: tier_2_forward_2026",
+                "  tier_1_core: tier_1",
+                "  tier_2_forward: tier_3",
             ]
         ),
         encoding="utf-8",
@@ -146,7 +146,7 @@ def test_causal_base_config_uses_smoke_profile_thresholds(tmp_path: Path) -> Non
     profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
     _write_profile_defaults_config(profile_config)
 
-    config = load_causal_base_config(profile_config, "tier_0_smoke")
+    config = load_causal_base_config(profile_config, "tier_0")
 
     assert config.max_synthetic_rows_pct == 5.0
     assert config.max_degraded_rows_pct == 5.0
@@ -159,7 +159,7 @@ def test_causal_base_config_resolves_alias_before_threshold_lookup(tmp_path: Pat
     _write_profile_defaults_config(profile_config)
 
     config = load_causal_base_config(profile_config, "tier_1")
-    direct_config = load_causal_base_config(profile_config, "tier_1_core_recent")
+    direct_config = load_causal_base_config(profile_config, "tier_1")
 
     assert config.max_synthetic_rows_pct == 2.0
     assert config.max_degraded_rows_pct == 1.0
@@ -272,7 +272,7 @@ def test_roll_boundary_sets_window_and_blocks_causal_valid(tmp_path: Path) -> No
     result = process_file(
         raw_path,
         out_path,
-        profile="tier_1_core",
+        profile="tier_1",
         roll_window_bars=1,
     )
 
@@ -318,7 +318,7 @@ def test_roll_exclusion_is_not_warn_under_threshold(tmp_path: Path) -> None:
     result = process_file(
         raw_path,
         out_path,
-        profile="tier_1_core",
+        profile="tier_1",
         roll_window_bars=1,
         profile_config_path=profile_config,
     )
@@ -394,7 +394,7 @@ def test_reports_are_written(tmp_path: Path) -> None:
             }
         ],
     )
-    result = process_file(raw_path, out_path, profile="tier_0_smoke")
+    result = process_file(raw_path, out_path, profile="tier_0")
 
     write_reports([result], reports_root, "metadata_optional_test")
 
@@ -512,7 +512,7 @@ def test_calendar_config_removes_hardcoded_calendar_warning(tmp_path: Path) -> N
     result = process_file(
         raw_path,
         out_path,
-        profile="tier_1_core",
+        profile="tier_1",
         session_config_path=session_config,
     )
 
@@ -555,7 +555,7 @@ def test_early_close_changes_minutes_until_session_close(tmp_path: Path) -> None
     result = process_file(
         raw_path,
         out_path,
-        profile="tier_1_core",
+        profile="tier_1",
         session_config_path=session_config,
     )
 
@@ -596,7 +596,7 @@ def test_closed_date_is_excluded(tmp_path: Path) -> None:
     result = process_file(
         raw_path,
         out_path,
-        profile="tier_1_core",
+        profile="tier_1",
         session_config_path=session_config,
     )
 
@@ -680,10 +680,10 @@ def test_profile_resolution_supports_all_raw_and_tier_profile(tmp_path: Path) ->
     )
 
     all_raw = resolve_profile_inputs("all_raw", raw_root)
-    tier = resolve_profile_inputs("tier_1_core", raw_root)
+    tier = resolve_profile_inputs("tier_1", raw_root)
 
     assert [(market, year) for market, year, _ in all_raw] == [("ZN", 2025)]
-    assert len(tier) == 9
+    assert len(tier) == 6
     assert ("CL", 2023) in [(market, year) for market, year, _ in tier]
 
 
@@ -751,7 +751,7 @@ def test_year_boundary_bleed_prevents_boundary_flag_when_adjacent_data_exists(
     )
     _write_raw(raw_root / "2025.parquet", [{**common, "ts_event": "2025-01-01T06:30:00Z"}])
 
-    process_file(raw_root / "2024.parquet", out_path, profile="tier_1_core")
+    process_file(raw_root / "2024.parquet", out_path, profile="tier_1")
 
     output = pd.read_parquet(out_path)
     assert output["boundary_session_flag"].tolist() == [False, False]
@@ -780,7 +780,7 @@ def test_boundary_session_flag_remains_true_when_adjacent_data_missing(tmp_path:
         ],
     )
 
-    process_file(raw_path, out_path, profile="tier_1_core")
+    process_file(raw_path, out_path, profile="tier_1")
 
     output = pd.read_parquet(out_path)
     assert output.loc[0, "boundary_session_flag"] == True
@@ -810,7 +810,7 @@ def test_causal_valid_formula_includes_boundary_session_flag(tmp_path: Path) -> 
         )
     _write_raw(raw_path, rows)
 
-    process_file(raw_path, out_path, profile="tier_1_core")
+    process_file(raw_path, out_path, profile="tier_1")
 
     output = pd.read_parquet(out_path)
     expected = (
@@ -832,8 +832,8 @@ def test_missing_raw_file_manifest_reports_failure_count_and_failures(tmp_path: 
     out_path = tmp_path / "data" / "causally_gated_normalized" / "ZN" / "2024.parquet"
     reports_root = tmp_path / "reports" / "causal_base"
 
-    result = process_file(raw_path, out_path, profile="tier_0_smoke")
-    write_reports([result], reports_root, "tier_1_core")
+    result = process_file(raw_path, out_path, profile="tier_0")
+    write_reports([result], reports_root, "tier_1")
 
     manifest = json.loads((reports_root / "causal_base_manifest.json").read_text())
     item = manifest["outputs"][0]
@@ -882,7 +882,7 @@ def test_synthetic_gap_at_max_limit_is_filled(tmp_path: Path) -> None:
     result = process_file(
         raw_path,
         out_path,
-        profile="tier_1_core",
+        profile="tier_1",
         max_synthetic_gap_minutes=3,
     )
 
@@ -941,7 +941,7 @@ def test_synthetic_gap_above_max_limit_is_not_filled(tmp_path: Path) -> None:
     result = process_file(
         raw_path,
         out_path,
-        profile="tier_1_core",
+        profile="tier_1",
         max_synthetic_gap_minutes=3,
     )
 
@@ -992,7 +992,7 @@ def test_no_synthetic_fill_across_instrument_change_when_metadata_available(
     result = process_file(
         raw_path,
         out_path,
-        profile="tier_1_core",
+        profile="tier_1",
         max_synthetic_gap_minutes=3,
     )
 
@@ -1045,14 +1045,14 @@ def test_synthetic_warning_only_triggers_above_threshold(tmp_path: Path) -> None
     high = process_file(
         raw_path,
         out_path,
-        profile="tier_1_core",
+        profile="tier_1",
         max_synthetic_gap_minutes=3,
         profile_config_path=high_threshold_config,
     )
     low = process_file(
         raw_path,
         tmp_path / "data" / "second" / "ES" / "2024.parquet",
-        profile="tier_1_core",
+        profile="tier_1",
         max_synthetic_gap_minutes=3,
     )
 
@@ -1099,7 +1099,7 @@ def test_no_synthetic_fill_across_session_boundary(tmp_path: Path) -> None:
         ],
     )
 
-    result = process_file(raw_path, out_path, profile="tier_1_core")
+    result = process_file(raw_path, out_path, profile="tier_1")
 
     assert result.synthetic_rows == 0
     output = pd.read_parquet(out_path)
@@ -1166,7 +1166,7 @@ def test_full_databento_schema_file_passes(tmp_path: Path) -> None:
         ],
     )
 
-    result = process_file(raw_path, out_path, profile="tier_1_core")
+    result = process_file(raw_path, out_path, profile="tier_1")
 
     assert result.status == "WARN"
     assert result.raw_schema_variant == "databento_full"
@@ -1197,7 +1197,7 @@ def test_missing_timestamp_fails(tmp_path: Path) -> None:
         ]
     ).to_parquet(raw_path, index=False)
 
-    result = process_file(raw_path, out_path, profile="tier_1_core")
+    result = process_file(raw_path, out_path, profile="tier_1")
 
     assert result.status == "FAIL"
     assert result.missing_required_raw_cols == ["ts_event"]
@@ -1228,7 +1228,7 @@ def test_missing_ohlcv_column_fails(tmp_path: Path) -> None:
         ],
     )
 
-    result = process_file(raw_path, out_path, profile="tier_1_core")
+    result = process_file(raw_path, out_path, profile="tier_1")
 
     assert result.status == "FAIL"
     assert result.missing_required_raw_cols == ["close"]
@@ -1259,7 +1259,7 @@ def test_production_profile_fails_if_data_quality_status_missing(tmp_path: Path)
         ],
     )
 
-    result = process_file(raw_path, out_path, profile="tier_1_core")
+    result = process_file(raw_path, out_path, profile="tier_1")
 
     assert result.status == "FAIL"
     assert result.missing_required_raw_cols == ["data_quality_status"]
@@ -1290,7 +1290,7 @@ def test_production_profile_fails_if_data_quality_degraded_missing(tmp_path: Pat
         ],
     )
 
-    result = process_file(raw_path, out_path, profile="tier_1_core")
+    result = process_file(raw_path, out_path, profile="tier_1")
 
     assert result.status == "FAIL"
     assert result.missing_required_raw_cols == ["data_quality_degraded"]
@@ -1322,7 +1322,7 @@ def test_strict_profile_fails_if_required_metadata_values_are_null(tmp_path: Pat
         ],
     )
 
-    result = process_file(raw_path, out_path, profile="tier_1_core")
+    result = process_file(raw_path, out_path, profile="tier_1")
 
     assert result.status == "FAIL"
     assert result.missing_required_raw_cols == [
@@ -1361,7 +1361,7 @@ def test_strict_profile_fails_if_symbol_is_blank(tmp_path: Path) -> None:
         ],
     )
 
-    result = process_file(raw_path, out_path, profile="tier_1_core")
+    result = process_file(raw_path, out_path, profile="tier_1")
 
     assert result.status == "FAIL"
     assert result.missing_required_raw_cols == ["symbol"]
@@ -1392,7 +1392,7 @@ def test_strict_profile_fails_if_data_quality_status_is_null(tmp_path: Path) -> 
         ],
     )
 
-    result = process_file(raw_path, out_path, profile="tier_1_core")
+    result = process_file(raw_path, out_path, profile="tier_1")
 
     assert result.status == "FAIL"
     assert result.missing_required_raw_cols == ["data_quality_status"]
@@ -1423,7 +1423,7 @@ def test_strict_profile_fails_if_data_quality_degraded_is_null(tmp_path: Path) -
         ],
     )
 
-    result = process_file(raw_path, out_path, profile="tier_1_core")
+    result = process_file(raw_path, out_path, profile="tier_1")
 
     assert result.status == "FAIL"
     assert result.missing_required_raw_cols == ["data_quality_degraded"]
@@ -1540,8 +1540,8 @@ def test_production_profile_fails_if_roll_metadata_missing(tmp_path: Path) -> No
         ],
     )
 
-    result = process_file(raw_path, out_path, profile="tier_1_core")
-    alias_result = process_file(raw_path, alias_out_path, profile="tier_1_core")
+    result = process_file(raw_path, out_path, profile="tier_1")
+    alias_result = process_file(raw_path, alias_out_path, profile="tier_1")
 
     assert result.status == "FAIL"
     assert result.missing_required_raw_cols == ["instrument_id"]
@@ -1591,7 +1591,7 @@ def test_degraded_data_quality_blocks_whole_session_from_causal_valid(tmp_path: 
         ],
     )
 
-    result = process_file(raw_path, out_path, profile="tier_1_core")
+    result = process_file(raw_path, out_path, profile="tier_1")
 
     output = pd.read_parquet(out_path)
     raw_rows = output[output["raw_row_present"]]
@@ -1631,16 +1631,17 @@ def test_degraded_warning_only_triggers_above_threshold(tmp_path: Path) -> None:
     high = process_file(
         raw_path,
         out_path,
-        profile="tier_1_core",
+        profile="tier_1",
         profile_config_path=high_threshold_config,
     )
     low = process_file(
         raw_path,
         tmp_path / "data" / "second" / "ES" / "2024.parquet",
-        profile="tier_1_core",
+        profile="tier_1",
     )
 
     assert high.degraded_threshold_breached is False
     assert not any("degraded threshold breached" in item for item in high.warnings)
     assert low.degraded_threshold_breached is True
     assert any("degraded threshold breached" in item for item in low.warnings)
+

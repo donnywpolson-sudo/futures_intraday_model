@@ -134,17 +134,18 @@ scripts/utilities/               repo safety utilities
 Operational profile model:
 
 ```text
-tier_0 = smoke
-tier_1 = machinery proof set
-tier_2 = real full universe
+tier_0 = ES smoke test
+tier_1 = CL/ES/ZN recent core
+tier_2 = CL/ES/ZN long core
+tier_3 = real full universe
 all_raw = inventory only
 metadata_optional_test = tests only
 ```
 
-`tier_1` is for proving the machinery on CL/ES/ZN. `tier_2` is the actual
-28-market GLBX-only research universe. `tier_1` results do not prove `tier_2`
-performance. Missing Tier-2 data must fail stage validation clearly; the
-pipeline must not shrink the Tier-2 universe to whatever data exists. `all_raw`
+`tier_1` is for frequent CL/ES/ZN iteration. `tier_2` is the same core over
+long history. `tier_3` is the actual 27-market GLBX-only research universe. `tier_1` results do not prove `tier_3`
+performance. Missing Tier-3 data must fail stage validation clearly; the
+pipeline must not shrink the Tier-3 universe to whatever data exists. `all_raw`
 is inventory only and must not feed labels, WFA, gates, or research decisions.
 
 Each market config should include:
@@ -167,7 +168,7 @@ ES
 ZN
 ```
 
-Tier-2 real research universe:
+Tier-3 real research universe:
 
 ```text
 ES NQ RTY YM VX
@@ -203,12 +204,10 @@ alignment.
 Profiles:
 
 ```text
-tier_0_smoke
-tier_1_core_recent
-tier_1_core_long
-tier_2_universe_recent
-tier_2_universe_long
-tier_2_forward_2026
+tier_0
+tier_1
+tier_2
+tier_3
 metadata_optional_test test-only
 all_raw inventory-only
 ```
@@ -225,7 +224,7 @@ This is the realistic operational pipeline. The old 27-stage checklist is preser
 
 | Phase | Name | Main artifact | Purpose |
 |---:|---|---|---|
-| 1A | DBN Archive | `data/raw/{market}/{year}.dbn.zst` | Download and archive immutable Databento OHLCV DBN/DBN.ZST market-year chunks. |
+| 1A | DBN Archive | `data/raw/{market}/{year}.dbn.zst` plus `data/raw/definition/{market}/{year}.dbn.zst` | Download and archive immutable Databento OHLCV and definition DBN/DBN.ZST market-year chunks. |
 | 1B | Raw Parquet Stitch | `data/raw/{market}/{year}.parquet` | Validate OHLCV plus definition DBN chunks and convert market-year OHLCV chunks into immutable parquet. |
 | 2 | Causal Base Builder | `data/causally_gated_normalized/{market}/{year}.parquet` | Validate, session-normalize, roll-flag, synthetic-mark, and causally gate raw bars. |
 | 3 | Target / Label Generation | `data/labeled/{market}/{year}.parquet` | Build next-bar-entry 15-minute labels with cost-aware and intraday validity flags. |
@@ -613,19 +612,19 @@ time remaining is insufficient for entry and exit
 Causal base:
 
 ```bash
-python -m scripts.phase2_causal_base.build_causal_base_data --profile tier_1_core
+python -m scripts.phase2_causal_base.build_causal_base_data --profile tier_1
 ```
 
 Labels:
 
 ```bash
-python -m scripts.phase3_labels.build_labels --profile tier_1_core
+python -m scripts.phase3_labels.build_labels --profile tier_1
 ```
 
 Baseline + L0 regime features:
 
 ```bash
-python -m scripts.phase4_features.build_baseline_features --profile tier_1_core
+python -m scripts.phase4_features.build_baseline_features --profile tier_1
 ```
 
 Tests:
@@ -746,7 +745,7 @@ This phase replaces separate materialized stages for raw manifest, validation, v
 ## Script
 
 ```bash
-python -m scripts.phase2_causal_base.build_causal_base_data --profile tier_1_core
+python -m scripts.phase2_causal_base.build_causal_base_data --profile tier_1
 ```
 
 ## Input
@@ -959,7 +958,7 @@ Create forward-looking labels while preserving realistic intraday execution alig
 ## Script
 
 ```bash
-python -m scripts.phase3_labels.build_labels --profile tier_1_core
+python -m scripts.phase3_labels.build_labels --profile tier_1
 ```
 
 ## Input
@@ -1117,7 +1116,7 @@ Create the initial OHLCV-only modeling matrix with baseline features, L0 regime 
 ## Script
 
 ```bash
-python -m scripts.phase4_features.build_baseline_features --profile tier_1_core
+python -m scripts.phase4_features.build_baseline_features --profile tier_1
 ```
 
 ## Planned paths
@@ -1237,7 +1236,7 @@ modeling cannot consume obvious leakage columns.
 ## Script
 
 ```bash
-python -m scripts.build_column_registry --profile tier_1_core --matrix baseline
+python -m scripts.build_column_registry --profile tier_1 --matrix baseline
 ```
 
 ## Output
@@ -1342,7 +1341,7 @@ Create deterministic walk-forward train/test folds with research/final-holdout s
 ## Script
 
 ```bash
-python -m scripts.build_wfa_splits --profile tier_1_core
+python -m scripts.build_wfa_splits --profile tier_1
 ```
 
 ## Output
@@ -1414,7 +1413,7 @@ out-of-sample predictions for each test fold.
 ## Script
 
 ```bash
-python -m scripts.run_wfa --profile tier_1_core --matrix baseline --run baseline
+python -m scripts.run_wfa --profile tier_1 --matrix baseline --run baseline
 ```
 
 ## Input
@@ -1693,7 +1692,7 @@ returns, ticks, and dollars.
 ## Script
 
 ```bash
-python -m scripts.run_execution_costs --profile tier_1_core --run baseline
+python -m scripts.run_execution_costs --profile tier_1 --run baseline
 ```
 
 ## Input
@@ -1831,7 +1830,7 @@ Evaluate baseline predictions, execution behavior, costs, cost stress, and net e
 ## Script
 
 ```bash
-python -m scripts.build_metrics --profile tier_1_core --run baseline
+python -m scripts.build_metrics --profile tier_1 --run baseline
 ```
 
 ## Output
@@ -1906,7 +1905,7 @@ Decide whether the baseline pipeline is valid and whether the baseline strategy 
 ## Script
 
 ```bash
-python -m scripts.run_gate --profile tier_1_core --run baseline
+python -m scripts.run_gate --profile tier_1 --run baseline
 ```
 
 ## Output
@@ -1961,7 +1960,7 @@ Generate a broader OHLCV-only candidate matrix for feature discovery and selecti
 ## Script
 
 ```bash
-python -m scripts.build_expanded_features --profile tier_1_core
+python -m scripts.build_expanded_features --profile tier_1
 ```
 
 ## Input
@@ -2022,7 +2021,7 @@ Analyze feature behavior, redundancy, stability, leakage risk, and economic usef
 ## Script
 
 ```bash
-python -m scripts.run_feature_discovery --profile tier_1_core
+python -m scripts.run_feature_discovery --profile tier_1
 ```
 
 ## Output
@@ -2077,7 +2076,7 @@ Select features without using OOS test information or final-holdout information.
 ## Script
 
 ```bash
-python -m scripts.run_feature_selection --profile tier_1_core
+python -m scripts.run_feature_selection --profile tier_1
 ```
 
 ## Output
@@ -2129,10 +2128,10 @@ selected execution policy before final evaluation.
 ## Script
 
 ```bash
-python -m scripts.freeze_features --profile tier_1_core
-python -m scripts.freeze_model --profile tier_1_core
-python -m scripts.freeze_calibration --profile tier_1_core
-python -m scripts.freeze_policy --profile tier_1_core
+python -m scripts.freeze_features --profile tier_1
+python -m scripts.freeze_model --profile tier_1
+python -m scripts.freeze_calibration --profile tier_1
+python -m scripts.freeze_policy --profile tier_1
 ```
 
 ## Output
@@ -2188,7 +2187,7 @@ Create the final evaluation split plan while ensuring final test windows are ent
 ## Script
 
 ```bash
-python -m scripts.build_final_splits --profile tier_1_core
+python -m scripts.build_final_splits --profile tier_1
 ```
 
 ## Output
@@ -2222,7 +2221,7 @@ Evaluate the frozen feature set through the same causal WFA process on final hol
 ## Script
 
 ```bash
-python -m scripts.run_wfa --profile tier_1_core --matrix expanded --features data/frozen_features/phase5_v1/feature_cols.json --model-config data/frozen_models/phase5_v1/model_config.yaml --calibration-config data/frozen_models/phase5_v1/calibration_config.yaml --split-plan reports/final_wfa/final_split_plan.json --run final
+python -m scripts.run_wfa --profile tier_1 --matrix expanded --features data/frozen_features/phase5_v1/feature_cols.json --model-config data/frozen_models/phase5_v1/model_config.yaml --calibration-config data/frozen_models/phase5_v1/calibration_config.yaml --split-plan reports/final_wfa/final_split_plan.json --run final
 ```
 
 ## Input
@@ -2331,7 +2330,7 @@ Apply the frozen execution and cost policy to final predictions.
 ## Script
 
 ```bash
-python -m scripts.run_execution_costs --profile tier_1_core --run final --policy data/frozen_features/phase5_v1/policy_config.json
+python -m scripts.run_execution_costs --profile tier_1 --run final --policy data/frozen_features/phase5_v1/policy_config.json
 ```
 
 ## Input
@@ -2378,8 +2377,8 @@ Evaluate final model economics and compare against baseline, placebo, simple-rul
 ## Script
 
 ```bash
-python -m scripts.build_metrics --profile tier_1_core --run final
-python -m scripts.run_placebo_baselines --profile tier_1_core --run final
+python -m scripts.build_metrics --profile tier_1 --run final
+python -m scripts.run_placebo_baselines --profile tier_1 --run final
 ```
 
 ## Output
@@ -2446,7 +2445,7 @@ Evaluate whether the strategy is usable for the user's real constraint set: intr
 ## Script
 
 ```bash
-python -m scripts.run_prop_simulation --profile tier_1_core --run final
+python -m scripts.run_prop_simulation --profile tier_1 --run final
 ```
 
 ## Input
@@ -2519,7 +2518,7 @@ Make the final strategy decision.
 ## Script
 
 ```bash
-python -m scripts.run_gate --profile tier_1_core --run final
+python -m scripts.run_gate --profile tier_1 --run final
 ```
 
 ## Output
@@ -2733,3 +2732,4 @@ Primary changes to implement now:
 ```
 
 Do not add new markets, alternative data, order book data, or hyperparameter tuning yet.
+

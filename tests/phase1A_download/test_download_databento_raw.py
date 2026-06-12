@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import types
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -13,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.phase1A_download.download_databento_raw import (
     CME_DATASET,
     CURRENT_20,
+    DbnArchiveEntry,
     EXTENDED_CME,
     STYPE_IN,
     STYPE_OUT,
@@ -33,6 +35,7 @@ from scripts.phase1A_download.download_databento_raw import (
     execute_download,
     execute_batch_downloads,
     estimate_cost,
+    fetch_conditions_for_archive_entries,
     finalize_plan_provenance,
     first_pending_download,
     iter_range_tasks,
@@ -249,6 +252,8 @@ def test_default_roots_match_public_raw_ingest_contract() -> None:
     args = build_arg_parser().parse_args([])
     assert args.mode == "download-dbn"
     assert args.chunk == "year"
+    assert args.workers == 3
+    assert args.end_date == (date.today() - timedelta(days=1)).isoformat()
     assert args.dbn_root == "data/raw"
     assert args.raw_root == "data/raw"
     assert args.reports_root == "reports/raw_ingest"
@@ -1321,6 +1326,22 @@ def test_convert_dbn_archive_fails_without_quality_metadata(tmp_path: Path) -> N
     assert not output_path.exists()
 
 
+def test_fetch_conditions_for_archive_entries_uses_manifest_dates(tmp_path: Path) -> None:
+    dbn_path = tmp_path / "raw" / "ES" / "2024.dbn.zst"
+    dbn_path.parent.mkdir(parents=True)
+    dbn_path.write_bytes(b"dbn-zstd-placeholder")
+    _write_raw_manifest(dbn_path, schema="ohlcv-1m")
+    client = FakeBatchClient()
+    client.metadata = DegradedMetadata()
+
+    conditions = fetch_conditions_for_archive_entries(
+        client,
+        [DbnArchiveEntry(path=dbn_path, product="ES", year=2024)],
+    )
+
+    assert conditions == {("ES", 2024): {"2024-01-03": "degraded"}}
+
+
 def test_convert_dbn_archive_fails_when_definition_file_missing(tmp_path: Path) -> None:
     dbn_root = tmp_path / "raw"
     dbn_path = dbn_root / "ES" / "2024.dbn.zst"
@@ -1554,12 +1575,15 @@ def test_dry_run_uses_separate_plan_path_and_no_results(
     assert payload["plan_hash"]
     assert payload["output_role"] == "dbn_archive"
     assert payload["pipeline_raw_ready"] is False
-    assert payload["schema"] == "ohlcv-1m"
-    assert payload["schemas"] == ["ohlcv-1m"]
-    assert payload["task_count"] == 1
+    assert payload["schema"] == "all"
+    assert payload["schemas"] == ["ohlcv-1m", "definition"]
+    assert payload["task_count"] == 2
     planned = payload["tasks"]
-    assert [task["schema"] for task in planned] == ["ohlcv-1m"]
+    assert [task["schema"] for task in planned] == ["ohlcv-1m", "definition"]
     assert planned[0]["output_path"].endswith("raw/ES/2024.dbn.zst")
+    assert planned[1]["output_path"].endswith("raw/definition/ES/2024.dbn.zst")
+    assert planned[1]["symbol"] == "ES.FUT"
+    assert planned[1]["stype_in"] == "parent"
 
 
 def REQUIRED_TEST_COLUMNS() -> list[str]:

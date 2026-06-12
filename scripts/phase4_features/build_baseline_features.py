@@ -21,15 +21,21 @@ import yaml
 warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
 
 
-DEFAULT_PROFILE = "tier_1_core"
+DEFAULT_PROFILE = "tier_1"
 DEFAULT_PROFILE_CONFIG = Path("configs/alpha_tiered.yaml")
 DEFAULT_INPUT_ROOT = Path("data/labeled")
 DEFAULT_OUTPUT_ROOT = Path("data/feature_matrices/baseline")
 DEFAULT_REPORTS_ROOT = Path("reports/features_baseline")
 DEFAULT_COSTS_CONFIG = Path("configs/costs.yaml")
 DISCOVERY_PROFILES = {"all_labeled", "all_labeled_data", "all_raw", "all_raw_data"}
-STATIC_PROFILE_MARKETS = {"tier_1_core": ["CL", "ES", "ZN"]}
-STATIC_PROFILE_YEARS = {"tier_1_core": [2023, 2024, 2025]}
+STATIC_PROFILE_MARKETS = {
+    "tier_1": ["CL", "ES", "ZN"],
+    "tier_2": ["CL", "ES", "ZN"],
+}
+STATIC_PROFILE_YEARS = {
+    "tier_1": [2023, 2024, 2025],
+    "tier_2": list(range(2010, 2026)),
+}
 TIER1_MARKETS = ("CL", "ES", "ZN")
 EPS = 1e-12
 PHASE3_LABEL_SEMANTICS_ID = "phase3_labels_v1_next_1m_open_to_15m_open"

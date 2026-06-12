@@ -16,11 +16,7 @@ from scripts.validation.check_tier_2_coverage import (
 
 
 ROOT = Path(__file__).resolve().parents[2]
-TIER_2_PROFILES = (
-    "tier_2_universe_recent",
-    "tier_2_universe_long",
-    "tier_2_forward_2026",
-)
+FULL_UNIVERSE_PROFILE = "tier_3_research"
 REMOVED_PROFILE_NAMES = (
     "tier_2_" + "liquid_recent",
     "tier_2_" + "liquid_long",
@@ -44,7 +40,7 @@ REFERENCE_ROOTS = ("README.md", "build/project_layout.md", "configs", "tests", "
 
 def _namespace(tmp_path: Path, *, config: Path, stage: str = "all") -> Namespace:
     return Namespace(
-        profile="tier_2_universe_recent",
+        profile=FULL_UNIVERSE_PROFILE,
         stage=stage,
         config=str(config),
         session_config=str(ROOT / "configs" / "market_sessions.yaml"),
@@ -52,7 +48,7 @@ def _namespace(tmp_path: Path, *, config: Path, stage: str = "all") -> Namespace
         raw_root=str(tmp_path / "data" / "raw"),
         causal_root=str(tmp_path / "data" / "causally_gated_normalized"),
         labeled_root=str(tmp_path / "data" / "labeled"),
-        report_out=str(tmp_path / "reports" / "validation" / "tier_2_coverage.json"),
+        report_out=str(tmp_path / "reports" / "validation" / "full_universe_coverage.json"),
     )
 
 
@@ -81,28 +77,25 @@ def test_default_profile_exists_aliases_resolve_and_retired_profiles_absent() ->
         assert name not in aliases
 
 
-def test_tier_2_profiles_match_exact_universe_and_years() -> None:
+def test_tier_3_profile_matches_exact_universe_and_years() -> None:
     config = load_yaml(ROOT / "configs" / "alpha_tiered.yaml")
     profiles = config["profiles"]
     aliases = config["aliases"]
 
-    assert resolve_profile_name("tier_2", aliases) == "tier_2_universe_recent"
-    assert resolve_profile_name("tier_2_recent", aliases) == "tier_2_universe_recent"
-    assert resolve_profile_name("tier_2_long", aliases) == "tier_2_universe_long"
-    assert resolve_profile_name("tier_2_forward", aliases) == "tier_2_forward_2026"
+    assert resolve_profile_name("tier_1", aliases) == "tier_1_research"
+    assert resolve_profile_name("tier_2", aliases) == "tier_2_research"
+    assert resolve_profile_name("tier_3", aliases) == "tier_3_research"
+    assert resolve_profile_name("tier_2_long", aliases) == "tier_2_research"
+    assert resolve_profile_name("tier_2_forward", aliases) == "tier_2_forward"
 
-    for profile_name in TIER_2_PROFILES:
-        markets = profiles[profile_name]["markets"]
-        assert markets == TIER_2_UNIVERSE
-        assert len(markets) == 27
-        assert len(set(markets)) == 27
-        assert set(markets).isdisjoint(EXCLUDED)
-
-    assert profiles["tier_2_universe_recent"]["years"] == [2023, 2024, 2025]
-    assert profiles["tier_2_universe_long"]["years"] == list(range(2010, 2026))
-    assert profiles["tier_2_forward_2026"]["years"] == [2026]
-    assert profiles["tier_2_forward_2026"]["forbid_feature_selection"] is True
-    assert profiles["tier_2_forward_2026"]["forbid_policy_selection"] is True
+    markets = profiles[FULL_UNIVERSE_PROFILE]["markets"]
+    assert markets == TIER_2_UNIVERSE
+    assert len(markets) == 27
+    assert len(set(markets)) == 27
+    assert set(markets).isdisjoint(EXCLUDED)
+    assert profiles[FULL_UNIVERSE_PROFILE]["years"] == list(range(2010, 2025))
+    assert profiles["tier_3_holdout"]["years"] == [2025]
+    assert profiles["tier_3_forward"]["years"] == [2026]
 
 
 def test_inventory_and_test_only_profiles_are_blocked_from_research_use() -> None:
@@ -141,7 +134,7 @@ def test_every_tier_2_market_has_family_session_cost_and_tick_coverage() -> None
     sessions = load_yaml(ROOT / "configs" / "market_sessions.yaml")
     costs = load_yaml(ROOT / "configs" / "costs.yaml")
 
-    families = config["profiles"]["tier_2_universe_recent"]["market_families"]
+    families = config["profiles"][FULL_UNIVERSE_PROFILE]["market_families"]
     session_markets = sessions["markets"]
     templates = sessions["session_templates"]
     cost_markets = costs["markets"]
@@ -160,7 +153,7 @@ def test_every_tier_2_market_has_family_session_cost_and_tick_coverage() -> None
 
 def test_coverage_gate_passes_on_tmp_complete_tree(tmp_path: Path) -> None:
     config = ROOT / "configs" / "alpha_tiered.yaml"
-    _touch_complete_tree(tmp_path, [2023, 2024, 2025])
+    _touch_complete_tree(tmp_path, list(range(2010, 2025)))
 
     report = build_report(_namespace(tmp_path, config=config, stage="all"))
 
@@ -172,21 +165,21 @@ def test_coverage_gate_passes_on_tmp_complete_tree(tmp_path: Path) -> None:
 
 def test_coverage_gate_fails_when_one_raw_file_is_missing(tmp_path: Path) -> None:
     config = ROOT / "configs" / "alpha_tiered.yaml"
-    _touch_complete_tree(tmp_path, [2023, 2024, 2025])
-    (tmp_path / "data" / "raw" / "ES" / "2023.parquet").unlink()
+    _touch_complete_tree(tmp_path, list(range(2010, 2025)))
+    (tmp_path / "data" / "raw" / "ES" / "2010.parquet").unlink()
 
     report = build_report(_namespace(tmp_path, config=config, stage="raw"))
 
     assert report["status"] == "FAIL"
-    assert "data/raw/ES/2023.parquet" in report["artifact_checks"]["raw"]["missing"][0]
+    assert "data/raw/ES/2010.parquet" in report["artifact_checks"]["raw"]["missing"][0]
 
 
 def test_coverage_gate_fails_if_excluded_market_is_inserted(tmp_path: Path) -> None:
     payload = load_yaml(ROOT / "configs" / "alpha_tiered.yaml")
-    payload["profiles"]["tier_2_universe_recent"]["markets"] = TIER_2_UNIVERSE + ["UB"]
+    payload["profiles"][FULL_UNIVERSE_PROFILE]["markets"] = TIER_2_UNIVERSE + ["UB"]
     config = tmp_path / "alpha_tiered.yaml"
     config.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-    _touch_complete_tree(tmp_path, [2023, 2024, 2025])
+    _touch_complete_tree(tmp_path, list(range(2010, 2025)))
 
     report = build_report(_namespace(tmp_path, config=config, stage="raw"))
 

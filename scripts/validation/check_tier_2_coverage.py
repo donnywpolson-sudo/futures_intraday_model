@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate tier-2 universe config and artifact coverage."""
+"""Validate full-universe tier config and artifact coverage."""
 
 from __future__ import annotations
 
@@ -109,7 +109,7 @@ def check_profile(config: dict[str, Any], requested_profile: str) -> tuple[dict[
 
     markets = [str(item) for item in profile.get("markets", [])]
     if markets != TIER_2_UNIVERSE:
-        errors.append("profile markets do not exactly match tier-2 universe order and membership")
+        errors.append("profile markets do not exactly match full-universe tier order and membership")
     if len(markets) != 27 or len(set(markets)) != 27:
         errors.append("profile markets must contain exactly 27 unique markets")
 
@@ -277,7 +277,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "profile": profile_info,
         "stage": args.stage,
-        "tier_2_universe": TIER_2_UNIVERSE,
+        "full_universe": TIER_2_UNIVERSE,
         "excluded": EXCLUDED,
         "config_checks": {
             "profile": {"errors": profile_errors, **profile_info},
@@ -303,7 +303,7 @@ def write_report(path: Path, report: dict[str, Any]) -> None:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", default="tier_2_universe_recent")
+    parser.add_argument("--profile", default="tier_3")
     parser.add_argument("--stage", choices=["raw", "causal", "labels", "all"], default="all")
     parser.add_argument("--config", default="configs/alpha_tiered.yaml")
     parser.add_argument("--session-config", default="configs/market_sessions.yaml")
@@ -311,7 +311,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--raw-root", default="data/raw")
     parser.add_argument("--causal-root", default="data/causally_gated_normalized")
     parser.add_argument("--labeled-root", default="data/labeled")
-    parser.add_argument("--report-out", default="reports/validation/tier_2_coverage.json")
+    parser.add_argument("--report-out", default="reports/validation/full_universe_coverage.json")
     return parser
 
 
