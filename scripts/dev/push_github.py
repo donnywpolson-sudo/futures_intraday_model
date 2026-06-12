@@ -43,7 +43,12 @@ RISKY_DIRS = (
 )
 
 
-def run(args: list[str], *, check: bool = True, capture: bool = True) -> subprocess.CompletedProcess[str]:
+def run(
+    args: list[str],
+    *,
+    check: bool = True,
+    capture: bool = True,
+) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(["git", *args], text=True, capture_output=capture)
     if check and result.returncode:
         if result.stdout:
@@ -52,6 +57,13 @@ def run(args: list[str], *, check: bool = True, capture: bool = True) -> subproc
             print(result.stderr)
         sys.exit(result.returncode)
     return result
+
+
+def stop(message: str, detail: str | None = None, exit_code: int = 1) -> None:
+    print(message)
+    if detail:
+        print(detail)
+    sys.exit(exit_code)
 
 
 def repo_root() -> Path:
@@ -63,8 +75,7 @@ def branch_name() -> str:
     result = run(["branch", "--show-current"])
     branch = result.stdout.strip()
     if not branch:
-        print("STOP: detached HEAD. Switch to a branch first.")
-        sys.exit(1)
+        stop("STOP: detached HEAD. Switch to a branch first.")
     return branch
 
 
@@ -93,16 +104,22 @@ def looks_risky(path: str) -> bool:
     )
 
 
+def print_paths(title: str, paths: Iterable[str]) -> None:
+    print(title)
+    for path in paths:
+        print(f"  - {path}")
+
+
 def ensure_origin() -> None:
     result = run(["remote", "get-url", "origin"], check=False)
     if result.returncode or not result.stdout.strip():
-        print("STOP: no origin remote configured.")
-        sys.exit(1)
+        stop("STOP: no origin remote configured.")
     origin = result.stdout.strip()
     if normalize_remote_url(origin) != normalize_remote_url(DEFAULT_REMOTE_URL):
-        print(f"STOP: origin points somewhere unexpected: {origin}")
-        print(f"Expected: {DEFAULT_REMOTE_URL}")
-        sys.exit(1)
+        stop(
+            f"STOP: origin points somewhere unexpected: {origin}",
+            f"Expected: {DEFAULT_REMOTE_URL}",
+        )
     print(f"Origin: {origin}")
 
 
@@ -128,8 +145,7 @@ def run_tests(skip_tests: bool) -> None:
     print("Running tests...")
     result = subprocess.run([sys.executable, "-m", "pytest", "-q"], text=True)
     if result.returncode:
-        print("STOP: tests failed. Not pushing.")
-        sys.exit(result.returncode)
+        stop("STOP: tests failed. Not pushing.", exit_code=result.returncode)
 
 
 def main() -> None:
@@ -147,16 +163,11 @@ def main() -> None:
     lines = status_lines()
     paths = changed_paths(lines)
     if paths:
-        print("Changed files:")
-        for path in paths:
-            print(f"  - {path}")
+        print_paths("Changed files:", paths)
         risky = [path for path in paths if looks_risky(path)]
         if risky:
-            print("STOP: risky data/secret/output files detected:")
-            for path in risky:
-                print(f"  - {path}")
-            print("Add them to .gitignore or remove them before pushing.")
-            sys.exit(1)
+            print_paths("STOP: risky data/secret/output files detected:", risky)
+            stop("Add them to .gitignore or remove them before pushing.")
     else:
         print("No local changes.")
 
@@ -175,8 +186,10 @@ def main() -> None:
     if pull.returncode:
         print(pull.stdout)
         print(pull.stderr)
-        print("STOP: pull/rebase failed. Resolve conflicts, then rerun.")
-        sys.exit(pull.returncode)
+        stop(
+            "STOP: pull/rebase failed. Resolve conflicts, then rerun.",
+            exit_code=pull.returncode,
+        )
     if pull.stdout.strip():
         print(pull.stdout.strip())
 

@@ -13,7 +13,12 @@ from pathlib import Path
 DEFAULT_REMOTE_URL = "https://github.com/donnywpolson-sudo/quant_project.git"
 
 
-def run(args: list[str], *, check: bool = True, capture: bool = True) -> subprocess.CompletedProcess[str]:
+def run(
+    args: list[str],
+    *,
+    check: bool = True,
+    capture: bool = True,
+) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(["git", *args], text=True, capture_output=capture)
     if check and result.returncode:
         if result.stdout:
@@ -22,6 +27,13 @@ def run(args: list[str], *, check: bool = True, capture: bool = True) -> subproc
             print(result.stderr)
         sys.exit(result.returncode)
     return result
+
+
+def stop(message: str, detail: str | None = None, exit_code: int = 1) -> None:
+    print(message)
+    if detail:
+        print(detail)
+    sys.exit(exit_code)
 
 
 def repo_root() -> Path:
@@ -33,17 +45,14 @@ def branch_name() -> str:
     result = run(["branch", "--show-current"])
     branch = result.stdout.strip()
     if not branch:
-        print("STOP: detached HEAD. Switch to a branch first.")
-        sys.exit(1)
+        stop("STOP: detached HEAD. Switch to a branch first.")
     return branch
 
 
 def ensure_clean_worktree() -> None:
     result = run(["status", "--porcelain=v1", "--untracked-files=all"])
     if result.stdout.strip():
-        print("STOP: local changes exist. Push/commit/stash them before pulling.")
-        print(result.stdout)
-        sys.exit(1)
+        stop("STOP: local changes exist. Push/commit/stash them before pulling.", result.stdout)
 
 
 def normalize_remote_url(url: str) -> str:
@@ -56,13 +65,13 @@ def normalize_remote_url(url: str) -> str:
 def ensure_origin() -> None:
     result = run(["remote", "get-url", "origin"], check=False)
     if result.returncode or not result.stdout.strip():
-        print("STOP: no origin remote configured.")
-        sys.exit(1)
+        stop("STOP: no origin remote configured.")
     origin = result.stdout.strip()
     if normalize_remote_url(origin) != normalize_remote_url(DEFAULT_REMOTE_URL):
-        print(f"STOP: origin points somewhere unexpected: {origin}")
-        print(f"Expected: {DEFAULT_REMOTE_URL}")
-        sys.exit(1)
+        stop(
+            f"STOP: origin points somewhere unexpected: {origin}",
+            f"Expected: {DEFAULT_REMOTE_URL}",
+        )
     print(f"Origin: {origin}")
 
 
@@ -76,7 +85,7 @@ def create_backup_branch(branch: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    args = parser.parse_args()
+    parser.parse_args()
 
     root = repo_root()
     branch = branch_name()
