@@ -243,7 +243,7 @@ def test_causal_base_schema_synthetic_and_source_lineage(tmp_path: Path) -> None
     assert raw_rows["boundary_session_flag"].all()
     assert not raw_rows["causal_valid"].any()
     assert raw_rows["causal_invalid_reason"].str.contains("boundary_session").all()
-    assert output["calendar_coverage_status"].eq("regular_session_only").all()
+    assert output["calendar_coverage_status"].eq("config_backed").all()
 
 
 def test_roll_boundary_sets_window_and_blocks_causal_valid(tmp_path: Path) -> None:
@@ -460,10 +460,10 @@ def test_reports_are_written(tmp_path: Path) -> None:
     assert manifest["outputs"][0]["boundary_session_rows"] == 1
     assert manifest["outputs"][0]["causal_valid_rows"] == 0
     assert manifest["outputs"][0]["causal_invalid_rows"] == 1
-    assert manifest["outputs"][0]["session_calendar_status"] == "config_backed_regular_session"
-    assert manifest["outputs"][0]["holiday_calendar_available"] is False
-    assert manifest["outputs"][0]["early_close_calendar_available"] is False
-    assert manifest["outputs"][0]["calendar_coverage_status"] == "regular_session_only"
+    assert manifest["outputs"][0]["session_calendar_status"] == "config_backed"
+    assert manifest["outputs"][0]["holiday_calendar_available"] is True
+    assert manifest["outputs"][0]["early_close_calendar_available"] is True
+    assert manifest["outputs"][0]["calendar_coverage_status"] == "config_backed"
     assert "warnings" in manifest["outputs"][0]
     assert "holiday calendar unavailable: using hardcoded regular session" not in manifest["outputs"][0]["warnings"]
     assert "early-close calendar unavailable: using hardcoded regular session" not in manifest["outputs"][0]["warnings"]
@@ -477,7 +477,7 @@ def test_reports_are_written(tmp_path: Path) -> None:
     assert validation_file["degraded_threshold_breached"] is False
     assert validation_file["raw_schema_policy"] == "strict"
     assert validation_file["raw_schema_missing_cols"] == []
-    assert validation_file["calendar_coverage_status"] == "regular_session_only"
+    assert validation_file["calendar_coverage_status"] == "config_backed"
     assert validation["summary"]["synthetic_gap_threshold_breached_files"] == 0
     assert validation["summary"]["roll_window_threshold_breached_files"] == 0
     assert validation["summary"]["degraded_threshold_breached_files"] == 0
@@ -768,7 +768,7 @@ def test_boundary_session_flag_remains_true_when_adjacent_data_missing(tmp_path:
                 "publisher_id": 1,
                 "instrument_id": 100,
                 "symbol": "ESH4",
-                "ts_event": "2024-01-01T06:30:00Z",
+                "ts_event": "2024-01-03T06:30:00Z",
                 "open": 100.0,
                 "high": 101.0,
                 "low": 99.0,
@@ -1132,7 +1132,7 @@ def test_metadata_with_timestamp_index_file_passes(tmp_path: Path) -> None:
 
     result = process_file(raw_path, out_path, profile="metadata_optional_test")
 
-    assert result.status == "WARN"
+    assert result.status == "PASS"
     assert result.raw_schema_variant == "metadata_no_ts_event"
     assert result.raw_schema_policy == "relaxed"
     assert result.timestamp_source == "dataframe_index"
@@ -1168,7 +1168,7 @@ def test_full_databento_schema_file_passes(tmp_path: Path) -> None:
 
     result = process_file(raw_path, out_path, profile="tier_1")
 
-    assert result.status == "WARN"
+    assert result.status == "PASS"
     assert result.raw_schema_variant == "databento_full"
     assert result.raw_schema_policy == "strict"
     assert result.timestamp_source == "ts_event_column"
