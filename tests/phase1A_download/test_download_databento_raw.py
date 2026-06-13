@@ -42,6 +42,7 @@ from scripts.phase1A_download.download_databento_raw import (
     first_pending_download,
     iter_range_tasks,
     is_fatal_error,
+    is_retryable_stream_error,
     iter_month_ranges,
     iter_year_tasks,
     main,
@@ -419,6 +420,12 @@ def test_condition_is_degraded_classifies_quality_status() -> None:
 def test_is_fatal_error_detects_auth_failure() -> None:
     assert is_fatal_error(RuntimeError("401 auth_authentication_failed")) is True
     assert is_fatal_error(RuntimeError("422 data_start_before_available_start")) is False
+
+
+def test_batch_wait_timeout_is_retryable() -> None:
+    exc = TimeoutError("Timed out waiting for Databento batch job job-test")
+
+    assert is_retryable_stream_error(exc) is True
 
 
 def test_dataset_for_product_uses_glbx_dataset() -> None:

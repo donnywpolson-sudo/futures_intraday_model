@@ -85,6 +85,7 @@ RETRYABLE_STREAM_ERROR_MARKERS = (
     "streaming response",
     "connection reset",
     "read timed out",
+    "timed out",
     "timeout",
     "temporarily unavailable",
     "too many requests",
@@ -552,6 +553,8 @@ def result_has_fatal_error(result: dict[str, object]) -> bool:
 def is_retryable_stream_error(exc: Exception) -> bool:
     if is_fatal_error(exc):
         return False
+    if isinstance(exc, TimeoutError):
+        return True
     text = str(exc).lower()
     return any(marker in text for marker in RETRYABLE_STREAM_ERROR_MARKERS)
 
