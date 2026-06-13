@@ -19,6 +19,7 @@ Tasks, in order:
      - reports/raw_ingest/
    - Make only minimal corrections needed to align docs, code, tests, and behavior.
    - Validate with focused Phase 1A/1B tests and CLI help checks.
+   - After this task is completed and validated, discard CODEX DO NEXT.md.
    - Stop after reporting this task unless I say continue.
 
 2. Fix contract metadata / point-in-time definitions
