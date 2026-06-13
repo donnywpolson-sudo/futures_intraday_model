@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Dry-run planner for migrating legacy Phase 1A DBN archives.
+"""Planner and guarded mover for legacy Phase 1A DBN archives.
 
-This script only reports proposed moves. It never creates, moves, deletes, or
-rewrites data files.
+Default mode only reports proposed moves. Use --apply only after the dry-run
+plan has zero unsafe items.
 """
 
 from __future__ import annotations
@@ -47,6 +47,13 @@ class MigrationItem:
     manifest_path_update_required: bool
 
 
+@dataclass
+class ProtectedParquetItem:
+    path: str
+    action: str
+    unsafe_reasons: list[str]
+
+
 def is_dbn_file(path: Path) -> bool:
     return path.is_file() and (path.name.endswith(".dbn.zst") or path.name.endswith(".dbn"))
 
@@ -83,6 +90,31 @@ def discover_legacy_dbn_files(raw_root: Path) -> list[Path]:
         for market_dir in sorted(path for path in definition_root.iterdir() if path.is_dir()):
             paths.extend(sorted(path for path in market_dir.iterdir() if is_dbn_file(path)))
     return paths
+
+
+def discover_raw_parquet_files(raw_root: Path) -> list[Path]:
+    if not raw_root.exists():
+        return []
+    return sorted(path for path in raw_root.rglob("*.parquet") if path.is_file())
+
+
+def plan_protected_parquet(path: Path, raw_root: Path) -> ProtectedParquetItem:
+    reasons: list[str] = []
+    try:
+        parts = path.relative_to(raw_root).parts
+    except ValueError:
+        parts = path.parts
+    if len(parts) != 2:
+        reasons.append("raw parquet is not under data/raw/{market}/{year}.parquet")
+    elif parts[0] == SCHEMA_PATHS[SCHEMA_DEFINITION]:
+        reasons.append("raw parquet is under the legacy definition archive directory")
+    elif not parts[1].removesuffix(".parquet").isdigit():
+        reasons.append("raw parquet filename is not a numeric year")
+    return ProtectedParquetItem(
+        path=path.as_posix(),
+        action="unsafe" if reasons else "protect",
+        unsafe_reasons=reasons,
+    )
 
 
 def infer_legacy_path_fields(path: Path, raw_root: Path) -> tuple[str | None, str | None, int | None, list[str]]:
@@ -278,13 +310,20 @@ def build_plan(raw_root: Path, target_dbn_root: Path) -> dict[str, Any]:
     sources = discover_legacy_dbn_files(raw_root)
     items = [plan_item(path, raw_root, target_dbn_root) for path in sources]
     mark_duplicate_targets(items)
+    parquet_items = [
+        plan_protected_parquet(path, raw_root)
+        for path in discover_raw_parquet_files(raw_root)
+    ]
+    unsafe_parquet = sum(1 for item in parquet_items if item.action == "unsafe")
     counts = {
         "total": len(items),
         "plan_move": sum(1 for item in items if item.action == "plan_move"),
-        "unsafe": sum(1 for item in items if item.action == "unsafe"),
+        "unsafe": sum(1 for item in items if item.action == "unsafe") + unsafe_parquet,
         "skip_target_exists_same_hash": sum(
             1 for item in items if item.action == "skip_target_exists_same_hash"
         ),
+        "protected_parquet": sum(1 for item in parquet_items if item.action == "protect"),
+        "unsafe_parquet": unsafe_parquet,
     }
     return {
         "dry_run": True,
@@ -292,16 +331,20 @@ def build_plan(raw_root: Path, target_dbn_root: Path) -> dict[str, Any]:
         "target_dbn_root": target_dbn_root.as_posix(),
         "counts": counts,
         "items": [asdict(item) for item in items],
+        "protected_parquet": [asdict(item) for item in parquet_items],
     }
 
 
-def print_text_report(plan: dict[str, Any]) -> None:
+def print_text_report(plan: dict[str, Any], *, summary_only: bool = False) -> None:
     counts = plan["counts"]
     print(
         "DRY_RUN raw_layout_migration "
         f"total={counts['total']} plan_move={counts['plan_move']} "
-        f"unsafe={counts['unsafe']} skip={counts['skip_target_exists_same_hash']}"
+        f"unsafe={counts['unsafe']} skip={counts['skip_target_exists_same_hash']} "
+        f"protected_parquet={counts['protected_parquet']} unsafe_parquet={counts['unsafe_parquet']}"
     )
+    if summary_only:
+        return
     for item in plan["items"]:
         target = item["target_path"] or "<no-target>"
         print(f"{item['action'].upper()} {item['source_path']} -> {target}")
@@ -309,6 +352,61 @@ def print_text_report(plan: dict[str, Any]) -> None:
             print(f"  UNSAFE {reason}")
         if item["manifest_path_update_required"]:
             print("  NOTE manifest path field must be rewritten during an approved migration")
+    for item in plan["protected_parquet"]:
+        print(f"{item['action'].upper()} {item['path']}")
+        for reason in item["unsafe_reasons"]:
+            print(f"  UNSAFE {reason}")
+
+
+def validate_apply_preflight(plan: dict[str, Any]) -> list[str]:
+    failures: list[str] = []
+    if plan["counts"]["unsafe"]:
+        failures.append("plan has unsafe items")
+    for item in plan["items"]:
+        if item["action"] != "plan_move":
+            continue
+        source = Path(item["source_path"])
+        source_manifest = Path(item["source_manifest_path"])
+        target = Path(str(item["target_path"]))
+        target_manifest = Path(str(item["target_manifest_path"]))
+        if not source.is_file():
+            failures.append(f"missing source DBN: {source.as_posix()}")
+        if not source_manifest.is_file():
+            failures.append(f"missing source manifest: {source_manifest.as_posix()}")
+        if target.exists():
+            failures.append(f"target DBN exists: {target.as_posix()}")
+        if target_manifest.exists():
+            failures.append(f"target manifest exists: {target_manifest.as_posix()}")
+    return failures
+
+
+def apply_migration(plan: dict[str, Any]) -> dict[str, Any]:
+    failures = validate_apply_preflight(plan)
+    if failures:
+        return {"applied": False, "moved": 0, "failures": failures}
+    moved = 0
+    for item in plan["items"]:
+        if item["action"] != "plan_move":
+            continue
+        source = Path(item["source_path"])
+        source_manifest = Path(item["source_manifest_path"])
+        target = Path(str(item["target_path"]))
+        target_manifest = Path(str(item["target_manifest_path"]))
+        payload = json.loads(source_manifest.read_text(encoding="utf-8"))
+        payload["path"] = target.as_posix()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source.rename(target)
+        target_manifest.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        source_manifest.unlink()
+        if file_sha256(target) != item["source_sha256"]:
+            failures.append(f"hash changed after move: {target.as_posix()}")
+        written = json.loads(target_manifest.read_text(encoding="utf-8"))
+        if written.get("path") != target.as_posix():
+            failures.append(f"target manifest path was not updated: {target_manifest.as_posix()}")
+        if source.exists() or source_manifest.exists():
+            failures.append(f"source still exists after move: {item['source_path']}")
+        moved += 1
+    return {"applied": not failures, "moved": moved, "failures": failures}
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -316,16 +414,31 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--raw-root", default=DEFAULT_RAW_ROOT.as_posix())
     parser.add_argument("--target-dbn-root", default=DEFAULT_DBN_ROOT.as_posix())
     parser.add_argument("--json", action="store_true", help="Print the dry-run plan as JSON.")
+    parser.add_argument("--summary-only", action="store_true", help="Print only summary counts.")
+    parser.add_argument("--apply", action="store_true", help="Move DBNs and rewrite moved manifests after a clean preflight.")
     return parser
 
 
 def main() -> int:
     args = build_arg_parser().parse_args()
     plan = build_plan(Path(args.raw_root), Path(args.target_dbn_root))
+    if args.apply:
+        result = apply_migration(plan)
+        if args.json:
+            print(json.dumps({"plan": plan, "apply_result": result}, indent=2))
+        else:
+            print_text_report(plan, summary_only=True)
+            print(
+                f"APPLY_RESULT applied={result['applied']} moved={result['moved']} "
+                f"failures={len(result['failures'])}"
+            )
+            for failure in result["failures"]:
+                print(f"  FAILURE {failure}")
+        return 0 if result["applied"] else 1
     if args.json:
         print(json.dumps(plan, indent=2))
     else:
-        print_text_report(plan)
+        print_text_report(plan, summary_only=args.summary_only)
     return 1 if plan["counts"]["unsafe"] else 0
 
 

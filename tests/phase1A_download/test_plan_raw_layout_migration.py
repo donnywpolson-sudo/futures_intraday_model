@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from scripts.phase1A_download.plan_raw_layout_migration import (
+    apply_migration,
     build_plan,
     file_sha256,
     sidecar_manifest_path,
@@ -55,7 +56,14 @@ def test_build_plan_maps_legacy_dbn_and_definition_to_canonical_targets(tmp_path
 
     plan = build_plan(raw_root, target_root)
 
-    assert plan["counts"] == {"total": 2, "plan_move": 2, "unsafe": 0, "skip_target_exists_same_hash": 0}
+    assert plan["counts"] == {
+        "total": 2,
+        "plan_move": 2,
+        "unsafe": 0,
+        "skip_target_exists_same_hash": 0,
+        "protected_parquet": 0,
+        "unsafe_parquet": 0,
+    }
     items = {item["schema"]: item for item in plan["items"]}
     assert items["ohlcv-1m"]["target_path"].endswith(
         "data/dbn/ohlcv_1m/ES/2024/2024-01-01_2025-01-01.dbn.zst"
@@ -65,6 +73,57 @@ def test_build_plan_maps_legacy_dbn_and_definition_to_canonical_targets(tmp_path
     )
     assert items["ohlcv-1m"]["manifest_path_update_required"] is True
     assert items["definition"]["manifest_path_update_required"] is True
+
+
+def test_build_plan_protects_canonical_raw_parquet(tmp_path: Path) -> None:
+    raw_root = tmp_path / "data" / "raw"
+    target_root = tmp_path / "data" / "dbn"
+    parquet = raw_root / "ES" / "2024.parquet"
+    parquet.parent.mkdir(parents=True)
+    parquet.write_bytes(b"parquet")
+
+    plan = build_plan(raw_root, target_root)
+
+    assert plan["counts"]["protected_parquet"] == 1
+    assert plan["counts"]["unsafe_parquet"] == 0
+    assert plan["protected_parquet"][0]["action"] == "protect"
+
+
+def test_build_plan_reports_unsafe_parquet_layout(tmp_path: Path) -> None:
+    raw_root = tmp_path / "data" / "raw"
+    target_root = tmp_path / "data" / "dbn"
+    parquet = raw_root / "definition" / "ES" / "2024.parquet"
+    parquet.parent.mkdir(parents=True)
+    parquet.write_bytes(b"parquet")
+
+    plan = build_plan(raw_root, target_root)
+
+    assert plan["counts"]["unsafe"] == 1
+    assert plan["counts"]["unsafe_parquet"] == 1
+    assert plan["protected_parquet"][0]["action"] == "unsafe"
+
+
+def test_apply_migration_moves_dbn_and_rewrites_manifest_path(tmp_path: Path) -> None:
+    raw_root = tmp_path / "data" / "raw"
+    target_root = tmp_path / "data" / "dbn"
+    source = raw_root / "ES" / "2024.dbn.zst"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"ohlcv")
+    write_manifest(source, schema="ohlcv-1m")
+    old_manifest = sidecar_manifest_path(source)
+
+    plan = build_plan(raw_root, target_root)
+    result = apply_migration(plan)
+
+    target = target_root / "ohlcv_1m" / "ES" / "2024" / "2024-01-01_2025-01-01.dbn.zst"
+    target_manifest = sidecar_manifest_path(target)
+    assert result == {"applied": True, "moved": 1, "failures": []}
+    assert not source.exists()
+    assert not old_manifest.exists()
+    assert target.read_bytes() == b"ohlcv"
+    payload = json.loads(target_manifest.read_text(encoding="utf-8"))
+    assert payload["path"] == target.as_posix()
+    assert payload["file_sha256"] == file_sha256(target)
 
 
 def test_build_plan_reports_target_hash_collision(tmp_path: Path) -> None:
