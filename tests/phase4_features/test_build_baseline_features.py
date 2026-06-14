@@ -19,6 +19,7 @@ from scripts.phase4_features.build_baseline_features import (
     add_intermarket_features,
     process_file,
     resolve_profile_inputs,
+    select_profile_inputs,
     validate_registry,
     write_reports,
 )
@@ -148,6 +149,36 @@ def test_profile_aliases_resolve_for_phase4() -> None:
         ("6E", 2023),
         ("6E", 2024),
     ]
+
+
+def test_phase4_input_filters_and_one_based_shards_are_deterministic(tmp_path: Path) -> None:
+    inputs = [
+        ("ES", 2023, tmp_path / "ES" / "2023.parquet"),
+        ("ES", 2024, tmp_path / "ES" / "2024.parquet"),
+        ("CL", 2023, tmp_path / "CL" / "2023.parquet"),
+        ("CL", 2024, tmp_path / "CL" / "2024.parquet"),
+    ]
+
+    selected, selection = select_profile_inputs(
+        inputs,
+        markets={"ES", "CL"},
+        years={2023, 2024},
+        shard_count=2,
+        shard_index=1,
+    )
+
+    assert [(market, year) for market, year, _ in selected] == [
+        ("ES", 2023),
+        ("CL", 2023),
+    ]
+    assert selection["profile_input_count"] == 4
+    assert selection["selected_input_count"] == 2
+    assert selection["requested_markets"] == ["CL", "ES"]
+    assert selection["requested_years"] == [2023, 2024]
+    assert selection["shard_count"] == 2
+    assert selection["shard_index"] == 1
+    assert selection["selected_markets"] == ["CL", "ES"]
+    assert selection["selected_years"] == [2023]
 
 
 def test_ret_1_uses_only_completed_prior_bar_and_invalidates_bad_prior() -> None:
@@ -442,6 +473,12 @@ def test_process_file_writes_matrix_registries_and_reports(tmp_path: Path) -> No
         input_root=input_root,
         output_root=output_root,
         reports_root=reports_root,
+        input_selection={
+            "profile_input_count": 8,
+            "selected_input_count": 1,
+            "shard_count": 8,
+            "shard_index": 1,
+        },
     )
 
     output = pd.read_parquet(output_root / "ES" / "2024.parquet")
@@ -473,6 +510,10 @@ def test_process_file_writes_matrix_registries_and_reports(tmp_path: Path) -> No
     for payload in (manifest, report):
         assert payload["input_root"] == input_root.as_posix()
         assert payload["output_root"] == output_root.as_posix()
+        assert payload["input_selection"]["profile_input_count"] == 8
+        assert payload["input_selection"]["selected_input_count"] == 1
+        assert payload["input_selection"]["shard_count"] == 8
+        assert payload["input_selection"]["shard_index"] == 1
         assert payload["config_hash"]
         assert payload["input_file_hashes"][input_path.as_posix()] != "missing"
         assert payload["output_file_hashes"][

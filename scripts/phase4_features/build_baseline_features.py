@@ -520,6 +520,61 @@ def resolve_profile_inputs(
     ]
 
 
+def parse_csv_filter(value: str | None, *, cast_type: type = str) -> set[object] | None:
+    if value is None or not value.strip():
+        return None
+    parsed: set[object] = set()
+    for raw_item in value.split(","):
+        item = raw_item.strip()
+        if item:
+            parsed.add(cast_type(item))
+    return parsed
+
+
+def select_profile_inputs(
+    inputs: list[tuple[str, int, Path]],
+    *,
+    markets: set[object] | None = None,
+    years: set[object] | None = None,
+    shard_count: int | None = None,
+    shard_index: int | None = None,
+) -> tuple[list[tuple[str, int, Path]], dict[str, object]]:
+    selected = list(inputs)
+    requested_markets = {str(item) for item in markets} if markets else None
+    requested_years = {int(item) for item in years} if years else None
+    if requested_markets is not None:
+        selected = [item for item in selected if item[0] in requested_markets]
+    if requested_years is not None:
+        selected = [item for item in selected if item[1] in requested_years]
+
+    if (shard_count is None) != (shard_index is None):
+        raise SystemExit("--shard-count and --shard-index must be provided together")
+    if shard_count is not None and shard_index is not None:
+        if shard_count <= 0:
+            raise SystemExit("--shard-count must be positive")
+        if shard_index < 1 or shard_index > shard_count:
+            raise SystemExit("--shard-index must be between 1 and --shard-count")
+        selected = [
+            item
+            for index, item in enumerate(selected)
+            if index % shard_count == shard_index - 1
+        ]
+
+    if not selected:
+        raise SystemExit("No Phase 4 inputs selected after filters/sharding")
+    selection = {
+        "profile_input_count": len(inputs),
+        "selected_input_count": len(selected),
+        "requested_markets": sorted(requested_markets) if requested_markets else None,
+        "requested_years": sorted(requested_years) if requested_years else None,
+        "shard_count": shard_count,
+        "shard_index": shard_index,
+        "selected_markets": sorted({market for market, _, _ in selected}),
+        "selected_years": sorted({year for _, year, _ in selected}),
+    }
+    return selected, selection
+
+
 def load_tick_sizes(costs_config: Path) -> dict[str, float]:
     raw = _read_yaml(costs_config)
     markets = raw.get("markets", {})
@@ -1413,6 +1468,7 @@ def write_reports(
     reports_root: Path,
     profile_config: Path = DEFAULT_PROFILE_CONFIG,
     costs_config: Path = DEFAULT_COSTS_CONFIG,
+    input_selection: Mapping[str, object] | None = None,
 ) -> None:
     reports_root.mkdir(parents=True, exist_ok=True)
     output_root.mkdir(parents=True, exist_ok=True)
@@ -1446,6 +1502,7 @@ def write_reports(
         "reports_root": relative_path(reports_root),
         "markets": sorted({result.market for result in results}),
         "years": sorted({result.year for result in results}),
+        "input_selection": dict(input_selection or {}),
         "feature_count": len(FEATURE_COLS),
         "feature_family_counts": {family: len(features) for family, features in FEATURE_FAMILIES.items()},
         "forbidden_feature_leakage_failures": validate_registry(FEATURE_COLS),
@@ -1468,6 +1525,7 @@ def write_reports(
         "output_root": relative_path(output_root),
         "reports_root": relative_path(reports_root),
         "status": "FAIL" if failures else ("WARN" if warnings else "PASS"),
+        "input_selection": dict(input_selection or {}),
         "summary": {
             "file_count": len(results),
             "pass_count": sum(result.status == "PASS" for result in results),
@@ -1498,6 +1556,28 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reports-root", default=DEFAULT_REPORTS_ROOT.as_posix())
     parser.add_argument("--profile-config", default=DEFAULT_PROFILE_CONFIG.as_posix())
     parser.add_argument("--costs-config", default=DEFAULT_COSTS_CONFIG.as_posix())
+    parser.add_argument(
+        "--markets",
+        default=None,
+        help="Optional comma-separated market roots to process inside the selected profile.",
+    )
+    parser.add_argument(
+        "--years",
+        default=None,
+        help="Optional comma-separated years to process inside the selected profile.",
+    )
+    parser.add_argument(
+        "--shard-count",
+        type=int,
+        default=None,
+        help="Optional number of deterministic Phase 4 shards.",
+    )
+    parser.add_argument(
+        "--shard-index",
+        type=int,
+        default=None,
+        help="Optional 1-based shard index to process.",
+    )
     return parser
 
 
@@ -1506,7 +1586,14 @@ def main() -> int:
     input_root = Path(args.input_root)
     output_root = Path(args.output_root)
     reports_root = Path(args.reports_root)
-    inputs = resolve_profile_inputs(args.profile, input_root, Path(args.profile_config))
+    profile_inputs = resolve_profile_inputs(args.profile, input_root, Path(args.profile_config))
+    inputs, input_selection = select_profile_inputs(
+        profile_inputs,
+        markets=parse_csv_filter(args.markets),
+        years=parse_csv_filter(args.years, cast_type=int),
+        shard_count=args.shard_count,
+        shard_index=args.shard_index,
+    )
     results: list[FeatureResult] = []
     for market, year, input_path in inputs:
         output_path = output_root / market / f"{year}.parquet"
@@ -1532,6 +1619,7 @@ def main() -> int:
         reports_root=reports_root,
         profile_config=Path(args.profile_config),
         costs_config=Path(args.costs_config),
+        input_selection=input_selection,
     )
     return 1 if any(result.status == "FAIL" for result in results) else 0
 
