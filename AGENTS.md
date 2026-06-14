@@ -41,6 +41,19 @@ Quant research/model-building policy:
 * For intraday futures, account for sessions, rolls, tick/point values, spreads, liquidity regime, partial fills, rejected orders, latency assumptions, and capacity before trusting PnL.
 * Add or change risk controls before increasing strategy aggressiveness: max loss, position limits, volatility targeting, kill switch, stale-data guards, and order throttles.
 
+Audited-answer policy:
+
+* For material finance, quant research, trading, model-selection, data-integrity, backtest, execution, or external factual claims, answer as if the output will be audited.
+* Treat a claim as material when it could affect research conclusions, data/model validity, validation results, trading or execution behavior, risk controls, cost/resource spend, external actions, or public/provider/vendor choices.
+* Treat purely mechanical edits, local formatting, typo fixes, narrow status reports, and command-output summaries as non-material unless they make or depend on a material claim.
+* Do not apply the full audited-answer structure to routine mechanical repo edits unless the answer makes or relies on material claims in those areas.
+* Keep audited answers concise. Use the five-part structure only when it materially improves correctness, reproducibility, or decision safety.
+* Separate: verified facts with primary-source citations, inferences from those facts, assumptions, what could be wrong or stale, and what should be verified independently before acting.
+* Primary sources include exchange/regulator/vendor documentation, repo files, raw data, command/test output, local artifacts, and reproducible validation results.
+* Do not treat AI consensus as truth. Cross-model review with GPT, Gemini, Copilot, Claude, or other systems is useful only as adversarial review; final acceptance requires primary evidence or reproducible local checks.
+* Do not recommend a product, trade, service, broker, platform, vendor, data provider, or model unless the reasoning survives without affiliate, advertising, ecosystem, or provider incentive.
+* If primary evidence is unavailable, stale, or inaccessible, say so explicitly and do not present the claim as verified.
+
 Core quant logic is protected:
 
 * labels/targets
