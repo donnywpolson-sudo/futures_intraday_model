@@ -92,6 +92,10 @@ def _write_feature_matrix(root: Path) -> Path:
     return path
 
 
+def _feature_root(tmp_path: Path) -> Path:
+    return tmp_path / "data" / "feature_matrices" / "baseline"
+
+
 def _write_split_plan(
     path: Path,
     *,
@@ -129,7 +133,7 @@ def _write_split_plan(
 
 
 def test_run_wfa_writes_oos_predictions_and_manifest(tmp_path: Path) -> None:
-    input_root = tmp_path / "data" / "feature_matrices"
+    input_root = _feature_root(tmp_path)
     predictions_root = tmp_path / "data" / "predictions"
     reports_root = tmp_path / "reports" / "wfa"
     models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
@@ -153,6 +157,8 @@ def test_run_wfa_writes_oos_predictions_and_manifest(tmp_path: Path) -> None:
     predictions = pd.read_parquet(prediction_path)
 
     assert manifest["failure_count"] == 0
+    assert manifest["input_root"] == input_root.as_posix()
+    assert manifest["output_root"] == predictions_root.as_posix()
     assert manifest["prediction_count"] == 72
     assert set(PREDICTION_COLUMNS).issubset(predictions.columns)
     assert len(predictions) == 24 * 3
@@ -167,7 +173,7 @@ def test_run_wfa_writes_oos_predictions_and_manifest(tmp_path: Path) -> None:
 
 
 def test_report_records_train_only_fit_window_and_feature_mean(tmp_path: Path) -> None:
-    input_root = tmp_path / "data" / "feature_matrices"
+    input_root = _feature_root(tmp_path)
     predictions_root = tmp_path / "data" / "predictions"
     reports_root = tmp_path / "reports" / "wfa"
     models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
@@ -189,10 +195,15 @@ def test_report_records_train_only_fit_window_and_feature_mean(tmp_path: Path) -
     first = report["diagnostics"][0]
     assert pd.Timestamp(first["fit_ts_max"]) < pd.Timestamp(first["score_ts_min"])
     assert first["train_feature_means_sample"]["feature_train_only_marker"] == 10.0
+    classifier = next(item for item in report["diagnostics"] if item["model_id"] == "logistic_direction_v1")
+    assert classifier["dummy_fallback_used"] is False
+    assert classifier["y_train_unique"] == 3
+    assert classifier["y_train_class_counts"] == {"-1": 16, "0": 16, "1": 16}
+    assert classifier["probability_std_by_column"]["p_long"] > 0.0
 
 
 def test_canonical_targets_are_consumed_without_alias_materialization(tmp_path: Path) -> None:
-    input_root = tmp_path / "data" / "feature_matrices"
+    input_root = _feature_root(tmp_path)
     predictions_root = tmp_path / "data" / "predictions"
     reports_root = tmp_path / "reports" / "wfa"
     models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
@@ -219,7 +230,7 @@ def test_canonical_targets_are_consumed_without_alias_materialization(tmp_path: 
 
 @pytest.mark.parametrize("split_group", ["restricted", "forward", "final_holdout"])
 def test_non_research_fold_is_not_fit_by_default(tmp_path: Path, split_group: str) -> None:
-    input_root = tmp_path / "data" / "feature_matrices"
+    input_root = _feature_root(tmp_path)
     predictions_root = tmp_path / "data" / "predictions"
     reports_root = tmp_path / "reports" / "wfa"
     models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
@@ -247,7 +258,7 @@ def test_non_research_fold_is_not_fit_by_default(tmp_path: Path, split_group: st
 
 
 def test_stale_split_plan_without_selection_allowed_fails(tmp_path: Path) -> None:
-    input_root = tmp_path / "data" / "feature_matrices"
+    input_root = _feature_root(tmp_path)
     predictions_root = tmp_path / "data" / "predictions"
     reports_root = tmp_path / "reports" / "wfa"
     models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
@@ -269,6 +280,37 @@ def test_stale_split_plan_without_selection_allowed_fails(tmp_path: Path) -> Non
     assert "missing selection_allowed" in " ".join(manifest["failures"])
 
 
+@pytest.mark.parametrize("split_group", ["restricted", "forward", "final_holdout"])
+def test_non_research_fold_marked_selectable_still_fails(tmp_path: Path, split_group: str) -> None:
+    input_root = _feature_root(tmp_path)
+    predictions_root = tmp_path / "data" / "predictions"
+    reports_root = tmp_path / "reports" / "wfa"
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    split_plan = _write_split_plan(
+        reports_root / "split_plan.json",
+        split_group=split_group,
+        selection_allowed=True,
+    )
+    _write_feature_matrix(input_root)
+
+    manifest = run_wfa(
+        profile="fixture",
+        matrix="baseline",
+        run="baseline",
+        input_root=input_root,
+        split_plan=split_plan,
+        predictions_root=predictions_root,
+        reports_root=reports_root,
+        models_config=models_config,
+    )
+
+    assert manifest["failure_count"] > 0
+    failures = " ".join(manifest["failures"])
+    assert "non-research split_group" in failures
+    assert "no selectable research folds" in failures
+    assert manifest["skipped_fold_count"] == 1
+
+
 def test_convergence_warning_is_a_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     class WarningEstimator:
         def fit(self, x_train: pd.DataFrame, y_train: pd.Series) -> "WarningEstimator":
@@ -280,7 +322,7 @@ def test_convergence_warning_is_a_failure(tmp_path: Path, monkeypatch: pytest.Mo
     def forced_estimator(spec: object, y_train: pd.Series) -> tuple[WarningEstimator, str]:
         return WarningEstimator(), "logistic_regression"
 
-    input_root = tmp_path / "data" / "feature_matrices"
+    input_root = _feature_root(tmp_path)
     predictions_root = tmp_path / "data" / "predictions"
     reports_root = tmp_path / "reports" / "wfa"
     models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
@@ -304,7 +346,7 @@ def test_convergence_warning_is_a_failure(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 def test_constant_classifier_probabilities_fail_without_dummy_fallback(tmp_path: Path) -> None:
-    input_root = tmp_path / "data" / "feature_matrices"
+    input_root = _feature_root(tmp_path)
     predictions_root = tmp_path / "data" / "predictions"
     reports_root = tmp_path / "reports" / "wfa"
     models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
@@ -329,3 +371,8 @@ def test_constant_classifier_probabilities_fail_without_dummy_fallback(tmp_path:
 
     assert manifest["failure_count"] > 0
     assert "near-constant" in " ".join(manifest["failures"])
+    report = json.loads((reports_root / "baseline_wfa_report.json").read_text(encoding="utf-8"))
+    failed = [item for item in report["diagnostics"] if item["status"] == "FAIL"]
+    assert failed
+    assert failed[0]["dummy_fallback_used"] is False
+    assert failed[0]["prediction_std"] <= wfa.CLASSIFIER_COLLAPSE_STD_EPS

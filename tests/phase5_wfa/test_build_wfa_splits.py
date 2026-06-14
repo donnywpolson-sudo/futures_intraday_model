@@ -92,8 +92,12 @@ def _write_matrix(root: Path, *, year: int, start: str) -> Path:
     return path
 
 
+def _feature_root(tmp_path: Path) -> Path:
+    return tmp_path / "data" / "feature_matrices" / "baseline"
+
+
 def test_build_split_plan_enforces_purge_and_writes_manifest(tmp_path: Path) -> None:
-    input_root = tmp_path / "data" / "feature_matrices"
+    input_root = _feature_root(tmp_path)
     reports_root = tmp_path / "reports" / "wfa"
     profile_config = _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
     models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
@@ -108,6 +112,8 @@ def test_build_split_plan_enforces_purge_and_writes_manifest(tmp_path: Path) -> 
     )
 
     assert manifest["failure_count"] == 0
+    assert manifest["input_root"] == input_root.as_posix()
+    assert manifest["output_root"] == reports_root.as_posix()
     assert manifest["fold_count"] > 0
     assert (reports_root / "split_plan.csv").exists()
     assert (reports_root / "split_plan.json").exists()
@@ -129,7 +135,7 @@ def test_build_split_plan_enforces_purge_and_writes_manifest(tmp_path: Path) -> 
 
 
 def test_final_holdout_profile_is_tagged_and_excluded_from_selection(tmp_path: Path) -> None:
-    input_root = tmp_path / "data" / "feature_matrices"
+    input_root = _feature_root(tmp_path)
     reports_root = tmp_path / "reports" / "wfa"
     profile_config = _write_profile_config(
         tmp_path / "configs" / "alpha_tiered.yaml",
@@ -155,7 +161,7 @@ def test_final_holdout_profile_is_tagged_and_excluded_from_selection(tmp_path: P
 
 
 def test_restricted_non_holdout_profile_is_not_tagged_as_forward(tmp_path: Path) -> None:
-    input_root = tmp_path / "data" / "feature_matrices"
+    input_root = _feature_root(tmp_path)
     reports_root = tmp_path / "reports" / "wfa"
     profile_config = _write_profile_config(
         tmp_path / "configs" / "alpha_tiered.yaml",
@@ -179,7 +185,7 @@ def test_restricted_non_holdout_profile_is_not_tagged_as_forward(tmp_path: Path)
 
 
 def test_mixed_research_and_final_holdout_years_fail(tmp_path: Path) -> None:
-    input_root = tmp_path / "data" / "feature_matrices"
+    input_root = _feature_root(tmp_path)
     reports_root = tmp_path / "reports" / "wfa"
     profile_config = _write_profile_config(
         tmp_path / "configs" / "alpha_tiered.yaml",
@@ -202,7 +208,7 @@ def test_mixed_research_and_final_holdout_years_fail(tmp_path: Path) -> None:
 
 
 def test_random_split_policy_is_rejected(tmp_path: Path) -> None:
-    input_root = tmp_path / "data" / "feature_matrices"
+    input_root = _feature_root(tmp_path)
     reports_root = tmp_path / "reports" / "wfa"
     profile_config = _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
     models_config = _write_models_config(tmp_path / "configs" / "models.yaml")

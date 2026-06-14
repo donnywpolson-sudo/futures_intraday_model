@@ -390,7 +390,7 @@ def classifier_collapse_failure(
     elif "trend_danger" in spec.target:
         relevant = probability_cols["p_trend_danger"]
     if _finite_std(np.asarray(relevant, dtype=float)) <= CLASSIFIER_COLLAPSE_STD_EPS:
-        return f"{spec.model_id}: classifier probabilities collapsed to near-constant values"
+        return f"{spec.model_id}: classifier probabilities collapsed to near-constant class-prior values"
     return None
 
 
@@ -501,14 +501,28 @@ def run_wfa(
         if "selection_allowed" not in fold:
             failures.append(f"{fold.get('fold_id', '<unknown>')}: missing selection_allowed")
             continue
-        if fold.get("selection_allowed") is True:
+        split_group = str(fold.get("split_group", ""))
+        if fold.get("selection_allowed") is True and split_group == "research":
             selectable_folds.append(fold)
+        elif fold.get("selection_allowed") is True:
+            failures.append(
+                f"{fold.get('fold_id', '<unknown>')}: non-research split_group {split_group!r} "
+                "cannot be selection_allowed"
+            )
+            skipped_folds.append(
+                {
+                    "fold_id": str(fold.get("fold_id", "<unknown>")),
+                    "market": str(fold.get("market", "")),
+                    "split_group": split_group,
+                    "reason": "selection_allowed true on non-research split",
+                }
+            )
         else:
             skipped_folds.append(
                 {
                     "fold_id": str(fold.get("fold_id", "<unknown>")),
                     "market": str(fold.get("market", "")),
-                    "split_group": str(fold.get("split_group", "")),
+                    "split_group": split_group,
                     "reason": "selection_allowed is false",
                 }
             )
@@ -576,12 +590,20 @@ def run_wfa(
             x_test = test[feature_cols]
             y_train = _target_series(train, spec)
             y_test = _target_series(test, spec)
+            y_train_non_null = pd.Series(y_train).dropna()
+            detail["y_train_unique"] = int(y_train_non_null.nunique())
+            if spec.task == "classification":
+                detail["y_train_class_counts"] = {
+                    str(key): int(value)
+                    for key, value in y_train_non_null.value_counts().sort_index().items()
+                }
             estimator, actual_estimator = _build_estimator(spec, y_train)
+            detail["fit_estimator"] = actual_estimator
+            detail["dummy_fallback_used"] = actual_estimator == "dummy_class_prior"
             with warnings.catch_warnings(record=True) as caught_warnings:
                 warnings.simplefilter("always", ConvergenceWarning)
                 estimator.fit(x_train, y_train)
             detail["warnings"].extend(str(item.message).splitlines()[0] for item in caught_warnings)
-            detail["fit_estimator"] = actual_estimator
             if caught_warnings:
                 detail["status"] = "FAIL"
                 failures.append(
@@ -597,6 +619,7 @@ def run_wfa(
             if spec.task == "regression":
                 raw_pred = estimator.predict(x_test)
                 probability_cols = None
+                detail["prediction_std"] = _finite_std(np.asarray(raw_pred, dtype=float))
             else:
                 raw_pred, probability_cols = _classification_predictions(estimator, spec, x_test)
                 collapse_failure = classifier_collapse_failure(
@@ -606,6 +629,10 @@ def run_wfa(
                     probability_cols=probability_cols,
                 )
                 detail["prediction_std"] = _finite_std(np.asarray(raw_pred, dtype=float))
+                detail["probability_std_by_column"] = {
+                    column: _finite_std(np.asarray(values, dtype=float))
+                    for column, values in probability_cols.items()
+                }
                 if collapse_failure is not None:
                     detail["status"] = "FAIL"
                     detail["warnings"].append(collapse_failure)
@@ -624,7 +651,6 @@ def run_wfa(
                 )
             )
             detail["prediction_rows"] = int(len(test))
-            detail["y_train_unique"] = int(pd.Series(y_train).nunique(dropna=True))
             diagnostics.append(detail)
 
     output_path = predictions_root / run / "oos_predictions.parquet"
@@ -681,6 +707,7 @@ def run_wfa(
         "feature_config_hash": _file_hash_or_missing(resolved_feature_cols_path),
         "split_plan_path": _relative_path(split_plan),
         "input_root": _relative_path(input_root),
+        "output_root": _relative_path(predictions_root),
         "predictions_root": _relative_path(predictions_root),
         "reports_root": _relative_path(reports_root),
         "prediction_path": _relative_path(output_path),

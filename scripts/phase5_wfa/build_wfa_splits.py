@@ -399,6 +399,7 @@ def build_split_plan(
         "profile": plan.requested_profile,
         "resolved_profile": plan.resolved_profile,
         "input_root": _relative_path(input_root),
+        "output_root": _relative_path(reports_root),
         "reports_root": _relative_path(reports_root),
         "markets": plan.markets,
         "years": plan.years,

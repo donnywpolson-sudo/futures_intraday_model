@@ -4,7 +4,7 @@ paths:
   raw_root: data/raw
   causal_base_root: data/causally_gated_normalized
   labeled_root: data/labeled
-  feature_matrix_root: data/feature_matrices
+  feature_matrix_root: data/feature_matrices/baseline
   predictions_root: data/predictions
   executions_root: data/executions
   frozen_features_root: data/frozen_features
