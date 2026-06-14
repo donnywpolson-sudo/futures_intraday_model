@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from argparse import Namespace
 from pathlib import Path
@@ -52,6 +53,9 @@ def _namespace(tmp_path: Path, *, config: Path, stage: str = "all") -> Namespace
         feature_root=str(tmp_path / "data" / "feature_matrices"),
         canonical_feature_root=str(tmp_path / "data" / "feature_matrices" / "baseline"),
         wfa_reports_root=str(tmp_path / "reports" / "wfa"),
+        metrics_root=str(tmp_path / "reports" / "metrics"),
+        model_selection_root=str(tmp_path / "reports" / "model_selection"),
+        artifact_quarantine=str(tmp_path / "reports" / "validation" / "artifact_quarantine.json"),
         report_out=str(tmp_path / "reports" / "validation" / "full_universe_coverage.json"),
     )
 
@@ -167,6 +171,8 @@ def test_coverage_gate_passes_on_tmp_complete_tree(tmp_path: Path) -> None:
     assert report["production_alpha_evidence_ready"] is True
     assert report["artifact_evidence_ready"] is True
     assert report["artifact_evidence_failures"] == []
+    assert report["research_alpha_ready"] is False
+    assert report["model_promotion_allowed"] is False
     assert report["research_pipeline_ready"] is True
     assert report["live_trading_ready"] is False
     assert report["canonical_feature_root"] == (
@@ -177,7 +183,13 @@ def test_coverage_gate_passes_on_tmp_complete_tree(tmp_path: Path) -> None:
     artifact_gate = report["hard_gates"]["artifact_evidence_gate"]
     assert artifact_gate["status"] == "PASS"
     assert artifact_gate["non_canonical_feature_artifact_count"] == 0
+    assert artifact_gate["unquarantined_non_canonical_feature_artifact_count"] == 0
     assert artifact_gate["invalid_prediction_manifest_count"] == 0
+    alpha_gate = report["hard_gates"]["research_alpha_promotion_gate"]
+    assert alpha_gate["status"] == "FAIL"
+    assert alpha_gate["research_alpha_ready"] is False
+    assert alpha_gate["model_promotion_allowed"] is False
+    assert any("missing metrics report" in item for item in alpha_gate["failures"])
     live_gate = report["hard_gates"]["live_trading_readiness_gate"]
     assert live_gate["status"] == "FAIL"
     assert live_gate["contract_execution_mapping_ready"] is False
@@ -225,13 +237,112 @@ def test_non_canonical_feature_artifacts_are_reported_without_failing_research(
     assert report["artifact_evidence_ready"] is False
     assert report["hard_gates"]["artifact_evidence_gate"]["status"] == "FAIL"
     assert report["non_canonical_feature_artifact_count"] == 1
-    assert "non-canonical feature artifacts exist" in report["artifact_evidence_failures"][0]
+    assert report["hard_gates"]["artifact_evidence_gate"][
+        "unquarantined_non_canonical_feature_artifact_count"
+    ] == 1
+    assert "unquarantined non-canonical feature artifacts exist" in report[
+        "artifact_evidence_failures"
+    ][0]
     assert report["non_canonical_feature_artifacts"] == [
         {
             "artifact_path": stale_path.as_posix(),
             "canonical_path": canonical_path.as_posix(),
+            "artifact_sha256": report["non_canonical_feature_artifacts"][0][
+                "artifact_sha256"
+            ],
         }
     ]
+
+
+def test_quarantined_non_canonical_feature_artifact_does_not_block_evidence(
+    tmp_path: Path,
+) -> None:
+    config = ROOT / "configs" / "alpha_tiered.yaml"
+    _touch_complete_tree(tmp_path, list(range(2010, 2025)))
+    feature_root = tmp_path / "data" / "feature_matrices"
+    stale_path = feature_root / "ES" / "2024.parquet"
+    canonical_path = feature_root / "baseline" / "ES" / "2024.parquet"
+    stale_path.parent.mkdir(parents=True, exist_ok=True)
+    canonical_path.parent.mkdir(parents=True, exist_ok=True)
+    stale_path.write_text("old", encoding="utf-8")
+    canonical_path.write_text("new", encoding="utf-8")
+    args = _namespace(tmp_path, config=config, stage="all")
+    stale_hash = hashlib.sha256(stale_path.read_bytes()).hexdigest()
+    Path(args.artifact_quarantine).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.artifact_quarantine).write_text(
+        json.dumps(
+            {
+                "non_canonical_feature_artifacts": [
+                    {
+                        "artifact_path": stale_path.as_posix(),
+                        "canonical_path": canonical_path.as_posix(),
+                        "artifact_sha256": stale_hash,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = build_report(args)
+
+    assert report["status"] == "PASS"
+    assert report["research_pipeline_ready"] is True
+    assert report["artifact_evidence_ready"] is True
+    artifact_gate = report["hard_gates"]["artifact_evidence_gate"]
+    assert artifact_gate["status"] == "PASS"
+    assert artifact_gate["quarantined_non_canonical_feature_artifact_count"] == 1
+    assert artifact_gate["unquarantined_non_canonical_feature_artifact_count"] == 0
+    assert report["quarantined_non_canonical_feature_artifacts"][0]["artifact_sha256"] == stale_hash
+
+
+def test_research_alpha_gate_consumes_phase8_reports(tmp_path: Path) -> None:
+    config = ROOT / "configs" / "alpha_tiered.yaml"
+    _touch_complete_tree(tmp_path, list(range(2010, 2025)))
+    metrics_path = tmp_path / "reports" / "metrics" / "baseline_metrics.json"
+    selection_path = (
+        tmp_path / "reports" / "model_selection" / "model_selection_report.json"
+    )
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    selection_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "failure_count": 0,
+        "research_alpha_ready": False,
+        "model_promotion_allowed": False,
+        "promotion_gate": {
+            "promotion_blockers": [
+                "net_return_dollars -1.0 below minimum 1.0",
+            ],
+        },
+    }
+    metrics_path.write_text(json.dumps(payload), encoding="utf-8")
+    selection_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = build_report(_namespace(tmp_path, config=config, stage="all"))
+
+    alpha_gate = report["hard_gates"]["research_alpha_promotion_gate"]
+    assert report["status"] == "PASS"
+    assert report["research_pipeline_ready"] is True
+    assert report["research_alpha_ready"] is False
+    assert report["model_promotion_allowed"] is False
+    assert alpha_gate["status"] == "FAIL"
+    assert alpha_gate["failure_count"] == 4
+    assert alpha_gate["promotion_blockers"] == [
+        "net_return_dollars -1.0 below minimum 1.0"
+    ]
+
+    payload["research_alpha_ready"] = True
+    payload["model_promotion_allowed"] = True
+    payload["promotion_gate"] = {"promotion_blockers": []}
+    metrics_path.write_text(json.dumps(payload), encoding="utf-8")
+    selection_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = build_report(_namespace(tmp_path, config=config, stage="all"))
+
+    alpha_gate = report["hard_gates"]["research_alpha_promotion_gate"]
+    assert report["research_alpha_ready"] is True
+    assert report["model_promotion_allowed"] is True
+    assert alpha_gate["status"] == "PASS"
 
 
 def test_invalid_prediction_manifest_fails_artifact_evidence_only(tmp_path: Path) -> None:

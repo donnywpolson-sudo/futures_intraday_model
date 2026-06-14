@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -79,6 +80,21 @@ def load_yaml(path: Path) -> dict[str, Any]:
         return {}
     payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return payload if isinstance(payload, dict) else {}
+
+
+def load_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else {}
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def resolve_profile_name(profile: str, aliases: dict[str, str]) -> str:
@@ -319,6 +335,7 @@ def check_non_canonical_feature_artifacts(
                         {
                             "artifact_path": path.as_posix(),
                             "canonical_path": canonical_path.as_posix(),
+                            "artifact_sha256": file_sha256(path),
                         }
                     )
     return {
@@ -327,6 +344,33 @@ def check_non_canonical_feature_artifacts(
         "non_canonical_feature_artifact_count": len(artifacts),
         "non_canonical_feature_artifacts": artifacts,
     }
+
+
+def quarantined_feature_artifacts(
+    artifacts: list[dict[str, str]],
+    quarantine: dict[str, Any],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    raw_entries = quarantine.get("non_canonical_feature_artifacts", [])
+    entries = raw_entries if isinstance(raw_entries, list) else []
+    quarantined: list[dict[str, str]] = []
+    unquarantined: list[dict[str, str]] = []
+    for artifact in artifacts:
+        matched = False
+        for raw_entry in entries:
+            if not isinstance(raw_entry, dict):
+                continue
+            if (
+                raw_entry.get("artifact_path") == artifact["artifact_path"]
+                and raw_entry.get("canonical_path") == artifact["canonical_path"]
+                and raw_entry.get("artifact_sha256") == artifact["artifact_sha256"]
+            ):
+                matched = True
+                break
+        if matched:
+            quarantined.append(artifact)
+        else:
+            unquarantined.append(artifact)
+    return quarantined, unquarantined
 
 
 def check_prediction_evidence_manifests(wfa_reports_root: Path) -> dict[str, Any]:
@@ -383,10 +427,70 @@ def check_prediction_evidence_manifests(wfa_reports_root: Path) -> dict[str, Any
     }
 
 
+def check_research_alpha_promotion(
+    metrics_root: Path,
+    model_selection_root: Path,
+) -> dict[str, Any]:
+    metrics_path = metrics_root / "baseline_metrics.json"
+    selection_path = model_selection_root / "model_selection_report.json"
+    failures: list[str] = []
+    promotion_blockers: list[str] = []
+    metrics: dict[str, Any] = {}
+    selection: dict[str, Any] = {}
+
+    if not metrics_path.exists():
+        failures.append(f"missing metrics report: {metrics_path.as_posix()}")
+    else:
+        try:
+            loaded = json.loads(metrics_path.read_text(encoding="utf-8"))
+            metrics = loaded if isinstance(loaded, dict) else {}
+        except json.JSONDecodeError as exc:
+            failures.append(f"invalid metrics report json: {exc}")
+    if not selection_path.exists():
+        failures.append(f"missing model selection report: {selection_path.as_posix()}")
+    else:
+        try:
+            loaded = json.loads(selection_path.read_text(encoding="utf-8"))
+            selection = loaded if isinstance(loaded, dict) else {}
+        except json.JSONDecodeError as exc:
+            failures.append(f"invalid model selection report json: {exc}")
+
+    for name, payload in (("metrics", metrics), ("model_selection", selection)):
+        if not payload:
+            continue
+        if int(payload.get("failure_count") or 0) > 0:
+            failures.append(f"{name} report failure_count is nonzero")
+        if payload.get("research_alpha_ready") is not True:
+            failures.append(f"{name} report research_alpha_ready is not true")
+        if payload.get("model_promotion_allowed") is not True:
+            failures.append(f"{name} report model_promotion_allowed is not true")
+        gate = payload.get("promotion_gate", {})
+        if isinstance(gate, dict):
+            raw_blockers = gate.get("promotion_blockers", [])
+            if isinstance(raw_blockers, list):
+                promotion_blockers.extend(str(item) for item in raw_blockers)
+
+    return {
+        "name": "research_alpha_requires_positive_net_stable_costed_policy",
+        "status": "FAIL" if failures else "PASS",
+        "metrics_report_path": metrics_path.as_posix(),
+        "model_selection_report_path": selection_path.as_posix(),
+        "research_alpha_ready": not failures,
+        "model_promotion_allowed": not failures,
+        "failure_count": len(failures),
+        "failures": failures,
+        "promotion_blockers": sorted(set(promotion_blockers)),
+    }
+
+
 def build_report(args: argparse.Namespace) -> dict[str, Any]:
     config = load_yaml(Path(args.config))
     session_config = load_yaml(Path(args.session_config))
     cost_config = load_yaml(Path(args.costs_config))
+    artifact_quarantine_path = getattr(
+        args, "artifact_quarantine", "reports/validation/artifact_quarantine.json"
+    )
+    artifact_quarantine = load_json(Path(artifact_quarantine_path))
 
     profile_info, profile_errors = check_profile(config, args.profile)
     session_info, session_errors = check_sessions(session_config)
@@ -404,8 +508,16 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         Path(getattr(args, "feature_root", "data/feature_matrices")),
         Path(getattr(args, "canonical_feature_root", "data/feature_matrices/baseline")),
     )
+    quarantined_features, unquarantined_features = quarantined_feature_artifacts(
+        feature_artifact_warnings["non_canonical_feature_artifacts"],
+        artifact_quarantine,
+    )
     prediction_evidence = check_prediction_evidence_manifests(
         Path(getattr(args, "wfa_reports_root", "reports/wfa"))
+    )
+    research_alpha = check_research_alpha_promotion(
+        Path(getattr(args, "metrics_root", "reports/metrics")),
+        Path(getattr(args, "model_selection_root", "reports/model_selection")),
     )
 
     artifact_errors = []
@@ -422,9 +534,9 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "provisional_cost_markets": provisional_costs,
     }
     artifact_evidence_failures = []
-    if feature_artifact_warnings["non_canonical_feature_artifact_count"]:
+    if unquarantined_features:
         artifact_evidence_failures.append(
-            "non-canonical feature artifacts exist alongside canonical baseline outputs"
+            "unquarantined non-canonical feature artifacts exist alongside canonical baseline outputs"
         )
     artifact_evidence_failures.extend(prediction_evidence["failures"])
     artifact_evidence_gate = {
@@ -435,6 +547,8 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "non_canonical_feature_artifact_count": feature_artifact_warnings[
             "non_canonical_feature_artifact_count"
         ],
+        "quarantined_non_canonical_feature_artifact_count": len(quarantined_features),
+        "unquarantined_non_canonical_feature_artifact_count": len(unquarantined_features),
         "invalid_prediction_manifest_count": prediction_evidence["invalid_manifest_count"],
     }
     live_readiness = check_live_readiness(session_config, cost_config)
@@ -461,9 +575,13 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "non_canonical_feature_artifacts": feature_artifact_warnings[
             "non_canonical_feature_artifacts"
         ],
+        "quarantined_non_canonical_feature_artifacts": quarantined_features,
+        "unquarantined_non_canonical_feature_artifacts": unquarantined_features,
+        "artifact_quarantine_path": artifact_quarantine_path,
         "hard_gates": {
             "production_alpha_cost_gate": production_alpha_cost_gate,
             "artifact_evidence_gate": artifact_evidence_gate,
+            "research_alpha_promotion_gate": research_alpha,
             "live_trading_readiness_gate": {
                 "name": "live_trading_requires_contract_mapping_current_calendar_and_live_fill_model",
                 **live_readiness,
@@ -472,6 +590,8 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "production_alpha_evidence_ready": production_alpha_cost_gate["status"] == "PASS",
         "artifact_evidence_ready": artifact_evidence_gate["status"] == "PASS",
         "artifact_evidence_failures": artifact_evidence_failures,
+        "research_alpha_ready": research_alpha["status"] == "PASS",
+        "model_promotion_allowed": research_alpha["model_promotion_allowed"],
         "research_pipeline_ready": not coverage_errors
         and production_alpha_cost_gate["status"] == "PASS",
         "live_trading_ready": live_readiness["live_trading_ready"],
@@ -500,6 +620,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--feature-root", default="data/feature_matrices")
     parser.add_argument("--canonical-feature-root", default="data/feature_matrices/baseline")
     parser.add_argument("--wfa-reports-root", default="reports/wfa")
+    parser.add_argument("--metrics-root", default="reports/metrics")
+    parser.add_argument("--model-selection-root", default="reports/model_selection")
+    parser.add_argument("--artifact-quarantine", default="reports/validation/artifact_quarantine.json")
     parser.add_argument("--report-out", default="reports/validation/full_universe_coverage.json")
     return parser
 
