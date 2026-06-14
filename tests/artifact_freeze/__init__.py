@@ -1,0 +1,1 @@
+"""Artifact freeze tests."""

@@ -214,8 +214,12 @@ def test_policy_metrics_block_trend_danger_and_fade_filter(tmp_path: Path) -> No
     assert overall["gross_return_dollars"] == 100.0
     assert overall["cost_dollars"] == 20.0
     assert overall["net_return_dollars"] == 80.0
+    assert overall["max_drawdown_dollars"] <= 0.0
+    assert overall["position_change_abs_sum"] >= 2.0
 
     metrics = json.loads(result["metrics_path"].read_text(encoding="utf-8"))
+    phase8_metrics = json.loads(result["phase8_metrics_path"].read_text(encoding="utf-8"))
+    decision = json.loads(result["alpha_promotion_decision_path"].read_text(encoding="utf-8"))
     selection = json.loads(result["model_selection_report_path"].read_text(encoding="utf-8"))
     calibration = json.loads(result["calibration_report_path"].read_text(encoding="utf-8"))
     comparison = pd.read_csv(result["model_comparison_path"])
@@ -225,6 +229,11 @@ def test_policy_metrics_block_trend_danger_and_fade_filter(tmp_path: Path) -> No
     assert metrics["execution_realism"] == "research_round_turn_cost_assumption_only"
     assert metrics["research_alpha_ready"] is True
     assert metrics["model_promotion_allowed"] is True
+    assert phase8_metrics["metrics"]["overall"]["net_return_dollars"] == 80.0
+    assert decision["promoted"] is True
+    assert decision["final_holdout_touched"] is False
+    assert decision["trading_semantics_changed"] is False
+    assert decision["used_final_holdout_for_tuning"] is False
     assert selection["selection_status"] == "NOT_SELECTED_BASELINE_DIAGNOSTICS_ONLY"
     assert selection["selected_model_id"] is None
     assert selection["research_alpha_ready"] is True
@@ -303,3 +312,36 @@ def test_promotion_gate_blocks_bad_alpha_even_when_structure_passes(tmp_path: Pa
     metrics = json.loads(result["metrics_path"].read_text(encoding="utf-8"))
     assert metrics["research_policy_metrics_ready"] is True
     assert metrics["research_alpha_ready"] is False
+
+
+def test_phase8_blocks_final_holdout_predictions_for_selection(tmp_path: Path) -> None:
+    prediction_path = _write_predictions(
+        tmp_path / "data" / "predictions" / "baseline" / "oos_predictions.parquet"
+    )
+    predictions = pd.read_parquet(prediction_path)
+    predictions["split_group"] = "final_holdout"
+    predictions.to_parquet(prediction_path, index=False)
+    manifest_path = _write_manifest(
+        tmp_path / "reports" / "wfa" / "baseline_predictions_manifest.json",
+        prediction_path,
+    )
+    costs_path = _write_costs(tmp_path / "configs" / "costs.yaml")
+    models_path = _write_models(tmp_path / "configs" / "models.yaml")
+
+    result = evaluate_predictions(
+        predictions_path=prediction_path,
+        predictions_manifest=manifest_path,
+        costs_config=costs_path,
+        models_config=models_path,
+        metrics_root=tmp_path / "reports" / "metrics",
+        model_selection_root=tmp_path / "reports" / "model_selection",
+        run="baseline",
+        policy=_policy(),
+        promotion_gate=_promotion_gate(),
+    )
+
+    assert result["failure_count"] > 0
+    decision = json.loads(result["alpha_promotion_decision_path"].read_text(encoding="utf-8"))
+    assert decision["promoted"] is False
+    assert decision["final_holdout_touched"] is True
+    assert "final_holdout predictions cannot be used" in " ".join(decision["failures"])

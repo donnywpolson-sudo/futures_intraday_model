@@ -16,6 +16,7 @@ import pandas as pd
 import yaml
 
 from scripts.validation.model_registry import resolve_purge_bars, validate_purge_policy
+from scripts.validation.check_tier_2_coverage import PRODUCT_AVAILABLE_START_YEAR
 
 
 DEFAULT_PROFILE = "tier_1"
@@ -339,6 +340,7 @@ def build_market_folds(
                     "resolved_purge_bars": policy.resolved_purge_bars,
                     "embargo_bars": policy.embargo_bars,
                     "is_final_holdout": is_final_holdout,
+                    "final_holdout": is_final_holdout,
                     "selection_allowed": split_group == "research",
                 }
             )
@@ -362,8 +364,22 @@ def build_split_plan(
     inputs = resolve_input_paths(plan, input_root)
     frames_by_market: dict[str, list[pd.DataFrame]] = {market: [] for market in plan.markets}
     failures: list[str] = []
+    skipped_inputs: list[dict[str, Any]] = []
+    hashed_inputs: list[Path] = []
 
     for market, year, path in inputs:
+        available_start = PRODUCT_AVAILABLE_START_YEAR.get(market)
+        if available_start is not None and year < available_start:
+            skipped_inputs.append(
+                {
+                    "market": market,
+                    "year": year,
+                    "path": _relative_path(path),
+                    "reason": f"product_unavailable_before_{available_start}",
+                }
+            )
+            continue
+        hashed_inputs.append(path)
         frame, failure = _read_feature_rows(path, market, year)
         if failure is not None:
             failures.append(failure)
@@ -395,7 +411,7 @@ def build_split_plan(
         "script_path": _relative_path(Path(__file__)),
         "script_hash": _file_sha256(Path(__file__)),
         "config_hash": _config_hash([profile_config, models_config]),
-        "input_file_hashes": _file_hash_map(path for _, _, path in inputs),
+        "input_file_hashes": _file_hash_map(hashed_inputs),
         "profile": plan.requested_profile,
         "resolved_profile": plan.resolved_profile,
         "input_root": _relative_path(input_root),
@@ -421,6 +437,8 @@ def build_split_plan(
         },
         "fold_count": len(folds),
         "fold_count_by_market": split_rows.groupby("market").size().to_dict() if folds else {},
+        "skipped_input_count": len(skipped_inputs),
+        "skipped_inputs": skipped_inputs,
         "warning_count": 0,
         "failure_count": len(failures),
         "failures": failures,

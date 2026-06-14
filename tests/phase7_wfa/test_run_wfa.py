@@ -101,13 +101,16 @@ def _write_split_plan(
     *,
     split_group: str = "research",
     selection_allowed: bool | None = True,
+    include_final_holdout_flag: bool = True,
+    markets: list[str] | None = None,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
+    final_holdout = split_group == "final_holdout"
     path.write_text(
         json.dumps(
             {
                 "profile": "fixture",
-                "markets": ["ES"],
+                "markets": markets or ["ES"],
                 "years": [2024],
                 "folds": [
                     {
@@ -118,6 +121,11 @@ def _write_split_plan(
                         "purged_train_end": "2024-01-02T23:00:00+00:00",
                         "test_start": "2024-01-03T00:00:00+00:00",
                         "test_end": "2024-01-03T23:00:00+00:00",
+                        **(
+                            {"is_final_holdout": final_holdout, "final_holdout": final_holdout}
+                            if include_final_holdout_flag
+                            else {}
+                        ),
                         **(
                             {"selection_allowed": selection_allowed}
                             if selection_allowed is not None
@@ -282,6 +290,153 @@ def test_stale_split_plan_without_selection_allowed_fails(tmp_path: Path) -> Non
 
     assert manifest["failure_count"] > 0
     assert "missing selection_allowed" in " ".join(manifest["failures"])
+
+
+def test_stale_split_plan_without_final_holdout_flag_fails(tmp_path: Path) -> None:
+    input_root = _feature_root(tmp_path)
+    predictions_root = tmp_path / "data" / "predictions"
+    reports_root = tmp_path / "reports" / "wfa"
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    split_plan = _write_split_plan(
+        reports_root / "split_plan.json",
+        include_final_holdout_flag=False,
+    )
+    _write_feature_matrix(input_root)
+
+    manifest = run_wfa(
+        profile="fixture",
+        matrix="baseline",
+        run="baseline",
+        input_root=input_root,
+        split_plan=split_plan,
+        predictions_root=predictions_root,
+        reports_root=reports_root,
+        models_config=models_config,
+    )
+
+    assert manifest["failure_count"] > 0
+    assert "missing final_holdout flag" in " ".join(manifest["failures"])
+
+
+def test_split_plan_missing_declared_market_fails_instead_of_single_es_fallback(
+    tmp_path: Path,
+) -> None:
+    input_root = _feature_root(tmp_path)
+    predictions_root = tmp_path / "data" / "predictions"
+    reports_root = tmp_path / "reports" / "wfa"
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    split_plan = _write_split_plan(
+        reports_root / "split_plan.json",
+        markets=["ES", "CL"],
+    )
+    _write_feature_matrix(input_root)
+
+    manifest = run_wfa(
+        profile="fixture",
+        matrix="baseline",
+        run="baseline",
+        input_root=input_root,
+        split_plan=split_plan,
+        predictions_root=predictions_root,
+        reports_root=reports_root,
+        models_config=models_config,
+    )
+
+    assert manifest["failure_count"] > 0
+    assert "selectable research folds missing for markets: ['CL']" in " ".join(
+        manifest["failures"]
+    )
+
+
+def test_explicit_market_filter_is_recorded_and_does_not_trigger_fallback_guard(
+    tmp_path: Path,
+) -> None:
+    input_root = _feature_root(tmp_path)
+    predictions_root = tmp_path / "data" / "predictions"
+    reports_root = tmp_path / "reports" / "wfa"
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    split_plan = _write_split_plan(
+        reports_root / "split_plan.json",
+        markets=["ES", "CL"],
+    )
+    _write_feature_matrix(input_root)
+
+    manifest = run_wfa(
+        profile="fixture",
+        matrix="baseline",
+        run="baseline",
+        input_root=input_root,
+        split_plan=split_plan,
+        predictions_root=predictions_root,
+        reports_root=reports_root,
+        models_config=models_config,
+        markets={"ES"},
+    )
+
+    assert manifest["failure_count"] == 0
+    assert manifest["fold_selection"]["markets"] == ["ES"]
+    assert manifest["unfiltered_selectable_fold_count"] == 1
+
+
+def test_run_wfa_does_not_load_split_plan_skipped_years(tmp_path: Path) -> None:
+    input_root = _feature_root(tmp_path)
+    predictions_root = tmp_path / "data" / "predictions"
+    reports_root = tmp_path / "reports" / "wfa"
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    es_path = _write_feature_matrix(input_root)
+    rty_path = input_root / "RTY" / "2024.parquet"
+    rty_path.parent.mkdir(parents=True, exist_ok=True)
+    frame = pd.read_parquet(es_path)
+    frame["market"] = "RTY"
+    frame["year"] = 2024
+    frame.to_parquet(rty_path, index=False)
+    split_plan = reports_root / "split_plan.json"
+    split_plan.parent.mkdir(parents=True, exist_ok=True)
+    split_plan.write_text(
+        json.dumps(
+            {
+                "profile": "fixture",
+                "markets": ["RTY"],
+                "years": [2010, 2024],
+                "skipped_inputs": [
+                    {
+                        "market": "RTY",
+                        "year": 2010,
+                        "reason": "product_unavailable_before_2017",
+                    }
+                ],
+                "folds": [
+                    {
+                        "market": "RTY",
+                        "fold_id": "RTY_research_0001",
+                        "split_group": "research",
+                        "train_start": "2024-01-01T00:00:00+00:00",
+                        "purged_train_end": "2024-01-02T23:00:00+00:00",
+                        "test_start": "2024-01-03T00:00:00+00:00",
+                        "test_end": "2024-01-03T23:00:00+00:00",
+                        "is_final_holdout": False,
+                        "final_holdout": False,
+                        "selection_allowed": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = run_wfa(
+        profile="fixture",
+        matrix="baseline",
+        run="baseline",
+        input_root=input_root,
+        split_plan=split_plan,
+        predictions_root=predictions_root,
+        reports_root=reports_root,
+        models_config=models_config,
+    )
+
+    assert manifest["failure_count"] == 0
+    assert manifest["prediction_count"] == 72
 
 
 def test_existing_prediction_output_is_flagged_when_current_run_writes_none(

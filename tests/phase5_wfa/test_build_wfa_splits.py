@@ -223,3 +223,57 @@ def test_random_split_policy_is_rejected(tmp_path: Path) -> None:
             profile_config=profile_config,
             models_config=models_config,
         )
+
+
+def test_product_unavailable_years_are_skipped_not_failed(tmp_path: Path) -> None:
+    input_root = _feature_root(tmp_path)
+    reports_root = tmp_path / "reports" / "wfa"
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    profile_config.parent.mkdir(parents=True, exist_ok=True)
+    profile_config.write_text(
+        """
+defaults:
+  final_holdout_years: [2025]
+profile_defaults:
+  tiny:
+    train_days: 2
+    test_days: 1
+    step_days: 1
+profiles:
+  research:
+    intent: test_research
+    settings_profile: tiny
+    markets: ["RTY"]
+    years: [2010, 2017]
+aliases:
+  selected: research
+""".strip(),
+        encoding="utf-8",
+    )
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    path = input_root / "RTY" / "2017.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = 7 * 24 * 60
+    ts = pd.date_range("2017-01-01T00:00:00Z", periods=rows, freq="min", tz="UTC")
+    pd.DataFrame(
+        {
+            "ts": ts,
+            "market": "RTY",
+            "year": 2017,
+            "training_row_valid": True,
+            "target_valid": True,
+            "feature_input_valid": True,
+        }
+    ).to_parquet(path, index=False)
+
+    manifest = build_split_plan(
+        profile="selected",
+        input_root=input_root,
+        reports_root=reports_root,
+        profile_config=profile_config,
+        models_config=models_config,
+    )
+
+    assert manifest["failure_count"] == 0
+    assert manifest["skipped_input_count"] == 1
+    assert manifest["skipped_inputs"][0]["reason"] == "product_unavailable_before_2017"

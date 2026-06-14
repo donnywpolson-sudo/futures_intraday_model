@@ -24,6 +24,7 @@ DEFAULT_COSTS_CONFIG = Path("configs/costs.yaml")
 DEFAULT_MODELS_CONFIG = Path("configs/models.yaml")
 DEFAULT_METRICS_ROOT = Path("reports/metrics")
 DEFAULT_MODEL_SELECTION_ROOT = Path("reports/model_selection")
+DEFAULT_PHASE8_ROOT = Path("reports/phase8")
 DEFAULT_RUN = "baseline"
 NO_CALIBRATION_ID = "no_calibration"
 
@@ -220,6 +221,15 @@ def _sharpe_like(values: pd.Series) -> float | None:
     return float(numeric.mean() / std * math.sqrt(len(numeric)))
 
 
+def _max_drawdown(values: pd.Series) -> float | None:
+    numeric = pd.to_numeric(values, errors="coerce").fillna(0.0)
+    if numeric.empty:
+        return None
+    equity = numeric.cumsum()
+    drawdown = equity - equity.cummax()
+    return float(drawdown.min())
+
+
 def _prediction_manifest_failures(manifest: Mapping[str, Any]) -> list[str]:
     failures: list[str] = []
     if not manifest:
@@ -359,6 +369,8 @@ def build_policy_frame(
 
     point_values: dict[str, float] = {}
     round_turn_costs: dict[str, float] = {}
+    tick_values: dict[str, float] = {}
+    slippage_ticks: dict[str, float] = {}
     missing_cost_markets: list[str] = []
     for market in sorted(str(value) for value in base["market"].dropna().unique()):
         market_costs = costs_by_market.get(market)
@@ -366,19 +378,38 @@ def build_policy_frame(
         round_turn = _safe_float(
             market_costs.get("round_turn_cost_dollars") if market_costs else None
         )
+        tick_value = _safe_float(market_costs.get("tick_value") if market_costs else None)
+        slippage = _safe_float(
+            market_costs.get("slippage_ticks_per_side") if market_costs else None
+        )
         if point_value is None or round_turn is None:
             missing_cost_markets.append(market)
             continue
         point_values[market] = point_value
         round_turn_costs[market] = round_turn
+        if tick_value is not None:
+            tick_values[market] = tick_value
+        if slippage is not None:
+            slippage_ticks[market] = slippage
     if missing_cost_markets:
         failures.append(f"missing usable costs for markets: {missing_cost_markets}")
 
     base["point_value"] = base["market"].map(point_values)
     base["round_turn_cost_dollars"] = base["market"].map(round_turn_costs)
+    base["tick_value"] = base["market"].map(tick_values)
+    base["slippage_ticks_per_side"] = base["market"].map(slippage_ticks).fillna(0.0)
     base["price_move"] = base["execution_close"] - base["execution_open"]
     base["gross_dollars"] = base["position"] * base["price_move"] * base["point_value"]
     base["cost_dollars"] = np.where(base["position"].ne(0), base["round_turn_cost_dollars"], 0.0)
+    base["slippage_cost_dollars"] = np.where(
+        base["position"].ne(0),
+        2.0 * base["slippage_ticks_per_side"] * base["tick_value"].fillna(0.0),
+        0.0,
+    )
+    base["commission_cost_dollars"] = np.maximum(
+        base["cost_dollars"] - base["slippage_cost_dollars"],
+        0.0,
+    )
     base["net_dollars"] = base["gross_dollars"] - base["cost_dollars"]
     base["trade_count"] = base["position"].ne(0).astype(int)
     base["long_count"] = base["position"].eq(1).astype(int)
@@ -403,6 +434,9 @@ def _policy_summary(frame: pd.DataFrame, scope: str, key_values: Mapping[str, An
     gross = _sum_float(frame["gross_dollars"]) if "gross_dollars" in frame else 0.0
     cost = _sum_float(frame["cost_dollars"]) if "cost_dollars" in frame else 0.0
     net = _sum_float(frame["net_dollars"]) if "net_dollars" in frame else 0.0
+    position_changes = (
+        float(frame["position_change_abs"].sum()) if "position_change_abs" in frame else 0.0
+    )
     trade_count = int(frame["trade_count"].sum()) if "trade_count" in frame else 0
     winning_trades = frame.loc[frame["trade_count"].eq(1), "net_dollars"] if trade_count else pd.Series(dtype=float)
     return {
@@ -420,10 +454,18 @@ def _policy_summary(frame: pd.DataFrame, scope: str, key_values: Mapping[str, An
         "avg_net_dollars_per_row": _mean_float(frame["net_dollars"]) if "net_dollars" in frame else None,
         "gross_sharpe_like": _sharpe_like(frame["gross_dollars"]) if "gross_dollars" in frame else None,
         "net_sharpe_like": _sharpe_like(frame["net_dollars"]) if "net_dollars" in frame else None,
+        "max_drawdown_dollars": _max_drawdown(frame["net_dollars"]) if "net_dollars" in frame else None,
         "cost_drag_to_abs_gross": cost / abs(gross) if abs(gross) > 0.0 else None,
         "turnover_per_bar": (
-            float(frame["position_change_abs"].sum()) / rows if rows and "position_change_abs" in frame else None
+            position_changes / rows if rows and "position_change_abs" in frame else None
         ),
+        "position_change_abs_sum": position_changes,
+        "slippage_cost_dollars": _sum_float(frame["slippage_cost_dollars"])
+        if "slippage_cost_dollars" in frame
+        else 0.0,
+        "commission_cost_dollars": _sum_float(frame["commission_cost_dollars"])
+        if "commission_cost_dollars" in frame
+        else 0.0,
         "round_turns_per_bar": float(trade_count) / rows if rows else None,
         "win_rate_net_positive": (
             float(winning_trades.gt(0.0).mean()) if trade_count and not winning_trades.empty else None
@@ -694,8 +736,10 @@ def evaluate_predictions(
     run: str,
     policy: PolicyConfig,
     promotion_gate: PromotionGateConfig,
+    phase8_root: Path | None = None,
 ) -> dict[str, Any]:
     generated_at = datetime.now(timezone.utc).isoformat()
+    resolved_phase8_root = phase8_root or metrics_root.parent / "phase8"
     failures: list[str] = []
     warnings: list[str] = []
     models = _read_yaml(models_config)
@@ -708,6 +752,12 @@ def evaluate_predictions(
     else:
         predictions = pd.read_parquet(predictions_path)
         failures.extend(_validate_prediction_columns(predictions))
+    final_holdout_touched = (
+        "split_group" in predictions.columns
+        and predictions["split_group"].astype(str).eq("final_holdout").any()
+    )
+    if final_holdout_touched:
+        failures.append("final_holdout predictions cannot be used for Phase 8 selection or calibration")
 
     if failures:
         policy_frame = pd.DataFrame()
@@ -739,12 +789,15 @@ def evaluate_predictions(
 
     metrics_root.mkdir(parents=True, exist_ok=True)
     model_selection_root.mkdir(parents=True, exist_ok=True)
+    resolved_phase8_root.mkdir(parents=True, exist_ok=True)
     metrics_json_path = metrics_root / f"{run}_metrics.json"
     metrics_csv_path = metrics_root / f"{run}_metrics.csv"
     turnover_path = metrics_root / "turnover_diagnostics.csv"
     model_comparison_path = model_selection_root / "model_comparison.csv"
     model_selection_report_path = model_selection_root / "model_selection_report.json"
     calibration_report_path = model_selection_root / "calibration_report.json"
+    phase8_metrics_path = resolved_phase8_root / "metrics.json"
+    alpha_decision_path = resolved_phase8_root / "alpha_promotion_decision.json"
 
     if not summary_frame.empty:
         summary_frame.to_csv(metrics_csv_path, index=False)
@@ -786,6 +839,8 @@ def evaluate_predictions(
         "research_policy_metrics_ready": len(failures) == 0,
         "research_alpha_ready": promotion_gate_report["research_alpha_ready"],
         "model_promotion_allowed": promotion_gate_report["model_promotion_allowed"],
+        "final_holdout_touched": bool(final_holdout_touched),
+        "trading_semantics_changed": False,
         "promotion_gate": promotion_gate_report,
         "live_execution_ready": False,
         "execution_realism": "research_round_turn_cost_assumption_only",
@@ -797,6 +852,7 @@ def evaluate_predictions(
         "metrics": policy_metrics,
     }
     _write_json(metrics_json_path, policy_report)
+    _write_json(phase8_metrics_path, policy_report)
 
     selection_report = {
         "generated_at": generated_at,
@@ -854,6 +910,33 @@ def evaluate_predictions(
         **calibration_report,
     }
     _write_json(calibration_report_path, calibration_payload)
+    market_summaries = [
+        item
+        for item in policy_metrics.get("summaries", [])
+        if isinstance(item, Mapping) and item.get("scope") == "market"
+    ]
+    fold_summaries = [
+        item
+        for item in policy_metrics.get("summaries", [])
+        if isinstance(item, Mapping) and item.get("scope") == "fold"
+    ]
+    alpha_decision = {
+        "generated_at": generated_at,
+        "run": run,
+        "promoted": bool(promotion_gate_report["model_promotion_allowed"]),
+        "blockers": promotion_gate_report["promotion_blockers"],
+        "costed_oos": policy_metrics["overall"],
+        "markets": market_summaries,
+        "folds": fold_summaries,
+        "final_holdout_touched": bool(final_holdout_touched),
+        "used_final_holdout_for_tuning": False,
+        "trading_semantics_changed": False,
+        "failure_count": len(failures),
+        "warning_count": len(warnings),
+        "failures": failures,
+        "warnings": warnings,
+    }
+    _write_json(alpha_decision_path, alpha_decision)
     return {
         "failure_count": len(failures),
         "warning_count": len(warnings),
@@ -865,6 +948,8 @@ def evaluate_predictions(
         "model_comparison_path": model_comparison_path,
         "model_selection_report_path": model_selection_report_path,
         "calibration_report_path": calibration_report_path,
+        "phase8_metrics_path": phase8_metrics_path,
+        "alpha_promotion_decision_path": alpha_decision_path,
         "policy_metrics": policy_metrics,
         "promotion_gate": promotion_gate_report,
     }
@@ -878,6 +963,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--models-config", default=DEFAULT_MODELS_CONFIG.as_posix())
     parser.add_argument("--metrics-root", default=DEFAULT_METRICS_ROOT.as_posix())
     parser.add_argument("--model-selection-root", default=DEFAULT_MODEL_SELECTION_ROOT.as_posix())
+    parser.add_argument("--phase8-root", default=DEFAULT_PHASE8_ROOT.as_posix())
     parser.add_argument("--run", default=DEFAULT_RUN)
     parser.add_argument("--long-short-margin", type=float, default=0.05)
     parser.add_argument("--min-fade-success", type=float, default=0.50)
@@ -916,6 +1002,7 @@ def main() -> int:
         models_config=Path(args.models_config),
         metrics_root=Path(args.metrics_root),
         model_selection_root=Path(args.model_selection_root),
+        phase8_root=Path(args.phase8_root),
         run=args.run,
         policy=PolicyConfig(
             long_short_margin=args.long_short_margin,

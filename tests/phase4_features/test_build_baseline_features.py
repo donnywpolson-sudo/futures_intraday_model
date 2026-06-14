@@ -23,6 +23,10 @@ from scripts.phase4_features.build_baseline_features import (
     validate_registry,
     write_reports,
 )
+from scripts.phase4_features.audit_feature_coverage import (
+    build_coverage_audit,
+    write_coverage_audit,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -519,4 +523,54 @@ def test_process_file_writes_matrix_registries_and_reports(tmp_path: Path) -> No
         assert payload["output_file_hashes"][
             (output_root / "ES" / "2024.parquet").as_posix()
         ] != "missing"
+
+
+def test_phase4_coverage_audit_compares_labeled_to_canonical_features(tmp_path: Path) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    input_root = tmp_path / "data" / "labeled"
+    output_root = tmp_path / "data" / "feature_matrices" / "baseline"
+    reports_root = tmp_path / "reports" / "phase4"
+    profile_config.parent.mkdir(parents=True, exist_ok=True)
+    profile_config.write_text(
+        """
+paths:
+  labeled_root: data/labeled
+  feature_matrix_root: data/feature_matrices/baseline
+profiles:
+  tier_3_research:
+    markets: ["ES", "RTY"]
+    years: [2010, 2017]
+aliases:
+  tier_3: tier_3_research
+""".strip(),
+        encoding="utf-8",
+    )
+    for market, year in (("ES", 2010), ("RTY", 2017)):
+        path = input_root / market / f"{year}.parquet"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _frame(5, market=market, year=year).to_parquet(path, index=False)
+    feature_path = output_root / "ES" / "2010.parquet"
+    feature_path.parent.mkdir(parents=True, exist_ok=True)
+    _frame(5).to_parquet(feature_path, index=False)
+
+    audit = build_coverage_audit(
+        profile="tier_3",
+        input_root=input_root,
+        output_root=output_root,
+        profile_config=profile_config,
+        collect_row_counts=True,
+    )
+    json_path, csv_path = write_coverage_audit(audit, reports_root)
+
+    assert audit["available_labeled"] == 2
+    assert audit["existing_features"] == 1
+    assert audit["missing_features"] == 1
+    assert audit["missing_tier3_count"] == 1
+    assert audit["skipped_count"] == 1
+    assert audit["skipped_reasons"] == ["product_unavailable_before_2017"]
+    missing = [row for row in audit["rows"] if row["status"] == "missing_feature"]
+    assert missing[0]["market"] == "RTY"
+    assert missing[0]["year"] == 2017
+    assert json_path.exists()
+    assert csv_path.exists()
 

@@ -332,6 +332,13 @@ def _valid_bool(df: pd.DataFrame, column: str, default: bool) -> pd.Series:
     return df[column].fillna(default).astype(bool)
 
 
+def _parse_csv_filter(value: str | None) -> set[str] | None:
+    if value is None:
+        return None
+    selected = {item.strip() for item in value.split(",") if item.strip()}
+    return selected or None
+
+
 def _target_series(df: pd.DataFrame, spec: ModelSpec) -> pd.Series:
     if spec.target not in df.columns:
         return pd.Series(np.nan, index=df.index)
@@ -364,7 +371,7 @@ def _build_estimator(spec: ModelSpec, y_train: pd.Series) -> tuple[Any, str]:
             [
                 ("imputer", SimpleImputer(strategy="median", keep_empty_features=True)),
                 ("scaler", StandardScaler()),
-                ("model", LogisticRegression(max_iter=200)),
+                ("model", LogisticRegression(max_iter=1000)),
             ]
         ),
         "logistic_regression",
@@ -521,6 +528,58 @@ def _fold_masks(frame: pd.DataFrame, fold: Mapping[str, Any], y: pd.Series) -> t
     return train_mask, test_mask
 
 
+def _validate_fold_fields(fold: Mapping[str, Any]) -> list[str]:
+    fold_id = str(fold.get("fold_id", "<unknown>"))
+    failures: list[str] = []
+    required = [
+        "market",
+        "fold_id",
+        "split_group",
+        "selection_allowed",
+        "train_start",
+        "purged_train_end",
+        "test_start",
+        "test_end",
+    ]
+    missing = [field for field in required if field not in fold]
+    if missing:
+        if "selection_allowed" in missing:
+            failures.append(f"{fold_id}: missing selection_allowed")
+        failures.append(f"{fold_id}: missing required fold fields: {missing}")
+        return failures
+    if "is_final_holdout" not in fold and "final_holdout" not in fold:
+        failures.append(f"{fold_id}: missing final_holdout flag")
+    if not str(fold.get("market", "")).strip():
+        failures.append(f"{fold_id}: market is empty")
+    split_group = str(fold.get("split_group", ""))
+    if split_group not in {"research", "restricted", "forward", "final_holdout"}:
+        failures.append(f"{fold_id}: invalid split_group {split_group!r}")
+    if not isinstance(fold.get("selection_allowed"), bool):
+        failures.append(f"{fold_id}: selection_allowed must be boolean")
+
+    final_holdout = bool(fold.get("is_final_holdout", fold.get("final_holdout", False)))
+    if split_group == "final_holdout" and not final_holdout:
+        failures.append(f"{fold_id}: final_holdout split must have final_holdout flag true")
+    if split_group != "final_holdout" and final_holdout:
+        failures.append(f"{fold_id}: non-final split cannot have final_holdout flag true")
+
+    try:
+        train_start = _utc(fold["train_start"])
+        purged_train_end = _utc(fold["purged_train_end"])
+        test_start = _utc(fold["test_start"])
+        test_end = _utc(fold["test_end"])
+    except Exception as exc:
+        failures.append(f"{fold_id}: invalid fold timestamp fields: {exc}")
+        return failures
+    if train_start > purged_train_end:
+        failures.append(f"{fold_id}: train_start after purged_train_end")
+    if purged_train_end >= test_start:
+        failures.append(f"{fold_id}: purged_train_end must be before test_start")
+    if test_start > test_end:
+        failures.append(f"{fold_id}: test_start after test_end")
+    return failures
+
+
 def run_wfa(
     *,
     profile: str,
@@ -533,9 +592,19 @@ def run_wfa(
     models_config: Path,
     feature_cols_path: Path | None = None,
     max_folds: int | None = None,
+    markets: set[str] | None = None,
+    fold_shard_count: int | None = None,
+    fold_shard_index: int | None = None,
 ) -> dict[str, Any]:
     if matrix != "baseline":
         raise SystemExit("only baseline matrix is supported in the initial WFA runner")
+    if (fold_shard_count is None) != (fold_shard_index is None):
+        raise SystemExit("--fold-shard-count and --fold-shard-index must be provided together")
+    if fold_shard_count is not None and fold_shard_index is not None:
+        if fold_shard_count <= 0:
+            raise SystemExit("--fold-shard-count must be positive")
+        if fold_shard_index < 1 or fold_shard_index > fold_shard_count:
+            raise SystemExit("--fold-shard-index must be between 1 and --fold-shard-count")
     feature_cols, resolved_feature_cols_path = load_feature_cols(input_root, feature_cols_path)
     model_specs, model_config = load_model_specs(models_config)
     split_manifest = _read_json(split_plan)
@@ -549,8 +618,9 @@ def run_wfa(
         if not isinstance(fold, Mapping):
             failures.append("invalid fold entry")
             continue
-        if "selection_allowed" not in fold:
-            failures.append(f"{fold.get('fold_id', '<unknown>')}: missing selection_allowed")
+        fold_failures = _validate_fold_fields(fold)
+        if fold_failures:
+            failures.extend(fold_failures)
             continue
         split_group = str(fold.get("split_group", ""))
         if fold.get("selection_allowed") is True and split_group == "research":
@@ -579,13 +649,43 @@ def run_wfa(
             )
     if not selectable_folds:
         failures.append("no selectable research folds in split plan")
+    unfiltered_selectable_count = len(selectable_folds)
+    if markets is not None:
+        selectable_folds = [fold for fold in selectable_folds if str(fold.get("market")) in markets]
+    if fold_shard_count is not None and fold_shard_index is not None:
+        selectable_folds = [
+            fold
+            for index, fold in enumerate(selectable_folds)
+            if index % fold_shard_count == fold_shard_index - 1
+        ]
+    if (markets is not None or fold_shard_count is not None) and not selectable_folds:
+        failures.append("no selectable research folds after explicit WFA filters")
+    manifest_markets = split_manifest.get("markets", [])
+    if selectable_folds and isinstance(manifest_markets, list) and markets is None:
+        selected_markets = {str(fold.get("market")) for fold in selectable_folds}
+        missing_markets = sorted(str(market) for market in manifest_markets if str(market) not in selected_markets)
+        if missing_markets:
+            failures.append(f"selectable research folds missing for markets: {missing_markets}")
     if max_folds is not None:
         selectable_folds = selectable_folds[:max_folds]
 
+    skipped_years_by_market: dict[str, set[int]] = {}
+    skipped_inputs = split_manifest.get("skipped_inputs", [])
+    if isinstance(skipped_inputs, list):
+        for item in skipped_inputs:
+            if not isinstance(item, Mapping):
+                continue
+            try:
+                skipped_years_by_market.setdefault(str(item["market"]), set()).add(int(item["year"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+    manifest_years = [int(year) for year in split_manifest["years"]]
     years_by_market: dict[str, set[int]] = {}
     for fold in selectable_folds:
         market = str(fold["market"])
-        years_by_market.setdefault(market, set()).update(int(year) for year in split_manifest["years"])
+        years_by_market.setdefault(market, set()).update(
+            year for year in manifest_years if year not in skipped_years_by_market.get(market, set())
+        )
 
     source_columns = _required_source_columns(feature_cols, model_specs)
     frames: dict[str, pd.DataFrame] = {}
@@ -752,6 +852,13 @@ def run_wfa(
         "models": [spec.__dict__ for spec in model_specs],
         "feature_count": len(feature_cols),
         "fold_count": len(selectable_folds),
+        "unfiltered_selectable_fold_count": unfiltered_selectable_count,
+        "fold_selection": {
+            "markets": sorted(markets) if markets is not None else None,
+            "fold_shard_count": fold_shard_count,
+            "fold_shard_index": fold_shard_index,
+            "max_folds": max_folds,
+        },
         "skipped_fold_count": len(skipped_folds),
         "skipped_folds": skipped_folds,
         "prediction_count": prediction_count,
@@ -781,6 +888,13 @@ def run_wfa(
         "model_ids": [spec.model_id for spec in model_specs],
         "target_names": [spec.target for spec in model_specs],
         "fold_count": len(selectable_folds),
+        "unfiltered_selectable_fold_count": unfiltered_selectable_count,
+        "fold_selection": {
+            "markets": sorted(markets) if markets is not None else None,
+            "fold_shard_count": fold_shard_count,
+            "fold_shard_index": fold_shard_index,
+            "max_folds": max_folds,
+        },
         "skipped_fold_count": len(skipped_folds),
         "skipped_folds": skipped_folds,
         "prediction_count": prediction_count,
@@ -812,6 +926,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--models-config", default=DEFAULT_MODELS_CONFIG.as_posix())
     parser.add_argument("--feature-cols", default=None)
     parser.add_argument("--max-folds", type=int, default=None)
+    parser.add_argument("--markets", default=None)
+    parser.add_argument("--fold-shard-count", type=int, default=None)
+    parser.add_argument("--fold-shard-index", type=int, default=None)
     return parser
 
 
@@ -828,6 +945,9 @@ def main() -> int:
         models_config=Path(args.models_config),
         feature_cols_path=Path(args.feature_cols) if args.feature_cols else None,
         max_folds=args.max_folds,
+        markets=_parse_csv_filter(args.markets),
+        fold_shard_count=args.fold_shard_count,
+        fold_shard_index=args.fold_shard_index,
     )
     status = "FAIL" if manifest["failure_count"] else "PASS"
     print(
