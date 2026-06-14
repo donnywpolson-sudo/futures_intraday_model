@@ -1390,6 +1390,38 @@ def test_fetch_conditions_for_archive_entries_uses_manifest_dates(tmp_path: Path
     assert conditions == {("ES", 2024): {"2024-01-03": "degraded"}}
 
 
+def test_fetch_conditions_for_archive_entries_caches_matching_date_ranges(tmp_path: Path) -> None:
+    entries = []
+    for market in ["ES", "NQ"]:
+        dbn_path = tmp_path / "raw" / market / "2024.dbn.zst"
+        dbn_path.parent.mkdir(parents=True)
+        dbn_path.write_bytes(b"dbn-zstd-placeholder")
+        _write_raw_manifest(dbn_path, schema="ohlcv-1m", market=market)
+        entries.append(DbnArchiveEntry(path=dbn_path, product=market, year=2024))
+
+    class CountingMetadata(DegradedMetadata):
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def get_dataset_condition(self, **kwargs: object) -> list[dict[str, object]]:
+            self.calls.append(kwargs)
+            return super().get_dataset_condition(**kwargs)
+
+    metadata = CountingMetadata()
+    client = FakeBatchClient()
+    client.metadata = metadata
+
+    conditions = fetch_conditions_for_archive_entries(client, entries)
+
+    assert len(metadata.calls) == 1
+    assert metadata.calls[0]["start_date"] == "2024-01-01"
+    assert metadata.calls[0]["end_date"] == "2024-12-31"
+    assert conditions == {
+        ("ES", 2024): {"2024-01-03": "degraded"},
+        ("NQ", 2024): {"2024-01-03": "degraded"},
+    }
+
+
 def test_convert_dbn_archive_fails_when_definition_file_missing(tmp_path: Path) -> None:
     dbn_root = tmp_path / "raw"
     dbn_path = dbn_root / "ES" / "2024.dbn.zst"
@@ -1637,7 +1669,8 @@ def test_convert_dbn_archive_writes_canonical_raw_parquet_and_manifest(
     assert results[0]["price_scale_policy"]
     assert results[0]["data_quality_source"] == "databento_metadata.get_dataset_condition"
     assert results[0]["vendor_quality_available"] is True
-    assert results[0]["definition_point_in_time_enforced"] is False
+    assert results[0]["definition_point_in_time_enforced"] is True
+    assert results[0]["warnings"] == []
     assert out["raw_symbol"].tolist() == ["ESH4", "ESH4"]
     assert out["tick_size"].tolist() == [0.25, 0.25]
 
@@ -1656,6 +1689,78 @@ def test_convert_dbn_archive_writes_canonical_raw_parquet_and_manifest(
     assert manifest["price_scale_policy"]
     assert manifest["input_hashes"][dbn_path.as_posix()]
     assert manifest["output_hashes"][output_path.as_posix()]
+
+
+def test_convert_dbn_archive_uses_point_in_time_definition_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ohlcv_df = pd.DataFrame(
+        {
+            "ts_event": [
+                pd.Timestamp("2024-01-02T15:00:00Z"),
+                pd.Timestamp("2024-01-04T15:00:00Z"),
+            ],
+            "open": [1.0, 1.0],
+            "high": [2.0, 2.0],
+            "low": [0.5, 0.5],
+            "close": [1.5, 1.5],
+            "volume": [10, 10],
+            "rtype": [33, 33],
+            "publisher_id": [1, 1],
+            "instrument_id": [100, 100],
+            "symbol": ["ESH4", "ESH4"],
+        }
+    )
+    definition_df = pd.DataFrame(
+        {
+            "ts_event": [
+                pd.Timestamp("2024-01-01T00:00:00Z"),
+                pd.Timestamp("2024-01-03T00:00:00Z"),
+            ],
+            "instrument_id": [100, 100],
+            "raw_symbol": ["ESH4", "ESM4"],
+            "min_price_increment": [0.25, 0.50],
+            "contract_multiplier": [50.0, 5.0],
+        }
+    )
+    dbn_root = tmp_path / "raw"
+    raw_root = dbn_root
+    dbn_path = dbn_root / "ES" / "2024.dbn.zst"
+    definition_path = dbn_root / "definition" / "ES" / "2024.dbn.zst"
+    dbn_path.parent.mkdir(parents=True)
+    definition_path.parent.mkdir(parents=True)
+    dbn_path.write_bytes(b"dbn-zstd-placeholder")
+    definition_path.write_bytes(b"definition-placeholder")
+    _write_raw_manifest(dbn_path, schema="ohlcv-1m")
+    _write_raw_manifest(definition_path, schema="definition")
+
+    class FakeDBNStore:
+        @classmethod
+        def from_file(cls, path: Path) -> FakeStore:
+            if path == definition_path:
+                return FakeStore(definition_df)
+            return FakeStore(ohlcv_df)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "databento",
+        types.SimpleNamespace(DBNStore=FakeDBNStore),
+    )
+
+    results = convert_dbn_archive_to_raw(
+        dbn_root,
+        raw_root,
+        condition_by_group={("ES", 2024): {"2024-01-02": "available"}},
+    )
+
+    output_path = raw_root / "ES" / "2024.parquet"
+    assert results[0]["status"] == "ok"
+    assert results[0]["definition_point_in_time_enforced"] is True
+    out = pd.read_parquet(output_path)
+    assert out["raw_symbol"].tolist() == ["ESH4", "ESM4"]
+    assert out["tick_size"].tolist() == [0.25, 0.50]
+    assert out["contract_multiplier_or_point_value"].tolist() == [50.0, 5.0]
 
 
 def test_estimate_cost_stops_on_auth_failure(tmp_path: Path) -> None:

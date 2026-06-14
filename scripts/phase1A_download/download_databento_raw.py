@@ -1248,9 +1248,12 @@ def definition_frame_for_group(
         store = db.DBNStore.from_file(path)
         df_or_frames = cast(DatabentoStore, store).to_df()
         if isinstance(df_or_frames, pd.DataFrame):
-            frames.append(df_or_frames)
+            frame = df_or_frames
         else:
-            frames.append(pd.concat(df_or_frames, ignore_index=False))
+            frame = pd.concat(df_or_frames, ignore_index=False)
+        if "ts_recv" not in frame.columns and frame.index.name == "ts_recv":
+            frame = frame.reset_index()
+        frames.append(frame)
     if len(frames) == 1:
         df = frames[0]
     else:
@@ -1269,22 +1272,68 @@ def definition_frame_for_group(
     return df, paths
 
 
-def latest_definition_metadata(definitions: pd.DataFrame) -> pd.DataFrame:
-    sort_cols = [col for col in ["instrument_id", "ts_event", "ts_recv"] if col in definitions.columns]
-    if sort_cols:
-        definitions = definitions.sort_values(sort_cols, kind="mergesort")
-    return definitions.drop_duplicates("instrument_id", keep="last")
-
-
 def enrich_with_definition_metadata(df: pd.DataFrame, definitions: pd.DataFrame) -> pd.DataFrame:
-    latest = latest_definition_metadata(definitions)
-    keep = [col for col in DEFINITION_METADATA_FIELDS if col in latest.columns]
-    latest = latest[keep].copy()
+    if "ts_event" not in definitions.columns:
+        raise ValueError("definition missing point-in-time timestamp: ts_event")
+    keep = [col for col in DEFINITION_METADATA_FIELDS if col in definitions.columns]
+    if "instrument_id" not in keep:
+        keep.append("instrument_id")
+    latest = definitions[keep].copy()
+    latest["_definition_ts_event"] = pd.to_datetime(latest["ts_event"], utc=True, errors="coerce")
+    if latest["_definition_ts_event"].isna().any():
+        raise ValueError("definition has invalid point-in-time ts_event")
+    if "ts_recv" in latest.columns:
+        latest["_definition_ts_recv"] = pd.to_datetime(latest["ts_recv"], utc=True, errors="coerce")
+    else:
+        latest["_definition_ts_recv"] = latest["_definition_ts_event"]
+    latest = latest.sort_values(
+        ["instrument_id", "_definition_ts_event", "_definition_ts_recv"],
+        kind="mergesort",
+    ).drop_duplicates(["instrument_id", "_definition_ts_event"], keep="last")
+    latest = latest.drop(columns=["ts_event"], errors="ignore")
     rename = {"raw_symbol": "raw_symbol", "min_price_increment": "tick_size"}
     latest = latest.rename(columns=rename)
     if "contract_multiplier" in latest.columns:
         latest = latest.rename(columns={"contract_multiplier": "contract_multiplier_or_point_value"})
-    merged = df.merge(latest, on="instrument_id", how="left", suffixes=("", "_definition"))
+
+    left = df.copy()
+    left["_row_order"] = range(len(left))
+    left["_ohlcv_ts_event"] = pd.to_datetime(left["ts_event"], utc=True, errors="coerce")
+    if left["_ohlcv_ts_event"].isna().any():
+        raise ValueError("OHLCV has invalid ts_event for point-in-time definition join")
+    for col in [
+        "raw_symbol",
+        "tick_size",
+        "contract_multiplier_or_point_value",
+        "expiration",
+        "maturity_year",
+        "maturity_month",
+    ]:
+        if col in left.columns:
+            left = left.drop(columns=[col])
+
+    merged_parts: list[pd.DataFrame] = []
+    for instrument_id, left_group in left.groupby("instrument_id", sort=False, dropna=False):
+        right_group = latest.loc[latest["instrument_id"] == instrument_id].drop(columns=["instrument_id"])
+        if right_group.empty:
+            merged_parts.append(left_group)
+            continue
+        merged_parts.append(
+            pd.merge_asof(
+                left_group.sort_values("_ohlcv_ts_event", kind="mergesort"),
+                right_group.sort_values("_definition_ts_event", kind="mergesort"),
+                left_on="_ohlcv_ts_event",
+                right_on="_definition_ts_event",
+                direction="backward",
+                allow_exact_matches=True,
+                suffixes=("", "_definition"),
+            )
+        )
+    merged = pd.concat(merged_parts, ignore_index=True).sort_values("_row_order", kind="mergesort")
+    merged = merged.drop(
+        columns=["_row_order", "_ohlcv_ts_event", "_definition_ts_event", "_definition_ts_recv"],
+        errors="ignore",
+    )
     if merged["raw_symbol"].isna().any():
         missing = sorted(set(merged.loc[merged["raw_symbol"].isna(), "instrument_id"].astype(str)))
         raise ValueError("missing definition coverage for OHLCV instruments: " + ",".join(missing))
@@ -1329,9 +1378,13 @@ def fetch_conditions_for_archive_entries(
     entries: Iterable[DbnArchiveEntry],
 ) -> dict[tuple[str, int], dict[str, str]]:
     conditions_by_group: dict[tuple[str, int], dict[str, str]] = {}
+    condition_cache: dict[tuple[str, str, str], DatasetConditionInfo] = {}
     for entry in entries:
         task = condition_task_for_archive_entry(entry)
-        info = fetch_dataset_conditions(client, task)
+        condition_key = (task.dataset, task.start, task.end)
+        if condition_key not in condition_cache:
+            condition_cache[condition_key] = fetch_dataset_conditions(client, task)
+        info = condition_cache[condition_key]
         conditions_by_group.setdefault((entry.product, entry.year), {}).update(info["conditions"])
     return conditions_by_group
 
@@ -1494,10 +1547,9 @@ def convert_dbn_archive_to_raw(
                     "price_scale_policy": PRICE_SCALE_POLICY,
                     "data_quality_source": data_quality_source,
                     "vendor_quality_available": vendor_quality_available,
-                    "definition_point_in_time_enforced": False,
-                    "warnings": [
-                        "definition metadata uses latest record per instrument; point-in-time selection is not fully enforced"
-                    ],
+                    "definition_point_in_time_enforced": True,
+                    "definition_metadata_policy": "latest definition row per instrument_id at or before OHLCV ts_event",
+                    "warnings": [],
                     "validation": check,
                     "elapsed_seconds": elapsed,
                     **summary,

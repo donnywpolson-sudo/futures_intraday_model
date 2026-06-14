@@ -2,7 +2,7 @@ Work in the active repo only: C:\Users\donny\Desktop\futures_intraday_model.
 
 Follow AGENTS.md exactly. Before edits, inspect repo path and git status. Keep diffs minimal. Do not commit, stage, delete, move, rename, add dependencies, or rewrite architecture unless explicitly asked. Do not change trading/data semantics casually.
 
-Goal: execute the next project tasks in this exact order, one task at a time. Do not skip ahead. After each task, run the narrowest relevant validation, report files changed, commands run, tests run, unresolved risks, and current git status. If a task exposes a blocker, stop and report the blocker instead of forcing progress.
+Goal: execute the next project tasks in this exact order. Do not skip ahead. After each task, run the narrowest relevant validation, report files changed, commands run, tests run, unresolved risks, and current git status. Continue to the next task after successful validation. Stop only when a task has unresolved risks, failures, or blockers.
 
 Project-wide exclusions: E7, J7, QI, QO, ZQ, and PA are not needed. Exclude them from coverage audits, download plans, downloads, conversions, validations, and reports unless explicitly re-approved.
 
@@ -48,7 +48,7 @@ Tasks, in order:
    - Do not download in this task.
    - Report exact missing market-years when 30 or fewer; otherwise report counts, first 20 rows, and the plan/report path with the full list.
    - Report dry-run commands, planned output path pattern, sampled output paths, and whether existing outputs will be skipped.
-   - Stop after reporting this task unless I say continue.
+   - Continue to the next task after successful validation.
 
 2. Download missing definition DBNs
    - Only use the missing-only plan produced by Task 1.
@@ -60,7 +60,7 @@ Tasks, in order:
    - Stop after the first failed, timed-out, or ambiguous market-year.
    - After download, re-audit coverage and report remaining missing/zero-byte definition files.
    - Stop if definition coverage is incomplete.
-   - Stop after reporting this task unless I say continue.
+   - Continue to the next task after successful validation.
 
 3. Lock down Phase 1A/1B raw data layout and tests
    - Review these files and any dirty changes in them, if present:
@@ -73,7 +73,7 @@ Tasks, in order:
    - Do not modify Phase 2/3/4 logic.
    - Validate with focused Phase 1A/1B tests and CLI help checks.
    - After this task is completed and validated, discard CODEX DO NEXT.md only if explicitly asked.
-   - Stop after reporting this task unless I say continue.
+   - Continue to the next task after successful validation.
 
 4. Fix contract metadata / point-in-time definitions
    - Inspect Phase 1B conversion and metadata handling.
@@ -82,7 +82,7 @@ Tasks, in order:
    - If the current data inputs do not support true point-in-time metadata, document the blocker explicitly instead of faking it.
    - Add or update tests proving the behavior.
    - Validate with focused Phase 1B tests.
-   - Stop after reporting this task unless I say continue.
+   - Continue to the next task after successful validation.
 
 5. Run Phase 1B bulk conversion
    - Only start after definition coverage is complete and point-in-time metadata behavior is validated.
@@ -95,7 +95,7 @@ Tasks, in order:
    - Then run bulk conversion only for missing converted outputs, unless explicitly approved to rerun existing outputs.
    - If conversion spans more than one market-year, report the plan first and wait for explicit continue.
    - Report exact commands, row counts, output manifests, warnings, failures, generated artifacts, and final git status without dumping large manifests/logs.
-   - Stop after reporting this task unless I say continue.
+   - Continue to the next task after successful validation.
 
 6. Replace provisional costs with real cost config
    - Inspect configs/costs.yaml and Phase 3/Phase 4 cost validation.
@@ -103,14 +103,14 @@ Tasks, in order:
    - If reliable values are not available, create a clear non-code TODO/blocker note in the appropriate planning doc rather than inventing costs.
    - Do not bypass Phase 4's provisional-cost guard.
    - Validate Phase 3/Phase 4 cost-related tests.
-   - Stop after reporting this task unless I say continue.
+   - Continue to the next task after successful validation.
 
 7. Run a small ES-only end-to-end build through Phase 4
    - Use the smallest existing ES sample/config path available.
    - Run Phase 1A/1B only if needed and safe; do not redownload large data unless explicitly approved.
    - Build or validate through Phase 4.
    - Report exact commands, row counts, schemas/manifest paths, warnings, and whether generated artifacts remain untracked.
-   - Stop after reporting this task unless I say continue.
+   - Continue to the next task after successful validation.
 
 8. Build Phase 5 WFA split planning
    - Add the smallest Phase 5 skeleton needed for walk-forward split planning.
@@ -118,7 +118,7 @@ Tasks, in order:
    - Do not train models yet.
    - Do not change Phase 1-4 public contracts unless strictly necessary.
    - Validate with focused tests and CLI help.
-   - Stop after reporting this task unless I say continue.
+   - Continue to the next task after successful validation.
 
 9. Add simple baseline models/rules
    - Only proceed after Phase 5 is structurally valid.
