@@ -1,7 +1,20 @@
-# Python and local test state
+# GitHub is the code/rebuild source of truth for this repo.
+# Raw data, generated artifacts, local environments, and secrets stay local or
+# in external/cloud backup. Keep small durable summaries in docs/ or manifests/.
+
+# Python environments and caches
 .venv/
+venv/
 __pycache__/
+*.pyc
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# OS/editor local state
+.DS_Store
+Thumbs.db
+.vscode/
 
 # Local secrets and credentials
 .env
@@ -11,31 +24,46 @@ __pycache__/
 databento.env
 databento_api_key*
 .databento_api_key*
+secrets/
+credentials/
 *.key
 *.pem
 
-# Generated pipeline outputs
+# Local data and generated pipeline artifacts
 data/
 reports/
-logs/
 models/
+outputs/
+output/
+logs/
 artifacts/
 cache/
 
-# Large or generated data files
+# Heavy or generated data file formats
 *.parquet
 *.dbn
 *.zst
-*.csv
-*.jsonl
-*.log
 *.pkl
 *.pickle
 *.joblib
+*.feather
+*.h5
+*.hdf5
 *.npy
 *.npz
-*.feather
 *.arrow
 *.duckdb
 *.sqlite
 *.sqlite3
+*.csv
+*.jsonl
+*.log
+
+# Small source-of-truth metadata is intentionally trackable in configs/,
+# scripts/, pipeline/, src/, tests/, docs/, manifests/, README files, lockfiles,
+# and project config files. Keep generated CSV/JSONL summaries trackable only
+# when they live under manifests/.
+!manifests/*.csv
+!manifests/**/*.csv
+!manifests/*.jsonl
+!manifests/**/*.jsonl

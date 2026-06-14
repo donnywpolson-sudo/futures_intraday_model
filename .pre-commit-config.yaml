@@ -6,3 +6,8 @@ repos:
         entry: python -m scripts.utilities.precommit_block_generated_artifacts
         language: system
         pass_filenames: true
+      - id: check-git-hygiene
+        name: check git hygiene
+        entry: python scripts/check_git_hygiene.py
+        language: system
+        pass_filenames: false
