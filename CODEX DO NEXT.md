@@ -36,6 +36,13 @@ Next valid work paths:
    - Pre-register one feature hypothesis at a time.
    - Use ES discovery folds 1-4 and confirmation folds 5-8.
    - Require positive discovery and confirmation before any locked recheck.
+   - `time_buckets` smoke stopped: discovery net `-25651.00`,
+     confirmation net `-10929.00`.
+   - `post_shock_volume_confirmed_continuation` stopped: discovery net
+     `-74112.00`, confirmation net `-259840.50`.
+   - Both failed the pre-registered stop rule; do not tune or rerun variants
+     from these results.
+   - Next ES-only work requires a new pre-registered hypothesis.
    - If a candidate passes discovery/confirmation, recheck on unused folds before
      considering broader WFA.
 

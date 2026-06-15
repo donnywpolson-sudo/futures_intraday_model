@@ -13,6 +13,12 @@ complete alpha-generating or production backtesting system.
 - Refreshed Phase 8 baseline evidence remains `NO_GO`: `baseline_refreshed`
   has 23 trades, `net_return_dollars=-2353.5`, and anti-overfit robustness
   `FAIL`.
+- Latest Phase 9 ES-only checks remain stopped: `time_buckets` smoke stopped
+  with discovery net `-25651.00` and confirmation net `-10929.00`;
+  `post_shock_volume_confirmed_continuation` stopped with discovery net
+  `-74112.00` and confirmation net `-259840.50`.
+- Both Phase 9 checks failed the pre-registered stop rule. Do not tune or
+  rerun variants from these results.
 
 ## Tier 1 No-Go Decision
 
@@ -40,6 +46,8 @@ Primary reports:
 - `reports/pipeline_audit/tier1_es_harness_family_sweep.md`
 - `reports/metrics/baseline_refreshed/baseline_refreshed_metrics.json`
 - `reports/experiments/anti_overfit_audit_refreshed.json`
+- `reports/pipeline_audit/phase9_smoke_time_buckets_1x1_hypothesis_harness.md`
+- `reports/pipeline_audit/phase9_post_shock_volume_confirmed_continuation_hypothesis_harness.md`
 
 ## Promotion Gates
 
