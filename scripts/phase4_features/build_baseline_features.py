@@ -1244,9 +1244,14 @@ def add_intermarket_features(
         missing_rates[rel_col] = float(out[rel_col].isna().mean())
         missing_rates[corr_col] = float(out[corr_col].isna().mean())
 
-    es = merged.get("ES_ret_30")
-    zn = merged.get("ZN_ret_30")
-    cl = merged.get("CL_ret_30")
+    def ret30_for(market_name: str) -> pd.Series | None:
+        if market_name == market:
+            return self_ret_30
+        return merged.get(f"{market_name}_ret_30")
+
+    es = ret30_for("ES")
+    zn = ret30_for("ZN")
+    cl = ret30_for("CL")
     out["feature_es_zn_divergence_30"] = (es - zn) if es is not None and zn is not None else np.nan
     out["feature_cl_es_divergence_30"] = (cl - es) if cl is not None and es is not None else np.nan
     out["feature_es_zn_risk_regime_30"] = out["feature_es_zn_divergence_30"]

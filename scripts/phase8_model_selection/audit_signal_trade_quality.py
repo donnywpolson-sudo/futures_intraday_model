@@ -281,6 +281,10 @@ def _block_counts(policy_frame: pd.DataFrame) -> pd.DataFrame:
     frame.loc[frame["position"].eq(0) & frame["no_direction_signal"], "block_category"] = "no_direction"
     frame.loc[frame["position"].eq(0) & frame["blocked_by_trend_danger"], "block_category"] = "trend_danger"
     frame.loc[frame["position"].eq(0) & frame["blocked_by_fade_filter"], "block_category"] = "fade_filter"
+    frame.loc[
+        frame["position"].eq(0) & frame.get("blocked_by_flat_probability", False),
+        "block_category",
+    ] = "flat_probability"
     return _group_metrics(frame, scope="block_category", group_cols=["block_category"], sort_by_net=False)
 
 

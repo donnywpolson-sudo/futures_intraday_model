@@ -273,6 +273,11 @@ def _blocked_category_frame(policy_frame: pd.DataFrame) -> pd.DataFrame:
             frame["position"].eq(0) & frame["blocked_by_trend_danger"],
             "blocked_category",
         ] = "trend-danger"
+    if "blocked_by_flat_probability" in frame.columns:
+        frame.loc[
+            frame["position"].eq(0) & frame["blocked_by_flat_probability"],
+            "blocked_category",
+        ] = "flat-probability"
     frame["opportunity_gross_dollars"] = 0.0
     if {"base_position", "price_move", "point_value"}.issubset(frame.columns):
         frame["opportunity_gross_dollars"] = (

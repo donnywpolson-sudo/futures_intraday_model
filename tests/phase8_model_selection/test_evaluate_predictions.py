@@ -94,12 +94,13 @@ def _prediction_rows(timestamp: pd.Timestamp, *, entry: float, exit_: float) -> 
 
 def _write_predictions(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    timestamps = pd.date_range("2024-01-02T14:30:00Z", periods=4, freq="15min")
+    timestamps = pd.date_range("2024-01-02T14:30:00Z", periods=5, freq="15min")
     policy_inputs = [
         {"p_long": 0.70, "p_short": 0.20, "p_flat": 0.10, "p_fade": 0.80, "p_trend": 0.20, "entry": 100.0, "exit": 101.0},
         {"p_long": 0.20, "p_short": 0.75, "p_flat": 0.05, "p_fade": 0.85, "p_trend": 0.90, "entry": 101.0, "exit": 100.0},
         {"p_long": 0.68, "p_short": 0.20, "p_flat": 0.12, "p_fade": 0.40, "p_trend": 0.20, "entry": 100.0, "exit": 101.0},
         {"p_long": 0.15, "p_short": 0.75, "p_flat": 0.10, "p_fade": 0.90, "p_trend": 0.10, "entry": 101.0, "exit": 100.0},
+        {"p_long": 0.35, "p_short": 0.20, "p_flat": 0.45, "p_fade": 0.90, "p_trend": 0.10, "entry": 100.0, "exit": 101.0},
     ]
     rows: list[dict[str, object]] = []
     for idx, item in enumerate(policy_inputs):
@@ -176,7 +177,7 @@ def _write_manifest(path: Path, prediction_path: Path) -> Path:
         json.dumps(
             {
                 "failure_count": 0,
-                "prediction_count": 16,
+                "prediction_count": 20,
                 "output_file_hashes": {prediction_path.as_posix(): "hash"},
                 "stale_output_path_exists": False,
                 "artifact_evidence_ready": True,
@@ -207,10 +208,11 @@ def test_policy_metrics_block_trend_danger_and_fade_filter(tmp_path: Path) -> No
 
     assert result["failure_count"] == 0
     overall = result["policy_metrics"]["overall"]
-    assert overall["row_count"] == 4
+    assert overall["row_count"] == 5
     assert overall["trade_count"] == 2
     assert overall["blocked_by_trend_danger"] == 1
     assert overall["blocked_by_fade_filter"] == 1
+    assert overall["blocked_by_flat_probability"] == 1
     assert overall["gross_return_dollars"] == 100.0
     assert overall["cost_dollars"] == 20.0
     assert overall["net_return_dollars"] == 80.0

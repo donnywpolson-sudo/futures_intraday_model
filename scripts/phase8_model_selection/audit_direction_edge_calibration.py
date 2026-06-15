@@ -211,6 +211,46 @@ def _scenario_record(
     return record
 
 
+def _position_record(
+    frame: pd.DataFrame,
+    *,
+    position: pd.Series,
+    mode: str,
+    margin_threshold: float,
+    flat_margin: float | None,
+    max_flat_probability: float | None,
+    group_keys: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    position = position.reindex(frame.index).fillna(0).astype(int)
+    gross = position * _numeric(frame, "price_move").fillna(0.0) * _numeric(frame, "point_value").fillna(0.0)
+    cost = pd.Series(
+        np.where(position.ne(0), _numeric(frame, "round_turn_cost_dollars").fillna(0.0), 0.0),
+        index=frame.index,
+    )
+    net = gross - cost
+    traded = position.ne(0)
+    return {
+        "scope": "scenario" if group_keys is None else "scenario_group",
+        **dict(group_keys or {}),
+        "edge_mode": mode,
+        "direction_margin_threshold": margin_threshold,
+        "flat_margin_threshold": flat_margin,
+        "max_flat_probability": max_flat_probability,
+        "row_count": int(len(frame)),
+        "trade_count": int(traded.sum()),
+        "long_count": int(position.eq(1).sum()),
+        "short_count": int(position.eq(-1).sum()),
+        "gross_return_dollars": _sum_float(gross),
+        "cost_dollars": _sum_float(cost),
+        "net_return_dollars": _sum_float(net),
+        "target_direction_accuracy": _direction_accuracy(position[traded], frame.loc[traded, "target_direction"]),
+        "realized_direction_accuracy": _direction_accuracy(position[traded], frame.loc[traded, "realized_direction"]),
+        "avg_p_flat_traded": _mean_or_none(_numeric(frame.loc[traded], "p_flat")) if bool(traded.any()) else None,
+        "avg_direction_margin_abs_traded": _mean_or_none(frame.loc[traded, "direction_margin_abs"]) if bool(traded.any()) else None,
+        "avg_direction_vs_flat_edge_traded": _mean_or_none(frame.loc[traded, "direction_vs_flat_edge"]) if bool(traded.any()) else None,
+    }
+
+
 def _edge_scenarios(frame: pd.DataFrame) -> pd.DataFrame:
     specs: list[tuple[str, float, float | None, float | None]] = []
     for margin_threshold in (0.05, 0.10, 0.15, 0.20, 0.30):
@@ -469,11 +509,12 @@ def build_direction_edge_calibration(
     best = _best_positive_scenario(edge_scenarios)
     scenario_market_side = _scenario_market_side(frame, edge_scenarios.iloc[0].to_dict())
     flat_suppression = _flat_suppression(frame)
-    current = _scenario_record(
+    current = _position_record(
         frame,
-        mode="current_margin",
+        position=frame["position"],
+        mode="current_policy",
         margin_threshold=policy.long_short_margin,
-        flat_margin=None,
+        flat_margin=0.0,
         max_flat_probability=None,
     )
     decision = _decision(edge_scenarios, current, class_calibration)

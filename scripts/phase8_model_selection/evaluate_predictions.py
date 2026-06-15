@@ -350,15 +350,26 @@ def build_policy_frame(
     base.loc[base["direction_margin"] >= policy.long_short_margin, "direction_signal"] = 1
     base.loc[base["direction_margin"] <= -policy.long_short_margin, "direction_signal"] = -1
     base["base_position"] = base["direction_signal"].astype(int)
+    base["direction_probability"] = np.where(
+        base["base_position"].eq(1),
+        base["p_long"],
+        np.where(base["base_position"].eq(-1), base["p_short"], np.nan),
+    )
+    base["direction_beats_flat"] = base["direction_probability"] > base["p_flat"]
     base["fade_allowed"] = base["p_fade_success"].ge(policy.min_fade_success).fillna(False)
     base["trend_danger_block"] = base["p_trend_danger"].isna() | base["p_trend_danger"].ge(
         policy.max_trend_danger
     )
     base["no_direction_signal"] = base["base_position"].eq(0)
+    base["blocked_by_flat_probability"] = (
+        base["base_position"].ne(0) & ~base["direction_beats_flat"].fillna(False)
+    )
     base["blocked_by_fade_filter"] = base["base_position"].ne(0) & ~base["fade_allowed"]
     base["blocked_by_trend_danger"] = base["base_position"].ne(0) & base["trend_danger_block"]
     base["position"] = np.where(
-        base["fade_allowed"] & ~base["trend_danger_block"],
+        base["direction_beats_flat"].fillna(False)
+        & base["fade_allowed"]
+        & ~base["trend_danger_block"],
         base["base_position"],
         0,
     ).astype(int)
@@ -366,6 +377,7 @@ def build_policy_frame(
     base.loc[base["base_position"].eq(0), "policy_reason"] = "no_direction_edge"
     base.loc[base["blocked_by_fade_filter"], "policy_reason"] = "fade_filter_block"
     base.loc[base["blocked_by_trend_danger"], "policy_reason"] = "trend_danger_block"
+    base.loc[base["blocked_by_flat_probability"], "policy_reason"] = "flat_probability_block"
 
     point_values: dict[str, float] = {}
     round_turn_costs: dict[str, float] = {}
@@ -472,6 +484,9 @@ def _policy_summary(frame: pd.DataFrame, scope: str, key_values: Mapping[str, An
         ),
         "blocked_by_fade_filter": int(frame["blocked_by_fade_filter"].sum())
         if "blocked_by_fade_filter" in frame
+        else 0,
+        "blocked_by_flat_probability": int(frame["blocked_by_flat_probability"].sum())
+        if "blocked_by_flat_probability" in frame
         else 0,
         "blocked_by_trend_danger": int(frame["blocked_by_trend_danger"].sum())
         if "blocked_by_trend_danger" in frame

@@ -356,6 +356,30 @@ def test_tier1_risk_score_is_usable_without_zero_filling_self_market(tmp_path: P
     assert out["feature_rel_ret_vs_CL_15"].isna().all()
 
 
+def test_intermarket_composite_features_use_current_market_leg(tmp_path: Path) -> None:
+    root = tmp_path / "labeled"
+    for market in ("CL", "ES", "ZN", "6E"):
+        path = root / market / "2024.parquet"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _frame(90, market=market).to_parquet(path, index=False)
+
+    es_base = add_base_market_features(_frame(90, market="ES"), tick_size=0.25)
+    es_out, _ = add_intermarket_features(es_base, market="ES", year=2024, input_root=root)
+
+    assert es_out["feature_rel_ret_vs_ES_15"].isna().all()
+    assert es_out["feature_es_zn_divergence_30"].notna().any()
+    assert es_out["feature_cl_es_divergence_30"].notna().any()
+    assert es_out["feature_es_zn_risk_regime_30"].notna().any()
+    assert es_out["feature_cl_es_macro_divergence_30"].notna().any()
+
+    cl_base = add_base_market_features(_frame(90, market="CL"), tick_size=0.01)
+    cl_out, _ = add_intermarket_features(cl_base, market="CL", year=2024, input_root=root)
+
+    assert cl_out["feature_rel_ret_vs_CL_15"].isna().all()
+    assert cl_out["feature_cl_es_divergence_30"].notna().any()
+    assert cl_out["feature_cl_es_macro_divergence_30"].notna().any()
+
+
 def test_shock_decay_features_do_not_explode_on_tiny_directional_denominator() -> None:
     df = pd.DataFrame(
         {
