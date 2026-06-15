@@ -16,8 +16,10 @@ complete alpha-generating or production backtesting system.
 - Latest Phase 9 ES-only checks remain stopped: `time_buckets` smoke stopped
   with discovery net `-25651.00` and confirmation net `-10929.00`;
   `post_shock_volume_confirmed_continuation` stopped with discovery net
-  `-74112.00` and confirmation net `-259840.50`.
-- Both Phase 9 checks failed the pre-registered stop rule. Do not tune or
+  `-74112.00` and confirmation net `-259840.50`;
+  `compression_breakout_participation_filter` stopped with discovery net
+  `-121049.50` and confirmation net `-200103.00`.
+- These Phase 9 checks failed the pre-registered stop rule. Do not tune or
   rerun variants from these results.
 
 ## Tier 1 No-Go Decision
@@ -48,6 +50,7 @@ Primary reports:
 - `reports/experiments/anti_overfit_audit_refreshed.json`
 - `reports/pipeline_audit/phase9_smoke_time_buckets_1x1_hypothesis_harness.md`
 - `reports/pipeline_audit/phase9_post_shock_volume_confirmed_continuation_hypothesis_harness.md`
+- `reports/pipeline_audit/phase9_compression_breakout_participation_filter_hypothesis_harness.md`
 
 ## Promotion Gates
 

@@ -40,7 +40,9 @@ Next valid work paths:
      confirmation net `-10929.00`.
    - `post_shock_volume_confirmed_continuation` stopped: discovery net
      `-74112.00`, confirmation net `-259840.50`.
-   - Both failed the pre-registered stop rule; do not tune or rerun variants
+   - `compression_breakout_participation_filter` stopped: discovery net
+     `-121049.50`, confirmation net `-200103.00`.
+   - These failed the pre-registered stop rule; do not tune or rerun variants
      from these results.
    - Next ES-only work requires a new pre-registered hypothesis.
    - If a candidate passes discovery/confirmation, recheck on unused folds before
