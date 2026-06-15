@@ -122,6 +122,11 @@ def _args(tmp_path: Path) -> object:
             "md_out": str(tmp_path / "reports" / "manifest.md"),
             "buffer_minutes": 2,
             "allow_unresolved_contracts": False,
+            "max_market_years": None,
+            "progress_jsonl": None,
+            "resume_progress": False,
+            "panel_systemic_threshold": 0.4,
+            "min_panel_denominator": 2,
         },
     )()
 
@@ -151,6 +156,7 @@ def test_resolves_adjacent_contract(tmp_path: Path) -> None:
     assert window["instrument_id"] == 123
     assert window["raw_ohlcv_source_files"] == ["raw.dbn.zst"]
     assert window["raw_ohlcv_source_hashes"] == ["abc"]
+    assert window["adjacent_ohlcv_context"]["uses_next_bar_for_audit_label_only"] is True
 
 
 def test_missing_inputs_fail_closed_after_writing_manifest(tmp_path: Path) -> None:
@@ -242,3 +248,64 @@ def test_accepted_external_trade_schema_is_documented(tmp_path: Path) -> None:
     assert schema["required_columns"] == ["timestamp_utc"]
     assert "OHLCV bars" in schema["not_accepted_as_proof"]
     assert manifest["windows"][0]["accepted_external_schema"] == schema
+
+
+def test_progress_jsonl_appends_per_market_year(tmp_path: Path) -> None:
+    _write_inputs(tmp_path)
+    args = _args(tmp_path)
+    args.progress_jsonl = str(tmp_path / "reports" / "progress.jsonl")
+
+    manifest = build_manifest(args)
+    lines = Path(args.progress_jsonl).read_text(encoding="utf-8").splitlines()
+    record = json.loads(lines[0])
+
+    assert manifest["status"] == "PASS"
+    assert len(lines) == 1
+    assert record["market"] == "ZN"
+    assert record["year"] == 2024
+    assert record["summary"]["window_count"] == 1
+    assert "diagnostics" in record
+
+
+def test_resume_progress_skips_completed_market_year(tmp_path: Path) -> None:
+    _write_inputs(tmp_path)
+    args = _args(tmp_path)
+    args.progress_jsonl = str(tmp_path / "reports" / "progress.jsonl")
+    build_manifest(args)
+    args.resume_progress = True
+
+    resumed = build_manifest(args)
+
+    assert resumed["status"] == "PASS"
+    assert resumed["summary"]["processed_market_year_count"] == 0
+    assert resumed["summary"]["skipped_market_year_count"] == 1
+    assert resumed["windows"] == []
+
+
+def test_max_market_years_limits_chunk(tmp_path: Path) -> None:
+    _write_inputs(tmp_path)
+    args = _args(tmp_path)
+    args.years = [2024, 2025]
+    args.max_market_years = 1
+
+    manifest = build_manifest(args)
+
+    assert manifest["status"] == "PASS"
+    assert manifest["summary"]["selected_market_year_count"] == 2
+    assert manifest["summary"]["processed_market_year_count"] == 1
+    assert manifest["summary"]["window_count"] == 1
+
+
+def test_diagnostic_labels_are_non_proof_and_audit_only(tmp_path: Path) -> None:
+    _write_inputs(tmp_path)
+
+    manifest = build_manifest(_args(tmp_path))
+    window = manifest["windows"][0]
+
+    assert manifest["diagnostics"]["root_cause_interpretation"]
+    assert window["audit_labels"]["is_missing"] is True
+    assert window["audit_labels"]["gap_length"] == 2
+    assert window["audit_labels"]["score_direction"].endswith("not proof of no-trade or bad data")
+    assert window["diagnostic_features"]["microstructure_context"]["uses_next_bar_for_audit_label_only"] is True
+    assert window["diagnostic_features"]["lead_market_check"]["status"] == "not_evaluated_without_lead_trade_evidence"
+    assert "lookahead_bias_risk" in window["diagnostic_features"]["potential_bias_flags"]
