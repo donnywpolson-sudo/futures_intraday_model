@@ -8,8 +8,24 @@ complete alpha-generating or production backtesting system.
 - `tier_1_research` has complete raw, causal, label, and baseline feature coverage.
 - `tier_2_research` has complete raw, causal, and label coverage, but incomplete baseline feature coverage.
 - `tier_3_research` has complete available raw, causal, and label coverage, but incomplete baseline feature coverage.
-- Current baseline WFA evidence is partial and should not be treated as promoted alpha.
+- Current Tier 1 model/research stack is `NO_GO` for promotion, tuning, and full WFA scale.
 - Phase 8 policy diagnostics can evaluate saved predictions with costs, but they are not a live fill simulator or full execution backtester.
+
+## Tier 1 No-Go Decision
+
+- Decision: `TIER1_NO_GO_STOP_PROMOTION_TUNING_AND_FULL_WFA_SCALE`.
+- Code state recorded in commit `c2794cf` (`Add Tier 1 ES research harness`).
+- Do not continue full-market/full-fold WFA, model tuning, or promotion work from the current Tier 1 stack.
+- The current evidence points to weak gross edge under the configured ES cost/slippage model, not a simple label-boundary issue.
+- `ZN` and `6E` remain quarantined until raw no-trade/session semantics are resolved.
+- `CL` remains diagnostic-only until raw gaps are explained.
+
+Primary reports:
+
+- `reports/pipeline_audit/tier1_consolidated_no_go_report.md`
+- `reports/pipeline_audit/tier1_es_break_even_cost_audit.md`
+- `reports/pipeline_audit/tier1_es_locked_selectivity_recheck.md`
+- `reports/pipeline_audit/tier1_es_harness_family_sweep.md`
 
 ## Promotion Gates
 
