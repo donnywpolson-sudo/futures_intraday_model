@@ -29,7 +29,13 @@ def _write_decisions(path: Path, rows: list[dict[str, object]]) -> None:
     path.write_text(json.dumps({"rows": rows}), encoding="utf-8")
 
 
-def _args(tmp_path: Path, *, decision_path: Path | None = None, diagnostics: list[str] | None = None) -> Namespace:
+def _args(
+    tmp_path: Path,
+    *,
+    decision_path: Path | None = None,
+    diagnostics: list[str] | None = None,
+    accept_databento_convention: bool = False,
+) -> Namespace:
     return Namespace(
         decision_table_json=str(decision_path or tmp_path / "reports" / "decisions.json"),
         profile="tier_1",
@@ -38,6 +44,7 @@ def _args(tmp_path: Path, *, decision_path: Path | None = None, diagnostics: lis
         json_out=str(tmp_path / "reports" / "universe.json"),
         md_out=str(tmp_path / "reports" / "universe.md"),
         require_usable=False,
+        accept_databento_ohlcv_no_trade_convention=accept_databento_convention,
     )
 
 
@@ -60,7 +67,13 @@ def _complete_rows() -> list[dict[str, object]]:
             "reason": "quarantine",
             "missing_minutes": 10,
             "largest_gap_size_minutes": 3,
-            "active_session_synthetic_rows": 1,
+            "active_session_synthetic_rows": 0,
+            "missing_minute_status": "PASS",
+            "provenance_status": "PASS",
+            "provenance_decision_reasons": [
+                "L1/trades unavailable: OHLCV-only audit cannot prove no trades occurred inside missing minutes",
+                "synthetic timestamps are absent from raw OHLCV parquet",
+            ],
             "failures": [],
         },
         {
@@ -71,6 +84,13 @@ def _complete_rows() -> list[dict[str, object]]:
             "missing_minutes": 20,
             "largest_gap_size_minutes": 4,
             "active_session_synthetic_rows": 2,
+            "missing_minute_status": "PASS",
+            "provenance_status": "PASS",
+            "provenance_decision_reasons": [
+                "L1/trades unavailable: OHLCV-only audit cannot prove no trades occurred inside missing minutes",
+                "synthetic timestamps are absent from raw OHLCV parquet",
+                "active-session synthetic share 0.200000 exceeds ceiling 0.050000",
+            ],
             "failures": [],
         },
         {
@@ -110,6 +130,31 @@ def test_diagnostic_market_override_is_explicit(tmp_path: Path) -> None:
         "quarantined": 1,
         "usable": 1,
     }
+
+
+def test_databento_ohlcv_convention_can_relax_ohlcv_only_quarantine(tmp_path: Path) -> None:
+    _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    _write_decisions(tmp_path / "reports" / "decisions.json", _complete_rows())
+
+    report = build_universe(_args(tmp_path, accept_databento_convention=True))
+
+    assert report["status"] == "PASS"
+    assert report["summary"]["audit_status_counts"] == {"quarantined": 2, "usable": 2}
+    row = next(item for item in report["market_years"] if item["market"] == "ES" and item["year"] == 2023)
+    assert row["audit_status"] == "usable"
+    assert "Databento documents ohlcv-1m" in row["reason"]
+    assert report["policy"]["databento_ohlcv_no_trade_convention"]["enabled"] is True
+
+
+def test_databento_ohlcv_convention_still_blocks_active_session_gap_flags(tmp_path: Path) -> None:
+    _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    _write_decisions(tmp_path / "reports" / "decisions.json", _complete_rows())
+
+    report = build_universe(_args(tmp_path, accept_databento_convention=True))
+
+    row = next(item for item in report["market_years"] if item["market"] == "CL" and item["year"] == 2022)
+    assert row["audit_status"] == "quarantined"
+    assert "active-session synthetic share" in row["reason"]
 
 
 def test_missing_decision_row_fails_closed(tmp_path: Path) -> None:

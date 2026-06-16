@@ -30,6 +30,24 @@ DIAGNOSTIC_DECISIONS = {
     "diagnostic_only_ohlcv_evidence_insufficient",
 }
 
+DATABENTO_OHLCV_CONVENTION_URL = "https://databento.com/docs/schemas-and-data-formats/ohlcv"
+DATABENTO_CUSTOM_OHLCV_URL = "https://databento.com/docs/examples/basics-historical/custom-ohlcv"
+
+DATABENTO_CONVENTION_ELIGIBLE_DECISIONS = {
+    "keep_quarantined_ohlcv_only_evidence_insufficient",
+}
+
+DATABENTO_CONVENTION_BLOCKING_REASON_SNIPPETS = (
+    "some synthetic timestamps are present in raw OHLCV parquet",
+    "synthetic row share ",
+    "active-session synthetic share ",
+    "largest synthetic gap ",
+    "synthetic rows overlap roll/symbol/instrument-change evidence",
+    "session",
+    "contract",
+    "mismatch",
+)
+
 
 def _relative_path(path: Path) -> str:
     try:
@@ -99,7 +117,40 @@ def _load_profile_scope(profile_config: Path, requested_profile: str) -> tuple[d
     }, failures
 
 
-def _status_for_decision(row: dict[str, Any], diagnostic_markets: set[str]) -> tuple[str, str]:
+def _decision_reasons(row: dict[str, Any]) -> list[str]:
+    reasons = row.get("provenance_decision_reasons") or []
+    if isinstance(reasons, list):
+        return [str(reason) for reason in reasons]
+    return [str(reasons)]
+
+
+def _databento_convention_acceptance_blockers(row: dict[str, Any]) -> list[str]:
+    decision = str(row.get("final_decision") or "")
+    if decision not in DATABENTO_CONVENTION_ELIGIBLE_DECISIONS:
+        return [f"final_decision {decision!r} is not eligible for Databento OHLCV convention policy"]
+    if str(row.get("missing_minute_status") or "PASS") != "PASS":
+        return ["missing-minute audit status is not PASS"]
+    if str(row.get("provenance_status") or "PASS") != "PASS":
+        return ["provenance audit status is not PASS"]
+
+    reasons = _decision_reasons(row)
+    if not any("synthetic timestamps are absent from raw OHLCV parquet" in reason for reason in reasons):
+        return ["decision row does not show synthetic timestamps absent from raw OHLCV parquet"]
+
+    blockers: list[str] = []
+    for reason in reasons:
+        for snippet in DATABENTO_CONVENTION_BLOCKING_REASON_SNIPPETS:
+            if snippet in reason:
+                blockers.append(reason)
+                break
+    return blockers
+
+
+def _status_for_decision(
+    row: dict[str, Any],
+    diagnostic_markets: set[str],
+    accept_databento_ohlcv_no_trade_convention: bool,
+) -> tuple[str, str]:
     decision = str(row.get("final_decision") or "")
     market = str(row.get("market") or "")
     failures = row.get("failures") or []
@@ -107,11 +158,23 @@ def _status_for_decision(row: dict[str, Any], diagnostic_markets: set[str]) -> t
         return "quarantined", "decision row contains failures"
     if decision in USABLE_DECISIONS:
         return "usable", "decision table marks market-year acceptable under current OHLCV-only evidence"
+    databento_convention_blocked_reason: str | None = None
+    if accept_databento_ohlcv_no_trade_convention and decision in DATABENTO_CONVENTION_ELIGIBLE_DECISIONS:
+        blockers = _databento_convention_acceptance_blockers(row)
+        if not blockers:
+            return (
+                "usable",
+                "Databento documents ohlcv-1m as trade-derived with no record printed when no trade occurs; "
+                "local audit found absent raw OHLCV minutes without configured gap/roll/session/contract blockers",
+            )
+        databento_convention_blocked_reason = "Databento OHLCV convention policy blocked: " + "; ".join(blockers)
     if market in diagnostic_markets and decision in QUARANTINE_DECISIONS:
         return "diagnostic_only", "market is explicitly marked diagnostic-only by audit policy"
     if decision in DIAGNOSTIC_DECISIONS:
         return "diagnostic_only", "decision table marks market-year diagnostic-only"
     if decision in QUARANTINE_DECISIONS:
+        if databento_convention_blocked_reason:
+            return "quarantined", databento_convention_blocked_reason
         return "quarantined", "decision table marks market-year quarantined"
     return "quarantined", f"unrecognized final_decision {decision!r}; failed closed"
 
@@ -176,7 +239,11 @@ def build_universe(args: argparse.Namespace) -> dict[str, Any]:
             )
             failures.append(f"missing decision row for {market} {year}")
             continue
-        status, reason = _status_for_decision(row, diagnostic_markets)
+        status, reason = _status_for_decision(
+            row,
+            diagnostic_markets,
+            bool(getattr(args, "accept_databento_ohlcv_no_trade_convention", False)),
+        )
         market_years.append(
             {
                 "market": market,
@@ -209,6 +276,20 @@ def build_universe(args: argparse.Namespace) -> dict[str, Any]:
             "usable_decisions": sorted(USABLE_DECISIONS),
             "quarantine_decisions": sorted(QUARANTINE_DECISIONS),
             "diagnostic_decisions": sorted(DIAGNOSTIC_DECISIONS),
+            "databento_ohlcv_no_trade_convention": {
+                "enabled": bool(getattr(args, "accept_databento_ohlcv_no_trade_convention", False)),
+                "eligible_decisions": sorted(DATABENTO_CONVENTION_ELIGIBLE_DECISIONS),
+                "source_urls": [
+                    DATABENTO_OHLCV_CONVENTION_URL,
+                    DATABENTO_CUSTOM_OHLCV_URL,
+                ],
+                "required_evidence": [
+                    "missing-minute audit status PASS when present",
+                    "provenance audit status PASS when present",
+                    "synthetic timestamps absent from raw OHLCV parquet",
+                    "no configured row-share, active-session, largest-gap, roll, session, contract, or mismatch blockers",
+                ],
+            },
             "diagnostic_only_markets": sorted(diagnostic_markets),
             "missing_or_unrecognized_decisions_fail_closed": True,
         },
@@ -279,6 +360,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json-out", required=True)
     parser.add_argument("--md-out")
     parser.add_argument("--require-usable", action="store_true")
+    parser.add_argument(
+        "--accept-databento-ohlcv-no-trade-convention",
+        action="store_true",
+        help=(
+            "Allow otherwise OHLCV-only quarantined rows when Databento's documented ohlcv-1m no-trade "
+            "convention is the only blocker and local gap/roll/session/contract checks are clean."
+        ),
+    )
     return parser
 
 
