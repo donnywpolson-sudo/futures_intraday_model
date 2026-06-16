@@ -21,6 +21,7 @@ from scripts.final_holdout.guard_final_holdout import (
 )
 from scripts.validation.model_registry import resolve_purge_bars, validate_purge_policy
 from scripts.validation.check_tier_2_coverage import PRODUCT_AVAILABLE_START_YEAR
+from scripts.validation.data_audit_universe_guard import load_data_audit_universe
 
 
 DEFAULT_PROFILE = "tier_1"
@@ -363,6 +364,7 @@ def build_split_plan(
     profile_config: Path,
     models_config: Path,
     allow_final_holdout: bool = False,
+    data_audit_universe_json: Path | None = None,
 ) -> dict[str, Any]:
     plan = load_profile_plan(profile, profile_config)
     permission_failure = final_holdout_permission_failure(
@@ -373,6 +375,11 @@ def build_split_plan(
     if permission_failure is not None:
         raise SystemExit(permission_failure)
     policy = load_wfa_policy(models_config)
+    data_audit_universe = (
+        load_data_audit_universe(data_audit_universe_json)
+        if data_audit_universe_json is not None
+        else None
+    )
     inputs = resolve_input_paths(plan, input_root)
     frames_by_market: dict[str, list[pd.DataFrame]] = {market: [] for market in plan.markets}
     failures: list[str] = []
@@ -391,6 +398,23 @@ def build_split_plan(
                 }
             )
             continue
+        if data_audit_universe is not None:
+            guard_failure = data_audit_universe.require_usable(
+                market,
+                year,
+                context="WFA split-plan generation",
+            )
+            if guard_failure is not None:
+                failures.append(guard_failure)
+                skipped_inputs.append(
+                    {
+                        "market": market,
+                        "year": year,
+                        "path": _relative_path(path),
+                        "reason": "data_audit_universe_not_usable",
+                    }
+                )
+                continue
         hashed_inputs.append(path)
         frame, failure = _read_feature_rows(path, market, year)
         if failure is not None:
@@ -447,6 +471,9 @@ def build_split_plan(
             "final_holdout_tuning_allowed": policy.final_holdout_tuning_allowed,
             "final_holdout_excluded_from_selection": policy.final_holdout_excluded_from_selection,
         },
+        "data_audit_universe": (
+            data_audit_universe.evidence() if data_audit_universe is not None else None
+        ),
         "fold_count": len(folds),
         "fold_count_by_market": split_rows.groupby("market").size().to_dict() if folds else {},
         "skipped_input_count": len(skipped_inputs),
@@ -471,6 +498,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile-config", default=DEFAULT_PROFILE_CONFIG.as_posix())
     parser.add_argument("--models-config", default=DEFAULT_MODELS_CONFIG.as_posix())
     parser.add_argument("--allow-final-holdout", action="store_true")
+    parser.add_argument("--data-audit-universe-json", default=None)
     return parser
 
 
@@ -483,6 +511,9 @@ def main() -> int:
         profile_config=Path(args.profile_config),
         models_config=Path(args.models_config),
         allow_final_holdout=args.allow_final_holdout,
+        data_audit_universe_json=(
+            Path(args.data_audit_universe_json) if args.data_audit_universe_json else None
+        ),
     )
     status = "FAIL" if manifest["failure_count"] else "PASS"
     print(

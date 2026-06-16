@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import scripts.phase7_wfa.run_wfa as wfa
 from scripts.phase7_wfa.run_wfa import PREDICTION_COLUMNS, run_wfa
+from scripts.validation.data_audit_universe_guard import load_data_audit_universe
 
 
 def _write_models_config(path: Path) -> Path:
@@ -103,6 +104,7 @@ def _write_split_plan(
     selection_allowed: bool | None = True,
     include_final_holdout_flag: bool = True,
     markets: list[str] | None = None,
+    data_audit_universe: dict[str, object] | None = None,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     final_holdout = split_group == "final_holdout"
@@ -112,6 +114,7 @@ def _write_split_plan(
                 "profile": "fixture",
                 "markets": markets or ["ES"],
                 "years": [2024],
+                "data_audit_universe": data_audit_universe,
                 "folds": [
                     {
                         "market": "ES",
@@ -131,6 +134,34 @@ def _write_split_plan(
                             if selection_allowed is not None
                             else {}
                         ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _write_data_audit_universe(
+    path: Path,
+    *,
+    audit_status: str,
+    market: str = "ES",
+    year: int = 2024,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "status": "PASS",
+                "summary": {"audit_status_counts": {audit_status: 1}},
+                "market_years": [
+                    {
+                        "market": market,
+                        "year": year,
+                        "audit_status": audit_status,
+                        "reason": "fixture",
                     }
                 ],
             }
@@ -170,6 +201,7 @@ def test_run_wfa_writes_oos_predictions_and_manifest(tmp_path: Path) -> None:
     assert manifest["prediction_count"] == 72
     assert manifest["artifact_evidence_ready"] is True
     assert manifest["artifact_evidence_failures"] == []
+    assert manifest["data_audit_universe"] is None
     assert manifest["stale_output_path_exists"] is False
     assert set(PREDICTION_COLUMNS).issubset(predictions.columns)
     assert len(predictions) == 24 * 3
@@ -376,6 +408,103 @@ def test_explicit_market_filter_is_recorded_and_does_not_trigger_fallback_guard(
     assert manifest["failure_count"] == 0
     assert manifest["fold_selection"]["markets"] == ["ES"]
     assert manifest["unfiltered_selectable_fold_count"] == 1
+
+
+def test_run_wfa_records_data_audit_universe_evidence(tmp_path: Path) -> None:
+    input_root = _feature_root(tmp_path)
+    predictions_root = tmp_path / "data" / "predictions"
+    reports_root = tmp_path / "reports" / "wfa"
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    data_audit = _write_data_audit_universe(
+        tmp_path / "reports" / "pipeline_audit" / "universe.json",
+        audit_status="usable",
+    )
+    split_plan = _write_split_plan(
+        reports_root / "split_plan.json",
+        data_audit_universe=load_data_audit_universe(data_audit).evidence(),
+    )
+    _write_feature_matrix(input_root)
+
+    manifest = run_wfa(
+        profile="fixture",
+        matrix="baseline",
+        run="baseline",
+        input_root=input_root,
+        split_plan=split_plan,
+        predictions_root=predictions_root,
+        reports_root=reports_root,
+        models_config=models_config,
+        data_audit_universe_json=data_audit,
+    )
+
+    report = json.loads((reports_root / "baseline_wfa_report.json").read_text(encoding="utf-8"))
+    assert manifest["failure_count"] == 0
+    assert manifest["data_audit_universe"]["status_counts"] == {"usable": 1}
+    assert report["data_audit_universe"] == manifest["data_audit_universe"]
+
+
+def test_run_wfa_blocks_unguarded_split_plan_when_data_audit_universe_is_provided(
+    tmp_path: Path,
+) -> None:
+    input_root = _feature_root(tmp_path)
+    predictions_root = tmp_path / "data" / "predictions"
+    reports_root = tmp_path / "reports" / "wfa"
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    data_audit = _write_data_audit_universe(
+        tmp_path / "reports" / "pipeline_audit" / "universe.json",
+        audit_status="usable",
+    )
+    split_plan = _write_split_plan(reports_root / "split_plan.json")
+    _write_feature_matrix(input_root)
+
+    manifest = run_wfa(
+        profile="fixture",
+        matrix="baseline",
+        run="baseline",
+        input_root=input_root,
+        split_plan=split_plan,
+        predictions_root=predictions_root,
+        reports_root=reports_root,
+        models_config=models_config,
+        data_audit_universe_json=data_audit,
+    )
+
+    assert manifest["failure_count"] > 0
+    assert "split plan missing or stale data-audit universe evidence" in " ".join(manifest["failures"])
+    assert manifest["prediction_count"] == 0
+
+
+@pytest.mark.parametrize("audit_status", ["quarantined", "diagnostic_only"])
+def test_run_wfa_blocks_non_usable_data_audit_fold(tmp_path: Path, audit_status: str) -> None:
+    input_root = _feature_root(tmp_path)
+    predictions_root = tmp_path / "data" / "predictions"
+    reports_root = tmp_path / "reports" / "wfa"
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    data_audit = _write_data_audit_universe(
+        tmp_path / "reports" / "pipeline_audit" / "universe.json",
+        audit_status=audit_status,
+    )
+    split_plan = _write_split_plan(
+        reports_root / "split_plan.json",
+        data_audit_universe=load_data_audit_universe(data_audit).evidence(),
+    )
+    _write_feature_matrix(input_root)
+
+    manifest = run_wfa(
+        profile="fixture",
+        matrix="baseline",
+        run="baseline",
+        input_root=input_root,
+        split_plan=split_plan,
+        predictions_root=predictions_root,
+        reports_root=reports_root,
+        models_config=models_config,
+        data_audit_universe_json=data_audit,
+    )
+
+    assert manifest["failure_count"] > 0
+    assert f"audit_status={audit_status!r}" in " ".join(manifest["failures"])
+    assert manifest["prediction_count"] == 0
 
 
 def test_run_wfa_does_not_load_split_plan_skipped_years(tmp_path: Path) -> None:

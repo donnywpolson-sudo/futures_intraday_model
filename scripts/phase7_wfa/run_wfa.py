@@ -23,6 +23,11 @@ from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from scripts.validation.data_audit_universe_guard import (
+    data_audit_evidence_matches,
+    load_data_audit_universe,
+)
+
 
 DEFAULT_PROFILE = "tier_1"
 DEFAULT_MATRIX = "baseline"
@@ -580,6 +585,12 @@ def _validate_fold_fields(fold: Mapping[str, Any]) -> list[str]:
     return failures
 
 
+def _fold_test_years(fold: Mapping[str, Any]) -> list[int]:
+    test_start = _utc(fold["test_start"])
+    test_end = _utc(fold["test_end"])
+    return list(range(int(test_start.year), int(test_end.year) + 1))
+
+
 def run_wfa(
     *,
     profile: str,
@@ -595,6 +606,7 @@ def run_wfa(
     markets: set[str] | None = None,
     fold_shard_count: int | None = None,
     fold_shard_index: int | None = None,
+    data_audit_universe_json: Path | None = None,
 ) -> dict[str, Any]:
     if matrix != "baseline":
         raise SystemExit("only baseline matrix is supported in the initial WFA runner")
@@ -608,10 +620,25 @@ def run_wfa(
     feature_cols, resolved_feature_cols_path = load_feature_cols(input_root, feature_cols_path)
     model_specs, model_config = load_model_specs(models_config)
     split_manifest = _read_json(split_plan)
+    data_audit_universe = (
+        load_data_audit_universe(data_audit_universe_json)
+        if data_audit_universe_json is not None
+        else None
+    )
+    data_audit_evidence = (
+        data_audit_universe.evidence() if data_audit_universe is not None else None
+    )
     folds = split_manifest.get("folds", [])
     if not isinstance(folds, list) or not folds:
         raise SystemExit(f"split plan has no folds: {_relative_path(split_plan)}")
     failures: list[str] = []
+    data_audit_plan_failure: str | None = None
+    if data_audit_universe is not None and not data_audit_evidence_matches(
+        split_manifest.get("data_audit_universe"),
+        data_audit_universe,
+    ):
+        data_audit_plan_failure = "split plan missing or stale data-audit universe evidence"
+        failures.append(data_audit_plan_failure)
     selectable_folds: list[Mapping[str, Any]] = []
     skipped_folds: list[dict[str, Any]] = []
     for fold in folds:
@@ -624,6 +651,37 @@ def run_wfa(
             continue
         split_group = str(fold.get("split_group", ""))
         if fold.get("selection_allowed") is True and split_group == "research":
+            if data_audit_plan_failure is not None:
+                skipped_folds.append(
+                    {
+                        "fold_id": str(fold.get("fold_id", "<unknown>")),
+                        "market": str(fold.get("market", "")),
+                        "split_group": split_group,
+                        "reason": data_audit_plan_failure,
+                    }
+                )
+                continue
+            if data_audit_universe is not None:
+                fold_guard_failures = [
+                    data_audit_universe.require_usable(
+                        str(fold["market"]),
+                        year,
+                        context=f"WFA fold {fold.get('fold_id', '<unknown>')}",
+                    )
+                    for year in _fold_test_years(fold)
+                ]
+                fold_guard_failures = [failure for failure in fold_guard_failures if failure]
+                if fold_guard_failures:
+                    failures.extend(fold_guard_failures)
+                    skipped_folds.append(
+                        {
+                            "fold_id": str(fold.get("fold_id", "<unknown>")),
+                            "market": str(fold.get("market", "")),
+                            "split_group": split_group,
+                            "reason": "data_audit_universe_not_usable",
+                        }
+                    )
+                    continue
             selectable_folds.append(fold)
         elif fold.get("selection_allowed") is True:
             failures.append(
@@ -859,6 +917,7 @@ def run_wfa(
             "fold_shard_index": fold_shard_index,
             "max_folds": max_folds,
         },
+        "data_audit_universe": data_audit_evidence,
         "skipped_fold_count": len(skipped_folds),
         "skipped_folds": skipped_folds,
         "prediction_count": prediction_count,
@@ -895,6 +954,7 @@ def run_wfa(
             "fold_shard_index": fold_shard_index,
             "max_folds": max_folds,
         },
+        "data_audit_universe": data_audit_evidence,
         "skipped_fold_count": len(skipped_folds),
         "skipped_folds": skipped_folds,
         "prediction_count": prediction_count,
@@ -929,6 +989,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--markets", default=None)
     parser.add_argument("--fold-shard-count", type=int, default=None)
     parser.add_argument("--fold-shard-index", type=int, default=None)
+    parser.add_argument("--data-audit-universe-json", default=None)
     return parser
 
 
@@ -948,6 +1009,9 @@ def main() -> int:
         markets=_parse_csv_filter(args.markets),
         fold_shard_count=args.fold_shard_count,
         fold_shard_index=args.fold_shard_index,
+        data_audit_universe_json=(
+            Path(args.data_audit_universe_json) if args.data_audit_universe_json else None
+        ),
     )
     status = "FAIL" if manifest["failure_count"] else "PASS"
     print(

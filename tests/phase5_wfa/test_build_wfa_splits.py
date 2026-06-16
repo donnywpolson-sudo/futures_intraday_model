@@ -96,6 +96,34 @@ def _feature_root(tmp_path: Path) -> Path:
     return tmp_path / "data" / "feature_matrices" / "baseline"
 
 
+def _write_data_audit_universe(
+    path: Path,
+    *,
+    audit_status: str,
+    market: str = "ES",
+    year: int = 2024,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "status": "PASS",
+                "summary": {"audit_status_counts": {audit_status: 1}},
+                "market_years": [
+                    {
+                        "market": market,
+                        "year": year,
+                        "audit_status": audit_status,
+                        "reason": "fixture",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def test_build_split_plan_enforces_purge_and_writes_manifest(tmp_path: Path) -> None:
     input_root = _feature_root(tmp_path)
     reports_root = tmp_path / "reports" / "wfa"
@@ -132,6 +160,61 @@ def test_build_split_plan_enforces_purge_and_writes_manifest(tmp_path: Path) -> 
     saved = json.loads((reports_root / "split_plan.json").read_text(encoding="utf-8"))
     assert saved["fold_count_by_market"] == {"ES": manifest["fold_count"]}
     assert saved["final_holdout_policy"]["final_holdout_excluded_from_selection"] is True
+    assert saved["data_audit_universe"] is None
+
+
+def test_build_split_plan_records_data_audit_universe_evidence(tmp_path: Path) -> None:
+    input_root = _feature_root(tmp_path)
+    reports_root = tmp_path / "reports" / "wfa"
+    profile_config = _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    data_audit = _write_data_audit_universe(
+        tmp_path / "reports" / "pipeline_audit" / "universe.json",
+        audit_status="usable",
+    )
+    _write_matrix(input_root, year=2024, start="2024-01-01T00:00:00Z")
+
+    manifest = build_split_plan(
+        profile="selected",
+        input_root=input_root,
+        reports_root=reports_root,
+        profile_config=profile_config,
+        models_config=models_config,
+        data_audit_universe_json=data_audit,
+    )
+
+    assert manifest["failure_count"] == 0
+    assert manifest["data_audit_universe"]["status_counts"] == {"usable": 1}
+    assert manifest["data_audit_universe"]["file_hash"]
+
+
+@pytest.mark.parametrize("audit_status", ["quarantined", "diagnostic_only"])
+def test_build_split_plan_blocks_non_usable_data_audit_market_year(
+    tmp_path: Path,
+    audit_status: str,
+) -> None:
+    input_root = _feature_root(tmp_path)
+    reports_root = tmp_path / "reports" / "wfa"
+    profile_config = _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    data_audit = _write_data_audit_universe(
+        tmp_path / "reports" / "pipeline_audit" / "universe.json",
+        audit_status=audit_status,
+    )
+    _write_matrix(input_root, year=2024, start="2024-01-01T00:00:00Z")
+
+    manifest = build_split_plan(
+        profile="selected",
+        input_root=input_root,
+        reports_root=reports_root,
+        profile_config=profile_config,
+        models_config=models_config,
+        data_audit_universe_json=data_audit,
+    )
+
+    assert manifest["failure_count"] > 0
+    assert f"audit_status={audit_status!r}" in " ".join(manifest["failures"])
+    assert manifest["fold_count"] == 0
 
 
 def test_final_holdout_profile_blocks_without_explicit_allow(tmp_path: Path) -> None:
