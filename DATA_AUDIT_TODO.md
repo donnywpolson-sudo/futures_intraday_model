@@ -63,6 +63,18 @@ Snapshot updated: 2026-06-16. Refresh generated reports before acting.
   - confirmation top net: `-48380.00`
   - failures: `0`
   - do not tune or rerun variants from this result
+- Existing registered ES feature-family reruns are exhausted:
+  - `reports/pipeline_audit/tier1_es_harness_family_sweep.md`
+  - result: `15 / 15` registered families stopped
+  - includes `higher_timeframe_prior_session`, `fade_safety_trend_danger`, `effort_result`, and `trend_day_open_drive`
+  - do not rerun built-in feature families as new Phase 9 hypotheses
+- Pre-registered Tier 2 ES prior-session/cross-market custom Phase 9 hypothesis failed:
+  - `reports/pipeline_audit/phase9_tier2_es_prior_session_cross_market_context_hypothesis_harness.md`
+  - result: `STOP_REWORK_HYPOTHESIS`
+  - discovery top net: `-198224.50`
+  - confirmation top net: `-159989.50`
+  - failures: `0`
+  - do not tune or rerun variants from this result
 
 ## Current Interpretation
 
@@ -84,13 +96,13 @@ Snapshot updated: 2026-06-16. Refresh generated reports before acting.
 6. Guarded Phase 5 split smoke, producing 48 folds across `ES`, `CL`, `ZN`, and `6E`.
 7. Guarded Phase 7 one-fold smoke, recording current data-audit universe evidence.
 8. Guarded Phase 7 bounded 4-fold smoke and Phase 8 / anti-overfit audit; structural run passed, model robustness failed.
-9. Fresh Tier 2 ES split plan for Phase 9 checks; the auction-acceptance hypothesis stopped on its pre-registered rule.
+9. Fresh Tier 2 ES split plan for Phase 9 checks; the auction-acceptance and prior-session/cross-market custom hypotheses stopped on their pre-registered rules.
 
 ## Next Valid Step
 
 Stop expanding this WFA result. The data-audit universe is usable, the guarded 4-fold ES smoke remains anti-overfit `FAIL`, and the latest pre-registered ES-only Phase 9 hypotheses also stopped; model research stays `NO_GO`.
 
-Do not run full-market WFA scale, tune models, or search for alpha from this data-audit result. Any further ES-only Phase 9 work must use one new pre-registered hypothesis on unused folds from `reports/wfa_phase9_es_tier2_refresh/split_plan.json`.
+Do not run full-market WFA scale, tune models, or search for alpha from this data-audit result. Any further ES-only Phase 9 work must be a genuinely new custom hypothesis, not another registered feature-family rerun, and must use unused folds from `reports/wfa_phase9_es_tier2_refresh/split_plan.json`.
 
 ## Reference Commands
 

@@ -37,13 +37,20 @@ complete alpha-generating or production backtesting system.
   `es_late_session_close_long_bias_context` stopped with discovery net
   `-145480.50` and confirmation net `-138599.00`;
   `tier2_es_auction_acceptance_reversal_context` stopped with discovery net
-  `-176934.00` and confirmation net `-48380.00`.
+  `-176934.00` and confirmation net `-48380.00`;
+  `tier2_es_prior_session_cross_market_context` stopped with discovery net
+  `-198224.50` and confirmation net `-159989.50`.
 - These Phase 9 checks failed the pre-registered stop rule. Do not tune or
   rerun variants from these results.
 - Fresh Tier 2 ES Phase 9 split evidence exists at
   `reports/wfa_phase9_es_tier2_refresh/split_plan.json`; it generated
   `PASS WFA split plan: folds=880 markets=15 failures=0` and contains 60 ES
   research folds.
+- Prior ES feature-family sweep evidence already stopped all 15 registered
+  families in `reports/pipeline_audit/tier1_es_harness_family_sweep.md`,
+  including `higher_timeframe_prior_session`, `fade_safety_trend_danger`,
+  `effort_result`, and `trend_day_open_drive`. Do not rerun built-in families
+  as new Phase 9 hypotheses.
 
 ## Tier 1 No-Go Decision
 
@@ -90,6 +97,7 @@ Primary reports:
 - `reports/pipeline_audit/phase9_compression_breakout_participation_filter_hypothesis_harness.md`
 - `reports/pipeline_audit/phase9_es_late_session_close_long_bias_context_hypothesis_harness.md`
 - `reports/pipeline_audit/phase9_tier2_es_auction_acceptance_reversal_context_hypothesis_harness.md`
+- `reports/pipeline_audit/phase9_tier2_es_prior_session_cross_market_context_hypothesis_harness.md`
 - `reports/wfa_phase9_es_tier2_refresh/split_plan.json`
 - `reports/pipeline_audit/tier_1_data_audit_decisions.md`
 - `reports/pipeline_audit/tier_1_data_audit_universe.md`

@@ -47,9 +47,15 @@ Next valid work paths:
      `-145480.50`, confirmation net `-138599.00`.
    - `tier2_es_auction_acceptance_reversal_context` stopped: discovery net
      `-176934.00`, confirmation net `-48380.00`.
+   - `tier2_es_prior_session_cross_market_context` stopped: discovery net
+     `-198224.50`, confirmation net `-159989.50`.
+   - The prior ES family sweep stopped all 15 registered feature families,
+     including `higher_timeframe_prior_session`, `fade_safety_trend_danger`,
+     `effort_result`, and `trend_day_open_drive`.
    - These failed the pre-registered stop rule; do not tune or rerun variants
      from these results.
-   - Next ES-only work requires a new pre-registered hypothesis on unused folds.
+   - Next ES-only work requires a genuinely new custom hypothesis on unused
+     folds, not another registered feature-family rerun.
    - If a candidate passes discovery/confirmation, recheck on unused folds before
      considering broader WFA.
 
