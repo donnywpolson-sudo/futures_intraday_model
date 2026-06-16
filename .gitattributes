@@ -1,0 +1,5 @@
+# Keep frequently edited project docs stable on Windows worktrees.
+.gitattributes text eol=lf
+DATA_AUDIT_TODO.md text eol=lf
+CURRENT_PIPELINE.md text eol=lf
+"CODEX DO NEXT.md" text eol=lf

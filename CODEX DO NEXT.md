@@ -11,6 +11,7 @@ Current decision:
 - Decision record: `reports/pipeline_audit/tier1_consolidated_no_go_report.md`.
 - Break-even/cost record: `reports/pipeline_audit/tier1_es_break_even_cost_audit.md`.
 - Locked selectivity rejection: `reports/pipeline_audit/tier1_es_locked_selectivity_recheck.md`.
+- Fresh Tier 2 ES Phase 9 split plan: `reports/wfa_phase9_es_tier2_refresh/split_plan.json`.
 - Code checkpoint: commit `c2794cf` (`Add Tier 1 ES research harness`).
 
 Do not do next:
@@ -22,19 +23,19 @@ Do not do next:
 Next valid work paths:
 
 1. Upstream data/session semantics
-   - Resolve whether ZN, 6E, and CL synthetic minute gaps are expected no-trade
-     minutes, session-template issues, or true missing data.
-   - Source-level validation is blocked by Databento access: the available
-     subscription only covers one year of L1 access, not the historical `trades`
-     windows needed here.
-   - Keep ZN and 6E quarantined from Tier 1 model diagnostics.
-   - Keep CL diagnostic-only until its raw gaps are explained.
+   - Tier 1 data-audit universe currently marks `ES`, `CL`, `ZN`, and `6E`
+     usable for 2023-2024 under Databento's documented OHLCV no-trade
+     convention plus local DBN/parquet provenance.
+   - Source-level historical L1/trades validation is blocked by Databento
+     access: the available subscription only covers one year of L1 access, not
+     the historical `trades` windows needed here.
    - Do not change Phase 2/session/fill semantics from the current evidence.
 
 2. New ES-only hypothesis research
    - Use `scripts.phase9_research.es_hypothesis_harness` for bounded checks.
    - Pre-register one feature hypothesis at a time.
-   - Use ES discovery folds 1-4 and confirmation folds 5-8.
+   - The original Tier 1 ES split-plan folds have been exhausted for Phase 9.
+   - Use unused ES folds from `reports/wfa_phase9_es_tier2_refresh/split_plan.json`.
    - Require positive discovery and confirmation before any locked recheck.
    - `time_buckets` smoke stopped: discovery net `-25651.00`,
      confirmation net `-10929.00`.
@@ -42,9 +43,13 @@ Next valid work paths:
      `-74112.00`, confirmation net `-259840.50`.
    - `compression_breakout_participation_filter` stopped: discovery net
      `-121049.50`, confirmation net `-200103.00`.
+   - `es_late_session_close_long_bias_context` stopped: discovery net
+     `-145480.50`, confirmation net `-138599.00`.
+   - `tier2_es_auction_acceptance_reversal_context` stopped: discovery net
+     `-176934.00`, confirmation net `-48380.00`.
    - These failed the pre-registered stop rule; do not tune or rerun variants
      from these results.
-   - Next ES-only work requires a new pre-registered hypothesis.
+   - Next ES-only work requires a new pre-registered hypothesis on unused folds.
    - If a candidate passes discovery/confirmation, recheck on unused folds before
      considering broader WFA.
 

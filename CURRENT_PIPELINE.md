@@ -35,9 +35,15 @@ complete alpha-generating or production backtesting system.
   `compression_breakout_participation_filter` stopped with discovery net
   `-121049.50` and confirmation net `-200103.00`;
   `es_late_session_close_long_bias_context` stopped with discovery net
-  `-145480.50` and confirmation net `-138599.00`.
+  `-145480.50` and confirmation net `-138599.00`;
+  `tier2_es_auction_acceptance_reversal_context` stopped with discovery net
+  `-176934.00` and confirmation net `-48380.00`.
 - These Phase 9 checks failed the pre-registered stop rule. Do not tune or
   rerun variants from these results.
+- Fresh Tier 2 ES Phase 9 split evidence exists at
+  `reports/wfa_phase9_es_tier2_refresh/split_plan.json`; it generated
+  `PASS WFA split plan: folds=880 markets=15 failures=0` and contains 60 ES
+  research folds.
 
 ## Tier 1 No-Go Decision
 
@@ -83,6 +89,8 @@ Primary reports:
 - `reports/pipeline_audit/phase9_post_shock_volume_confirmed_continuation_hypothesis_harness.md`
 - `reports/pipeline_audit/phase9_compression_breakout_participation_filter_hypothesis_harness.md`
 - `reports/pipeline_audit/phase9_es_late_session_close_long_bias_context_hypothesis_harness.md`
+- `reports/pipeline_audit/phase9_tier2_es_auction_acceptance_reversal_context_hypothesis_harness.md`
+- `reports/wfa_phase9_es_tier2_refresh/split_plan.json`
 - `reports/pipeline_audit/tier_1_data_audit_decisions.md`
 - `reports/pipeline_audit/tier_1_data_audit_universe.md`
 - `reports/wfa_data_audit_guard_smoke/split_plan.json`
