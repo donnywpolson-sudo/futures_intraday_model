@@ -9,10 +9,13 @@ complete alpha-generating or production backtesting system.
 - `tier_2_research` has complete raw, causal, and label coverage, but incomplete baseline feature coverage.
 - `tier_3_research` has complete available raw, causal, and label coverage, but incomplete baseline feature coverage.
 - Current Tier 1 model/research stack is `NO_GO` for promotion, tuning, and full WFA scale.
-- Tier 1 data-audit universe is now guarded and usable only for `ES 2023`
-  and `ES 2024`; guarded Phase 5 split smoke passed with 12 ES-only folds
-  and zero failures. Guarded Phase 7 ES one-fold smoke also passed with
-  `118188` predictions, 4 models, 1 fold, and zero failures.
+- Tier 1 data-audit universe is now guarded and marks all 8 Tier 1
+  market-years usable: `ES`, `CL`, `ZN`, and `6E` for 2023-2024. This accepts
+  Databento's documented OHLCV no-trade convention when local provenance
+  passes. Guarded Phase 5 split smoke passed with
+  `PASS WFA split plan: folds=48 markets=4 failures=0`. Guarded Phase 7
+  one-fold smoke passed with
+  `PASS WFA baseline: predictions=118188 models=4 folds=1 failures=0`.
 - Phase 8 policy diagnostics can evaluate saved predictions with costs, but they are not a live fill simulator or full execution backtester.
 - Refreshed Phase 8 baseline evidence remains `NO_GO`: `baseline_refreshed`
   has 23 trades, `net_return_dollars=-2353.5`, and anti-overfit robustness
@@ -37,18 +40,19 @@ complete alpha-generating or production backtesting system.
   `single_market_profit_contribution_above_cap`, and
   `fold_pass_rate_below_minimum`.
 - Data-audit universe:
-  - usable: `ES 2023`, `ES 2024`
-  - diagnostic-only: `CL 2023`, `CL 2024`
-  - quarantined: `ZN 2023`, `ZN 2024`, `6E 2023`, `6E 2024`
-- `ZN` and `6E` remain quarantined due to synthetic row share,
-  active-session share, and/or largest-gap blockers.
-- `CL` remains diagnostic-only by explicit audit policy.
+  - usable: `ES 2023`, `ES 2024`, `CL 2023`, `CL 2024`, `ZN 2023`, `ZN 2024`, `6E 2023`, `6E 2024`
+  - diagnostic-only: none under the current audited-universe policy
+  - quarantined: none under the current audited-universe policy
+- DBN-to-raw-parquet parity audit found no dropped rows and no
+  OHLCV/timestamp mismatches for the previously blocked Tier 1 market-years:
+  `CL 2023`, `CL 2024`, `ZN 2023`, `ZN 2024`, `6E 2023`, `6E 2024`.
 - Source-level validation is blocked by Databento access: the available
   subscription only covers one year of L1 access, not the historical `trades`
   windows needed here.
 - Databento documents `ohlcv-1m` as trade-derived with no record printed when
-  no trade occurs in the interval. The audit accepts that convention only
-  under conservative local guardrails; no Phase 2/session/fill semantic
+  no trade occurs in the interval. The audit now accepts that convention for
+  audited universe decisions when local DBN/parquet provenance passes. This is
+  not independent historical L1/trades proof; no Phase 2/session/fill semantic
   changes are justified from the current evidence.
 
 Primary reports:
