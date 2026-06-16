@@ -535,6 +535,53 @@ def _market_year_pairs(markets: list[str], years: list[int]) -> list[tuple[str, 
     return [(market, int(year)) for market in markets for year in years]
 
 
+def _available_parquet_years(root: Path, market: str) -> set[int]:
+    market_root = root / market
+    if not market_root.exists():
+        return set()
+    years: set[int] = set()
+    for path in market_root.glob("*.parquet"):
+        try:
+            years.add(int(path.stem))
+        except ValueError:
+            continue
+    return years
+
+
+def _profile_market_year_pairs_from_available_data(
+    *,
+    markets: list[str],
+    years: list[int],
+    raw_root: Path,
+    causal_root: Path,
+) -> tuple[list[tuple[str, int]], list[dict[str, Any]], list[str]]:
+    pairs: list[tuple[str, int]] = []
+    skipped: list[dict[str, Any]] = []
+    failures: list[str] = []
+    requested = sorted(set(int(year) for year in years))
+    for market in markets:
+        raw_years = _available_parquet_years(raw_root, market)
+        causal_years = _available_parquet_years(causal_root, market)
+        common_years = sorted((raw_years & causal_years) & set(requested))
+        if not common_years:
+            failures.append(f"{market}: no common raw+causal parquet years in requested profile range")
+            continue
+        first_year = common_years[0]
+        for year in requested:
+            if year < first_year:
+                skipped.append(
+                    {
+                        "market": market,
+                        "year": int(year),
+                        "reason": "before_first_common_raw_causal_year",
+                        "first_common_raw_causal_year": int(first_year),
+                    }
+                )
+                continue
+            pairs.append((market, int(year)))
+    return pairs, skipped, failures
+
+
 def _read_progress_keys(path: Path) -> tuple[set[tuple[str, int]], list[str]]:
     if not path.exists():
         return set(), []
@@ -586,7 +633,17 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         completed_keys, progress_failures = _read_progress_keys(progress_path)
         failures.extend(progress_failures)
 
-    selected_pairs = _market_year_pairs(markets, years)
+    if args.years:
+        selected_pairs = _market_year_pairs(markets, years)
+        unavailable_skipped: list[dict[str, Any]] = []
+    else:
+        selected_pairs, unavailable_skipped, availability_failures = _profile_market_year_pairs_from_available_data(
+            markets=markets,
+            years=years,
+            raw_root=Path(args.raw_root),
+            causal_root=Path(args.causal_root),
+        )
+        failures.extend(availability_failures)
     pending_pairs = [
         (market, year)
         for market, year in selected_pairs
@@ -597,6 +654,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         for market, year in selected_pairs
         if (market, year) in completed_keys
     ]
+    skipped_market_years.extend(unavailable_skipped)
     if max_market_years is not None:
         pending_pairs = pending_pairs[: int(max_market_years)]
 

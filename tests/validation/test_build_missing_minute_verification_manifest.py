@@ -187,7 +187,7 @@ def test_missing_inputs_fail_closed_after_writing_manifest(tmp_path: Path) -> No
     manifest = json.loads(json_out.read_text(encoding="utf-8"))
     assert code == 1
     assert manifest["status"] == "FAIL"
-    assert "missing input" in " ".join(manifest["failures"])
+    assert "no common raw+causal parquet years" in " ".join(manifest["failures"])
     assert md_out.exists()
 
 
@@ -296,6 +296,58 @@ def test_max_market_years_limits_chunk(tmp_path: Path) -> None:
     assert manifest["summary"]["window_count"] == 1
 
 
+def test_profile_years_start_at_first_available_raw_and_causal_year(tmp_path: Path) -> None:
+    _write_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    _write_session_config(tmp_path / "configs" / "market_sessions.yaml")
+    _write_inputs(tmp_path)
+    args = _args(tmp_path)
+    args.years = None
+
+    manifest = build_manifest(args)
+
+    assert manifest["status"] == "PASS"
+    assert manifest["summary"]["selected_market_year_count"] == 1
+    assert manifest["summary"]["processed_market_year_count"] == 1
+    assert not manifest["skipped_market_years"]
+
+
+def test_profile_years_skip_before_first_available_year(tmp_path: Path) -> None:
+    _write_inputs(tmp_path)
+    config = tmp_path / "configs" / "alpha_tiered.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "profiles:",
+                "  tier_3_research:",
+                "    markets: [ZN]",
+                "    years: [2023, 2024]",
+                "aliases:",
+                "  tier_3: tier_3_research",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    args = _args(tmp_path)
+    args.years = None
+
+    manifest = build_manifest(args)
+
+    assert manifest["status"] == "PASS"
+    assert manifest["summary"]["selected_market_year_count"] == 1
+    assert manifest["summary"]["skipped_market_year_count"] == 1
+    assert manifest["skipped_market_years"][0]["year"] == 2023
+    assert manifest["skipped_market_years"][0]["reason"] == "before_first_common_raw_causal_year"
+
+
+def test_explicit_years_still_fail_closed_when_missing(tmp_path: Path) -> None:
+    _write_inputs(tmp_path)
+    args = _args(tmp_path)
+    args.years = [2023, 2024]
+
+    manifest = build_manifest(args)
+
+    assert manifest["status"] == "FAIL"
+    assert "missing input" in " ".join(manifest["failures"])
 def test_diagnostic_labels_are_non_proof_and_audit_only(tmp_path: Path) -> None:
     _write_inputs(tmp_path)
 
