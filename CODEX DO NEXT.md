@@ -94,13 +94,20 @@ Next valid work paths:
      `reports/phase8/data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_signal_trade_quality_summary.json`.
    - Positive gross/net threshold scenarios exist, but best examples are only
      `19` trades; do not accept or tune around these small-sample pockets.
+   - Event-level edge feasibility:
+     `reports/phase8/data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_event_level_edge_feasibility.json`.
+   - Event-level result: `1053` non-overlapping events, `32222` skipped
+     overlapping rows, event gross/cost/net `-787.5`, `31063.5`, `-31851.0`,
+     direction accuracy `0.30959164292497626`, positive fold rate `0.0`,
+     decision `does_not_support_new_edge_model_research`.
    - Current conclusion: cost accounting is not the only problem; target-window
-     overlap and poor traded direction alignment must be resolved before more
-     alpha hypothesis searches.
+     overlap, poor traded direction alignment, and negative event-level edge
+     rule out this saved signal stack.
 
 4. Checkpoint and reset research direction
-   - Next safe action is to commit the diagnostic harness/docs if reviewed.
-   - After that, plan a new edge-model or target-construction research direction
+   - Next safe action is to commit the event-level diagnostic harness/docs if
+     reviewed.
+   - After that, plan a new target-construction or feature-generation direction
      separately.
    - Do not rescue this stack by threshold tuning.
    - Do not change policy, position semantics, labels, or features without a

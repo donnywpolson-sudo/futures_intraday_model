@@ -80,6 +80,19 @@ Snapshot updated: 2026-06-16. Refresh generated reports before acting.
   - signal quality report: `reports/phase8/data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_signal_trade_quality_summary.json`
   - positive gross/net threshold scenarios found: `30`, but best examples are only `19` trades
   - interpretation: do not tune thresholds from these diagnostics; any apparent positive small-sample threshold pocket is exploratory and fails robustness/sample-size discipline
+- Phase 8 event-level edge feasibility audit also remains `NO_GO`:
+  - report: `reports/phase8/data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_event_level_edge_feasibility.json`
+  - source prediction rows: `456712`
+  - policy rows: `114178`
+  - current-policy traded rows: `173`
+  - direction candidate rows: `33275`
+  - non-overlapping events: `1053`
+  - skipped overlapping rows: `32222`
+  - event gross/cost/net: `-787.5`, `31063.5`, `-31851.0`
+  - event direction accuracy: `0.30959164292497626`
+  - positive fold rate: `0.0`
+  - decision: `does_not_support_new_edge_model_research`
+  - interpretation: after converting row-level candidates to non-overlapping events, the edge remains negative and does not support new edge-model research from this saved signal stack
 - Pre-registered ES-only Phase 9 late-session context hypothesis also failed:
   - `reports/pipeline_audit/phase9_es_late_session_close_long_bias_context_hypothesis_harness.md`
   - result: `STOP_REWORK_HYPOTHESIS`
@@ -135,13 +148,14 @@ Snapshot updated: 2026-06-16. Refresh generated reports before acting.
 10. Phase 8 policy signal / threshold sanity diagnostics; traded direction alignment is poor and threshold sanity says to stop policy work and audit labels/features.
 11. Phase 8 label/feature sanity; prediction rows match feature/label rows and target scale is not flagged.
 12. Phase 8 direction-edge / signal-quality diagnostics; direction probabilities are not tradeable without a new edge model, and small positive threshold pockets are not accepted.
-13. Fresh Tier 2 ES split plan for Phase 9 checks; the auction-acceptance and prior-session/cross-market custom hypotheses stopped on their pre-registered rules.
+13. Phase 8 event-level edge feasibility audit; non-overlapping events remain negative and do not support new edge-model research from this saved signal stack.
+14. Fresh Tier 2 ES split plan for Phase 9 checks; the auction-acceptance and prior-session/cross-market custom hypotheses stopped on their pre-registered rules.
 
 ## Next Valid Step
 
-Stop expanding this WFA result. The data-audit universe is usable, the guarded 4-fold ES smoke remains anti-overfit `FAIL`, run-level cost sensitivity remains negative, target-window overlap is material, traded target-direction accuracy is poor, label/feature alignment passed, direction probabilities are not tradeable without a new edge model, and the latest pre-registered ES-only Phase 9 hypotheses also stopped; model research stays `NO_GO`.
+Stop expanding this WFA result. The data-audit universe is usable, the guarded 4-fold ES smoke remains anti-overfit `FAIL`, run-level cost sensitivity remains negative, target-window overlap is material, traded target-direction accuracy is poor, label/feature alignment passed, direction probabilities are not tradeable without a new edge model, event-level edge feasibility is negative, and the latest pre-registered ES-only Phase 9 hypotheses also stopped; model research stays `NO_GO`.
 
-Do not run full-market WFA scale, tune models, or search for alpha from this data-audit result. The next safe action is to checkpoint the diagnostic harness/docs, then plan a new edge-model or target-construction research direction separately; do not rescue this stack by threshold tuning. Any later ES-only Phase 9 work must be a genuinely new custom hypothesis, not another registered feature-family rerun, and must use unused folds from `reports/wfa_phase9_es_tier2_refresh/split_plan.json`.
+Do not run full-market WFA scale, tune models, or search for alpha from this data-audit result. The next safe action is to checkpoint the event-level diagnostic harness/docs, then plan a new target-construction or feature-generation direction separately; do not rescue this stack by threshold tuning. Any later ES-only Phase 9 work must be a genuinely new custom hypothesis, not another registered feature-family rerun, and must use unused folds from `reports/wfa_phase9_es_tier2_refresh/split_plan.json`.
 
 ## Reference Commands
 

@@ -51,6 +51,12 @@ complete alpha-generating or production backtesting system.
   positive tested scenario met the minimum `100` trades rule; signal-quality
   found positive threshold pockets, but best examples are only `19` trades and
   are not accepted as alpha.
+- Phase 8 event-level edge feasibility is also `NO_GO`: source prediction rows
+  `456712`, policy rows `114178`, current-policy traded rows `173`, direction
+  candidate rows `33275`, non-overlapping events `1053`, skipped overlapping
+  rows `32222`, event gross/cost/net `-787.5`, `31063.5`, `-31851.0`, event
+  direction accuracy `0.30959164292497626`, positive fold rate `0.0`, and
+  decision `does_not_support_new_edge_model_research`.
 - Refreshed Phase 8 baseline evidence remains `NO_GO`: `baseline_refreshed`
   has 23 trades, `net_return_dollars=-2353.5`, and anti-overfit robustness
   `FAIL`.
@@ -107,6 +113,9 @@ complete alpha-generating or production backtesting system.
 - Guarded 4-fold direction-edge diagnostics reject threshold rescue: direction
   probabilities are not tradeable without a new edge model, and small positive
   threshold pockets fail sample-size/robustness discipline.
+- Guarded 4-fold event-level edge feasibility rejects the saved signal stack
+  after non-overlapping conversion: `1053` events, net `-31851.0`, direction
+  accuracy `0.30959164292497626`, positive fold rate `0.0`.
 - Data-audit universe:
   - usable: `ES 2023`, `ES 2024`, `CL 2023`, `CL 2024`, `ZN 2023`, `ZN 2024`, `6E 2023`, `6E 2024`
   - diagnostic-only: none under the current audited-universe policy
