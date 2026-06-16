@@ -45,6 +45,13 @@ Snapshot updated: 2026-06-16. Refresh generated reports before acting.
   - anti-overfit result: `FAIL`
   - failures: `base_net_nonpositive`, `cost_stress_1_5x_nonpositive`, `cost_stress_2x_nonpositive`, `single_market_profit_contribution_above_cap`, `fold_pass_rate_below_minimum`
   - checks: base net `-4991.0`, 1.5x cost stress `-7542.75`, 2x cost stress `-10094.5`, fold pass rate `0.25`
+- Pre-registered ES-only Phase 9 late-session context hypothesis also failed:
+  - `reports/pipeline_audit/phase9_es_late_session_close_long_bias_context_hypothesis_harness.md`
+  - result: `STOP_REWORK_HYPOTHESIS`
+  - discovery top net: `-145480.50`
+  - confirmation top net: `-138599.00`
+  - failures: `0`
+  - do not tune or rerun variants from this result
 
 ## Current Interpretation
 
@@ -69,7 +76,7 @@ Snapshot updated: 2026-06-16. Refresh generated reports before acting.
 
 ## Next Valid Step
 
-Stop expanding this WFA result. The data-audit universe is usable, but the guarded 4-fold ES smoke remains anti-overfit `FAIL`; model research stays `NO_GO`.
+Stop expanding this WFA result. The data-audit universe is usable, the guarded 4-fold ES smoke remains anti-overfit `FAIL`, and the latest pre-registered ES-only Phase 9 hypothesis also stopped; model research stays `NO_GO`.
 
 Do not run full-market WFA scale, tune models, or search for alpha from this data-audit result.
 

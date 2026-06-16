@@ -33,7 +33,9 @@ complete alpha-generating or production backtesting system.
   `post_shock_volume_confirmed_continuation` stopped with discovery net
   `-74112.00` and confirmation net `-259840.50`;
   `compression_breakout_participation_filter` stopped with discovery net
-  `-121049.50` and confirmation net `-200103.00`.
+  `-121049.50` and confirmation net `-200103.00`;
+  `es_late_session_close_long_bias_context` stopped with discovery net
+  `-145480.50` and confirmation net `-138599.00`.
 - These Phase 9 checks failed the pre-registered stop rule. Do not tune or
   rerun variants from these results.
 
@@ -80,6 +82,7 @@ Primary reports:
 - `reports/pipeline_audit/phase9_smoke_time_buckets_1x1_hypothesis_harness.md`
 - `reports/pipeline_audit/phase9_post_shock_volume_confirmed_continuation_hypothesis_harness.md`
 - `reports/pipeline_audit/phase9_compression_breakout_participation_filter_hypothesis_harness.md`
+- `reports/pipeline_audit/phase9_es_late_session_close_long_bias_context_hypothesis_harness.md`
 - `reports/pipeline_audit/tier_1_data_audit_decisions.md`
 - `reports/pipeline_audit/tier_1_data_audit_universe.md`
 - `reports/wfa_data_audit_guard_smoke/split_plan.json`
