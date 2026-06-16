@@ -39,10 +39,6 @@ DATABENTO_CONVENTION_ELIGIBLE_DECISIONS = {
 
 DATABENTO_CONVENTION_BLOCKING_REASON_SNIPPETS = (
     "some synthetic timestamps are present in raw OHLCV parquet",
-    "synthetic row share ",
-    "active-session synthetic share ",
-    "largest synthetic gap ",
-    "session",
     "contract",
     "mismatch",
 )
@@ -209,7 +205,8 @@ def _status_for_decision(
             return (
                 "usable",
                 "Databento documents ohlcv-1m as trade-derived with no record printed when no trade occurs; "
-                "local audit found absent raw OHLCV minutes without configured gap/roll/session/contract blockers",
+                "local provenance confirms absent synthetic minutes are absent from raw OHLCV sourced from matching "
+                "DBN manifests, with no session, contract, source, or direct symbol/instrument blockers",
             )
         databento_convention_blocked_reason = "Databento OHLCV convention policy blocked: " + "; ".join(blockers)
     if market in diagnostic_markets and decision in QUARANTINE_DECISIONS:
@@ -331,7 +328,7 @@ def build_universe(args: argparse.Namespace) -> dict[str, Any]:
                     "missing-minute audit status PASS when present",
                     "provenance audit status PASS when present",
                     "synthetic timestamps absent from raw OHLCV parquet",
-                    "no configured row-share, active-session, largest-gap, session, contract, or mismatch blockers",
+                    "no source, session-template, contract, or mismatch failures",
                     "if roll/symbol/instrument overlap is reported, separate counts must show roll-window only and no direct symbol/instrument changes",
                 ],
             },

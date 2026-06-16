@@ -139,22 +139,23 @@ def test_databento_ohlcv_convention_can_relax_ohlcv_only_quarantine(tmp_path: Pa
     report = build_universe(_args(tmp_path, accept_databento_convention=True))
 
     assert report["status"] == "PASS"
-    assert report["summary"]["audit_status_counts"] == {"quarantined": 2, "usable": 2}
+    assert report["summary"]["audit_status_counts"] == {"quarantined": 1, "usable": 3}
     row = next(item for item in report["market_years"] if item["market"] == "ES" and item["year"] == 2023)
     assert row["audit_status"] == "usable"
     assert "Databento documents ohlcv-1m" in row["reason"]
+    assert "matching DBN manifests" in row["reason"]
     assert report["policy"]["databento_ohlcv_no_trade_convention"]["enabled"] is True
 
 
-def test_databento_ohlcv_convention_still_blocks_active_session_gap_flags(tmp_path: Path) -> None:
+def test_databento_ohlcv_convention_does_not_block_on_gap_size_or_share_flags(tmp_path: Path) -> None:
     _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
     _write_decisions(tmp_path / "reports" / "decisions.json", _complete_rows())
 
     report = build_universe(_args(tmp_path, accept_databento_convention=True))
 
     row = next(item for item in report["market_years"] if item["market"] == "CL" and item["year"] == 2022)
-    assert row["audit_status"] == "quarantined"
-    assert "active-session synthetic share" in row["reason"]
+    assert row["audit_status"] == "usable"
+    assert "Databento documents ohlcv-1m" in row["reason"]
 
 
 def test_databento_ohlcv_convention_allows_roll_window_only_when_counts_are_available(tmp_path: Path) -> None:
