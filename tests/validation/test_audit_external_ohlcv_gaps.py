@@ -99,6 +99,61 @@ def _args(tmp_path: Path) -> object:
     )()
 
 
+def _manifest_args(tmp_path: Path, external: Path, manifest: Path | None = None) -> object:
+    return type(
+        "Args",
+        (),
+        {
+            "manifest_json": str(manifest or tmp_path / "reports" / "manifest.json"),
+            "external_ohlcv": [str(external)],
+            "markets": None,
+            "years": None,
+            "external_market": None,
+            "external_year": None,
+            "external_contract": None,
+            "external_instrument_id": None,
+            "external_market_column": None,
+            "external_year_column": None,
+            "external_contract_column": None,
+            "external_instrument_id_column": None,
+            "external_volume_column": None,
+        },
+    )()
+
+
+def _write_manifest(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "windows": [
+                    {
+                        "market": "ZN",
+                        "year": 2024,
+                        "synthetic_gap_id": "gap-1",
+                        "raw_symbol": "ZNH4",
+                        "instrument_id": 123,
+                        "first_missing_ts_utc": "2024-01-03T15:00:00Z",
+                        "last_missing_ts_utc": "2024-01-03T15:01:00Z",
+                        "query_start_utc": "2024-01-03T14:59:00Z",
+                        "query_end_utc": "2024-01-03T15:02:00Z",
+                        "source_gap_timestamps": [
+                            "2024-01-03T15:00:00Z",
+                            "2024-01-03T15:01:00Z",
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_external(path: Path, rows: list[dict[str, object]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(path, index=False)
+
+
 def test_builds_plan_and_resolves_adjacent_contract(tmp_path: Path) -> None:
     _write_inputs(tmp_path)
 
@@ -190,4 +245,179 @@ def test_missing_inputs_fail_closed_after_writing_reports(tmp_path: Path) -> Non
     assert code == 1
     assert report["status"] == "FAIL"
     assert "missing input" in " ".join(report["failures"])
+    assert md_out.exists()
+
+
+def test_manifest_mode_classifies_present_external_gap_bar(tmp_path: Path) -> None:
+    manifest = tmp_path / "reports" / "manifest.json"
+    external = tmp_path / "external.csv"
+    _write_manifest(manifest)
+    _write_external(
+        external,
+        [
+            {
+                "market": "ZN",
+                "year": 2024,
+                "raw_symbol": "ZNH4",
+                "ts": "2024-01-03T14:59:00Z",
+                "volume": 10,
+            },
+            {
+                "market": "ZN",
+                "year": 2024,
+                "raw_symbol": "ZNH4",
+                "ts": "2024-01-03T15:00:00Z",
+                "volume": 5,
+            },
+            {
+                "market": "ZN",
+                "year": 2024,
+                "raw_symbol": "ZNH4",
+                "ts": "2024-01-03T15:02:00Z",
+                "volume": 12,
+            },
+        ],
+    )
+
+    report = build_report(_manifest_args(tmp_path, external, manifest))
+    window = report["windows"][0]
+
+    assert report["status"] == "PASS"
+    assert window["classification"] == "confirmed_present_in_external_ohlcv"
+    assert window["external_bar_count_in_gap"] == 1
+
+
+def test_manifest_mode_classifies_missing_in_both_sources(tmp_path: Path) -> None:
+    manifest = tmp_path / "reports" / "manifest.json"
+    external = tmp_path / "external.csv"
+    _write_manifest(manifest)
+    _write_external(
+        external,
+        [
+            {
+                "market": "ZN",
+                "year": 2024,
+                "raw_symbol": "ZNH4",
+                "ts": "2024-01-03T14:59:00Z",
+                "volume": 10,
+            },
+            {
+                "market": "ZN",
+                "year": 2024,
+                "raw_symbol": "ZNH4",
+                "ts": "2024-01-03T15:02:00Z",
+                "volume": 12,
+            },
+        ],
+    )
+
+    report = build_report(_manifest_args(tmp_path, external, manifest))
+
+    assert report["status"] == "PASS"
+    assert report["windows"][0]["classification"] == "missing_in_both_ohlcv_sources"
+
+
+def test_manifest_mode_classifies_zero_volume_external_bar(tmp_path: Path) -> None:
+    manifest = tmp_path / "reports" / "manifest.json"
+    external = tmp_path / "external.csv"
+    _write_manifest(manifest)
+    _write_external(
+        external,
+        [
+            {
+                "market": "ZN",
+                "year": 2024,
+                "raw_symbol": "ZNH4",
+                "ts": "2024-01-03T14:59:00Z",
+                "volume": 10,
+            },
+            {
+                "market": "ZN",
+                "year": 2024,
+                "raw_symbol": "ZNH4",
+                "ts": "2024-01-03T15:00:00Z",
+                "volume": 0,
+            },
+            {
+                "market": "ZN",
+                "year": 2024,
+                "raw_symbol": "ZNH4",
+                "ts": "2024-01-03T15:02:00Z",
+                "volume": 12,
+            },
+        ],
+    )
+
+    report = build_report(_manifest_args(tmp_path, external, manifest))
+
+    assert report["status"] == "PASS"
+    assert report["windows"][0]["classification"] == "external_zero_volume_bar"
+
+
+def test_manifest_mode_fails_closed_on_contract_mismatch(tmp_path: Path) -> None:
+    manifest = tmp_path / "reports" / "manifest.json"
+    external = tmp_path / "external.csv"
+    _write_manifest(manifest)
+    _write_external(
+        external,
+        [
+            {
+                "market": "ZN",
+                "year": 2024,
+                "raw_symbol": "ZNM4",
+                "ts": "2024-01-03T15:00:00Z",
+                "volume": 5,
+            }
+        ],
+    )
+
+    report = build_report(_manifest_args(tmp_path, external, manifest))
+
+    assert report["status"] == "FAIL"
+    assert report["windows"][0]["classification"] == "contract_or_session_mismatch"
+
+
+def test_manifest_mode_fails_closed_on_missing_manifest(tmp_path: Path) -> None:
+    external = tmp_path / "external.csv"
+    _write_external(
+        external,
+        [{"market": "ZN", "year": 2024, "raw_symbol": "ZNH4", "ts": "2024-01-03T15:00:00Z"}],
+    )
+
+    report = build_report(_manifest_args(tmp_path, external))
+
+    assert report["status"] == "FAIL"
+    assert "missing manifest" in " ".join(report["failures"])
+
+
+def test_manifest_mode_main_writes_reports(tmp_path: Path) -> None:
+    manifest = tmp_path / "reports" / "manifest.json"
+    external = tmp_path / "external.csv"
+    json_out = tmp_path / "reports" / "external_compare.json"
+    md_out = tmp_path / "reports" / "external_compare.md"
+    _write_manifest(manifest)
+    _write_external(
+        external,
+        [
+            {"market": "ZN", "year": 2024, "raw_symbol": "ZNH4", "ts": "2024-01-03T14:59:00Z"},
+            {"market": "ZN", "year": 2024, "raw_symbol": "ZNH4", "ts": "2024-01-03T15:02:00Z"},
+        ],
+    )
+
+    code = main(
+        [
+            "--manifest-json",
+            str(manifest),
+            "--external-ohlcv",
+            str(external),
+            "--json-out",
+            str(json_out),
+            "--md-out",
+            str(md_out),
+        ]
+    )
+
+    report = json.loads(json_out.read_text(encoding="utf-8"))
+    assert code == 0
+    assert report["windows"][0]["classification"] == "missing_in_both_ohlcv_sources"
     assert md_out.exists()
