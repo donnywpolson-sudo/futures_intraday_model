@@ -9,6 +9,10 @@ complete alpha-generating or production backtesting system.
 - `tier_2_research` has complete raw, causal, and label coverage, but incomplete baseline feature coverage.
 - `tier_3_research` has complete available raw, causal, and label coverage, but incomplete baseline feature coverage.
 - Current Tier 1 model/research stack is `NO_GO` for promotion, tuning, and full WFA scale.
+- Tier 1 data-audit universe is now guarded and usable only for `ES 2023`
+  and `ES 2024`; guarded Phase 5 split smoke passed with 12 ES-only folds
+  and zero failures. Guarded Phase 7 ES one-fold smoke also passed with
+  `118188` predictions, 4 models, 1 fold, and zero failures.
 - Phase 8 policy diagnostics can evaluate saved predictions with costs, but they are not a live fill simulator or full execution backtester.
 - Refreshed Phase 8 baseline evidence remains `NO_GO`: `baseline_refreshed`
   has 23 trades, `net_return_dollars=-2353.5`, and anti-overfit robustness
@@ -32,13 +36,20 @@ complete alpha-generating or production backtesting system.
   `cost_stress_1_5x_nonpositive`, `cost_stress_2x_nonpositive`,
   `single_market_profit_contribution_above_cap`, and
   `fold_pass_rate_below_minimum`.
-- `ZN` and `6E` remain quarantined until raw no-trade/session semantics are resolved.
-- `CL` remains diagnostic-only until raw gaps are explained.
+- Data-audit universe:
+  - usable: `ES 2023`, `ES 2024`
+  - diagnostic-only: `CL 2023`, `CL 2024`
+  - quarantined: `ZN 2023`, `ZN 2024`, `6E 2023`, `6E 2024`
+- `ZN` and `6E` remain quarantined due to synthetic row share,
+  active-session share, and/or largest-gap blockers.
+- `CL` remains diagnostic-only by explicit audit policy.
 - Source-level validation is blocked by Databento access: the available
   subscription only covers one year of L1 access, not the historical `trades`
   windows needed here.
-- No Phase 2/session/fill semantic changes are justified from the current
-  evidence.
+- Databento documents `ohlcv-1m` as trade-derived with no record printed when
+  no trade occurs in the interval. The audit accepts that convention only
+  under conservative local guardrails; no Phase 2/session/fill semantic
+  changes are justified from the current evidence.
 
 Primary reports:
 
@@ -51,6 +62,11 @@ Primary reports:
 - `reports/pipeline_audit/phase9_smoke_time_buckets_1x1_hypothesis_harness.md`
 - `reports/pipeline_audit/phase9_post_shock_volume_confirmed_continuation_hypothesis_harness.md`
 - `reports/pipeline_audit/phase9_compression_breakout_participation_filter_hypothesis_harness.md`
+- `reports/pipeline_audit/tier_1_data_audit_decisions.md`
+- `reports/pipeline_audit/tier_1_data_audit_universe.md`
+- `reports/wfa_data_audit_guard_smoke/split_plan.json`
+- `reports/wfa_data_audit_guard_phase7_smoke/data_audit_guard_smoke_wfa_report.json`
+- `reports/wfa_data_audit_guard_phase7_smoke/data_audit_guard_smoke_predictions_manifest.json`
 
 ## Promotion Gates
 
