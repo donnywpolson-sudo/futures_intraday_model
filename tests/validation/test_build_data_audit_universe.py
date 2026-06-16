@@ -157,6 +157,62 @@ def test_databento_ohlcv_convention_still_blocks_active_session_gap_flags(tmp_pa
     assert "active-session synthetic share" in row["reason"]
 
 
+def test_databento_ohlcv_convention_allows_roll_window_only_when_counts_are_available(tmp_path: Path) -> None:
+    rows = _complete_rows()
+    rows[1]["provenance_decision_reasons"] = [
+        "L1/trades unavailable: OHLCV-only audit cannot prove no trades occurred inside missing minutes",
+        "synthetic timestamps are absent from raw OHLCV parquet",
+        "synthetic rows overlap roll/symbol/instrument-change evidence",
+    ]
+    rows[1]["roll_window_synthetic_rows"] = 2
+    rows[1]["symbol_change_synthetic_rows"] = 0
+    rows[1]["instrument_id_change_synthetic_rows"] = 0
+    _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    _write_decisions(tmp_path / "reports" / "decisions.json", rows)
+
+    report = build_universe(_args(tmp_path, accept_databento_convention=True))
+
+    row = next(item for item in report["market_years"] if item["market"] == "ES" and item["year"] == 2023)
+    assert row["audit_status"] == "usable"
+
+
+def test_databento_ohlcv_convention_fails_closed_when_roll_counts_are_missing(tmp_path: Path) -> None:
+    rows = _complete_rows()
+    rows[1]["provenance_decision_reasons"] = [
+        "L1/trades unavailable: OHLCV-only audit cannot prove no trades occurred inside missing minutes",
+        "synthetic timestamps are absent from raw OHLCV parquet",
+        "synthetic rows overlap roll/symbol/instrument-change evidence",
+    ]
+    _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    _write_decisions(tmp_path / "reports" / "decisions.json", rows)
+
+    report = build_universe(_args(tmp_path, accept_databento_convention=True))
+
+    row = next(item for item in report["market_years"] if item["market"] == "ES" and item["year"] == 2023)
+    assert row["audit_status"] == "quarantined"
+    assert "lacks separate counts" in row["reason"]
+
+
+def test_databento_ohlcv_convention_blocks_direct_symbol_or_instrument_changes(tmp_path: Path) -> None:
+    rows = _complete_rows()
+    rows[1]["provenance_decision_reasons"] = [
+        "L1/trades unavailable: OHLCV-only audit cannot prove no trades occurred inside missing minutes",
+        "synthetic timestamps are absent from raw OHLCV parquet",
+        "synthetic rows overlap roll/symbol/instrument-change evidence",
+    ]
+    rows[1]["roll_window_synthetic_rows"] = 2
+    rows[1]["symbol_change_synthetic_rows"] = 1
+    rows[1]["instrument_id_change_synthetic_rows"] = 0
+    _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    _write_decisions(tmp_path / "reports" / "decisions.json", rows)
+
+    report = build_universe(_args(tmp_path, accept_databento_convention=True))
+
+    row = next(item for item in report["market_years"] if item["market"] == "ES" and item["year"] == 2023)
+    assert row["audit_status"] == "quarantined"
+    assert "symbol_change_synthetic_rows=1" in row["reason"]
+
+
 def test_missing_decision_row_fails_closed(tmp_path: Path) -> None:
     _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
     _write_decisions(tmp_path / "reports" / "decisions.json", _complete_rows()[:-1])

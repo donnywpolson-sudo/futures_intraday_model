@@ -42,10 +42,16 @@ DATABENTO_CONVENTION_BLOCKING_REASON_SNIPPETS = (
     "synthetic row share ",
     "active-session synthetic share ",
     "largest synthetic gap ",
-    "synthetic rows overlap roll/symbol/instrument-change evidence",
     "session",
     "contract",
     "mismatch",
+)
+
+ROLL_SYMBOL_INSTRUMENT_REASON = "synthetic rows overlap roll/symbol/instrument-change evidence"
+ROLL_SYMBOL_INSTRUMENT_COUNT_FIELDS = (
+    "roll_window_synthetic_rows",
+    "symbol_change_synthetic_rows",
+    "instrument_id_change_synthetic_rows",
 )
 
 
@@ -124,6 +130,41 @@ def _decision_reasons(row: dict[str, Any]) -> list[str]:
     return [str(reasons)]
 
 
+def _optional_int(row: dict[str, Any], field: str) -> int | None:
+    value = row.get(field)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _roll_symbol_instrument_blockers(row: dict[str, Any], reasons: list[str]) -> list[str]:
+    has_combined_roll_reason = any(ROLL_SYMBOL_INSTRUMENT_REASON in reason for reason in reasons)
+    counts = {field: _optional_int(row, field) for field in ROLL_SYMBOL_INSTRUMENT_COUNT_FIELDS}
+    direct_blockers: list[str] = []
+    if counts["symbol_change_synthetic_rows"]:
+        direct_blockers.append(f"symbol_change_synthetic_rows={counts['symbol_change_synthetic_rows']}")
+    if counts["instrument_id_change_synthetic_rows"]:
+        direct_blockers.append(
+            f"instrument_id_change_synthetic_rows={counts['instrument_id_change_synthetic_rows']}"
+        )
+    if direct_blockers:
+        return direct_blockers
+
+    if not has_combined_roll_reason:
+        return []
+
+    missing_count_fields = [field for field, value in counts.items() if value is None]
+    if missing_count_fields:
+        return [
+            f"{ROLL_SYMBOL_INSTRUMENT_REASON} but decision row lacks separate counts: "
+            + ", ".join(missing_count_fields)
+        ]
+    return []
+
+
 def _databento_convention_acceptance_blockers(row: dict[str, Any]) -> list[str]:
     decision = str(row.get("final_decision") or "")
     if decision not in DATABENTO_CONVENTION_ELIGIBLE_DECISIONS:
@@ -139,10 +180,13 @@ def _databento_convention_acceptance_blockers(row: dict[str, Any]) -> list[str]:
 
     blockers: list[str] = []
     for reason in reasons:
+        if ROLL_SYMBOL_INSTRUMENT_REASON in reason:
+            continue
         for snippet in DATABENTO_CONVENTION_BLOCKING_REASON_SNIPPETS:
             if snippet in reason:
                 blockers.append(reason)
                 break
+    blockers.extend(_roll_symbol_instrument_blockers(row, reasons))
     return blockers
 
 
@@ -287,7 +331,8 @@ def build_universe(args: argparse.Namespace) -> dict[str, Any]:
                     "missing-minute audit status PASS when present",
                     "provenance audit status PASS when present",
                     "synthetic timestamps absent from raw OHLCV parquet",
-                    "no configured row-share, active-session, largest-gap, roll, session, contract, or mismatch blockers",
+                    "no configured row-share, active-session, largest-gap, session, contract, or mismatch blockers",
+                    "if roll/symbol/instrument overlap is reported, separate counts must show roll-window only and no direct symbol/instrument changes",
                 ],
             },
             "diagnostic_only_markets": sorted(diagnostic_markets),
