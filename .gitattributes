@@ -7,3 +7,5 @@ scripts/phase8_model_selection/audit_policy_run_level_overlap.py text eol=lf
 tests/phase8_model_selection/test_audit_policy_run_level_overlap.py text eol=lf
 scripts/phase8_model_selection/audit_event_level_edge_feasibility.py text eol=lf
 tests/phase8_model_selection/test_audit_event_level_edge_feasibility.py text eol=lf
+scripts/phase3_labels/audit_target_construction_feasibility.py text eol=lf
+tests/phase3_labels/test_audit_target_construction_feasibility.py text eol=lf
