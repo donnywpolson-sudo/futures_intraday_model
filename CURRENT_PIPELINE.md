@@ -16,6 +16,14 @@ complete alpha-generating or production backtesting system.
   `PASS WFA split plan: folds=48 markets=4 failures=0`. Guarded Phase 7
   one-fold smoke passed with
   `PASS WFA baseline: predictions=118188 models=4 folds=1 failures=0`.
+- Guarded Phase 7 bounded 4-fold smoke passed structurally with
+  `PASS WFA baseline: predictions=456712 models=4 folds=4 failures=0`.
+  The first 4 split-plan folds are ES folds only. Phase 8 diagnostics on this
+  smoke remain `NO_GO`: rows `114178`, trades `173`, net dollars `-4991.0`,
+  `alpha_ready=False`, failures `0`. Anti-overfit robustness is `FAIL` with
+  base net nonpositive, 1.5x and 2x cost-stress net nonpositive,
+  single-market profit contribution above cap, and fold pass rate below
+  minimum.
 - Phase 8 policy diagnostics can evaluate saved predictions with costs, but they are not a live fill simulator or full execution backtester.
 - Refreshed Phase 8 baseline evidence remains `NO_GO`: `baseline_refreshed`
   has 23 trades, `net_return_dollars=-2353.5`, and anti-overfit robustness
@@ -39,6 +47,12 @@ complete alpha-generating or production backtesting system.
   `cost_stress_1_5x_nonpositive`, `cost_stress_2x_nonpositive`,
   `single_market_profit_contribution_above_cap`, and
   `fold_pass_rate_below_minimum`.
+- Guarded 4-fold data-audit smoke anti-overfit audit failures are also
+  `base_net_nonpositive`, `cost_stress_1_5x_nonpositive`,
+  `cost_stress_2x_nonpositive`,
+  `single_market_profit_contribution_above_cap`, and
+  `fold_pass_rate_below_minimum`; base net is `-4991.0` and fold pass rate is
+  `0.25`.
 - Data-audit universe:
   - usable: `ES 2023`, `ES 2024`, `CL 2023`, `CL 2024`, `ZN 2023`, `ZN 2024`, `6E 2023`, `6E 2024`
   - diagnostic-only: none under the current audited-universe policy
@@ -71,6 +85,10 @@ Primary reports:
 - `reports/wfa_data_audit_guard_smoke/split_plan.json`
 - `reports/wfa_data_audit_guard_phase7_smoke/data_audit_guard_smoke_wfa_report.json`
 - `reports/wfa_data_audit_guard_phase7_smoke/data_audit_guard_smoke_predictions_manifest.json`
+- `reports/wfa_data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_wfa_report.json`
+- `reports/wfa_data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_predictions_manifest.json`
+- `reports/metrics/data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_metrics.json`
+- `reports/experiments/anti_overfit_audit_data_audit_guard_tier1_smoke.json`
 
 ## Promotion Gates
 
