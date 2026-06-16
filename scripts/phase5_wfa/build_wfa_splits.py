@@ -385,6 +385,7 @@ def build_split_plan(
     failures: list[str] = []
     skipped_inputs: list[dict[str, Any]] = []
     hashed_inputs: list[Path] = []
+    guard_skipped_markets: set[str] = set()
 
     for market, year, path in inputs:
         available_start = PRODUCT_AVAILABLE_START_YEAR.get(market)
@@ -405,13 +406,14 @@ def build_split_plan(
                 context="WFA split-plan generation",
             )
             if guard_failure is not None:
-                failures.append(guard_failure)
+                guard_skipped_markets.add(market)
                 skipped_inputs.append(
                     {
                         "market": market,
                         "year": year,
                         "path": _relative_path(path),
                         "reason": "data_audit_universe_not_usable",
+                        "detail": guard_failure,
                     }
                 )
                 continue
@@ -426,6 +428,8 @@ def build_split_plan(
     folds: list[dict[str, Any]] = []
     for market, frames in frames_by_market.items():
         if not frames:
+            if market in guard_skipped_markets:
+                continue
             failures.append(f"{market}: no readable feature matrices")
             continue
         market_folds, market_failures = build_market_folds(
@@ -436,6 +440,9 @@ def build_split_plan(
         )
         folds.extend(market_folds)
         failures.extend(market_failures)
+
+    if not folds and guard_skipped_markets and not failures:
+        failures.append("data-audit universe blocked all market-years; no folds generated")
 
     split_rows = pd.DataFrame(folds)
     reports_root.mkdir(parents=True, exist_ok=True)

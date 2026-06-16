@@ -46,6 +46,11 @@ profiles:
     settings_profile: tiny
     markets: ["ES"]
     years: [2024, 2025]
+  mixed_audit:
+    intent: test_research
+    settings_profile: tiny
+    markets: ["ES", "CL"]
+    years: [2024]
 aliases:
   selected: {profile}
 """.strip(),
@@ -74,15 +79,15 @@ model_selection_reports:
     return path
 
 
-def _write_matrix(root: Path, *, year: int, start: str) -> Path:
-    path = root / "ES" / f"{year}.parquet"
+def _write_matrix(root: Path, *, year: int, start: str, market: str = "ES") -> Path:
+    path = root / market / f"{year}.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = 7 * 24 * 60
     ts = pd.date_range(start, periods=rows, freq="min", tz="UTC")
     pd.DataFrame(
         {
             "ts": ts,
-            "market": "ES",
+            "market": market,
             "year": year,
             "training_row_valid": True,
             "target_valid": True,
@@ -116,6 +121,34 @@ def _write_data_audit_universe(
                         "audit_status": audit_status,
                         "reason": "fixture",
                     }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _write_mixed_data_audit_universe(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "status": "PASS",
+                "summary": {"audit_status_counts": {"diagnostic_only": 1, "usable": 1}},
+                "market_years": [
+                    {
+                        "market": "ES",
+                        "year": 2024,
+                        "audit_status": "usable",
+                        "reason": "fixture",
+                    },
+                    {
+                        "market": "CL",
+                        "year": 2024,
+                        "audit_status": "diagnostic_only",
+                        "reason": "fixture diagnostic",
+                    },
                 ],
             }
         ),
@@ -213,8 +246,43 @@ def test_build_split_plan_blocks_non_usable_data_audit_market_year(
     )
 
     assert manifest["failure_count"] > 0
-    assert f"audit_status={audit_status!r}" in " ".join(manifest["failures"])
+    assert "data-audit universe blocked all market-years" in " ".join(manifest["failures"])
     assert manifest["fold_count"] == 0
+    assert f"audit_status={audit_status!r}" in manifest["skipped_inputs"][0]["detail"]
+
+
+def test_build_split_plan_guard_skips_non_usable_market_without_failing_when_usable_market_has_folds(
+    tmp_path: Path,
+) -> None:
+    input_root = _feature_root(tmp_path)
+    reports_root = tmp_path / "reports" / "wfa"
+    profile_config = _write_profile_config(
+        tmp_path / "configs" / "alpha_tiered.yaml",
+        profile="mixed_audit",
+    )
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    data_audit = _write_mixed_data_audit_universe(
+        tmp_path / "reports" / "pipeline_audit" / "universe.json",
+    )
+    _write_matrix(input_root, year=2024, start="2024-01-01T00:00:00Z", market="ES")
+    _write_matrix(input_root, year=2024, start="2024-01-01T00:00:00Z", market="CL")
+
+    manifest = build_split_plan(
+        profile="selected",
+        input_root=input_root,
+        reports_root=reports_root,
+        profile_config=profile_config,
+        models_config=models_config,
+        data_audit_universe_json=data_audit,
+    )
+
+    assert manifest["failure_count"] == 0
+    assert manifest["fold_count"] > 0
+    assert manifest["fold_count_by_market"] == {"ES": manifest["fold_count"]}
+    assert manifest["skipped_input_count"] == 1
+    assert manifest["skipped_inputs"][0]["market"] == "CL"
+    assert manifest["skipped_inputs"][0]["reason"] == "data_audit_universe_not_usable"
+    assert "audit_status='diagnostic_only'" in manifest["skipped_inputs"][0]["detail"]
 
 
 def test_final_holdout_profile_blocks_without_explicit_allow(tmp_path: Path) -> None:
