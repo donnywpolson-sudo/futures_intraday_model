@@ -32,6 +32,8 @@ Next valid work paths:
    - Do not change Phase 2/session/fill semantics from the current evidence.
 
 2. New ES-only hypothesis research
+   - Do not run more Phase 9 feature hypotheses until Phase 8 target/policy
+     tradability diagnostics are addressed.
    - Use `scripts.phase9_research.es_hypothesis_harness` for bounded checks.
    - Pre-register one feature hypothesis at a time.
    - The original Tier 1 ES split-plan folds have been exhausted for Phase 9.
@@ -59,7 +61,52 @@ Next valid work paths:
    - If a candidate passes discovery/confirmation, recheck on unused folds before
      considering broader WFA.
 
-3. Documentation / cleanup
+3. Phase 8 target/policy tradability diagnostics
+   - Latest guarded Tier 1 smoke row-level economics: `173` trades,
+     net `-4991.0`.
+   - Run-level/overlap diagnostic:
+     `reports/phase8/data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_policy_run_level_overlap.json`.
+   - Diagnostic result: `55` continuous position runs, run-level estimated net
+     `-1510.0`, `20` non-overlapping selected trades, `153` overlapping trades
+     skipped by diagnostic.
+   - Policy signal alignment:
+     `reports/phase8/data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_policy_signal_alignment_summary.json`.
+   - Signal decision: `direction_edge_calibration_issue_not_policy_logic_bug`;
+     traded target-direction accuracy `0.3063583815028902`, base-signal
+     accuracy `0.3832907588279489`, all-row argmax accuracy
+     `0.5132599975476887`.
+   - Threshold sanity:
+     `reports/phase8/data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_next_action_summary.json`.
+   - Threshold scenario produced `1` trade, net `-154.5`, stable `False`;
+     diagnostic next action is `stop_policy_work_and_audit_labels_features`.
+   - Label/feature sanity:
+     `reports/phase8/data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_label_feature_sanity_summary.json`.
+   - Label/feature decision:
+     `targets_align_return_scale_not_flagged_review_policy_signal_quality`;
+     matched feature rows `114178 / 114178`, return match rate `1.0`,
+     direction match rate `1.0`, target-valid rate `1.0`.
+   - Direction edge calibration:
+     `reports/phase8/data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_direction_edge_calibration_summary.json`.
+   - Direction edge decision:
+     `direction_probabilities_not_tradeable_without_new_edge_model`; current
+     trades/net/target accuracy `173`, `-4991.0`, `0.3063583815028902`.
+   - Signal trade quality:
+     `reports/phase8/data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_signal_trade_quality_summary.json`.
+   - Positive gross/net threshold scenarios exist, but best examples are only
+     `19` trades; do not accept or tune around these small-sample pockets.
+   - Current conclusion: cost accounting is not the only problem; target-window
+     overlap and poor traded direction alignment must be resolved before more
+     alpha hypothesis searches.
+
+4. Checkpoint and reset research direction
+   - Next safe action is to commit the diagnostic harness/docs if reviewed.
+   - After that, plan a new edge-model or target-construction research direction
+     separately.
+   - Do not rescue this stack by threshold tuning.
+   - Do not change policy, position semantics, labels, or features without a
+     separate pre-registered implementation plan.
+
+5. Documentation / cleanup
    - Keep `CURRENT_PIPELINE.md` aligned with the no-go decision.
    - Keep failed generated audit artifacts ignored/untracked unless the user
      explicitly asks to version them.

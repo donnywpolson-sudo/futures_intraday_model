@@ -25,6 +25,32 @@ complete alpha-generating or production backtesting system.
   single-market profit contribution above cap, and fold pass rate below
   minimum.
 - Phase 8 policy diagnostics can evaluate saved predictions with costs, but they are not a live fill simulator or full execution backtester.
+- Phase 8 run-level/overlap diagnostic on the guarded 4-fold smoke remains
+  `NO_GO`: row-level net `-4991.0`, continuous-position-run estimated net
+  `-1510.0`, policy trade rows `173`, continuous position runs `55`,
+  non-overlapping target-window selected trades `20`, and overlapping
+  target-window trades skipped by diagnostic `153`. Row-level cost accounting is
+  punitive, but the result remains negative even under run-level cost
+  sensitivity; target-window overlap is material.
+- Phase 8 policy signal / threshold sanity diagnostics also remain `NO_GO`:
+  signal decision `direction_edge_calibration_issue_not_policy_logic_bug`,
+  traded target-direction accuracy `0.3063583815028902`, base-signal
+  target-direction accuracy `0.3832907588279489`, all-row argmax direction
+  accuracy `0.5132599975476887`; threshold sanity produced only `1` trade,
+  net `-154.5`, stable `False`, with next action
+  `stop_policy_work_and_audit_labels_features`.
+- Phase 8 label/feature sanity passed alignment: policy rows `114178`,
+  matched feature rows `114178`, observed feature return match rate `1.0`,
+  observed feature direction match rate `1.0`, feature target valid rate `1.0`,
+  and decision
+  `targets_align_return_scale_not_flagged_review_policy_signal_quality`.
+- Phase 8 direction-edge / signal-quality diagnostics keep the policy stack
+  `NO_GO`: direction edge decision
+  `direction_probabilities_not_tradeable_without_new_edge_model`, current
+  trades/net/target accuracy `173`, `-4991.0`, `0.3063583815028902`, no
+  positive tested scenario met the minimum `100` trades rule; signal-quality
+  found positive threshold pockets, but best examples are only `19` trades and
+  are not accepted as alpha.
 - Refreshed Phase 8 baseline evidence remains `NO_GO`: `baseline_refreshed`
   has 23 trades, `net_return_dollars=-2353.5`, and anti-overfit robustness
   `FAIL`.
@@ -68,6 +94,19 @@ complete alpha-generating or production backtesting system.
   `single_market_profit_contribution_above_cap`, and
   `fold_pass_rate_below_minimum`; base net is `-4991.0` and fold pass rate is
   `0.25`.
+- Guarded 4-fold run-level/overlap diagnostic is also `NO_GO`; continuous-run
+  cost sensitivity improves net from `-4991.0` to `-1510.0`, but remains
+  negative, and only `20 / 173` policy trades survive the non-overlapping
+  target-window diagnostic.
+- Guarded 4-fold policy signal / threshold sanity diagnostics are also `NO_GO`;
+  traded target-direction accuracy is only `0.3063583815028902`, and threshold
+  sanity says to stop policy work and audit labels/features.
+- Guarded 4-fold label/feature sanity found no feature/label alignment blocker:
+  matched feature rows `114178 / 114178`, return match rate `1.0`, direction
+  match rate `1.0`, and target-valid rate `1.0`.
+- Guarded 4-fold direction-edge diagnostics reject threshold rescue: direction
+  probabilities are not tradeable without a new edge model, and small positive
+  threshold pockets fail sample-size/robustness discipline.
 - Data-audit universe:
   - usable: `ES 2023`, `ES 2024`, `CL 2023`, `CL 2024`, `ZN 2023`, `ZN 2024`, `6E 2023`, `6E 2024`
   - diagnostic-only: none under the current audited-universe policy

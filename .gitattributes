@@ -3,3 +3,5 @@
 DATA_AUDIT_TODO.md text eol=lf
 CURRENT_PIPELINE.md text eol=lf
 "CODEX DO NEXT.md" text eol=lf
+scripts/phase8_model_selection/audit_policy_run_level_overlap.py text eol=lf
+tests/phase8_model_selection/test_audit_policy_run_level_overlap.py text eol=lf

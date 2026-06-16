@@ -45,6 +45,41 @@ Snapshot updated: 2026-06-16. Refresh generated reports before acting.
   - anti-overfit result: `FAIL`
   - failures: `base_net_nonpositive`, `cost_stress_1_5x_nonpositive`, `cost_stress_2x_nonpositive`, `single_market_profit_contribution_above_cap`, `fold_pass_rate_below_minimum`
   - checks: base net `-4991.0`, 1.5x cost stress `-7542.75`, 2x cost stress `-10094.5`, fold pass rate `0.25`
+- Phase 8 run-level/overlap diagnostic on the same 4-fold smoke also remains `NO_GO`:
+  - report: `reports/phase8/data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_policy_run_level_overlap.json`
+  - row-level net: `-4991.0`
+  - continuous-position-run estimated net: `-1510.0`
+  - policy trade rows: `173`
+  - continuous position runs: `55`
+  - non-overlapping target-window selected trades: `20`
+  - overlapping target-window trades skipped by diagnostic: `153`
+  - interpretation: row-level cost accounting is punitive, but the result remains negative even under run-level cost sensitivity; target-window overlap is material
+- Phase 8 policy signal / threshold sanity diagnostics remain `NO_GO`:
+  - policy signal report: `reports/phase8/data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_policy_signal_alignment_summary.json`
+  - signal decision: `direction_edge_calibration_issue_not_policy_logic_bug`
+  - traded target-direction accuracy: `0.3063583815028902`
+  - base-signal target-direction accuracy: `0.3832907588279489`
+  - all-row argmax direction accuracy: `0.5132599975476887`
+  - threshold sanity report: `reports/phase8/data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_next_action_summary.json`
+  - threshold scenario: `1` trade, net `-154.5`, stable `False`
+  - next action from diagnostic: `stop_policy_work_and_audit_labels_features`
+- Phase 8 label/feature sanity passed alignment but keeps policy research `NO_GO`:
+  - report: `reports/phase8/data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_label_feature_sanity_summary.json`
+  - policy rows: `114178`
+  - matched feature rows: `114178`
+  - observed feature return match rate: `1.0`
+  - observed feature direction match rate: `1.0`
+  - feature target valid rate: `1.0`
+  - decision: `targets_align_return_scale_not_flagged_review_policy_signal_quality`
+  - interpretation: saved predictions align to feature/label rows; current blocker is policy signal quality, not an obvious label/feature join mismatch
+- Phase 8 direction-edge / signal-quality diagnostics keep policy research `NO_GO`:
+  - direction edge report: `reports/phase8/data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_direction_edge_calibration_summary.json`
+  - direction edge decision: `direction_probabilities_not_tradeable_without_new_edge_model`
+  - current trades/net/target accuracy: `173`, `-4991.0`, `0.3063583815028902`
+  - no positive tested scenario met the minimum `100` trades rule
+  - signal quality report: `reports/phase8/data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_signal_trade_quality_summary.json`
+  - positive gross/net threshold scenarios found: `30`, but best examples are only `19` trades
+  - interpretation: do not tune thresholds from these diagnostics; any apparent positive small-sample threshold pocket is exploratory and fails robustness/sample-size discipline
 - Pre-registered ES-only Phase 9 late-session context hypothesis also failed:
   - `reports/pipeline_audit/phase9_es_late_session_close_long_bias_context_hypothesis_harness.md`
   - result: `STOP_REWORK_HYPOTHESIS`
@@ -96,13 +131,17 @@ Snapshot updated: 2026-06-16. Refresh generated reports before acting.
 6. Guarded Phase 5 split smoke, producing 48 folds across `ES`, `CL`, `ZN`, and `6E`.
 7. Guarded Phase 7 one-fold smoke, recording current data-audit universe evidence.
 8. Guarded Phase 7 bounded 4-fold smoke and Phase 8 / anti-overfit audit; structural run passed, model robustness failed.
-9. Fresh Tier 2 ES split plan for Phase 9 checks; the auction-acceptance and prior-session/cross-market custom hypotheses stopped on their pre-registered rules.
+9. Phase 8 run-level/overlap diagnostic; run-level cost sensitivity remains negative and target-window overlap is material.
+10. Phase 8 policy signal / threshold sanity diagnostics; traded direction alignment is poor and threshold sanity says to stop policy work and audit labels/features.
+11. Phase 8 label/feature sanity; prediction rows match feature/label rows and target scale is not flagged.
+12. Phase 8 direction-edge / signal-quality diagnostics; direction probabilities are not tradeable without a new edge model, and small positive threshold pockets are not accepted.
+13. Fresh Tier 2 ES split plan for Phase 9 checks; the auction-acceptance and prior-session/cross-market custom hypotheses stopped on their pre-registered rules.
 
 ## Next Valid Step
 
-Stop expanding this WFA result. The data-audit universe is usable, the guarded 4-fold ES smoke remains anti-overfit `FAIL`, and the latest pre-registered ES-only Phase 9 hypotheses also stopped; model research stays `NO_GO`.
+Stop expanding this WFA result. The data-audit universe is usable, the guarded 4-fold ES smoke remains anti-overfit `FAIL`, run-level cost sensitivity remains negative, target-window overlap is material, traded target-direction accuracy is poor, label/feature alignment passed, direction probabilities are not tradeable without a new edge model, and the latest pre-registered ES-only Phase 9 hypotheses also stopped; model research stays `NO_GO`.
 
-Do not run full-market WFA scale, tune models, or search for alpha from this data-audit result. Any further ES-only Phase 9 work must be a genuinely new custom hypothesis, not another registered feature-family rerun, and must use unused folds from `reports/wfa_phase9_es_tier2_refresh/split_plan.json`.
+Do not run full-market WFA scale, tune models, or search for alpha from this data-audit result. The next safe action is to checkpoint the diagnostic harness/docs, then plan a new edge-model or target-construction research direction separately; do not rescue this stack by threshold tuning. Any later ES-only Phase 9 work must be a genuinely new custom hypothesis, not another registered feature-family rerun, and must use unused folds from `reports/wfa_phase9_es_tier2_refresh/split_plan.json`.
 
 ## Reference Commands
 
