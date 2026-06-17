@@ -67,7 +67,7 @@
     },
     {
       "hypothesis_id": "liquidity_cost_state_features_v1",
-      "status": "CANDIDATE",
+      "status": "REJECTED",
       "wfa_allowed": false,
       "feature_family": "liquidity_cost_state",
       "scope": {
@@ -85,11 +85,12 @@
         ]
       },
       "description": "Test whether pre-entry liquidity and cost-state proxies identify non-overlapping Tier 1 events with stable post-cost opportunity across ES, CL, ZN, and 6E.",
-      "status_reason": "Pre-registered candidate; discovery not run.",
-      "source_reports": [],
-      "next_allowed_actions": [
-        "RUN_DISCOVERY_HARNESS"
-      ]
+      "status_reason": "Rejected by bounded smoke: failed market/year/session baseline control in discovery and confirmation, and failed market/fold positive oracle-net concentration caps.",
+      "source_reports": [
+        "reports/pipeline_audit/liquidity_cost_state_features_v1_smoke_20260617T045008Z.md",
+        "reports/pipeline_audit/liquidity_cost_state_features_v1_smoke_20260617T045008Z.json"
+      ],
+      "next_allowed_actions": []
     }
   ]
 }
