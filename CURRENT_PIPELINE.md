@@ -1,179 +1,246 @@
 # Current Pipeline
 
-This project has a real research pipeline scaffold, but it is not yet a
-complete alpha-generating or production backtesting system.
+This repo has a reproducible intraday futures research pipeline. It is not a
+production trading system, and the current Tier 1 baseline is locked negative
+evidence.
 
 ## Current Status
 
-- `tier_1_research` has complete raw, causal, label, and baseline feature coverage.
-- `tier_2_research` has complete raw, causal, and label coverage, but incomplete baseline feature coverage.
-- `tier_3_research` has complete available raw, causal, and label coverage, but incomplete baseline feature coverage.
-- Current Tier 1 model/research stack is `NO_GO` for promotion, tuning, and full WFA scale.
-- Tier 1 data-audit universe is now guarded and marks all 8 Tier 1
-  market-years usable: `ES`, `CL`, `ZN`, and `6E` for 2023-2024. This accepts
-  Databento's documented OHLCV no-trade convention when local provenance
-  passes. Guarded Phase 5 split smoke passed with
-  `PASS WFA split plan: folds=48 markets=4 failures=0`. Guarded Phase 7
-  one-fold smoke passed with
-  `PASS WFA baseline: predictions=118188 models=4 folds=1 failures=0`.
-- Guarded Phase 7 bounded 4-fold smoke passed structurally with
-  `PASS WFA baseline: predictions=456712 models=4 folds=4 failures=0`.
-  The first 4 split-plan folds are ES folds only. Phase 8 diagnostics on this
-  smoke remain `NO_GO`: rows `114178`, trades `173`, net dollars `-4991.0`,
-  `alpha_ready=False`, failures `0`. Anti-overfit robustness is `FAIL` with
-  base net nonpositive, 1.5x and 2x cost-stress net nonpositive,
-  single-market profit contribution above cap, and fold pass rate below
-  minimum.
-- Phase 8 policy diagnostics can evaluate saved predictions with costs, but they are not a live fill simulator or full execution backtester.
-- Phase 8 run-level/overlap diagnostic on the guarded 4-fold smoke remains
-  `NO_GO`: row-level net `-4991.0`, continuous-position-run estimated net
-  `-1510.0`, policy trade rows `173`, continuous position runs `55`,
-  non-overlapping target-window selected trades `20`, and overlapping
-  target-window trades skipped by diagnostic `153`. Row-level cost accounting is
-  punitive, but the result remains negative even under run-level cost
-  sensitivity; target-window overlap is material.
-- Phase 8 policy signal / threshold sanity diagnostics also remain `NO_GO`:
-  signal decision `direction_edge_calibration_issue_not_policy_logic_bug`,
-  traded target-direction accuracy `0.3063583815028902`, base-signal
-  target-direction accuracy `0.3832907588279489`, all-row argmax direction
-  accuracy `0.5132599975476887`; threshold sanity produced only `1` trade,
-  net `-154.5`, stable `False`, with next action
-  `stop_policy_work_and_audit_labels_features`.
-- Phase 8 label/feature sanity passed alignment: policy rows `114178`,
-  matched feature rows `114178`, observed feature return match rate `1.0`,
-  observed feature direction match rate `1.0`, feature target valid rate `1.0`,
-  and decision
-  `targets_align_return_scale_not_flagged_review_policy_signal_quality`.
-- Phase 8 direction-edge / signal-quality diagnostics keep the policy stack
-  `NO_GO`: direction edge decision
-  `direction_probabilities_not_tradeable_without_new_edge_model`, current
-  trades/net/target accuracy `173`, `-4991.0`, `0.3063583815028902`, no
-  positive tested scenario met the minimum `100` trades rule; signal-quality
-  found positive threshold pockets, but best examples are only `19` trades and
-  are not accepted as alpha.
-- Phase 8 event-level edge feasibility is also `NO_GO`: source prediction rows
-  `456712`, policy rows `114178`, current-policy traded rows `173`, direction
-  candidate rows `33275`, non-overlapping events `1053`, skipped overlapping
-  rows `32222`, event gross/cost/net `-787.5`, `31063.5`, `-31851.0`, event
-  direction accuracy `0.30959164292497626`, positive fold rate `0.0`, and
-  decision `does_not_support_new_edge_model_research`.
-- Refreshed Phase 8 baseline evidence remains `NO_GO`: `baseline_refreshed`
-  has 23 trades, `net_return_dollars=-2353.5`, and anti-overfit robustness
-  `FAIL`.
-- Latest Phase 9 ES-only checks remain stopped: `time_buckets` smoke stopped
-  with discovery net `-25651.00` and confirmation net `-10929.00`;
-  `post_shock_volume_confirmed_continuation` stopped with discovery net
-  `-74112.00` and confirmation net `-259840.50`;
-  `compression_breakout_participation_filter` stopped with discovery net
-  `-121049.50` and confirmation net `-200103.00`;
-  `es_late_session_close_long_bias_context` stopped with discovery net
-  `-145480.50` and confirmation net `-138599.00`;
-  `tier2_es_auction_acceptance_reversal_context` stopped with discovery net
-  `-176934.00` and confirmation net `-48380.00`;
-  `tier2_es_prior_session_cross_market_context` stopped with discovery net
-  `-198224.50` and confirmation net `-159989.50`.
-- These Phase 9 checks failed the pre-registered stop rule. Do not tune or
-  rerun variants from these results.
-- Fresh Tier 2 ES Phase 9 split evidence exists at
-  `reports/wfa_phase9_es_tier2_refresh/split_plan.json`; it generated
-  `PASS WFA split plan: folds=880 markets=15 failures=0` and contains 60 ES
-  research folds.
-- Prior ES feature-family sweep evidence already stopped all 15 registered
-  families in `reports/pipeline_audit/tier1_es_harness_family_sweep.md`,
-  including `higher_timeframe_prior_session`, `fade_safety_trend_danger`,
-  `effort_result`, and `trend_day_open_drive`. Do not rerun built-in families
-  as new Phase 9 hypotheses.
+- Tier 1 alias resolution is `tier_1 -> tier_1_research`.
+- Current Tier 1 research scope is `ES`, `CL`, `ZN`, and `6E` for 2023-2024.
+- Phase 2, Phase 3, Phase 4, Phase 5, Phase 7, and Phase 8 now have
+  artifact/scope/provenance guards for the confirmed stale/partial artifact
+  failure modes.
+- Shared report manifests now distinguish full-scope evidence from partial
+  Tier 1 evidence with `partial_scope`, `authoritative`,
+  `expected_input_count`, selected/actual input counts, and missing/extra
+  market-years where computable.
+- Phase 7 fails closed on split-plan profile, resolved profile, markets, years,
+  and required provenance/hash mismatches.
+- Phase 8 fails closed when the prediction manifest does not match the actual
+  prediction parquet path, hash, row count, profile/scope, artifact readiness,
+  stale flag, or split-plan provenance.
 
-## Tier 1 No-Go Decision
+## Locked Tier 1 Baseline Evidence
 
-- Decision: `TIER1_NO_GO_STOP_PROMOTION_TUNING_AND_FULL_WFA_SCALE`.
-- Code state recorded in commit `c2794cf` (`Add Tier 1 ES research harness`).
-- Do not continue full-market/full-fold WFA, model tuning, or promotion work from the current Tier 1 stack.
-- The current evidence points to weak gross edge under the configured ES cost/slippage model, not a simple label-boundary issue.
-- Refreshed anti-overfit audit failures are `base_net_nonpositive`,
-  `cost_stress_1_5x_nonpositive`, `cost_stress_2x_nonpositive`,
-  `single_market_profit_contribution_above_cap`, and
-  `fold_pass_rate_below_minimum`.
-- Guarded 4-fold data-audit smoke anti-overfit audit failures are also
-  `base_net_nonpositive`, `cost_stress_1_5x_nonpositive`,
-  `cost_stress_2x_nonpositive`,
-  `single_market_profit_contribution_above_cap`, and
-  `fold_pass_rate_below_minimum`; base net is `-4991.0` and fold pass rate is
-  `0.25`.
-- Guarded 4-fold run-level/overlap diagnostic is also `NO_GO`; continuous-run
-  cost sensitivity improves net from `-4991.0` to `-1510.0`, but remains
-  negative, and only `20 / 173` policy trades survive the non-overlapping
-  target-window diagnostic.
-- Guarded 4-fold policy signal / threshold sanity diagnostics are also `NO_GO`;
-  traded target-direction accuracy is only `0.3063583815028902`, and threshold
-  sanity says to stop policy work and audit labels/features.
-- Guarded 4-fold label/feature sanity found no feature/label alignment blocker:
-  matched feature rows `114178 / 114178`, return match rate `1.0`, direction
-  match rate `1.0`, and target-valid rate `1.0`.
-- Guarded 4-fold direction-edge diagnostics reject threshold rescue: direction
-  probabilities are not tradeable without a new edge model, and small positive
-  threshold pockets fail sample-size/robustness discipline.
-- Guarded 4-fold event-level edge feasibility rejects the saved signal stack
-  after non-overlapping conversion: `1053` events, net `-31851.0`, direction
-  accuracy `0.30959164292497626`, positive fold rate `0.0`.
-- Data-audit universe:
-  - usable: `ES 2023`, `ES 2024`, `CL 2023`, `CL 2024`, `ZN 2023`, `ZN 2024`, `6E 2023`, `6E 2024`
-  - diagnostic-only: none under the current audited-universe policy
-  - quarantined: none under the current audited-universe policy
-- DBN-to-raw-parquet parity audit found no dropped rows and no
-  OHLCV/timestamp mismatches for the previously blocked Tier 1 market-years:
-  `CL 2023`, `CL 2024`, `ZN 2023`, `ZN 2024`, `6E 2023`, `6E 2024`.
-- Source-level validation is blocked by Databento access: the available
-  subscription only covers one year of L1 access, not the historical `trades`
-  windows needed here.
-- Databento documents `ohlcv-1m` as trade-derived with no record printed when
-  no trade occurs in the interval. The audit now accepts that convention for
-  audited universe decisions when local DBN/parquet provenance passes. This is
-  not independent historical L1/trades proof; no Phase 2/session/fill semantic
-  changes are justified from the current evidence.
+Locked run:
 
-Primary reports:
+- Run: `tier1_locked_baseline_20260616`
+- Prediction file:
+  `data/predictions/tier1_locked_baseline_20260616/oos_predictions.parquet`
+- Prediction manifest:
+  `reports/wfa/tier1_locked_baseline_20260616_predictions_manifest.json`
+- Metrics:
+  `reports/metrics/tier1_locked_baseline_20260616_metrics.json`
+- Promotion decision:
+  `reports/phase8/alpha_promotion_decision.json`
 
-- `reports/pipeline_audit/tier1_consolidated_no_go_report.md`
-- `reports/pipeline_audit/tier1_es_break_even_cost_audit.md`
-- `reports/pipeline_audit/tier1_es_locked_selectivity_recheck.md`
-- `reports/pipeline_audit/tier1_es_harness_family_sweep.md`
-- `reports/metrics/baseline_refreshed/baseline_refreshed_metrics.json`
-- `reports/experiments/anti_overfit_audit_refreshed.json`
-- `reports/pipeline_audit/phase9_smoke_time_buckets_1x1_hypothesis_harness.md`
-- `reports/pipeline_audit/phase9_post_shock_volume_confirmed_continuation_hypothesis_harness.md`
-- `reports/pipeline_audit/phase9_compression_breakout_participation_filter_hypothesis_harness.md`
-- `reports/pipeline_audit/phase9_es_late_session_close_long_bias_context_hypothesis_harness.md`
-- `reports/pipeline_audit/phase9_tier2_es_auction_acceptance_reversal_context_hypothesis_harness.md`
-- `reports/pipeline_audit/phase9_tier2_es_prior_session_cross_market_context_hypothesis_harness.md`
-- `reports/wfa_phase9_es_tier2_refresh/split_plan.json`
-- `reports/pipeline_audit/tier_1_data_audit_decisions.md`
-- `reports/pipeline_audit/tier_1_data_audit_universe.md`
-- `reports/wfa_data_audit_guard_smoke/split_plan.json`
-- `reports/wfa_data_audit_guard_phase7_smoke/data_audit_guard_smoke_wfa_report.json`
-- `reports/wfa_data_audit_guard_phase7_smoke/data_audit_guard_smoke_predictions_manifest.json`
-- `reports/wfa_data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_wfa_report.json`
-- `reports/wfa_data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_predictions_manifest.json`
-- `reports/metrics/data_audit_guard_tier1_smoke/data_audit_guard_tier1_smoke_metrics.json`
-- `reports/experiments/anti_overfit_audit_data_audit_guard_tier1_smoke.json`
+Structural pipeline evidence:
 
-## Promotion Gates
+- Phase 2 causal data: `WARN`, full Tier 1 scope, `authoritative=true`,
+  `partial_scope=false`, failures `0`, warnings `4`.
+- Phase 2 warnings are synthetic-gap warnings for `ZN 2023`, `ZN 2024`,
+  `6E 2023`, and `6E 2024`. These were explicitly accepted for this locked
+  evidence after local provenance checks; they are not a model edge.
+- Phase 3 labels: `PASS`, full Tier 1 scope, `authoritative=true`,
+  failures `0`, warnings `0`.
+- Phase 4 baseline features: `WARN`, full Tier 1 scope, `authoritative=true`,
+  failures `0`, warnings from self-reference unavailable features.
+- Phase 5 WFA split plan: `PASS`, folds `48`, markets `4`, failures `0`.
+- Phase 7 WFA was run as 8 fold shards and combined:
+  predictions `4,616,712`, folds `48`, failures `0`,
+  `artifact_evidence_ready=true`.
+- Phase 8 structural evaluation passed with failures `0`, but promotion failed.
 
-Before calling the system research-alpha ready:
+Costed OOS policy result:
 
-- Phase 4 baseline features must exist for the intended profile scope.
-- Phase 7 must produce non-stale out-of-sample predictions across the intended WFA folds.
-- Phase 8 must pass the costed promotion gate.
-- Model promotion must remain blocked when net PnL, net Sharpe-like metrics, cost drag, or per-market/per-fold stability fail.
+- Policy rows: `1,154,178`
+- Trades: `780`
+- Gross dollars: `-20,287.50`
+- Costs: `22,357.88`
+- Net dollars: `-42,645.38`
+- Net Sharpe-like: `-5.1086`
+- Cost drag to absolute gross: `1.1021`
+- `research_alpha_ready=false`
+- `model_promotion_allowed=false`
+- `promoted=false`
 
-Before live or paper-live use:
+Market result:
 
-- Contract-specific execution mapping must exist.
-- Exchange calendar and early-close data must be refreshed.
-- Fixed research slippage assumptions must be replaced by a live/paper fill model.
-- A real execution layer must handle order lifecycle, fills, rejects, position state, risk limits, and audit logs.
+- `6E`: `281,895` rows, `0` trades, net `0`.
+- `CL`: `300,436` rows, `137` trades, net `-8,489.38`.
+- `ES`: `342,821` rows, `643` trades, net `-34,156.00`.
+- `ZN`: `229,026` rows, `0` trades, net `0`.
 
-## Phases In Simple Terms
+## Diagnostic Decisions
+
+- 6E and ZN zero-trade behavior is explained by current policy gates and label
+  base rates, not by artifact/provenance failure.
+- Fade is not the blocking gate for 6E/ZN. Direction edge, flat probability,
+  and trend-danger probability block all rows under the current policy.
+- Label/feature alignment passed:
+  - policy rows matched feature rows: `1,154,178 / 1,154,178`
+  - return target match rate: `1.0`
+  - direction target match rate: `1.0`
+  - decision: `targets_align_return_scale_not_flagged_review_policy_signal_quality`
+- Target-construction feasibility did not justify a target semantics change.
+  The current fixed 15m deadzone direction oracle is positive in hindsight, but
+  the pathwise first-hit barrier candidate is net negative.
+- Policy signal alignment decision:
+  `direction_edge_calibration_issue_not_policy_logic_bug`.
+- Direction-edge calibration decision:
+  `direction_probabilities_not_tradeable_without_new_edge_model`.
+- Event-level edge feasibility decision:
+  `does_not_support_new_edge_model_research`.
+- Event-level base-signal candidate result:
+  `11,398` non-overlapping events, gross `23,558.13`, costs `281,986.73`,
+  net `-258,428.60`, direction accuracy `0.2987`, positive folds `0 / 48`.
+- Signal trade-quality diagnostics found small positive threshold pockets, but
+  they are not accepted:
+  - best net case had only `31` trades
+  - the only `>=100` trade positive case required dropping the flat gate, which
+    is a policy semantics change
+  - that case had only `106` trades, traded in `11` folds, positive in `6`, and
+    was concentrated in ES while CL remained materially negative
+
+## Current Decision
+
+Decision: `TIER1_LOCKED_BASELINE_NO_GO`.
+
+Do not:
+
+- promote this model or policy
+- tune thresholds against this locked run
+- rerun near-neighbor policy variants to rescue this baseline
+- run full-market/full-fold WFA again for this same baseline line
+- treat the small positive threshold pockets as alpha
+- start a new edge-model experiment from the saved base-signal candidate set
+
+The current evidence says the Tier 1 baseline has weak or negative gross edge
+after realistic costs and non-overlapping event handling. Cost accounting is
+not the only problem.
+
+## Phase 9 Cost-Clearability Feasibility
+
+The Tier 1 cost-clearability feasibility harness is also stopped as currently
+registered.
+
+- Harness report:
+  `reports/pipeline_audit/tier1_cost_clearability_event_harness_20260617T002348Z.md`
+- JSON report:
+  `reports/pipeline_audit/tier1_cost_clearability_event_harness_20260617T002348Z.json`
+- Decision: `STOP_BRANCH_PERMANENTLY`
+- Scope: `tier_1 -> tier_1_research`, `ES`, `CL`, `ZN`, `6E`, 2023-2024
+- Events: `154,728`
+  - `ES`: `43,712`
+  - `CL`: `40,352`
+  - `6E`: `38,318`
+  - `ZN`: `32,346`
+- Passed gates:
+  - schema/provenance and all markets have events
+  - minimum events per market
+  - model beats random-label, shuffled-feature, market/year/session baseline,
+    and inverse-score controls in discovery and confirmation
+  - positive fold requirement: `12 / 12` positive folds for every market
+  - top-5% cost drag below 50%: `0.1460`
+  - non-ES markets participate materially
+- Failed gate:
+  - positive oracle net concentration limit. ES contributed `57.66%` of
+    positive oracle net, above the pre-registered `35%` cap.
+
+This harness output is oracle/feasibility evidence only. It is not executable
+PnL or strategy PnL. Do not proceed from it to a direction model or full Tier 1
+WFA. Any next harness must be materially different and must address
+cross-market concentration before direction modeling.
+
+## Phase 9 Market-Balanced Cost-Clearability Feasibility
+
+The market-balanced Tier 1 cost-clearability follow-up is also stopped.
+
+- Harness report:
+  `reports/pipeline_audit/tier1_market_balanced_cost_clearability_harness_20260617T012137Z.md`
+- JSON report:
+  `reports/pipeline_audit/tier1_market_balanced_cost_clearability_harness_20260617T012137Z.json`
+- Smoke report:
+  `reports/pipeline_audit/tier1_market_balanced_cost_clearability_smoke_20260617T011545Z.md`
+- Decision: `STOP_BRANCH_PERMANENTLY`
+- Scope: `tier_1 -> tier_1_research`, `ES`, `CL`, `ZN`, `6E`, 2023-2024
+- Events: `154,728`
+  - `ES`: `43,712`
+  - `CL`: `40,352`
+  - `6E`: `38,318`
+  - `ZN`: `32,346`
+- Passed gates:
+  - minimum events and top-5 rows by market
+  - positive fold requirement by market
+  - fold/hour concentration limit
+- Failed gates:
+  - each market beats all controls by stage
+  - market quality requirements
+  - market contribution balance
+- Main failures:
+  - market-local model did not beat `pooled_score_transfer` in ES, CL, and
+    ZN where listed
+  - ZN top-5 cost drag was `0.5418`, above the registered `0.50` cap
+  - market contribution balance failed: ES `58.32%`, CL `27.48%`, 6E
+    `10.25%`, ZN `3.95%`
+
+Both pooled and market-balanced cost-clearability versions failed
+pre-registered robustness gates. The cost-clearability research branch is
+stopped. Do not proceed from it to direction modeling, policy work, or full
+Tier 1 WFA. Next valid work must be a materially different target/feature
+hypothesis, not a rescue variant of cost-clearability.
+
+## Data Audit Status
+
+The old data-audit action list is complete for the current Tier 1 decision. It
+is now historical context, not the active next-step file.
+
+Current Tier 1 data-audit interpretation:
+
+- Usable market-years for the current Tier 1 evidence:
+  `ES 2023`, `ES 2024`, `CL 2023`, `CL 2024`, `ZN 2023`, `ZN 2024`,
+  `6E 2023`, `6E 2024`.
+- Diagnostic-only: none under the current audited-universe policy.
+- Quarantined: none under the current audited-universe policy.
+- DBN-to-raw-parquet parity found no dropped rows and no OHLCV/timestamp
+  mismatches for the previously blocked Tier 1 market-years.
+- Acceptance relies on Databento's documented OHLCV no-trade convention plus
+  local DBN/parquet provenance.
+- Independent historical L1/trades proof is still unavailable under the
+  current subscription.
+- No Phase 2/session/fill semantic change is justified by the current data
+  audit.
+
+## Next Valid Work
+
+The current baseline line is stopped.
+
+The cost-clearability branch is also stopped as currently registered, including
+the market-balanced follow-up.
+
+Next valid work must be a separate research direction with a new hypothesis and
+pre-registered stop rules. Do not run more cost-clearability rescue variants.
+Acceptable directions are:
+
+- new target-construction research
+- new feature-generation research
+- a genuinely new ES-only custom hypothesis on unused folds from
+  `reports/wfa_phase9_es_tier2_refresh/split_plan.json`
+
+Do not reuse the failed built-in ES feature-family sweep or the stopped Phase 9
+hypotheses as "new" work:
+
+- `time_buckets`
+- `post_shock_volume_confirmed_continuation`
+- `compression_breakout_participation_filter`
+- `es_late_session_close_long_bias_context`
+- `tier2_es_auction_acceptance_reversal_context`
+- `tier2_es_prior_session_cross_market_context`
+- the 15 registered ES feature families in
+  `reports/pipeline_audit/tier1_es_harness_family_sweep.md`
+
+## Phases
 
 - Phase 1A: download Databento DBN archives.
 - Phase 1B: convert DBN archives into raw yearly parquet files.
@@ -183,12 +250,17 @@ Before live or paper-live use:
 - Phase 5: build walk-forward train/test splits with purge and embargo.
 - Phase 6: no separate implemented phase in this repo.
 - Phase 7: train baseline models and save out-of-sample predictions.
-- Phase 8: score predictions with a deterministic research policy, costs, and promotion gates.
+- Phase 8: score predictions with deterministic research policy, costs,
+  promotion gates, and artifact/provenance guards.
 
 ## Useful Checks
 
 ```powershell
 python -m scripts.validation.check_tier_2_coverage --profile tier_1 --stage all
-python -m scripts.validation.check_tier_2_coverage --profile tier_3 --stage features
-python -m scripts.phase8_model_selection.evaluate_predictions --run baseline --require-promotion-ready
+python -m pytest tests\phase7_wfa\test_run_wfa.py tests\phase8_model_selection\test_evaluate_predictions.py -q
+python -m scripts.phase8_model_selection.evaluate_predictions --predictions data/predictions/tier1_locked_baseline_20260616/oos_predictions.parquet --predictions-manifest reports/wfa/tier1_locked_baseline_20260616_predictions_manifest.json --run tier1_locked_baseline_20260616 --require-promotion-ready
 ```
+
+The last command is expected to fail promotion because the locked model is not
+promotion-ready. A structural pass with `alpha_ready=False` is the expected
+state for this evidence.

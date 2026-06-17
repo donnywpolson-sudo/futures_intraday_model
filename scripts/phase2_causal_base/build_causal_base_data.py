@@ -17,6 +17,8 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from scripts.profile_scope import scope_authority_metadata
+
 
 DEFAULT_PROFILE = "all_raw"
 DISCOVERY_PROFILES = {"all_raw", "all_raw_data"}
@@ -1399,6 +1401,23 @@ def write_reports(
         for row in rows
         if row["failures"]
     ]
+    failure_count = int(sum(row["failure_count"] for row in rows))
+    warning_count = int(sum(row["warning_count"] for row in rows))
+    status = (
+        "FAIL"
+        if any(row["status"] == "FAIL" for row in rows)
+        else "WARN"
+        if any(row["status"] == "WARN" for row in rows)
+        else "PASS"
+    )
+    authority = scope_authority_metadata(
+        profile=profile,
+        selected_market_years=((row["market"], row["year"]) for row in rows),
+        profile_config=profile_config_path,
+        status=status,
+        failure_count=failure_count,
+        selected_input_count=len(rows),
+    )
     provenance = {
         "generated_at": utc_timestamp(),
         "git_commit": current_git_commit(),
@@ -1415,17 +1434,16 @@ def write_reports(
         "profile": profile,
         "markets": sorted({str(row["market"]) for row in rows}),
         "years": sorted({int(row["year"]) for row in rows}),
-        "warning_count": int(sum(row["warning_count"] for row in rows)),
-        "failure_count": int(sum(row["failure_count"] for row in rows)),
+        "warning_count": warning_count,
+        "failure_count": failure_count,
         "failures": run_failures,
+        **authority,
     }
 
     validation_json = {
         **provenance,
         "stage": "causal_base",
-        "status": "FAIL" if any(r["status"] == "FAIL" for r in rows) else "WARN"
-        if any(r["status"] == "WARN" for r in rows)
-        else "PASS",
+        "status": status,
         "files": rows,
         "summary": {
             "file_count": len(rows),
@@ -1463,7 +1481,7 @@ def write_reports(
     manifest = {
         **provenance,
         "stage": "causal_base",
-        "status": validation_json["status"],
+        "status": status,
         "outputs": [
             {
                 "market": row["market"],

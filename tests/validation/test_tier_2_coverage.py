@@ -234,6 +234,32 @@ def test_coverage_gate_skips_product_unavailable_years(tmp_path: Path) -> None:
     }
 
 
+def test_coverage_gate_skips_unavailable_years_across_artifact_stages(tmp_path: Path) -> None:
+    config = ROOT / "configs" / "alpha_tiered.yaml"
+    _touch_complete_tree(tmp_path, list(range(2010, 2025)))
+    unavailable = {"RTY": range(2010, 2017), "SR3": range(2010, 2018)}
+    roots = (
+        tmp_path / "data" / "raw",
+        tmp_path / "data" / "causally_gated_normalized",
+        tmp_path / "data" / "labeled",
+        tmp_path / "data" / "feature_matrices" / "baseline",
+    )
+    for root in roots:
+        for market, years in unavailable.items():
+            for year in years:
+                (root / market / f"{year}.parquet").unlink()
+
+    report = build_report(_namespace(tmp_path, config=config, stage="all"))
+
+    assert report["status"] == "PASS"
+    for stage in ("raw", "causal", "labels", "features"):
+        assert report["artifact_checks"][stage]["missing"] == []
+        assert report["artifact_checks"][stage]["unavailable_by_market"] == {
+            "RTY": list(range(2010, 2017)),
+            "SR3": list(range(2010, 2018)),
+        }
+
+
 def test_coverage_gate_fails_when_feature_file_is_missing(tmp_path: Path) -> None:
     config = ROOT / "configs" / "alpha_tiered.yaml"
     _touch_complete_tree(tmp_path, list(range(2010, 2025)))

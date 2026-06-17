@@ -418,6 +418,12 @@ def test_output_schema_and_reports(tmp_path: Path) -> None:
     assert manifest["profile"] == "tier_1"
     assert manifest["markets"] == ["ES"]
     assert manifest["years"] == [2024]
+    for payload in (manifest, report):
+        assert payload["partial_scope"] is True
+        assert payload["authoritative"] is False
+        assert payload["expected_input_count"] == 8
+        assert payload["actual_input_count"] == 1
+        assert len(payload["missing_market_years"]) == 7
     assert manifest["warning_count"] == len(result.warnings)
     assert manifest["failure_count"] == len(result.failures)
     assert manifest["failures"] == []

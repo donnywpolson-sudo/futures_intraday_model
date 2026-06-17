@@ -848,6 +848,10 @@ def test_missing_raw_file_manifest_reports_failure_count_and_failures(tmp_path: 
 
     manifest = json.loads((reports_root / "causal_base_manifest.json").read_text())
     item = manifest["outputs"][0]
+    assert manifest["partial_scope"] is True
+    assert manifest["authoritative"] is False
+    assert manifest["expected_input_count"] == 8
+    assert manifest["actual_input_count"] == 1
     assert item["status"] == "FAIL"
     assert item["failure_count"] == 1
     assert item["failures"] == ["input file missing"]

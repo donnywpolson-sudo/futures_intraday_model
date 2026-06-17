@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -13,6 +14,16 @@ from scripts.phase8_model_selection.evaluate_predictions import (  # noqa: E402
     PromotionGateConfig,
     evaluate_predictions,
 )
+
+
+def _sha256(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _write_costs(path: Path) -> Path:
@@ -171,18 +182,59 @@ def _write_predictions(path: Path) -> Path:
     return path
 
 
-def _write_manifest(path: Path, prediction_path: Path) -> Path:
+def _write_split_plan(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
             {
-                "failure_count": 0,
-                "prediction_count": 20,
-                "output_file_hashes": {prediction_path.as_posix(): "hash"},
-                "stale_output_path_exists": False,
-                "artifact_evidence_ready": True,
+                "profile": "tier_1",
+                "resolved_profile": "tier_1_research",
+                "config_hash": "split-config-hash",
+                "markets": ["ES"],
+                "years": [2024],
             }
         ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _write_manifest(
+    path: Path,
+    prediction_path: Path,
+    *,
+    overrides: dict[str, object] | None = None,
+    remove: set[str] | None = None,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    split_plan = _write_split_plan(path.parent / "split_plan.json")
+    payload: dict[str, object] = {
+        "failure_count": 0,
+        "run": "baseline",
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": ["ES"],
+        "years": [2024],
+        "prediction_markets": ["ES"],
+        "prediction_years": [2024],
+        "prediction_path": prediction_path.as_posix(),
+        "prediction_count": 20,
+        "output_file_hashes": {prediction_path.as_posix(): _sha256(prediction_path)},
+        "input_file_hashes": {split_plan.as_posix(): _sha256(split_plan)},
+        "split_plan_path": split_plan.as_posix(),
+        "split_plan_hash": _sha256(split_plan),
+        "split_plan_profile": "tier_1",
+        "split_plan_resolved_profile": "tier_1_research",
+        "split_plan_config_hash": "split-config-hash",
+        "stale_output_path_exists": False,
+        "artifact_evidence_ready": True,
+    }
+    if overrides:
+        payload.update(overrides)
+    for key in remove or set():
+        payload.pop(key, None)
+    path.write_text(
+        json.dumps(payload),
         encoding="utf-8",
     )
     return path
@@ -248,6 +300,73 @@ def test_policy_metrics_block_trend_danger_and_fade_filter(tmp_path: Path) -> No
         "logistic_trend_danger_v1",
     }
     assert turnover.loc[0, "trade_count"] == 2
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_failure"),
+    [
+        ("hash", "output hash does not match"),
+        ("path", "prediction_path does not match CLI predictions path"),
+        ("count", "prediction_count does not match"),
+        ("missing_hashes", "output_file_hashes missing"),
+        ("missing_count", "prediction_count missing"),
+        ("stale", "flags stale output"),
+        ("not_ready", "artifact_evidence_ready is false"),
+        ("scope", "prediction_markets do not match"),
+        ("profile", "profile does not match split-plan profile"),
+    ],
+)
+def test_prediction_manifest_artifact_guard_rejects_invalid_metadata(
+    tmp_path: Path,
+    case: str,
+    expected_failure: str,
+) -> None:
+    prediction_path = _write_predictions(
+        tmp_path / "data" / "predictions" / "baseline" / "oos_predictions.parquet"
+    )
+    overrides: dict[str, object] = {}
+    remove: set[str] = set()
+    if case == "hash":
+        overrides["output_file_hashes"] = {prediction_path.as_posix(): "0" * 64}
+    elif case == "path":
+        overrides["prediction_path"] = (tmp_path / "other.parquet").as_posix()
+    elif case == "count":
+        overrides["prediction_count"] = 19
+    elif case == "missing_hashes":
+        remove.add("output_file_hashes")
+    elif case == "missing_count":
+        remove.add("prediction_count")
+    elif case == "stale":
+        overrides["stale_output_path_exists"] = True
+    elif case == "not_ready":
+        overrides["artifact_evidence_ready"] = False
+    elif case == "scope":
+        overrides["prediction_markets"] = ["CL"]
+    elif case == "profile":
+        overrides["profile"] = "tier_2"
+    manifest_path = _write_manifest(
+        tmp_path / "reports" / "wfa" / "baseline_predictions_manifest.json",
+        prediction_path,
+        overrides=overrides,
+        remove=remove,
+    )
+    costs_path = _write_costs(tmp_path / "configs" / "costs.yaml")
+    models_path = _write_models(tmp_path / "configs" / "models.yaml")
+
+    result = evaluate_predictions(
+        predictions_path=prediction_path,
+        predictions_manifest=manifest_path,
+        costs_config=costs_path,
+        models_config=models_path,
+        metrics_root=tmp_path / "reports" / "metrics",
+        model_selection_root=tmp_path / "reports" / "model_selection",
+        run="baseline",
+        policy=_policy(),
+        promotion_gate=_promotion_gate(),
+    )
+
+    assert result["failure_count"] > 0
+    assert expected_failure in " ".join(result["failures"])
 
 
 def test_prediction_manifest_must_certify_artifact_evidence(tmp_path: Path) -> None:

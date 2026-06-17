@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import scripts.phase7_wfa.run_wfa as wfa
 from scripts.phase7_wfa.run_wfa import PREDICTION_COLUMNS, run_wfa
+from scripts.profile_scope import load_profile_scope, profile_config_hash
 from scripts.validation.data_audit_universe_guard import load_data_audit_universe
 
 
@@ -51,23 +52,24 @@ models:
     return path
 
 
-def _write_feature_matrix(root: Path) -> Path:
+def _write_feature_matrix(root: Path, *, market: str = "ES", year: int = 2024) -> Path:
     feature_cols = ["feature_train_only_marker", "feature_signal", "feature_fade_signal"]
     root.mkdir(parents=True, exist_ok=True)
     (root / "feature_cols.json").write_text(json.dumps(feature_cols), encoding="utf-8")
 
-    ts = pd.date_range("2024-01-01T00:00:00Z", periods=72, freq="h")
-    train_marker = [10.0 if value < pd.Timestamp("2024-01-03T00:00:00Z") else 1000.0 for value in ts]
+    ts = pd.date_range(f"{year}-01-01T00:00:00Z", periods=72, freq="h")
+    train_cutoff = pd.Timestamp(f"{year}-01-03T00:00:00Z")
+    train_marker = [10.0 if value < train_cutoff else 1000.0 for value in ts]
     signal = [float(idx % 3) for idx in range(len(ts))]
     fade_signal = [float(idx % 2) for idx in range(len(ts))]
     target_sign = [-1, 0, 1] * 24
-    path = root / "ES" / "2024.parquet"
+    path = root / market / f"{year}.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(
         {
             "ts": ts,
-            "market": "ES",
-            "year": 2024,
+            "market": market,
+            "year": year,
             "session_id": "session",
             "session_segment_id": "segment",
             "causal_valid": True,
@@ -93,6 +95,35 @@ def _write_feature_matrix(root: Path) -> Path:
     return path
 
 
+def _write_profile_config(
+    path: Path,
+    *,
+    profile: str = "fixture",
+    resolved_profile: str = "fixture",
+    markets: list[str] | None = None,
+    years: list[int] | None = None,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    alias_block = f"aliases:\n  {profile}: {resolved_profile}\n" if profile != resolved_profile else "aliases: {}\n"
+    path.write_text(
+        (
+            "profile_defaults:\n"
+            "  smoke:\n"
+            "    train_days: 1\n"
+            "    test_days: 1\n"
+            "    step_days: 1\n"
+            "profiles:\n"
+            f"  {resolved_profile}:\n"
+            "    settings_profile: smoke\n"
+            f"    markets: {json.dumps(markets or ['ES'])}\n"
+            f"    years: {json.dumps(years or [2024])}\n"
+            f"{alias_block}"
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def _feature_root(tmp_path: Path) -> Path:
     return tmp_path / "data" / "feature_matrices" / "baseline"
 
@@ -100,20 +131,38 @@ def _feature_root(tmp_path: Path) -> Path:
 def _write_split_plan(
     path: Path,
     *,
+    profile: str = "fixture",
+    resolved_profile: str = "fixture",
     split_group: str = "research",
     selection_allowed: bool | None = True,
     include_final_holdout_flag: bool = True,
     markets: list[str] | None = None,
+    years: list[int] | None = None,
     data_audit_universe: dict[str, object] | None = None,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
+    root = path.parents[2]
+    actual_markets = markets or ["ES"]
+    actual_years = years or [2024]
+    profile_config = _write_profile_config(
+        root / "configs" / "alpha_tiered.yaml",
+        profile=profile,
+        resolved_profile=resolved_profile,
+        markets=actual_markets,
+        years=actual_years,
+    )
+    models_config = root / "configs" / "models.yaml"
     final_holdout = split_group == "final_holdout"
     path.write_text(
         json.dumps(
             {
-                "profile": "fixture",
-                "markets": markets or ["ES"],
-                "years": [2024],
+                "profile": profile,
+                "resolved_profile": resolved_profile,
+                "config_hash": profile_config_hash([profile_config, models_config]),
+                "script_hash": "fixture-script-hash",
+                "input_file_hashes": {},
+                "markets": actual_markets,
+                "years": actual_years,
                 "data_audit_universe": data_audit_universe,
                 "folds": [
                     {
@@ -171,6 +220,83 @@ def _write_data_audit_universe(
     return path
 
 
+def _write_scope_guard_split_plan(
+    path: Path,
+    *,
+    profile: str = "tier_1",
+    resolved_profile: str = "tier_1_research",
+    markets: list[str],
+    years: list[int],
+    models_config: Path,
+    profile_config: Path = Path("configs/alpha_tiered.yaml"),
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "profile": profile,
+                "resolved_profile": resolved_profile,
+                "config_hash": profile_config_hash([profile_config, models_config]),
+                "script_hash": "fixture-script-hash",
+                "input_file_hashes": {},
+                "markets": markets,
+                "years": years,
+                "folds": [
+                    {
+                        "market": market,
+                        "fold_id": f"{market}_research_0001",
+                        "split_group": "research",
+                        "train_start": "2023-01-01T00:00:00+00:00",
+                        "purged_train_end": "2024-01-02T23:00:00+00:00",
+                        "test_start": "2024-01-03T00:00:00+00:00",
+                        "test_end": "2024-01-03T23:00:00+00:00",
+                        "is_final_holdout": False,
+                        "final_holdout": False,
+                        "selection_allowed": True,
+                    }
+                    for market in markets
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _run_scope_guard(
+    tmp_path: Path,
+    *,
+    requested_profile: str,
+    split_markets: list[str],
+    split_years: list[int],
+    split_profile: str = "tier_1",
+    split_resolved_profile: str = "tier_1_research",
+) -> None:
+    input_root = _feature_root(tmp_path)
+    (input_root / "feature_cols.json").parent.mkdir(parents=True, exist_ok=True)
+    (input_root / "feature_cols.json").write_text(json.dumps(["feature_signal"]), encoding="utf-8")
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    split_plan = _write_scope_guard_split_plan(
+        tmp_path / "reports" / "wfa" / "split_plan.json",
+        profile=split_profile,
+        resolved_profile=split_resolved_profile,
+        markets=split_markets,
+        years=split_years,
+        models_config=models_config,
+    )
+    run_wfa(
+        profile=requested_profile,
+        matrix="baseline",
+        run="baseline",
+        input_root=input_root,
+        split_plan=split_plan,
+        predictions_root=tmp_path / "data" / "predictions",
+        reports_root=tmp_path / "reports" / "wfa",
+        models_config=models_config,
+        profile_config=Path("configs/alpha_tiered.yaml"),
+    )
+
+
 def test_run_wfa_writes_oos_predictions_and_manifest(tmp_path: Path) -> None:
     input_root = _feature_root(tmp_path)
     predictions_root = tmp_path / "data" / "predictions"
@@ -213,6 +339,191 @@ def test_run_wfa_writes_oos_predictions_and_manifest(tmp_path: Path) -> None:
     assert report_path.exists()
     assert manifest_path.exists()
     assert manifest["output_file_hashes"][prediction_path.as_posix()] != "MISSING"
+
+
+def test_scope_guard_rejects_tier2_request_with_tier1_split_plan(tmp_path: Path) -> None:
+    scope = load_profile_scope("tier_1", Path("configs/alpha_tiered.yaml"))
+    assert scope is not None
+
+    with pytest.raises(SystemExit) as excinfo:
+        _run_scope_guard(
+            tmp_path,
+            requested_profile="tier_2_research",
+            split_markets=scope.markets,
+            split_years=scope.years,
+        )
+
+    message = str(excinfo.value)
+    assert "reason=profile mismatch" in message
+    assert "requested_profile='tier_2_research'" in message
+    assert "requested_resolved_profile='tier_2_research'" in message
+    assert "split_plan_profile='tier_1'" in message
+    assert "split_plan_resolved_profile='tier_1_research'" in message
+    assert "expected_markets=" in message
+    assert "actual_markets=" in message
+    assert "expected_years=" in message
+    assert "actual_years=" in message
+
+
+def test_scope_guard_rejects_tier1_split_plan_missing_market(tmp_path: Path) -> None:
+    scope = load_profile_scope("tier_1", Path("configs/alpha_tiered.yaml"))
+    assert scope is not None
+
+    with pytest.raises(SystemExit) as excinfo:
+        _run_scope_guard(
+            tmp_path,
+            requested_profile="tier_1",
+            split_markets=scope.markets[:-1],
+            split_years=scope.years,
+        )
+
+    assert "reason=markets mismatch" in str(excinfo.value)
+
+
+def test_scope_guard_rejects_tier1_split_plan_extra_market(tmp_path: Path) -> None:
+    scope = load_profile_scope("tier_1", Path("configs/alpha_tiered.yaml"))
+    assert scope is not None
+
+    with pytest.raises(SystemExit) as excinfo:
+        _run_scope_guard(
+            tmp_path,
+            requested_profile="tier_1",
+            split_markets=[*scope.markets, "NQ"],
+            split_years=scope.years,
+        )
+
+    assert "reason=markets mismatch" in str(excinfo.value)
+
+
+def test_scope_guard_rejects_tier1_split_plan_missing_year(tmp_path: Path) -> None:
+    scope = load_profile_scope("tier_1", Path("configs/alpha_tiered.yaml"))
+    assert scope is not None
+
+    with pytest.raises(SystemExit) as excinfo:
+        _run_scope_guard(
+            tmp_path,
+            requested_profile="tier_1",
+            split_markets=scope.markets,
+            split_years=scope.years[:-1],
+        )
+
+    assert "reason=years mismatch" in str(excinfo.value)
+
+
+def test_scope_guard_rejects_tier1_split_plan_extra_year(tmp_path: Path) -> None:
+    scope = load_profile_scope("tier_1", Path("configs/alpha_tiered.yaml"))
+    assert scope is not None
+
+    with pytest.raises(SystemExit) as excinfo:
+        _run_scope_guard(
+            tmp_path,
+            requested_profile="tier_1",
+            split_markets=scope.markets,
+            split_years=[*scope.years, 2025],
+        )
+
+    assert "reason=years mismatch" in str(excinfo.value)
+
+
+def test_scope_guard_rejects_split_plan_missing_provenance(tmp_path: Path) -> None:
+    scope = load_profile_scope("tier_1", Path("configs/alpha_tiered.yaml"))
+    assert scope is not None
+    input_root = _feature_root(tmp_path)
+    (input_root / "feature_cols.json").parent.mkdir(parents=True, exist_ok=True)
+    (input_root / "feature_cols.json").write_text(json.dumps(["feature_signal"]), encoding="utf-8")
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    split_plan = _write_scope_guard_split_plan(
+        tmp_path / "reports" / "wfa" / "split_plan.json",
+        markets=scope.markets,
+        years=scope.years,
+        models_config=models_config,
+    )
+    payload = json.loads(split_plan.read_text(encoding="utf-8"))
+    payload.pop("config_hash")
+    split_plan.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(SystemExit) as excinfo:
+        run_wfa(
+            profile="tier_1",
+            matrix="baseline",
+            run="baseline",
+            input_root=input_root,
+            split_plan=split_plan,
+            predictions_root=tmp_path / "data" / "predictions",
+            reports_root=tmp_path / "reports" / "wfa",
+            models_config=models_config,
+            profile_config=Path("configs/alpha_tiered.yaml"),
+        )
+
+    assert "reason=missing provenance field config_hash" in str(excinfo.value)
+
+
+def test_scope_guard_rejects_split_plan_stale_config_hash(tmp_path: Path) -> None:
+    scope = load_profile_scope("tier_1", Path("configs/alpha_tiered.yaml"))
+    assert scope is not None
+    input_root = _feature_root(tmp_path)
+    (input_root / "feature_cols.json").parent.mkdir(parents=True, exist_ok=True)
+    (input_root / "feature_cols.json").write_text(json.dumps(["feature_signal"]), encoding="utf-8")
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    split_plan = _write_scope_guard_split_plan(
+        tmp_path / "reports" / "wfa" / "split_plan.json",
+        markets=scope.markets,
+        years=scope.years,
+        models_config=models_config,
+    )
+    payload = json.loads(split_plan.read_text(encoding="utf-8"))
+    payload["config_hash"] = "stale"
+    split_plan.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(SystemExit) as excinfo:
+        run_wfa(
+            profile="tier_1",
+            matrix="baseline",
+            run="baseline",
+            input_root=input_root,
+            split_plan=split_plan,
+            predictions_root=tmp_path / "data" / "predictions",
+            reports_root=tmp_path / "reports" / "wfa",
+            models_config=models_config,
+            profile_config=Path("configs/alpha_tiered.yaml"),
+        )
+
+    assert "reason=config_hash mismatch" in str(excinfo.value)
+
+
+def test_valid_tier1_split_plan_passes_scope_guard(tmp_path: Path) -> None:
+    scope = load_profile_scope("tier_1", Path("configs/alpha_tiered.yaml"))
+    assert scope is not None
+    input_root = _feature_root(tmp_path)
+    predictions_root = tmp_path / "data" / "predictions"
+    reports_root = tmp_path / "reports" / "wfa"
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    split_plan = _write_scope_guard_split_plan(
+        reports_root / "split_plan.json",
+        markets=scope.markets,
+        years=scope.years,
+        models_config=models_config,
+    )
+    _write_feature_matrix(input_root, market=scope.markets[0], year=scope.years[0])
+    _write_feature_matrix(input_root, market=scope.markets[0], year=scope.years[1])
+
+    manifest = run_wfa(
+        profile="tier_1",
+        matrix="baseline",
+        run="baseline",
+        input_root=input_root,
+        split_plan=split_plan,
+        predictions_root=predictions_root,
+        reports_root=reports_root,
+        models_config=models_config,
+        profile_config=Path("configs/alpha_tiered.yaml"),
+        max_folds=1,
+    )
+
+    assert manifest["failure_count"] == 0
+    assert manifest["resolved_profile"] == "tier_1_research"
+    assert manifest["markets"] == scope.markets
+    assert manifest["years"] == scope.years
 
 
 def test_report_records_train_only_fit_window_and_feature_mean(tmp_path: Path) -> None:
@@ -521,10 +832,19 @@ def test_run_wfa_does_not_load_split_plan_skipped_years(tmp_path: Path) -> None:
     frame.to_parquet(rty_path, index=False)
     split_plan = reports_root / "split_plan.json"
     split_plan.parent.mkdir(parents=True, exist_ok=True)
+    profile_config = _write_profile_config(
+        tmp_path / "configs" / "alpha_tiered.yaml",
+        markets=["RTY"],
+        years=[2010, 2024],
+    )
     split_plan.write_text(
         json.dumps(
             {
                 "profile": "fixture",
+                "resolved_profile": "fixture",
+                "config_hash": profile_config_hash([profile_config, models_config]),
+                "script_hash": "fixture-script-hash",
+                "input_file_hashes": {},
                 "markets": ["RTY"],
                 "years": [2010, 2024],
                 "skipped_inputs": [

@@ -1,5 +1,10 @@
 # Tier 1 Data Audit Status
 
+Historical status file. This data-audit todo is complete for the current Tier 1
+decision and is superseded by `CURRENT_PIPELINE.md` for active next steps. Keep
+this file only as an audit trail unless you explicitly decide to delete/archive
+old planning files.
+
 Snapshot updated: 2026-06-16. Refresh generated reports before acting.
 
 ## Current State

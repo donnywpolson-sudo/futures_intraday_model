@@ -56,6 +56,8 @@ EXCLUDED = [
 ]
 
 PRODUCT_AVAILABLE_START_YEAR = {
+    # Expected unavailable years, not local data gaps:
+    # RTY 2010-2016 and SR3 2010-2017 do not resolve in Databento GLBX.MDP3.
     "RTY": 2017,
     "SR3": 2018,
 }

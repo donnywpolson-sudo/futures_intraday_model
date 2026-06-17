@@ -45,6 +45,28 @@ def _file_hash_map(paths: Iterable[Path]) -> dict[str, str]:
     return {_relative_path(path): _file_hash_or_missing(path) for path in paths}
 
 
+def _manifest_path(value: object) -> Path | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return Path(value)
+
+
+def _unique_manifest_value(
+    manifests: list[dict[str, Any]],
+    key: str,
+    failures: list[str],
+) -> Any:
+    values = [manifest.get(key) for manifest in manifests if manifest.get(key) not in (None, "")]
+    encoded = {json.dumps(value, sort_keys=True, default=str) for value in values}
+    if not values:
+        failures.append(f"shard manifests missing {key}")
+        return None
+    if len(encoded) > 1:
+        failures.append(f"shard manifests disagree on {key}")
+        return None
+    return values[0]
+
+
 def _git_commit() -> str | None:
     try:
         return subprocess.check_output(
@@ -127,6 +149,8 @@ def combine_wfa_prediction_shards(
         if duplicate_count:
             failures.append(f"duplicate combined prediction rows: {duplicate_count}")
         combined_fold_ids = set(output["fold_id"].dropna().astype(str).unique())
+        prediction_markets = sorted(output["market"].dropna().astype(str).unique().tolist())
+        prediction_years = sorted(int(year) for year in output["year"].dropna().unique())
         if require_all_folds:
             if split_plan is None:
                 failures.append("--require-all-folds needs --split-plan")
@@ -145,7 +169,42 @@ def combine_wfa_prediction_shards(
             tmp_path.replace(output_path)
             prediction_count = int(len(output))
     else:
+        prediction_markets = []
+        prediction_years = []
         failures.append("no shard prediction rows to combine")
+
+    profile = _unique_manifest_value(manifests, "profile", failures) if manifests else None
+    resolved_profile = (
+        _unique_manifest_value(manifests, "resolved_profile", failures) if manifests else None
+    )
+    markets = _unique_manifest_value(manifests, "markets", failures) if manifests else None
+    years = _unique_manifest_value(manifests, "years", failures) if manifests else None
+    split_plan_profile = (
+        _unique_manifest_value(manifests, "split_plan_profile", failures) if manifests else None
+    )
+    split_plan_resolved_profile = (
+        _unique_manifest_value(manifests, "split_plan_resolved_profile", failures)
+        if manifests
+        else None
+    )
+    split_plan_config_hash = (
+        _unique_manifest_value(manifests, "split_plan_config_hash", failures) if manifests else None
+    )
+    if profile != split_plan_profile:
+        failures.append("shard profile does not match split-plan profile")
+    if resolved_profile != split_plan_resolved_profile:
+        failures.append("shard resolved_profile does not match split-plan resolved_profile")
+
+    shard_split_plan_path = _manifest_path(
+        _unique_manifest_value(manifests, "split_plan_path", failures) if manifests else None
+    )
+    resolved_split_plan = split_plan or shard_split_plan_path
+    split_plan_hash = _file_hash_or_missing(resolved_split_plan) if resolved_split_plan else None
+    shard_split_plan_hash = (
+        _unique_manifest_value(manifests, "split_plan_hash", failures) if manifests else None
+    )
+    if split_plan_hash and shard_split_plan_hash and split_plan_hash != shard_split_plan_hash:
+        failures.append("shard split_plan_hash does not match combined split plan")
 
     output_hashes = (
         _file_hash_map([output_path])
@@ -158,18 +217,31 @@ def combine_wfa_prediction_shards(
         "script_path": _relative_path(Path(__file__)),
         "script_hash": _file_sha256(Path(__file__)),
         "run": run,
+        "profile": profile,
+        "resolved_profile": resolved_profile,
+        "markets": markets,
+        "years": years,
         "prediction_path": _relative_path(output_path),
+        "prediction_markets": prediction_markets,
+        "prediction_years": prediction_years,
         "predictions_root": _relative_path(predictions_root),
         "reports_root": _relative_path(reports_root),
-        "split_plan_path": _relative_path(split_plan) if split_plan else None,
+        "split_plan_path": _relative_path(resolved_split_plan) if resolved_split_plan else None,
+        "split_plan_hash": split_plan_hash,
+        "split_plan_profile": split_plan_profile,
+        "split_plan_resolved_profile": split_plan_resolved_profile,
+        "split_plan_config_hash": split_plan_config_hash,
         "manifest_patterns": manifest_patterns,
         "shard_manifest_count": len(manifest_paths),
         "shard_prediction_count": sum(int(item.get("prediction_count") or 0) for item in manifests),
         "prediction_count": prediction_count,
         "fold_count": len(combined_fold_ids),
         "duplicate_prediction_count": duplicate_count,
-        "input_file_hashes": _file_hash_map([*manifest_paths, *prediction_paths]),
+        "input_file_hashes": _file_hash_map(
+            [*manifest_paths, *prediction_paths, *([resolved_split_plan] if resolved_split_plan else [])]
+        ),
         "output_file_hashes": output_hashes,
+        "stale_output_path_exists": False,
         "failure_count": len(failures),
         "failures": failures,
         "artifact_evidence_ready": len(failures) == 0 and prediction_count > 0,

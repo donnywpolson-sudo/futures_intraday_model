@@ -27,6 +27,12 @@ from scripts.validation.data_audit_universe_guard import (
     data_audit_evidence_matches,
     load_data_audit_universe,
 )
+from scripts.profile_scope import (
+    DEFAULT_PROFILE_CONFIG,
+    ProfileScope,
+    load_profile_scope,
+    profile_config_hash,
+)
 
 
 DEFAULT_PROFILE = "tier_1"
@@ -178,6 +184,105 @@ def _stable_hash(payload: object) -> str:
         "utf-8"
     )
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _resolved_profile_config(profile_config: Path | None, models_config: Path) -> Path:
+    if profile_config is not None:
+        return profile_config
+    sibling = models_config.parent / DEFAULT_PROFILE_CONFIG.name
+    return sibling if sibling.exists() else DEFAULT_PROFILE_CONFIG
+
+
+def _string_list(value: object) -> list[str] | None:
+    if not isinstance(value, list):
+        return None
+    return sorted(str(item) for item in value)
+
+
+def _int_list(value: object) -> list[int] | None:
+    if not isinstance(value, list):
+        return None
+    try:
+        return sorted(int(item) for item in value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _split_scope_context(
+    *,
+    plan: ProfileScope,
+    split_profile: object,
+    split_resolved_profile: object,
+    expected_markets: list[str],
+    expected_years: list[int],
+    actual_markets: object,
+    actual_years: object,
+    reason: str,
+) -> str:
+    return (
+        "split plan scope/provenance mismatch: "
+        f"reason={reason}; "
+        f"requested_profile={plan.requested_profile!r}; "
+        f"requested_resolved_profile={plan.resolved_profile!r}; "
+        f"split_plan_profile={split_profile!r}; "
+        f"split_plan_resolved_profile={split_resolved_profile!r}; "
+        f"expected_markets={expected_markets}; expected_years={expected_years}; "
+        f"actual_markets={actual_markets}; actual_years={actual_years}"
+    )
+
+
+def _validate_split_plan_scope(
+    *,
+    split_manifest: Mapping[str, Any],
+    plan: ProfileScope,
+    profile_config: Path,
+    models_config: Path,
+) -> None:
+    split_profile = split_manifest.get("profile")
+    split_resolved_profile = split_manifest.get("resolved_profile")
+    expected_markets = sorted(plan.markets)
+    expected_years = sorted(plan.years)
+    actual_markets = _string_list(split_manifest.get("markets"))
+    actual_years = _int_list(split_manifest.get("years"))
+    failures: list[str] = []
+
+    def add(reason: str) -> None:
+        failures.append(
+            _split_scope_context(
+                plan=plan,
+                split_profile=split_profile,
+                split_resolved_profile=split_resolved_profile,
+                expected_markets=expected_markets,
+                expected_years=expected_years,
+                actual_markets=actual_markets if actual_markets is not None else split_manifest.get("markets"),
+                actual_years=actual_years if actual_years is not None else split_manifest.get("years"),
+                reason=reason,
+            )
+        )
+
+    if split_profile != plan.requested_profile:
+        add("profile mismatch")
+    if split_resolved_profile != plan.resolved_profile:
+        add("resolved_profile mismatch")
+    if actual_markets is None:
+        add("markets missing or invalid")
+    elif actual_markets != expected_markets:
+        add("markets mismatch")
+    if actual_years is None:
+        add("years missing or invalid")
+    elif actual_years != expected_years:
+        add("years mismatch")
+
+    required_provenance = ("config_hash", "script_hash", "input_file_hashes")
+    for field in required_provenance:
+        if field not in split_manifest:
+            add(f"missing provenance field {field}")
+    expected_config_hash = profile_config_hash([profile_config, models_config])
+    if split_manifest.get("config_hash") not in (None, expected_config_hash):
+        add("config_hash mismatch")
+
+    if failures:
+        raise SystemExit("; ".join(failures))
 
 
 def _git_commit() -> str | None:
@@ -601,6 +706,7 @@ def run_wfa(
     predictions_root: Path,
     reports_root: Path,
     models_config: Path,
+    profile_config: Path | None = None,
     feature_cols_path: Path | None = None,
     max_folds: int | None = None,
     markets: set[str] | None = None,
@@ -617,9 +723,17 @@ def run_wfa(
             raise SystemExit("--fold-shard-count must be positive")
         if fold_shard_index < 1 or fold_shard_index > fold_shard_count:
             raise SystemExit("--fold-shard-index must be between 1 and --fold-shard-count")
+    resolved_profile_config = _resolved_profile_config(profile_config, models_config)
+    profile_scope = load_profile_scope(profile, resolved_profile_config)
     feature_cols, resolved_feature_cols_path = load_feature_cols(input_root, feature_cols_path)
     model_specs, model_config = load_model_specs(models_config)
     split_manifest = _read_json(split_plan)
+    _validate_split_plan_scope(
+        split_manifest=split_manifest,
+        plan=profile_scope,
+        profile_config=resolved_profile_config,
+        models_config=models_config,
+    )
     data_audit_universe = (
         load_data_audit_universe(data_audit_universe_json)
         if data_audit_universe_json is not None
@@ -865,6 +979,8 @@ def run_wfa(
     output_path = predictions_root / run / "oos_predictions.parquet"
     prediction_count = 0
     duplicate_count = 0
+    prediction_markets: list[str] = []
+    prediction_years: list[int] = []
     if predictions:
         output = pd.concat(predictions, ignore_index=True)
         duplicate_count = int(
@@ -874,6 +990,8 @@ def run_wfa(
         )
         if duplicate_count:
             failures.append(f"duplicate prediction rows: {duplicate_count}")
+        prediction_markets = sorted(output["market"].dropna().astype(str).unique().tolist())
+        prediction_years = sorted(int(year) for year in output["year"].dropna().unique())
         output_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = output_path.with_name(f"{output_path.name}.tmp")
         output.to_parquet(tmp_path, index=False)
@@ -905,8 +1023,11 @@ def run_wfa(
         "script_path": _relative_path(Path(__file__)),
         "script_hash": _file_sha256(Path(__file__)),
         "profile": profile,
+        "resolved_profile": profile_scope.resolved_profile,
         "matrix": matrix,
         "run": run,
+        "markets": profile_scope.markets,
+        "years": profile_scope.years,
         "models": [spec.__dict__ for spec in model_specs],
         "feature_count": len(feature_cols),
         "fold_count": len(selectable_folds),
@@ -921,6 +1042,8 @@ def run_wfa(
         "skipped_fold_count": len(skipped_folds),
         "skipped_folds": skipped_folds,
         "prediction_count": prediction_count,
+        "prediction_markets": prediction_markets,
+        "prediction_years": prediction_years,
         "duplicate_prediction_count": duplicate_count,
         "warning_count": sum(len(item["warnings"]) for item in diagnostics),
         "failure_count": len(failures),
@@ -931,11 +1054,20 @@ def run_wfa(
     manifest = {
         **{key: report[key] for key in ("generated_at", "git_commit", "script_path", "script_hash")},
         "profile": profile,
+        "resolved_profile": profile_scope.resolved_profile,
         "matrix": matrix,
         "run": run,
+        "markets": profile_scope.markets,
+        "years": profile_scope.years,
         "model_config_hash": _stable_hash(model_config),
         "feature_config_hash": _file_hash_or_missing(resolved_feature_cols_path),
+        "profile_config_path": _relative_path(resolved_profile_config),
+        "profile_config_hash": _file_hash_or_missing(resolved_profile_config),
         "split_plan_path": _relative_path(split_plan),
+        "split_plan_hash": _file_hash_or_missing(split_plan),
+        "split_plan_profile": split_manifest.get("profile"),
+        "split_plan_resolved_profile": split_manifest.get("resolved_profile"),
+        "split_plan_config_hash": split_manifest.get("config_hash"),
         "input_root": _relative_path(input_root),
         "output_root": _relative_path(predictions_root),
         "predictions_root": _relative_path(predictions_root),
@@ -958,6 +1090,8 @@ def run_wfa(
         "skipped_fold_count": len(skipped_folds),
         "skipped_folds": skipped_folds,
         "prediction_count": prediction_count,
+        "prediction_markets": prediction_markets,
+        "prediction_years": prediction_years,
         "duplicate_prediction_count": duplicate_count,
         "warning_count": report["warning_count"],
         "failure_count": len(failures),
@@ -984,6 +1118,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--predictions-root", default=DEFAULT_PREDICTIONS_ROOT.as_posix())
     parser.add_argument("--reports-root", default=DEFAULT_REPORTS_ROOT.as_posix())
     parser.add_argument("--models-config", default=DEFAULT_MODELS_CONFIG.as_posix())
+    parser.add_argument("--profile-config", default=DEFAULT_PROFILE_CONFIG.as_posix())
     parser.add_argument("--feature-cols", default=None)
     parser.add_argument("--max-folds", type=int, default=None)
     parser.add_argument("--markets", default=None)
@@ -1004,6 +1139,7 @@ def main() -> int:
         predictions_root=Path(args.predictions_root),
         reports_root=Path(args.reports_root),
         models_config=Path(args.models_config),
+        profile_config=Path(args.profile_config),
         feature_cols_path=Path(args.feature_cols) if args.feature_cols else None,
         max_folds=args.max_folds,
         markets=_parse_csv_filter(args.markets),

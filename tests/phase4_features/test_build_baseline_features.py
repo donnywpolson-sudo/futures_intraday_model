@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.phase4_features.build_baseline_features import (
     FEATURE_COLS,
+    FeatureResult,
     FORBIDDEN_FEATURE_COLUMNS,
     PHASE3_LABEL_SEMANTICS_ID,
     REGIME_LABEL_COLUMNS,
@@ -24,6 +25,7 @@ from scripts.phase4_features.build_baseline_features import (
     validate_registry,
     write_reports,
 )
+from scripts.profile_scope import load_profile_scope
 from scripts.phase4_features.audit_feature_coverage import (
     build_coverage_audit,
     write_coverage_audit,
@@ -571,11 +573,130 @@ def test_process_file_writes_matrix_registries_and_reports(tmp_path: Path) -> No
         assert payload["input_selection"]["selected_input_count"] == 1
         assert payload["input_selection"]["shard_count"] == 8
         assert payload["input_selection"]["shard_index"] == 1
+        assert payload["partial_scope"] is True
+        assert payload["authoritative"] is False
+        assert payload["expected_input_count"] == 8
+        assert payload["selected_input_count"] == 1
+        assert payload["actual_input_count"] == 1
+        assert len(payload["missing_market_years"]) == 7
         assert payload["config_hash"]
         assert payload["input_file_hashes"][input_path.as_posix()] != "missing"
         assert payload["output_file_hashes"][
             (output_root / "ES" / "2024.parquet").as_posix()
         ] != "missing"
+
+
+def _feature_result_fixture(tmp_path: Path, market: str, year: int, *, profile: str) -> FeatureResult:
+    input_path = tmp_path / "data" / "labeled" / market / f"{year}.parquet"
+    output_path = tmp_path / "data" / "feature_matrices" / "baseline" / market / f"{year}.parquet"
+    input_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"source": [1]}).to_parquet(input_path, index=False)
+    frame = pd.DataFrame({column: [0.0] for column in FEATURE_COLS})
+    frame["training_row_valid"] = True
+    frame.to_parquet(output_path, index=False)
+    return FeatureResult(
+        profile=profile,
+        market=market,
+        year=year,
+        input_path=input_path.as_posix(),
+        output_path=output_path.as_posix(),
+        input_rows=1,
+        output_rows=1,
+        feature_input_valid_rows=1,
+        training_row_valid_rows=1,
+        target_valid_rows=1,
+        feature_count=len(FEATURE_COLS),
+    )
+
+
+def test_full_tier1_feature_manifest_can_be_authoritative(tmp_path: Path) -> None:
+    scope = load_profile_scope("tier_1", Path("configs/alpha_tiered.yaml"))
+    assert scope is not None
+    input_root = tmp_path / "data" / "labeled"
+    output_root = tmp_path / "data" / "feature_matrices" / "baseline"
+    reports_root = tmp_path / "reports" / "features_baseline"
+    costs_path = _write_costs(tmp_path / "configs" / "costs.yaml")
+    results = [
+        _feature_result_fixture(tmp_path, market, year, profile="tier_1")
+        for market in scope.markets
+        for year in scope.years
+    ]
+
+    write_reports(
+        results,
+        profile="tier_1",
+        input_root=input_root,
+        output_root=output_root,
+        reports_root=reports_root,
+        costs_config=costs_path,
+        input_selection={
+            "profile_input_count": len(results),
+            "selected_input_count": len(results),
+        },
+    )
+
+    manifest = json.loads((reports_root / "baseline_feature_manifest.json").read_text())
+    assert manifest["partial_scope"] is False
+    assert manifest["authoritative"] is True
+    assert manifest["expected_input_count"] == len(results) == 8
+    assert manifest["actual_input_count"] == 8
+    assert manifest["missing_market_years"] == []
+
+
+def test_full_tier1_feature_manifest_with_warnings_is_scope_authoritative(tmp_path: Path) -> None:
+    scope = load_profile_scope("tier_1", Path("configs/alpha_tiered.yaml"))
+    assert scope is not None
+    input_root = tmp_path / "data" / "labeled"
+    output_root = tmp_path / "data" / "feature_matrices" / "baseline"
+    reports_root = tmp_path / "reports" / "features_baseline"
+    costs_path = _write_costs(tmp_path / "configs" / "costs.yaml")
+    results = [
+        _feature_result_fixture(tmp_path, market, year, profile="tier_1")
+        for market in scope.markets
+        for year in scope.years
+    ]
+    results[0].warnings.append("fixture data-quality warning")
+
+    write_reports(
+        results,
+        profile="tier_1",
+        input_root=input_root,
+        output_root=output_root,
+        reports_root=reports_root,
+        costs_config=costs_path,
+        input_selection={
+            "profile_input_count": len(results),
+            "selected_input_count": len(results),
+        },
+    )
+
+    manifest = json.loads((reports_root / "baseline_feature_manifest.json").read_text())
+    assert manifest["status"] == "WARN"
+    assert manifest["partial_scope"] is False
+    assert manifest["authoritative"] is True
+    assert manifest["failure_count"] == 0
+
+
+def test_non_tier1_feature_manifest_keeps_compatible_authority_shape(tmp_path: Path) -> None:
+    input_root = tmp_path / "data" / "labeled"
+    output_root = tmp_path / "data" / "feature_matrices" / "baseline"
+    reports_root = tmp_path / "reports" / "features_baseline"
+    costs_path = _write_costs(tmp_path / "configs" / "costs.yaml")
+    result = _feature_result_fixture(tmp_path, "ES", 2024, profile="tier_0")
+
+    write_reports(
+        [result],
+        profile="tier_0",
+        input_root=input_root,
+        output_root=output_root,
+        reports_root=reports_root,
+        costs_config=costs_path,
+    )
+
+    manifest = json.loads((reports_root / "baseline_feature_manifest.json").read_text())
+    assert "partial_scope" not in manifest
+    assert "authoritative" not in manifest
 
 
 def test_phase4_coverage_audit_compares_labeled_to_canonical_features(tmp_path: Path) -> None:

@@ -155,6 +155,48 @@ def _file_hash_map(paths: Iterable[Path]) -> dict[str, str]:
     return {_relative_path(path): _file_hash_or_missing(path) for path in paths}
 
 
+def _normalized_path(path: Path | str) -> str:
+    raw = Path(path).expanduser()
+    return raw.resolve().as_posix()
+
+
+def _manifest_path(path_value: object) -> Path | None:
+    if not isinstance(path_value, str) or not path_value.strip():
+        return None
+    path = Path(path_value).expanduser()
+    return path if path.is_absolute() else Path.cwd() / path
+
+
+def _parquet_row_count(path: Path) -> int:
+    import pyarrow.parquet as pq
+
+    return int(pq.ParquetFile(path).metadata.num_rows)
+
+
+def _manifest_hash_lookup(
+    hashes: object,
+    artifact_path: Path,
+) -> tuple[str | None, bool]:
+    if not isinstance(hashes, Mapping) or not hashes:
+        return None, False
+    expected = _normalized_path(artifact_path)
+    for raw_path, raw_hash in hashes.items():
+        if not isinstance(raw_path, str):
+            continue
+        if _normalized_path(raw_path) == expected:
+            return str(raw_hash), True
+    return None, True
+
+
+def _scope_list(value: object, *, cast_type: type = str) -> list[Any] | None:
+    if not isinstance(value, list):
+        return None
+    try:
+        return sorted(cast_type(item) for item in value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _stable_hash(payload: object) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode(
         "utf-8"
@@ -230,22 +272,133 @@ def _max_drawdown(values: pd.Series) -> float | None:
     return float(drawdown.min())
 
 
-def _prediction_manifest_failures(manifest: Mapping[str, Any]) -> list[str]:
+def _prediction_manifest_failures(
+    manifest: Mapping[str, Any],
+    *,
+    predictions_path: Path,
+    predictions: pd.DataFrame,
+    run: str,
+) -> list[str]:
     failures: list[str] = []
     if not manifest:
         failures.append("prediction manifest missing or unreadable")
         return failures
     if int(manifest.get("failure_count") or 0) > 0:
         failures.append("prediction manifest failure_count is nonzero")
-    if int(manifest.get("prediction_count") or 0) <= 0:
+
+    manifest_prediction_path = _manifest_path(manifest.get("prediction_path"))
+    if manifest_prediction_path is None:
+        failures.append("prediction manifest prediction_path missing")
+    elif _normalized_path(manifest_prediction_path) != _normalized_path(predictions_path):
+        failures.append(
+            "prediction manifest prediction_path does not match CLI predictions path: "
+            f"manifest={manifest_prediction_path.as_posix()} cli={predictions_path.as_posix()}"
+        )
+
+    if not predictions_path.exists():
+        failures.append(f"prediction parquet missing: {_relative_path(predictions_path)}")
+    output_hashes = manifest.get("output_file_hashes")
+    actual_hash, hash_mapping_present = _manifest_hash_lookup(output_hashes, predictions_path)
+    if not hash_mapping_present:
+        failures.append("prediction manifest output_file_hashes missing")
+    elif actual_hash is None:
+        failures.append(
+            "prediction manifest output_file_hashes missing prediction path: "
+            f"{predictions_path.as_posix()}"
+        )
+    elif actual_hash in {"MISSING", "NOT_WRITTEN"}:
+        failures.append(f"prediction manifest output hash is {actual_hash}")
+    elif predictions_path.exists() and actual_hash != _file_sha256(predictions_path):
+        failures.append("prediction manifest output hash does not match prediction parquet")
+
+    if "prediction_count" not in manifest:
+        failures.append("prediction manifest prediction_count missing")
+    elif int(manifest.get("prediction_count") or 0) <= 0:
         failures.append("prediction manifest prediction_count is zero")
-    output_hashes = manifest.get("output_file_hashes", {})
-    if isinstance(output_hashes, Mapping) and any(value == "NOT_WRITTEN" for value in output_hashes.values()):
-        failures.append("prediction manifest output hash is NOT_WRITTEN")
-    if manifest.get("stale_output_path_exists") is True:
+    elif predictions_path.exists() and int(manifest["prediction_count"]) != _parquet_row_count(predictions_path):
+        failures.append("prediction manifest prediction_count does not match prediction parquet row count")
+
+    if "stale_output_path_exists" not in manifest:
+        failures.append("prediction manifest stale_output_path_exists missing")
+    elif manifest.get("stale_output_path_exists") is True:
         failures.append("prediction manifest flags stale output")
-    if manifest.get("artifact_evidence_ready") is False:
+    if "artifact_evidence_ready" not in manifest:
+        failures.append("prediction manifest artifact_evidence_ready missing")
+    elif manifest.get("artifact_evidence_ready") is not True:
         failures.append("prediction manifest artifact_evidence_ready is false")
+
+    if manifest.get("run") != run:
+        failures.append(
+            f"prediction manifest run mismatch: manifest={manifest.get('run')!r} cli={run!r}"
+        )
+
+    profile = manifest.get("profile")
+    resolved_profile = manifest.get("resolved_profile")
+    split_profile = manifest.get("split_plan_profile")
+    split_resolved_profile = manifest.get("split_plan_resolved_profile")
+    for field, value in (
+        ("profile", profile),
+        ("resolved_profile", resolved_profile),
+        ("split_plan_profile", split_profile),
+        ("split_plan_resolved_profile", split_resolved_profile),
+    ):
+        if not isinstance(value, str) or not value:
+            failures.append(f"prediction manifest {field} missing")
+    if isinstance(profile, str) and isinstance(split_profile, str) and profile != split_profile:
+        failures.append("prediction manifest profile does not match split-plan profile")
+    if (
+        isinstance(resolved_profile, str)
+        and isinstance(split_resolved_profile, str)
+        and resolved_profile != split_resolved_profile
+    ):
+        failures.append("prediction manifest resolved_profile does not match split-plan resolved_profile")
+
+    manifest_markets = _scope_list(manifest.get("markets"), cast_type=str)
+    manifest_years = _scope_list(manifest.get("years"), cast_type=int)
+    prediction_markets = _scope_list(manifest.get("prediction_markets"), cast_type=str)
+    prediction_years = _scope_list(manifest.get("prediction_years"), cast_type=int)
+    if manifest_markets is None:
+        failures.append("prediction manifest markets missing or invalid")
+    if manifest_years is None:
+        failures.append("prediction manifest years missing or invalid")
+    if prediction_markets is None:
+        failures.append("prediction manifest prediction_markets missing or invalid")
+    if prediction_years is None:
+        failures.append("prediction manifest prediction_years missing or invalid")
+    if not predictions.empty and {"market", "year"} <= set(predictions.columns):
+        actual_markets = sorted(predictions["market"].dropna().astype(str).unique().tolist())
+        actual_years = sorted(int(year) for year in predictions["year"].dropna().unique())
+        if prediction_markets is not None and actual_markets != prediction_markets:
+            failures.append("prediction manifest prediction_markets do not match prediction parquet")
+        if prediction_years is not None and actual_years != prediction_years:
+            failures.append("prediction manifest prediction_years do not match prediction parquet")
+        if manifest_markets is not None and not set(actual_markets).issubset(set(manifest_markets)):
+            failures.append("prediction parquet markets are outside manifest markets")
+        if manifest_years is not None and not set(actual_years).issubset(set(manifest_years)):
+            failures.append("prediction parquet years are outside manifest years")
+
+    split_plan_path = _manifest_path(manifest.get("split_plan_path"))
+    if split_plan_path is None:
+        failures.append("prediction manifest split_plan_path missing")
+    elif not split_plan_path.exists():
+        failures.append(f"prediction manifest split_plan_path missing file: {split_plan_path.as_posix()}")
+    split_plan_hash = manifest.get("split_plan_hash")
+    if not isinstance(split_plan_hash, str) or not split_plan_hash:
+        failures.append("prediction manifest split_plan_hash missing")
+    elif split_plan_path is not None and split_plan_path.exists() and split_plan_hash != _file_sha256(split_plan_path):
+        failures.append("prediction manifest split_plan_hash does not match current split plan")
+    input_hash, input_hash_mapping_present = _manifest_hash_lookup(
+        manifest.get("input_file_hashes"),
+        split_plan_path or Path("__missing_split_plan__"),
+    )
+    if not input_hash_mapping_present:
+        failures.append("prediction manifest input_file_hashes missing")
+    elif input_hash is None:
+        failures.append("prediction manifest input_file_hashes missing split plan path")
+    elif isinstance(split_plan_hash, str) and input_hash != split_plan_hash:
+        failures.append("prediction manifest split_plan_hash does not match input_file_hashes")
+    if not isinstance(manifest.get("split_plan_config_hash"), str) or not manifest.get("split_plan_config_hash"):
+        failures.append("prediction manifest split_plan_config_hash missing")
     return failures
 
 
@@ -759,14 +912,23 @@ def evaluate_predictions(
     warnings: list[str] = []
     models = _read_yaml(models_config)
     manifest = _read_json(predictions_manifest) if predictions_manifest else {}
-    if predictions_manifest:
-        failures.extend(_prediction_manifest_failures(manifest))
     if not predictions_path.exists():
         failures.append(f"prediction parquet missing: {_relative_path(predictions_path)}")
         predictions = pd.DataFrame()
     else:
         predictions = pd.read_parquet(predictions_path)
         failures.extend(_validate_prediction_columns(predictions))
+    manifest_failures = (
+        _prediction_manifest_failures(
+            manifest,
+            predictions_path=predictions_path,
+            predictions=predictions,
+            run=run,
+        )
+        if predictions_manifest
+        else ["prediction manifest required"]
+    )
+    failures.extend(manifest_failures)
     final_holdout_touched = (
         "split_group" in predictions.columns
         and predictions["split_group"].astype(str).eq("final_holdout").any()
@@ -883,9 +1045,7 @@ def evaluate_predictions(
         else None,
         "models_config": _relative_path(models_config),
         "model_config_hash": _stable_hash(models),
-        "prediction_manifest_artifact_evidence_ready": not _prediction_manifest_failures(manifest)
-        if predictions_manifest
-        else False,
+        "prediction_manifest_artifact_evidence_ready": not manifest_failures,
         "selection_status": "NOT_SELECTED_BASELINE_DIAGNOSTICS_ONLY",
         "selected_model_id": None,
         "selection_reason": (

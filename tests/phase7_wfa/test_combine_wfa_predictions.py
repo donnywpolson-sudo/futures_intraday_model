@@ -11,6 +11,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.phase7_wfa.combine_wfa_predictions import combine_wfa_prediction_shards
 
 
+def _sha256(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _write_prediction(path: Path, *, fold_id: str, timestamp: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(
@@ -29,13 +39,22 @@ def _write_prediction(path: Path, *, fold_id: str, timestamp: str) -> Path:
     return path
 
 
-def _write_manifest(path: Path, prediction_path: Path) -> Path:
+def _write_manifest(path: Path, prediction_path: Path, split_plan: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
             {
                 "failure_count": 0,
                 "artifact_evidence_ready": True,
+                "profile": "tier_1",
+                "resolved_profile": "tier_1_research",
+                "markets": ["ES"],
+                "years": [2024],
+                "split_plan_path": split_plan.as_posix(),
+                "split_plan_hash": _sha256(split_plan),
+                "split_plan_profile": "tier_1",
+                "split_plan_resolved_profile": "tier_1_research",
+                "split_plan_config_hash": "split-config-hash",
                 "prediction_count": 1,
                 "prediction_path": prediction_path.as_posix(),
             }
@@ -46,18 +65,6 @@ def _write_manifest(path: Path, prediction_path: Path) -> Path:
 
 
 def test_combine_wfa_prediction_shards_requires_all_folds(tmp_path: Path) -> None:
-    pred1 = _write_prediction(
-        tmp_path / "data" / "predictions" / "s1" / "oos_predictions.parquet",
-        fold_id="ES_research_0001",
-        timestamp="2024-01-01T00:00:00Z",
-    )
-    pred2 = _write_prediction(
-        tmp_path / "data" / "predictions" / "s2" / "oos_predictions.parquet",
-        fold_id="ES_research_0002",
-        timestamp="2024-01-02T00:00:00Z",
-    )
-    _write_manifest(tmp_path / "reports" / "s1" / "s1_predictions_manifest.json", pred1)
-    _write_manifest(tmp_path / "reports" / "s2" / "s2_predictions_manifest.json", pred2)
     split_plan = tmp_path / "reports" / "wfa" / "split_plan.json"
     split_plan.parent.mkdir(parents=True, exist_ok=True)
     split_plan.write_text(
@@ -79,6 +86,18 @@ def test_combine_wfa_prediction_shards_requires_all_folds(tmp_path: Path) -> Non
         ),
         encoding="utf-8",
     )
+    pred1 = _write_prediction(
+        tmp_path / "data" / "predictions" / "s1" / "oos_predictions.parquet",
+        fold_id="ES_research_0001",
+        timestamp="2024-01-01T00:00:00Z",
+    )
+    pred2 = _write_prediction(
+        tmp_path / "data" / "predictions" / "s2" / "oos_predictions.parquet",
+        fold_id="ES_research_0002",
+        timestamp="2024-01-02T00:00:00Z",
+    )
+    _write_manifest(tmp_path / "reports" / "s1" / "s1_predictions_manifest.json", pred1, split_plan)
+    _write_manifest(tmp_path / "reports" / "s2" / "s2_predictions_manifest.json", pred2, split_plan)
 
     manifest = combine_wfa_prediction_shards(
         manifest_patterns=[(tmp_path / "reports" / "s*" / "*_predictions_manifest.json").as_posix()],
@@ -90,18 +109,17 @@ def test_combine_wfa_prediction_shards_requires_all_folds(tmp_path: Path) -> Non
     )
 
     assert manifest["failure_count"] == 0
+    assert manifest["profile"] == "tier_1"
+    assert manifest["resolved_profile"] == "tier_1_research"
+    assert manifest["split_plan_hash"] == _sha256(split_plan)
+    assert manifest["stale_output_path_exists"] is False
+    assert manifest["artifact_evidence_ready"] is True
     assert manifest["prediction_count"] == 2
     assert manifest["fold_count"] == 2
     assert (tmp_path / "data" / "predictions" / "full" / "oos_predictions.parquet").exists()
 
 
 def test_combine_wfa_prediction_shards_fails_missing_expected_fold(tmp_path: Path) -> None:
-    pred1 = _write_prediction(
-        tmp_path / "data" / "predictions" / "s1" / "oos_predictions.parquet",
-        fold_id="ES_research_0001",
-        timestamp="2024-01-01T00:00:00Z",
-    )
-    _write_manifest(tmp_path / "reports" / "s1" / "s1_predictions_manifest.json", pred1)
     split_plan = tmp_path / "reports" / "wfa" / "split_plan.json"
     split_plan.parent.mkdir(parents=True, exist_ok=True)
     split_plan.write_text(
@@ -123,6 +141,12 @@ def test_combine_wfa_prediction_shards_fails_missing_expected_fold(tmp_path: Pat
         ),
         encoding="utf-8",
     )
+    pred1 = _write_prediction(
+        tmp_path / "data" / "predictions" / "s1" / "oos_predictions.parquet",
+        fold_id="ES_research_0001",
+        timestamp="2024-01-01T00:00:00Z",
+    )
+    _write_manifest(tmp_path / "reports" / "s1" / "s1_predictions_manifest.json", pred1, split_plan)
 
     manifest = combine_wfa_prediction_shards(
         manifest_patterns=[(tmp_path / "reports" / "s*" / "*_predictions_manifest.json").as_posix()],
@@ -135,3 +159,58 @@ def test_combine_wfa_prediction_shards_fails_missing_expected_fold(tmp_path: Pat
 
     assert manifest["failure_count"] > 0
     assert "combined predictions missing folds: 1" in manifest["failures"]
+
+
+def test_combine_wfa_prediction_shards_fails_profile_disagreement(tmp_path: Path) -> None:
+    split_plan = tmp_path / "reports" / "wfa" / "split_plan.json"
+    split_plan.parent.mkdir(parents=True, exist_ok=True)
+    split_plan.write_text(
+        json.dumps(
+            {
+                "folds": [
+                    {
+                        "fold_id": "ES_research_0001",
+                        "split_group": "research",
+                        "selection_allowed": True,
+                    },
+                    {
+                        "fold_id": "ES_research_0002",
+                        "split_group": "research",
+                        "selection_allowed": True,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    pred1 = _write_prediction(
+        tmp_path / "data" / "predictions" / "s1" / "oos_predictions.parquet",
+        fold_id="ES_research_0001",
+        timestamp="2024-01-01T00:00:00Z",
+    )
+    pred2 = _write_prediction(
+        tmp_path / "data" / "predictions" / "s2" / "oos_predictions.parquet",
+        fold_id="ES_research_0002",
+        timestamp="2024-01-02T00:00:00Z",
+    )
+    _write_manifest(tmp_path / "reports" / "s1" / "s1_predictions_manifest.json", pred1, split_plan)
+    second_manifest = _write_manifest(
+        tmp_path / "reports" / "s2" / "s2_predictions_manifest.json",
+        pred2,
+        split_plan,
+    )
+    payload = json.loads(second_manifest.read_text(encoding="utf-8"))
+    payload["profile"] = "tier_2"
+    second_manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    manifest = combine_wfa_prediction_shards(
+        manifest_patterns=[(tmp_path / "reports" / "s*" / "*_predictions_manifest.json").as_posix()],
+        run="full",
+        predictions_root=tmp_path / "data" / "predictions",
+        reports_root=tmp_path / "reports" / "full",
+        split_plan=split_plan,
+        require_all_folds=True,
+    )
+
+    assert manifest["failure_count"] > 0
+    assert "shard manifests disagree on profile" in manifest["failures"]

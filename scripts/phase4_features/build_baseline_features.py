@@ -18,6 +18,8 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from scripts.profile_scope import scope_authority_metadata
+
 warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
 
 
@@ -1503,6 +1505,17 @@ def write_reports(
     input_hashes = file_hash_map(Path(result.input_path) for result in results)
     output_hashes = file_hash_map(Path(result.output_path) for result in results)
     config_digest = config_hash([profile_config, costs_config])
+    status = "FAIL" if failures else ("WARN" if warnings else "PASS")
+    authority = scope_authority_metadata(
+        profile=profile,
+        selected_market_years=((result.market, result.year) for result in results),
+        profile_config=profile_config,
+        status=status,
+        failure_count=len(failures),
+        selected_input_count=int(input_selection.get("selected_input_count", len(results)))
+        if input_selection
+        else len(results),
+    )
     manifest = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "git_commit": git_commit(),
@@ -1512,12 +1525,14 @@ def write_reports(
         "input_file_hashes": input_hashes,
         "output_file_hashes": output_hashes,
         "profile": profile,
+        "status": status,
         "input_root": relative_path(input_root),
         "output_root": relative_path(output_root),
         "reports_root": relative_path(reports_root),
         "markets": sorted({result.market for result in results}),
         "years": sorted({result.year for result in results}),
         "input_selection": dict(input_selection or {}),
+        **authority,
         "feature_count": len(FEATURE_COLS),
         "feature_family_counts": {family: len(features) for family, features in FEATURE_FAMILIES.items()},
         "forbidden_feature_leakage_failures": validate_registry(FEATURE_COLS),
@@ -1539,8 +1554,9 @@ def write_reports(
         "input_root": relative_path(input_root),
         "output_root": relative_path(output_root),
         "reports_root": relative_path(reports_root),
-        "status": "FAIL" if failures else ("WARN" if warnings else "PASS"),
+        "status": status,
         "input_selection": dict(input_selection or {}),
+        **authority,
         "summary": {
             "file_count": len(results),
             "pass_count": sum(result.status == "PASS" for result in results),

@@ -64,6 +64,8 @@ DEFAULT_RETRY_BACKOFF_SECONDS = 1.0
 DATASET_AVAILABLE_START = {
     CME_DATASET: date(2010, 6, 6),
 }
+# Databento GLBX.MDP3 has venue-level OHLCV coverage from 2010-06-06, but
+# these continuous futures roots do not resolve before their product windows.
 PRODUCT_AVAILABLE_START = {
     (CME_DATASET, "RTY"): date(2017, 6, 5),
     (CME_DATASET, "SR3"): date(2018, 4, 23),
