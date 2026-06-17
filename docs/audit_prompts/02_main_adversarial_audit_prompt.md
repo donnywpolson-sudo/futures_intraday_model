@@ -60,8 +60,6 @@ Scope:
 - Do not audit tier_1_holdout or tier_1_forward except for leakage/contamination checks.
 - Use CURRENT_PIPELINE.md only as stale-suspect orientation; independently verify all claims.
 - Treat root planning/docs files as orientation only, not pipeline truth:
-  - CODEX DO NEXT.md
-  - DATA_AUDIT_TODO.md
   - RESOURCES.md
 - Ignore _archive/ unless auditing cleanup/provenance explicitly.
 - Current feature-set/research-process state to verify, not assume:
