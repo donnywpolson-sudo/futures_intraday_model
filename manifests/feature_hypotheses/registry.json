@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "allowed_statuses": [
+    "CANDIDATE",
+    "DISCOVERY_PASS",
+    "CONFIRMATION_PASS",
+    "FROZEN",
+    "REJECTED",
+    "RETIRED",
+    "QUARANTINED"
+  ],
+  "wfa_allowed_statuses": [
+    "FROZEN"
+  ],
+  "allowed_transitions": {
+    "CANDIDATE": [
+      "DISCOVERY_PASS",
+      "REJECTED",
+      "QUARANTINED"
+    ],
+    "DISCOVERY_PASS": [
+      "CONFIRMATION_PASS",
+      "REJECTED",
+      "QUARANTINED"
+    ],
+    "CONFIRMATION_PASS": [
+      "FROZEN",
+      "REJECTED",
+      "QUARANTINED"
+    ],
+    "FROZEN": [
+      "RETIRED",
+      "QUARANTINED"
+    ],
+    "REJECTED": [],
+    "RETIRED": [],
+    "QUARANTINED": []
+  },
+  "hypotheses": [
+    {
+      "hypothesis_id": "baseline_current",
+      "status": "FROZEN",
+      "wfa_allowed": true,
+      "feature_set_manifest": "manifests/feature_sets/baseline_current.json",
+      "feature_family": "baseline_current",
+      "scope": {
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": [
+          "ES",
+          "CL",
+          "ZN",
+          "6E"
+        ],
+        "years": [
+          2023,
+          2024
+        ]
+      },
+      "description": "Compatibility record for the current Phase 4 baseline feature registry.",
+      "status_reason": "Existing 122-feature baseline registry is frozen as an explicit Phase 7 input set.",
+      "source_reports": [],
+      "next_allowed_actions": [
+        "WFA_WITH_FEATURE_SET",
+        "REFERENCE_BASELINE"
+      ]
+    }
+  ]
+}

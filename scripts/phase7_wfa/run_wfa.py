@@ -90,6 +90,14 @@ class ModelSpec:
     config_hash: str
 
 
+@dataclass(frozen=True)
+class FeatureSetSpec:
+    feature_cols: list[str]
+    config_path: Path
+    config_hash: str
+    manifest: dict[str, Any] | None = None
+
+
 def _read_yaml(path: Path) -> dict[str, Any]:
     payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return payload if isinstance(payload, dict) else {}
@@ -313,6 +321,113 @@ def load_feature_cols(input_root: Path, feature_cols_path: Path | None = None) -
     if any(item.startswith("target_") for item in payload):
         raise SystemExit("feature column registry contains target columns")
     return list(payload), path
+
+
+def _validate_feature_list(features: object, context: str) -> list[str]:
+    if not isinstance(features, list) or not all(isinstance(item, str) for item in features):
+        raise SystemExit(f"invalid feature column registry: {context}")
+    if not features:
+        raise SystemExit(f"feature column registry is empty: {context}")
+    duplicates = sorted({item for item in features if features.count(item) > 1})
+    if duplicates:
+        raise SystemExit(f"feature column registry contains duplicates: {duplicates}")
+    if any(item.startswith("target_") for item in features):
+        raise SystemExit("feature column registry contains target columns")
+    return list(features)
+
+
+def _resolve_manifest_relative_path(manifest_path: Path, raw_path: object) -> Path:
+    path = Path(str(raw_path))
+    if path.is_absolute():
+        return path
+    cwd_path = Path.cwd() / path
+    if cwd_path.exists():
+        return cwd_path
+    return manifest_path.parent / path
+
+
+def load_feature_set(feature_set_path: Path) -> FeatureSetSpec:
+    if not feature_set_path.exists():
+        raise SystemExit(f"feature-set manifest missing: {_relative_path(feature_set_path)}")
+    payload = _read_json(feature_set_path)
+    feature_set_id = payload.get("feature_set_id")
+    if not isinstance(feature_set_id, str) or not feature_set_id:
+        raise SystemExit(f"feature-set manifest missing feature_set_id: {_relative_path(feature_set_path)}")
+    if payload.get("status") != "FROZEN":
+        raise SystemExit(f"feature-set {feature_set_id!r} is not FROZEN")
+    if payload.get("allowed_for_wfa") is not True:
+        raise SystemExit(f"feature-set {feature_set_id!r} is not allowed for WFA")
+
+    features_source: Path | None = None
+    if "features" in payload:
+        feature_cols = _validate_feature_list(
+            payload.get("features"),
+            f"feature-set {feature_set_id!r}",
+        )
+    elif "features_path" in payload:
+        features_source = _resolve_manifest_relative_path(feature_set_path, payload["features_path"])
+        if not features_source.exists():
+            raise SystemExit(f"feature-set features file missing: {_relative_path(features_source)}")
+        feature_cols = _validate_feature_list(
+            [
+                line.strip()
+                for line in features_source.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.lstrip().startswith("#")
+            ],
+            _relative_path(features_source),
+        )
+    else:
+        raise SystemExit(f"feature-set {feature_set_id!r} has no features or features_path")
+
+    expected_count = payload.get("feature_count")
+    if expected_count is not None and int(expected_count) != len(feature_cols):
+        raise SystemExit(
+            f"feature-set {feature_set_id!r} feature_count mismatch: "
+            f"manifest={expected_count} actual={len(feature_cols)}"
+        )
+
+    registry_path: Path | None = None
+    if "feature_cols_path" in payload:
+        registry_path = _resolve_manifest_relative_path(feature_set_path, payload["feature_cols_path"])
+        registry_features, _ = load_feature_cols(registry_path.parent, registry_path)
+        if registry_features != feature_cols:
+            raise SystemExit(
+                f"feature-set {feature_set_id!r} does not match feature_cols_path "
+                f"{_relative_path(registry_path)}"
+            )
+
+    manifest = {
+        "feature_set_id": feature_set_id,
+        "status": payload.get("status"),
+        "allowed_for_wfa": payload.get("allowed_for_wfa"),
+        "feature_count": len(feature_cols),
+        "feature_set_path": _relative_path(feature_set_path),
+        "features_path": _relative_path(features_source) if features_source is not None else None,
+        "feature_cols_path": _relative_path(registry_path) if registry_path is not None else None,
+    }
+    return FeatureSetSpec(
+        feature_cols=feature_cols,
+        config_path=feature_set_path,
+        config_hash=_file_hash_or_missing(feature_set_path),
+        manifest=manifest,
+    )
+
+
+def resolve_feature_set(
+    input_root: Path,
+    feature_cols_path: Path | None = None,
+    feature_set_path: Path | None = None,
+) -> FeatureSetSpec:
+    if feature_cols_path is not None and feature_set_path is not None:
+        raise SystemExit("provide either --feature-cols or --feature-set, not both")
+    if feature_set_path is not None:
+        return load_feature_set(feature_set_path)
+    feature_cols, resolved_path = load_feature_cols(input_root, feature_cols_path)
+    return FeatureSetSpec(
+        feature_cols=feature_cols,
+        config_path=resolved_path,
+        config_hash=_file_hash_or_missing(resolved_path),
+    )
 
 
 def load_model_specs(models_config: Path) -> tuple[list[ModelSpec], dict[str, Any]]:
@@ -708,6 +823,7 @@ def run_wfa(
     models_config: Path,
     profile_config: Path | None = None,
     feature_cols_path: Path | None = None,
+    feature_set_path: Path | None = None,
     max_folds: int | None = None,
     markets: set[str] | None = None,
     fold_shard_count: int | None = None,
@@ -725,7 +841,9 @@ def run_wfa(
             raise SystemExit("--fold-shard-index must be between 1 and --fold-shard-count")
     resolved_profile_config = _resolved_profile_config(profile_config, models_config)
     profile_scope = load_profile_scope(profile, resolved_profile_config)
-    feature_cols, resolved_feature_cols_path = load_feature_cols(input_root, feature_cols_path)
+    feature_set = resolve_feature_set(input_root, feature_cols_path, feature_set_path)
+    feature_cols = feature_set.feature_cols
+    resolved_feature_config_path = feature_set.config_path
     model_specs, model_config = load_model_specs(models_config)
     split_manifest = _read_json(split_plan)
     _validate_split_plan_scope(
@@ -861,7 +979,7 @@ def run_wfa(
 
     source_columns = _required_source_columns(feature_cols, model_specs)
     frames: dict[str, pd.DataFrame] = {}
-    input_paths: list[Path] = [split_plan, resolved_feature_cols_path, models_config]
+    input_paths: list[Path] = [split_plan, resolved_feature_config_path, models_config]
     for market, years in years_by_market.items():
         frame, market_failures, paths = _load_market_frame(market, years, input_root, source_columns)
         input_paths.extend(paths)
@@ -970,7 +1088,7 @@ def run_wfa(
                     y_test,
                     np.asarray(raw_pred, dtype=float),
                     probability_cols,
-                    _file_hash_or_missing(resolved_feature_cols_path),
+                    feature_set.config_hash,
                 )
             )
             detail["prediction_rows"] = int(len(test))
@@ -1030,6 +1148,7 @@ def run_wfa(
         "years": profile_scope.years,
         "models": [spec.__dict__ for spec in model_specs],
         "feature_count": len(feature_cols),
+        "feature_set": feature_set.manifest,
         "fold_count": len(selectable_folds),
         "unfiltered_selectable_fold_count": unfiltered_selectable_count,
         "fold_selection": {
@@ -1060,7 +1179,8 @@ def run_wfa(
         "markets": profile_scope.markets,
         "years": profile_scope.years,
         "model_config_hash": _stable_hash(model_config),
-        "feature_config_hash": _file_hash_or_missing(resolved_feature_cols_path),
+        "feature_config_hash": feature_set.config_hash,
+        "feature_set": feature_set.manifest,
         "profile_config_path": _relative_path(resolved_profile_config),
         "profile_config_hash": _file_hash_or_missing(resolved_profile_config),
         "split_plan_path": _relative_path(split_plan),
@@ -1078,6 +1198,7 @@ def run_wfa(
         "required_columns": PREDICTION_COLUMNS,
         "model_ids": [spec.model_id for spec in model_specs],
         "target_names": [spec.target for spec in model_specs],
+        "feature_count": len(feature_cols),
         "fold_count": len(selectable_folds),
         "unfiltered_selectable_fold_count": unfiltered_selectable_count,
         "fold_selection": {
@@ -1120,6 +1241,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--models-config", default=DEFAULT_MODELS_CONFIG.as_posix())
     parser.add_argument("--profile-config", default=DEFAULT_PROFILE_CONFIG.as_posix())
     parser.add_argument("--feature-cols", default=None)
+    parser.add_argument("--feature-set", default=None)
     parser.add_argument("--max-folds", type=int, default=None)
     parser.add_argument("--markets", default=None)
     parser.add_argument("--fold-shard-count", type=int, default=None)
@@ -1141,6 +1263,7 @@ def main() -> int:
         models_config=Path(args.models_config),
         profile_config=Path(args.profile_config),
         feature_cols_path=Path(args.feature_cols) if args.feature_cols else None,
+        feature_set_path=Path(args.feature_set) if args.feature_set else None,
         max_folds=args.max_folds,
         markets=_parse_csv_filter(args.markets),
         fold_shard_count=args.fold_shard_count,

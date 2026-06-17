@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "feature_set_id": "baseline_current",
+  "status": "FROZEN",
+  "allowed_for_wfa": true,
+  "matrix": "baseline",
+  "feature_root": "data/feature_matrices/baseline",
+  "feature_cols_path": "data/feature_matrices/baseline/feature_cols.json",
+  "features_path": "baseline_current_features.txt",
+  "feature_count": 122,
+  "source": "Current Phase 4 baseline registry snapshot.",
+  "notes": [
+    "Compatibility freeze for the current baseline feature registry.",
+    "Use this manifest with Phase 7 --feature-set to keep feature selection explicit."
+  ]
+}

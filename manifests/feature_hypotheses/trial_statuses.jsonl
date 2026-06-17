@@ -1,0 +1,1 @@
+{"schema_version":1,"trial_id":"baseline_current_initial_freeze","hypothesis_id":"baseline_current","status":"FROZEN","stage":"freeze","evidence":["manifests/feature_sets/baseline_current.json"],"notes":"Compatibility record for current Phase 4 baseline feature registry."}

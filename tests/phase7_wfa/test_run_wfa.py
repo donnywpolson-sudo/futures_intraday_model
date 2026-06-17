@@ -95,6 +95,29 @@ def _write_feature_matrix(root: Path, *, market: str = "ES", year: int = 2024) -
     return path
 
 
+def _write_feature_set(
+    path: Path,
+    *,
+    features: list[str],
+    status: str = "FROZEN",
+    allowed_for_wfa: bool = True,
+    feature_cols_path: Path | None = None,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "feature_set_id": "fixture_feature_set",
+        "status": status,
+        "allowed_for_wfa": allowed_for_wfa,
+        "feature_count": len(features),
+        "features": features,
+    }
+    if feature_cols_path is not None:
+        payload["feature_cols_path"] = feature_cols_path.as_posix()
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
 def _write_profile_config(
     path: Path,
     *,
@@ -328,6 +351,7 @@ def test_run_wfa_writes_oos_predictions_and_manifest(tmp_path: Path) -> None:
     assert manifest["artifact_evidence_ready"] is True
     assert manifest["artifact_evidence_failures"] == []
     assert manifest["data_audit_universe"] is None
+    assert manifest["feature_set"] is None
     assert manifest["stale_output_path_exists"] is False
     assert set(PREDICTION_COLUMNS).issubset(predictions.columns)
     assert len(predictions) == 24 * 3
@@ -339,6 +363,65 @@ def test_run_wfa_writes_oos_predictions_and_manifest(tmp_path: Path) -> None:
     assert report_path.exists()
     assert manifest_path.exists()
     assert manifest["output_file_hashes"][prediction_path.as_posix()] != "MISSING"
+
+
+def test_run_wfa_accepts_frozen_feature_set_manifest(tmp_path: Path) -> None:
+    input_root = _feature_root(tmp_path)
+    predictions_root = tmp_path / "data" / "predictions"
+    reports_root = tmp_path / "reports" / "wfa"
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    split_plan = _write_split_plan(reports_root / "split_plan.json")
+    _write_feature_matrix(input_root)
+    feature_set = _write_feature_set(
+        tmp_path / "manifests" / "feature_sets" / "fixture_feature_set.json",
+        features=["feature_signal", "feature_fade_signal"],
+    )
+
+    manifest = run_wfa(
+        profile="fixture",
+        matrix="baseline",
+        run="feature_set_run",
+        input_root=input_root,
+        split_plan=split_plan,
+        predictions_root=predictions_root,
+        reports_root=reports_root,
+        models_config=models_config,
+        feature_set_path=feature_set,
+    )
+
+    predictions = pd.read_parquet(predictions_root / "feature_set_run" / "oos_predictions.parquet")
+
+    assert manifest["failure_count"] == 0
+    assert manifest["feature_count"] == 2
+    assert manifest["feature_set"]["feature_set_id"] == "fixture_feature_set"
+    assert manifest["feature_set"]["status"] == "FROZEN"
+    assert manifest["feature_config_hash"] == wfa._file_hash_or_missing(feature_set)
+    assert set(predictions["feature_config_hash"]) == {manifest["feature_config_hash"]}
+
+
+def test_feature_set_rejects_non_frozen_manifest(tmp_path: Path) -> None:
+    feature_set = _write_feature_set(
+        tmp_path / "manifests" / "feature_sets" / "candidate.json",
+        features=["feature_signal"],
+        status="CANDIDATE",
+    )
+
+    with pytest.raises(SystemExit, match="not FROZEN"):
+        wfa.load_feature_set(feature_set)
+
+
+def test_feature_set_rejects_feature_cols_override_together(tmp_path: Path) -> None:
+    feature_set = _write_feature_set(
+        tmp_path / "manifests" / "feature_sets" / "frozen.json",
+        features=["feature_signal"],
+    )
+
+    with pytest.raises(SystemExit, match="provide either --feature-cols or --feature-set"):
+        wfa.resolve_feature_set(
+            tmp_path / "data" / "feature_matrices" / "baseline",
+            feature_cols_path=tmp_path / "feature_cols.json",
+            feature_set_path=feature_set,
+        )
 
 
 def test_scope_guard_rejects_tier2_request_with_tier1_split_plan(tmp_path: Path) -> None:
