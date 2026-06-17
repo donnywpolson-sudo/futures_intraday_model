@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "allowed_statuses": [
+    "CANDIDATE",
+    "DISCOVERY_PASS",
+    "CONFIRMATION_PASS",
+    "FROZEN",
+    "REJECTED",
+    "RETIRED",
+    "QUARANTINED"
+  ],
+  "wfa_allowed_statuses": [
+    "FROZEN"
+  ],
+  "allowed_transitions": {
+    "CANDIDATE": [
+      "DISCOVERY_PASS",
+      "REJECTED",
+      "QUARANTINED"
+    ],
+    "DISCOVERY_PASS": [
+      "CONFIRMATION_PASS",
+      "REJECTED",
+      "QUARANTINED"
+    ],
+    "CONFIRMATION_PASS": [
+      "FROZEN",
+      "REJECTED",
+      "QUARANTINED"
+    ],
+    "FROZEN": [
+      "RETIRED",
+      "QUARANTINED"
+    ],
+    "REJECTED": [],
+    "RETIRED": [],
+    "QUARANTINED": []
+  },
+  "hypotheses": [
+    {
+      "target_hypothesis_id": "directional_path_quality_target_v1",
+      "status": "REJECTED",
+      "wfa_allowed": false,
+      "target_family": "directional_path_quality",
+      "scope": {
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": [
+          "ES",
+          "CL",
+          "ZN",
+          "6E"
+        ],
+        "years": [
+          2023,
+          2024
+        ]
+      },
+      "description": "Pre-registered Phase 9 target-construction candidate requiring terminal 15m direction, cost clearance, and controlled adverse path excursion.",
+      "status_reason": "Rejected by bounded smoke: STOP_UNDERPOWERED, duplicate-target overlap with first-hit proxy was 1.0, controls failed, market balance failed, and top-5 cost drag failed.",
+      "source_reports": [
+        "reports/pipeline_audit/directional_path_quality_target_v1_smoke_20260617T095912Z.md",
+        "reports/pipeline_audit/directional_path_quality_target_v1_smoke_20260617T095912Z.json"
+      ],
+      "next_allowed_actions": []
+    }
+  ]
+}
