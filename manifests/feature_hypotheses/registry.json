@@ -64,6 +64,32 @@
         "WFA_WITH_FEATURE_SET",
         "REFERENCE_BASELINE"
       ]
+    },
+    {
+      "hypothesis_id": "liquidity_cost_state_features_v1",
+      "status": "CANDIDATE",
+      "wfa_allowed": false,
+      "feature_family": "liquidity_cost_state",
+      "scope": {
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": [
+          "ES",
+          "CL",
+          "ZN",
+          "6E"
+        ],
+        "years": [
+          2023,
+          2024
+        ]
+      },
+      "description": "Test whether pre-entry liquidity and cost-state proxies identify non-overlapping Tier 1 events with stable post-cost opportunity across ES, CL, ZN, and 6E.",
+      "status_reason": "Pre-registered candidate; discovery not run.",
+      "source_reports": [],
+      "next_allowed_actions": [
+        "RUN_DISCOVERY_HARNESS"
+      ]
     }
   ]
 }
