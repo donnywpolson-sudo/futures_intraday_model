@@ -190,34 +190,52 @@ def _status_for_decision(
     row: dict[str, Any],
     diagnostic_markets: set[str],
     accept_databento_ohlcv_no_trade_convention: bool,
-) -> tuple[str, str]:
+) -> tuple[str, str, bool, bool]:
     decision = str(row.get("final_decision") or "")
     market = str(row.get("market") or "")
     failures = row.get("failures") or []
     if failures:
-        return "quarantined", "decision row contains failures"
+        return "quarantined", "decision row contains failures", False, False
     if decision in USABLE_DECISIONS:
-        return "usable", "decision table marks market-year acceptable under current OHLCV-only evidence"
+        return (
+            "usable",
+            "decision table marks market-year acceptable under current OHLCV-only evidence",
+            True,
+            True,
+        )
+    if market in diagnostic_markets and decision in QUARANTINE_DECISIONS:
+        return (
+            "diagnostic_only",
+            "market is explicitly marked diagnostic-only by audit policy",
+            True,
+            False,
+        )
+    if decision in DIAGNOSTIC_DECISIONS:
+        return (
+            "diagnostic_only",
+            "decision table marks market-year diagnostic-only",
+            True,
+            False,
+        )
     databento_convention_blocked_reason: str | None = None
     if accept_databento_ohlcv_no_trade_convention and decision in DATABENTO_CONVENTION_ELIGIBLE_DECISIONS:
         blockers = _databento_convention_acceptance_blockers(row)
         if not blockers:
             return (
-                "usable",
+                "diagnostic_only",
                 "Databento documents ohlcv-1m as trade-derived with no record printed when no trade occurs; "
                 "local provenance confirms absent synthetic minutes are absent from raw OHLCV sourced from matching "
-                "DBN manifests, with no session, contract, source, or direct symbol/instrument blockers",
+                "DBN manifests, with no session, contract, source, or direct symbol/instrument blockers; "
+                "accepted for diagnostics only, not WFA selection",
+                True,
+                False,
             )
         databento_convention_blocked_reason = "Databento OHLCV convention policy blocked: " + "; ".join(blockers)
-    if market in diagnostic_markets and decision in QUARANTINE_DECISIONS:
-        return "diagnostic_only", "market is explicitly marked diagnostic-only by audit policy"
-    if decision in DIAGNOSTIC_DECISIONS:
-        return "diagnostic_only", "decision table marks market-year diagnostic-only"
     if decision in QUARANTINE_DECISIONS:
         if databento_convention_blocked_reason:
-            return "quarantined", databento_convention_blocked_reason
-        return "quarantined", "decision table marks market-year quarantined"
-    return "quarantined", f"unrecognized final_decision {decision!r}; failed closed"
+            return "quarantined", databento_convention_blocked_reason, False, False
+        return "quarantined", "decision table marks market-year quarantined", False, False
+    return "quarantined", f"unrecognized final_decision {decision!r}; failed closed", False, False
 
 
 def build_universe(args: argparse.Namespace) -> dict[str, Any]:
@@ -270,6 +288,8 @@ def build_universe(args: argparse.Namespace) -> dict[str, Any]:
                     "market": market,
                     "year": year,
                     "audit_status": "quarantined",
+                    "usable_for_diagnostics": False,
+                    "usable_for_wfa": False,
                     "final_decision": "missing_decision_row",
                     "reason": "missing market-year in decision table; failed closed",
                     "source_reason": None,
@@ -280,7 +300,7 @@ def build_universe(args: argparse.Namespace) -> dict[str, Any]:
             )
             failures.append(f"missing decision row for {market} {year}")
             continue
-        status, reason = _status_for_decision(
+        status, reason, usable_for_diagnostics, usable_for_wfa = _status_for_decision(
             row,
             diagnostic_markets,
             bool(getattr(args, "accept_databento_ohlcv_no_trade_convention", False)),
@@ -290,6 +310,8 @@ def build_universe(args: argparse.Namespace) -> dict[str, Any]:
                 "market": market,
                 "year": year,
                 "audit_status": status,
+                "usable_for_diagnostics": usable_for_diagnostics,
+                "usable_for_wfa": usable_for_wfa,
                 "final_decision": row.get("final_decision"),
                 "reason": reason,
                 "source_reason": row.get("reason"),
@@ -300,7 +322,7 @@ def build_universe(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     counts = Counter(str(row["audit_status"]) for row in market_years)
-    usable = [row for row in market_years if row["audit_status"] == "usable"]
+    usable = [row for row in market_years if row["usable_for_wfa"] is True]
     quarantined = [row for row in market_years if row["audit_status"] == "quarantined"]
     diagnostic_only = [row for row in market_years if row["audit_status"] == "diagnostic_only"]
     if args.require_usable and not usable:
@@ -331,6 +353,7 @@ def build_universe(args: argparse.Namespace) -> dict[str, Any]:
                     "no source, session-template, contract, or mismatch failures",
                     "if roll/symbol/instrument overlap is reported, separate counts must show roll-window only and no direct symbol/instrument changes",
                 ],
+                "wfa_usage": "does not make quarantined OHLCV-only rows WFA-usable",
             },
             "diagnostic_only_markets": sorted(diagnostic_markets),
             "missing_or_unrecognized_decisions_fail_closed": True,
@@ -369,15 +392,17 @@ def write_markdown_report(report: dict[str, Any], path: Path) -> None:
         "Status counts: "
         + ", ".join(f"`{key}`={value}" for key, value in sorted(counts.items())),
         "",
-        "| Market | Year | Audit status | Final decision | Missing min | Largest gap | Active synthetic | Reason |",
-        "|---|---:|---|---|---:|---:|---:|---|",
+        "| Market | Year | Audit status | WFA usable | Diagnostics usable | Final decision | Missing min | Largest gap | Active synthetic | Reason |",
+        "|---|---:|---|---:|---:|---|---:|---:|---:|---|",
     ]
     for row in report["market_years"]:
         lines.append(
-            "| `{market}` | {year} | `{status}` | `{decision}` | {missing} | {gap} | {active} | {reason} |".format(
+            "| `{market}` | {year} | `{status}` | {wfa} | {diag} | `{decision}` | {missing} | {gap} | {active} | {reason} |".format(
                 market=row["market"],
                 year=row["year"],
                 status=row["audit_status"],
+                wfa=str(bool(row.get("usable_for_wfa"))).lower(),
+                diag=str(bool(row.get("usable_for_diagnostics"))).lower(),
                 decision=row["final_decision"],
                 missing="" if row["missing_minutes"] is None else row["missing_minutes"],
                 gap="" if row["largest_gap_size_minutes"] is None else row["largest_gap_size_minutes"],

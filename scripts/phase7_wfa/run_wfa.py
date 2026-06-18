@@ -852,6 +852,14 @@ def run_wfa(
         profile_config=resolved_profile_config,
         models_config=models_config,
     )
+    if (
+        data_audit_universe_json is None
+        and (
+            profile_scope.requested_profile == "tier_1"
+            or profile_scope.resolved_profile == "tier_1_research"
+        )
+    ):
+        raise SystemExit("Tier 1 WFA execution requires --data-audit-universe-json")
     data_audit_universe = (
         load_data_audit_universe(data_audit_universe_json)
         if data_audit_universe_json is not None

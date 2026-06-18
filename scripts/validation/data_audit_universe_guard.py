@@ -12,6 +12,7 @@ from typing import Any, Mapping
 
 USABLE_STATUS = "usable"
 BLOCKED_STATUSES = {"quarantined", "diagnostic_only"}
+WFA_BLOCKED_FINAL_DECISIONS = {"keep_quarantined_ohlcv_only_evidence_insufficient"}
 
 
 def relative_path(path: Path) -> str:
@@ -42,6 +43,8 @@ class DataAuditUniverse:
             "file_hash": self.file_hash,
             "status_counts": self.status_counts,
             "allowed_status": USABLE_STATUS,
+            "requires_usable_for_wfa": True,
+            "blocked_final_decisions": sorted(WFA_BLOCKED_FINAL_DECISIONS),
             "blocked_statuses": sorted(BLOCKED_STATUSES),
         }
 
@@ -51,8 +54,19 @@ class DataAuditUniverse:
         if row is None:
             return f"{context}: missing data-audit universe decision for {key[0]} {key[1]}"
         status = str(row.get("audit_status") or "")
+        final_decision = str(row.get("final_decision") or "")
+        reason = str(row.get("reason") or row.get("source_reason") or "no reason provided")
+        if final_decision in WFA_BLOCKED_FINAL_DECISIONS:
+            return (
+                f"{context}: data-audit universe blocks {key[0]} {key[1]} "
+                f"with final_decision={final_decision!r}: {reason}"
+            )
+        if row.get("usable_for_wfa") is False:
+            return (
+                f"{context}: data-audit universe blocks {key[0]} {key[1]} "
+                f"with usable_for_wfa=False and audit_status={status!r}: {reason}"
+            )
         if status != USABLE_STATUS:
-            reason = str(row.get("reason") or row.get("source_reason") or "no reason provided")
             return (
                 f"{context}: data-audit universe blocks {key[0]} {key[1]} "
                 f"with audit_status={status!r}: {reason}"

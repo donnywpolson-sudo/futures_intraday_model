@@ -243,6 +243,38 @@ def _write_data_audit_universe(
     return path
 
 
+def _write_multi_data_audit_universe(
+    path: Path,
+    *,
+    markets: list[str],
+    year: int,
+    audit_status: str = "usable",
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {
+            "market": market,
+            "year": year,
+            "audit_status": audit_status,
+            "usable_for_wfa": audit_status == "usable",
+            "final_decision": "acceptable_with_caveat_ohlcv_empty_minutes_assumed",
+            "reason": "fixture",
+        }
+        for market in markets
+    ]
+    path.write_text(
+        json.dumps(
+            {
+                "status": "PASS",
+                "summary": {"audit_status_counts": {audit_status: len(rows)}},
+                "market_years": rows,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def _write_scope_guard_split_plan(
     path: Path,
     *,
@@ -252,6 +284,7 @@ def _write_scope_guard_split_plan(
     years: list[int],
     models_config: Path,
     profile_config: Path = Path("configs/alpha_tiered.yaml"),
+    data_audit_universe: dict[str, object] | None = None,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -264,6 +297,7 @@ def _write_scope_guard_split_plan(
                 "input_file_hashes": {},
                 "markets": markets,
                 "years": years,
+                "data_audit_universe": data_audit_universe,
                 "folds": [
                     {
                         "market": market,
@@ -581,11 +615,17 @@ def test_valid_tier1_split_plan_passes_scope_guard(tmp_path: Path) -> None:
     predictions_root = tmp_path / "data" / "predictions"
     reports_root = tmp_path / "reports" / "wfa"
     models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    data_audit = _write_multi_data_audit_universe(
+        tmp_path / "reports" / "pipeline_audit" / "universe.json",
+        markets=scope.markets,
+        year=scope.years[-1],
+    )
     split_plan = _write_scope_guard_split_plan(
         reports_root / "split_plan.json",
         markets=scope.markets,
         years=scope.years,
         models_config=models_config,
+        data_audit_universe=load_data_audit_universe(data_audit).evidence(),
     )
     _write_feature_matrix(input_root, market=scope.markets[0], year=scope.years[0])
     _write_feature_matrix(input_root, market=scope.markets[0], year=scope.years[1])
@@ -600,6 +640,7 @@ def test_valid_tier1_split_plan_passes_scope_guard(tmp_path: Path) -> None:
         reports_root=reports_root,
         models_config=models_config,
         profile_config=Path("configs/alpha_tiered.yaml"),
+        data_audit_universe_json=data_audit,
         max_folds=1,
     )
 
@@ -607,6 +648,35 @@ def test_valid_tier1_split_plan_passes_scope_guard(tmp_path: Path) -> None:
     assert manifest["resolved_profile"] == "tier_1_research"
     assert manifest["markets"] == scope.markets
     assert manifest["years"] == scope.years
+    assert manifest["data_audit_universe"]["status_counts"] == {"usable": len(scope.markets)}
+
+
+def test_tier1_run_wfa_requires_data_audit_universe_json(tmp_path: Path) -> None:
+    scope = load_profile_scope("tier_1", Path("configs/alpha_tiered.yaml"))
+    assert scope is not None
+    input_root = _feature_root(tmp_path)
+    (input_root / "feature_cols.json").parent.mkdir(parents=True, exist_ok=True)
+    (input_root / "feature_cols.json").write_text(json.dumps(["feature_signal"]), encoding="utf-8")
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    split_plan = _write_scope_guard_split_plan(
+        tmp_path / "reports" / "wfa" / "split_plan.json",
+        markets=scope.markets,
+        years=scope.years,
+        models_config=models_config,
+    )
+
+    with pytest.raises(SystemExit, match="Tier 1 WFA execution requires"):
+        run_wfa(
+            profile="tier_1",
+            matrix="baseline",
+            run="baseline",
+            input_root=input_root,
+            split_plan=split_plan,
+            predictions_root=tmp_path / "data" / "predictions",
+            reports_root=tmp_path / "reports" / "wfa",
+            models_config=models_config,
+            profile_config=Path("configs/alpha_tiered.yaml"),
+        )
 
 
 def test_report_records_train_only_fit_window_and_feature_mean(tmp_path: Path) -> None:

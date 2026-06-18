@@ -53,6 +53,48 @@ def test_guard_blocks_non_usable_market_year(tmp_path: Path, status: str) -> Non
     assert f"audit_status={status!r}" in failure
 
 
+def test_guard_blocks_false_usable_for_wfa(tmp_path: Path) -> None:
+    path = _write_universe(
+        tmp_path / "universe.json",
+        [
+            {
+                "market": "ES",
+                "year": 2024,
+                "audit_status": "usable",
+                "usable_for_wfa": False,
+                "reason": "diagnostic only",
+            }
+        ],
+    )
+
+    universe = load_data_audit_universe(path)
+    failure = universe.require_usable("ES", 2024, context="test")
+
+    assert failure is not None
+    assert "usable_for_wfa=False" in failure
+
+
+def test_guard_blocks_legacy_quarantined_final_decision_marked_usable(tmp_path: Path) -> None:
+    path = _write_universe(
+        tmp_path / "universe.json",
+        [
+            {
+                "market": "ES",
+                "year": 2024,
+                "audit_status": "usable",
+                "final_decision": "keep_quarantined_ohlcv_only_evidence_insufficient",
+                "reason": "legacy caveat",
+            }
+        ],
+    )
+
+    universe = load_data_audit_universe(path)
+    failure = universe.require_usable("ES", 2024, context="test")
+
+    assert failure is not None
+    assert "final_decision='keep_quarantined_ohlcv_only_evidence_insufficient'" in failure
+
+
 def test_guard_blocks_missing_market_year(tmp_path: Path) -> None:
     path = _write_universe(
         tmp_path / "universe.json",

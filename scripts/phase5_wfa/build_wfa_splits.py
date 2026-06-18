@@ -375,6 +375,11 @@ def build_split_plan(
     if permission_failure is not None:
         raise SystemExit(permission_failure)
     policy = load_wfa_policy(models_config)
+    if (
+        data_audit_universe_json is None
+        and (plan.requested_profile == "tier_1" or plan.resolved_profile == "tier_1_research")
+    ):
+        raise SystemExit("Tier 1 WFA split-plan generation requires --data-audit-universe-json")
     data_audit_universe = (
         load_data_audit_universe(data_audit_universe_json)
         if data_audit_universe_json is not None

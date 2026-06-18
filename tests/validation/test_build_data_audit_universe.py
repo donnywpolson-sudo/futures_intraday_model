@@ -116,6 +116,9 @@ def test_builds_usable_and_quarantined_universe(tmp_path: Path) -> None:
     assert report["summary"]["audit_status_counts"] == {"quarantined": 3, "usable": 1}
     usable = report["summary"]["usable_market_years"]
     assert usable == [{"market": "ES", "year": 2022}]
+    row = next(item for item in report["market_years"] if item["market"] == "ES" and item["year"] == 2022)
+    assert row["usable_for_diagnostics"] is True
+    assert row["usable_for_wfa"] is True
 
 
 def test_diagnostic_market_override_is_explicit(tmp_path: Path) -> None:
@@ -130,21 +133,39 @@ def test_diagnostic_market_override_is_explicit(tmp_path: Path) -> None:
         "quarantined": 1,
         "usable": 1,
     }
+    cl_rows = [item for item in report["market_years"] if item["market"] == "CL"]
+    assert all(row["audit_status"] == "diagnostic_only" for row in cl_rows)
+    assert all(row["usable_for_diagnostics"] is True for row in cl_rows)
+    assert all(row["usable_for_wfa"] is False for row in cl_rows)
 
 
-def test_databento_ohlcv_convention_can_relax_ohlcv_only_quarantine(tmp_path: Path) -> None:
+def test_databento_ohlcv_convention_relaxes_ohlcv_only_quarantine_for_diagnostics_only(
+    tmp_path: Path,
+) -> None:
     _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
     _write_decisions(tmp_path / "reports" / "decisions.json", _complete_rows())
 
     report = build_universe(_args(tmp_path, accept_databento_convention=True))
 
     assert report["status"] == "PASS"
-    assert report["summary"]["audit_status_counts"] == {"quarantined": 1, "usable": 3}
+    assert report["summary"]["audit_status_counts"] == {
+        "diagnostic_only": 2,
+        "quarantined": 1,
+        "usable": 1,
+    }
+    assert report["summary"]["usable_market_years"] == [{"market": "ES", "year": 2022}]
     row = next(item for item in report["market_years"] if item["market"] == "ES" and item["year"] == 2023)
-    assert row["audit_status"] == "usable"
+    assert row["audit_status"] == "diagnostic_only"
+    assert row["usable_for_diagnostics"] is True
+    assert row["usable_for_wfa"] is False
     assert "Databento documents ohlcv-1m" in row["reason"]
     assert "matching DBN manifests" in row["reason"]
+    assert "diagnostics only" in row["reason"]
     assert report["policy"]["databento_ohlcv_no_trade_convention"]["enabled"] is True
+    assert (
+        report["policy"]["databento_ohlcv_no_trade_convention"]["wfa_usage"]
+        == "does not make quarantined OHLCV-only rows WFA-usable"
+    )
 
 
 def test_databento_ohlcv_convention_does_not_block_on_gap_size_or_share_flags(tmp_path: Path) -> None:
@@ -154,7 +175,9 @@ def test_databento_ohlcv_convention_does_not_block_on_gap_size_or_share_flags(tm
     report = build_universe(_args(tmp_path, accept_databento_convention=True))
 
     row = next(item for item in report["market_years"] if item["market"] == "CL" and item["year"] == 2022)
-    assert row["audit_status"] == "usable"
+    assert row["audit_status"] == "diagnostic_only"
+    assert row["usable_for_diagnostics"] is True
+    assert row["usable_for_wfa"] is False
     assert "Databento documents ohlcv-1m" in row["reason"]
 
 
@@ -174,7 +197,9 @@ def test_databento_ohlcv_convention_allows_roll_window_only_when_counts_are_avai
     report = build_universe(_args(tmp_path, accept_databento_convention=True))
 
     row = next(item for item in report["market_years"] if item["market"] == "ES" and item["year"] == 2023)
-    assert row["audit_status"] == "usable"
+    assert row["audit_status"] == "diagnostic_only"
+    assert row["usable_for_diagnostics"] is True
+    assert row["usable_for_wfa"] is False
 
 
 def test_databento_ohlcv_convention_fails_closed_when_roll_counts_are_missing(tmp_path: Path) -> None:
@@ -191,6 +216,8 @@ def test_databento_ohlcv_convention_fails_closed_when_roll_counts_are_missing(tm
 
     row = next(item for item in report["market_years"] if item["market"] == "ES" and item["year"] == 2023)
     assert row["audit_status"] == "quarantined"
+    assert row["usable_for_diagnostics"] is False
+    assert row["usable_for_wfa"] is False
     assert "lacks separate counts" in row["reason"]
 
 

@@ -221,6 +221,25 @@ def test_build_split_plan_records_data_audit_universe_evidence(tmp_path: Path) -
     assert manifest["data_audit_universe"]["file_hash"]
 
 
+@pytest.mark.parametrize("profile", ["tier_1", "tier_1_research"])
+def test_tier1_build_split_plan_requires_data_audit_universe_json(
+    tmp_path: Path,
+    profile: str,
+) -> None:
+    input_root = _feature_root(tmp_path)
+    reports_root = tmp_path / "reports" / "wfa"
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+
+    with pytest.raises(SystemExit, match="Tier 1 WFA split-plan generation requires"):
+        build_split_plan(
+            profile=profile,
+            input_root=input_root,
+            reports_root=reports_root,
+            profile_config=Path("configs/alpha_tiered.yaml"),
+            models_config=models_config,
+        )
+
+
 @pytest.mark.parametrize("audit_status", ["quarantined", "diagnostic_only"])
 def test_build_split_plan_blocks_non_usable_data_audit_market_year(
     tmp_path: Path,
