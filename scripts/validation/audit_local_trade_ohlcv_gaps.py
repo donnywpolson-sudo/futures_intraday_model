@@ -969,7 +969,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profiles", nargs="+", default=["tier_3_holdout", "tier_3_forward"])
     parser.add_argument("--markets", nargs="*")
     parser.add_argument("--start", default="2025-06-18")
-    parser.add_argument("--end", default="2026-06-12")
+    parser.add_argument("--end", default="2026-06-13")
     parser.add_argument("--dbn-root", default="data/dbn")
     parser.add_argument("--raw-root", default="data/raw")
     parser.add_argument("--causal-root", default="data/causally_gated_normalized")

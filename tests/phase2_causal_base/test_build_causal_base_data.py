@@ -9,9 +9,12 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.phase2_causal_base.build_causal_base_data import (
+    LOCAL_TRADE_GAP_FAILED_STATUS,
+    LOCAL_TRADE_GAP_VALIDATED_STATUS,
     OUTPUT_COLUMNS,
     discover_raw_inputs,
     load_causal_base_config,
+    phase2_exit_code,
     process_file,
     resolve_profile_inputs,
     write_reports,
@@ -140,6 +143,44 @@ def _write_session_config(
         ),
         encoding="utf-8",
     )
+
+
+def _local_trade_gate(
+    *,
+    status: str = "PASS",
+    market_statuses: dict[str, str] | None = None,
+) -> dict[str, object]:
+    market_statuses = market_statuses or {"ES": "PASS"}
+    return {
+        "status": status,
+        "method": "local trades DBN cross-check of OHLCV synthetic missing minutes",
+        "profiles": ["tier_3_holdout", "tier_3_forward"],
+        "selected_markets": sorted(market_statuses),
+        "window": {
+            "start": "2025-06-18T00:00:00Z",
+            "end": "2026-06-13T00:00:00Z",
+        },
+        "report_paths": {
+            "json": "reports/causal_base/local_trade_ohlcv_gap_crosscheck_2025_2026.json",
+            "markdown": "reports/causal_base/local_trade_ohlcv_gap_crosscheck_2025_2026.md",
+        },
+        "caveat": (
+            "A passing local trades cross-check supports a Databento OHLCV "
+            "no-trade convention assumption for similar archives; it does not "
+            "independently prove every older market-year minute is complete."
+        ),
+        "summary": {"missing_minute_count": 0},
+        "market_statuses": market_statuses,
+        "validation_status_by_market": {
+            market: (
+                LOCAL_TRADE_GAP_VALIDATED_STATUS
+                if market_status == "PASS"
+                else LOCAL_TRADE_GAP_FAILED_STATUS
+            )
+            for market, market_status in market_statuses.items()
+        },
+        "failures": [] if status == "PASS" else ["local trades gate failed"],
+    }
 
 
 def test_causal_base_config_uses_smoke_profile_thresholds(tmp_path: Path) -> None:
@@ -493,6 +534,90 @@ def test_reports_are_written(tmp_path: Path) -> None:
     assert validation["summary"]["roll_window_threshold_breached_files"] == 0
     assert validation["summary"]["degraded_threshold_breached_files"] == 0
     assert validation["files"][0]["output_path"].endswith("2024.parquet")
+
+
+def test_reports_mark_older_years_validated_by_local_trades_convention(
+    tmp_path: Path,
+) -> None:
+    raw_path = tmp_path / "data" / "raw" / "ES" / "2024.parquet"
+    out_path = tmp_path / "data" / "causally_gated_normalized" / "ES" / "2024.parquet"
+    reports_root = tmp_path / "reports" / "causal_base"
+    _write_raw(
+        raw_path,
+        [
+            {
+                "rtype": 33,
+                "publisher_id": 1,
+                "instrument_id": 100,
+                "symbol": "ESH4",
+                "ts_event": "2024-01-02T15:00:00Z",
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.5,
+                "volume": 10,
+                "data_quality_status": "available",
+                "data_quality_degraded": False,
+            }
+        ],
+    )
+    result = process_file(raw_path, out_path, profile="tier_0")
+    gate = _local_trade_gate()
+
+    write_reports(
+        [result],
+        reports_root,
+        "tier_3",
+        input_root=tmp_path / "data" / "raw",
+        output_root=tmp_path / "data" / "causally_gated_normalized",
+        local_trade_gap_gate=gate,
+    )
+
+    manifest = json.loads((reports_root / "causal_base_manifest.json").read_text())
+    validation = json.loads((reports_root / "causal_base_validation.json").read_text())
+    output = pd.read_parquet(out_path)
+    assert list(output.columns) == OUTPUT_COLUMNS
+    assert manifest["local_trade_ohlcv_gap_gate"]["status"] == "PASS"
+    assert validation["local_trade_ohlcv_gap_gate"]["status"] == "PASS"
+    assert validation["summary"]["local_trade_ohlcv_gap_gate_status"] == "PASS"
+    assert manifest["outputs"][0]["year"] == 2024
+    assert (
+        manifest["outputs"][0]["local_trade_gap_validation_status"]
+        == LOCAL_TRADE_GAP_VALIDATED_STATUS
+    )
+    assert (
+        validation["files"][0]["local_trade_gap_validation_status"]
+        == LOCAL_TRADE_GAP_VALIDATED_STATUS
+    )
+    assert "older market-year" in manifest["outputs"][0]["local_trade_gap_gate_caveat"]
+
+
+def test_phase2_exit_code_fails_when_local_trades_gate_fails(tmp_path: Path) -> None:
+    raw_path = tmp_path / "data" / "raw" / "ES" / "2024.parquet"
+    out_path = tmp_path / "data" / "causally_gated_normalized" / "ES" / "2024.parquet"
+    _write_raw(
+        raw_path,
+        [
+            {
+                "rtype": 33,
+                "publisher_id": 1,
+                "instrument_id": 100,
+                "symbol": "ESH4",
+                "ts_event": "2024-01-02T15:00:00Z",
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.5,
+                "volume": 10,
+                "data_quality_status": "available",
+                "data_quality_degraded": False,
+            }
+        ],
+    )
+    result = process_file(raw_path, out_path, profile="tier_0")
+
+    assert phase2_exit_code([result], _local_trade_gate(status="PASS")) == 0
+    assert phase2_exit_code([result], _local_trade_gate(status="FAIL")) == 1
 
 
 def test_calendar_config_removes_hardcoded_calendar_warning(tmp_path: Path) -> None:

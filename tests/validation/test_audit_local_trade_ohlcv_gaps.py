@@ -19,6 +19,7 @@ from scripts.validation.audit_local_trade_ohlcv_gaps import (
     TRADE_ACTIVITY,
     UNVERIFIED_CONTRACT,
     VERIFIED_NO_TRADE,
+    build_arg_parser,
     build_report,
 )
 
@@ -168,6 +169,13 @@ def _trade_frame(ts_values: list[str], instrument_ids: list[int] | None = None) 
             "size": [1] * len(ts_values),
         }
     )
+
+
+def test_default_window_is_end_exclusive_through_2026_06_12() -> None:
+    args = build_arg_parser().parse_args([])
+
+    assert args.start == "2025-06-18"
+    assert args.end == "2026-06-13"
 
 
 def test_missing_trade_market_fails_closed(tmp_path: Path) -> None:

@@ -31,11 +31,14 @@ credentials/
 
 # Local data and generated pipeline artifacts
 data/
+data/live_raw/
+data/live_parquet/
 reports/
 models/
 outputs/
 output/
 logs/
+logs/live/
 artifacts/
 cache/
 

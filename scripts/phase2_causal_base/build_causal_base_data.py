@@ -11,19 +11,34 @@ import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
 import yaml
 
 from scripts.profile_scope import scope_authority_metadata
+from scripts.validation.audit_local_trade_ohlcv_gaps import (
+    build_report as build_local_trade_gap_report,
+    write_json_report as write_local_trade_gap_json_report,
+    write_markdown_report as write_local_trade_gap_markdown_report,
+)
 
 
 DEFAULT_PROFILE = "all_raw"
 DISCOVERY_PROFILES = {"all_raw", "all_raw_data"}
 DEFAULT_PROFILE_CONFIG = Path("configs/alpha_tiered.yaml")
 DEFAULT_SESSION_CONFIG = Path("configs/market_sessions.yaml")
+LOCAL_TRADE_GAP_AUDIT_START = "2025-06-18"
+LOCAL_TRADE_GAP_AUDIT_END = "2026-06-13"
+LOCAL_TRADE_GAP_AUDIT_PROFILES = ("tier_3_holdout", "tier_3_forward")
+LOCAL_TRADE_GAP_AUDIT_DBN_ROOT = Path("data/dbn")
+LOCAL_TRADE_GAP_AUDIT_JSON = "local_trade_ohlcv_gap_crosscheck_2025_2026.json"
+LOCAL_TRADE_GAP_AUDIT_MD = "local_trade_ohlcv_gap_crosscheck_2025_2026.md"
+LOCAL_TRADE_GAP_VALIDATED_STATUS = "validated_by_local_trades_window_convention"
+LOCAL_TRADE_GAP_FAILED_STATUS = "failed_local_trades_window_gate"
+LOCAL_TRADE_GAP_NOT_RUN_STATUS = "local_trades_window_gate_not_run"
+LOCAL_TRADE_GAP_NOT_IN_SCOPE_STATUS = "not_in_local_trades_window_gate_scope"
 
 # Discovery profiles process every top-level data/raw/{market}/{year}.parquet file.
 # Static profiles mirror configs/alpha_tiered.yaml when that file is unavailable.
@@ -346,6 +361,196 @@ def infer_artifact_root(rows: list[dict[str, object]], key: str) -> Path | None:
     if not roots:
         return None
     return Path(os.path.commonpath([str(root) for root in roots]))
+
+
+def _local_trade_gate_report_paths(reports_root: Path) -> tuple[Path, Path]:
+    return (
+        reports_root / LOCAL_TRADE_GAP_AUDIT_JSON,
+        reports_root / LOCAL_TRADE_GAP_AUDIT_MD,
+    )
+
+
+def _local_trade_market_gate_statuses(
+    report: dict[str, Any],
+    selected_markets: Iterable[str],
+) -> dict[str, str]:
+    entries_by_market: dict[str, list[dict[str, Any]]] = {}
+    for entry in report.get("market_years", []):
+        if not isinstance(entry, dict):
+            continue
+        market = str(entry.get("market", ""))
+        if market:
+            entries_by_market.setdefault(market, []).append(entry)
+
+    preflight = report.get("preflight", {})
+    by_schema_market = (
+        preflight.get("by_schema_market", {}) if isinstance(preflight, dict) else {}
+    )
+    statuses: dict[str, str] = {}
+    for market in selected_markets:
+        schema_rows = []
+        if isinstance(by_schema_market, dict):
+            for schema_rows_by_market in by_schema_market.values():
+                if isinstance(schema_rows_by_market, dict) and market in schema_rows_by_market:
+                    schema_rows.append(schema_rows_by_market[market])
+        schema_ok = len(schema_rows) >= 3 and all(
+            isinstance(row, dict) and row.get("status") == "PASS" for row in schema_rows
+        )
+        entries = entries_by_market.get(market, [])
+        entries_ok = bool(entries) and all(entry.get("status") == "PASS" for entry in entries)
+        statuses[market] = "PASS" if schema_ok and entries_ok else "FAIL"
+    return statuses
+
+
+def summarize_local_trade_ohlcv_gap_gate(
+    report: dict[str, Any],
+    *,
+    json_path: Path,
+    markdown_path: Path,
+    selected_markets: Iterable[str],
+) -> dict[str, Any]:
+    markets = sorted({str(market) for market in selected_markets})
+    market_statuses = _local_trade_market_gate_statuses(report, markets)
+    validation_status_by_market = {
+        market: (
+            LOCAL_TRADE_GAP_VALIDATED_STATUS
+            if status == "PASS"
+            else LOCAL_TRADE_GAP_FAILED_STATUS
+        )
+        for market, status in market_statuses.items()
+    }
+    return {
+        "status": str(report.get("status", "FAIL")),
+        "method": report.get("method"),
+        "profiles": list(LOCAL_TRADE_GAP_AUDIT_PROFILES),
+        "selected_markets": markets,
+        "window": report.get(
+            "window",
+            {"start": LOCAL_TRADE_GAP_AUDIT_START, "end": LOCAL_TRADE_GAP_AUDIT_END},
+        ),
+        "report_paths": {
+            "json": relative_source_path(json_path),
+            "markdown": relative_source_path(markdown_path),
+        },
+        "caveat": report.get("caveat"),
+        "summary": report.get("summary", {}),
+        "market_statuses": market_statuses,
+        "validation_status_by_market": validation_status_by_market,
+        "failures": report.get("failures", []),
+    }
+
+
+def build_local_trade_ohlcv_gap_gate(
+    *,
+    markets: Iterable[str],
+    raw_root: Path,
+    causal_root: Path,
+    reports_root: Path,
+    profile_config_path: Path = DEFAULT_PROFILE_CONFIG,
+    dbn_root: Path = LOCAL_TRADE_GAP_AUDIT_DBN_ROOT,
+    chunk_size: int = 250_000,
+) -> dict[str, Any]:
+    selected_markets = sorted({str(market) for market in markets})
+    json_path, markdown_path = _local_trade_gate_report_paths(reports_root)
+    if not selected_markets:
+        return {
+            "status": "PASS",
+            "method": "local trades DBN cross-check of OHLCV synthetic missing minutes",
+            "profiles": list(LOCAL_TRADE_GAP_AUDIT_PROFILES),
+            "selected_markets": [],
+            "window": {
+                "start": f"{LOCAL_TRADE_GAP_AUDIT_START}T00:00:00Z",
+                "end": f"{LOCAL_TRADE_GAP_AUDIT_END}T00:00:00Z",
+            },
+            "report_paths": {
+                "json": relative_source_path(json_path),
+                "markdown": relative_source_path(markdown_path),
+            },
+            "caveat": "No selected markets were available for local-trades gap validation.",
+            "summary": {},
+            "market_statuses": {},
+            "validation_status_by_market": {},
+            "failures": [],
+        }
+
+    args = argparse.Namespace(
+        profile_config=str(profile_config_path),
+        profiles=list(LOCAL_TRADE_GAP_AUDIT_PROFILES),
+        markets=selected_markets,
+        start=LOCAL_TRADE_GAP_AUDIT_START,
+        end=LOCAL_TRADE_GAP_AUDIT_END,
+        dbn_root=str(dbn_root),
+        raw_root=str(raw_root),
+        causal_root=str(causal_root),
+        json_out=str(json_path),
+        md_out=str(markdown_path),
+        chunk_size=chunk_size,
+        max_gap_windows=None,
+        inventory_only=False,
+    )
+    report = build_local_trade_gap_report(args)
+    write_local_trade_gap_json_report(report, json_path)
+    write_local_trade_gap_markdown_report(report, markdown_path)
+    return summarize_local_trade_ohlcv_gap_gate(
+        report,
+        json_path=json_path,
+        markdown_path=markdown_path,
+        selected_markets=selected_markets,
+    )
+
+
+def _local_trade_validation_status_for_market(
+    local_trade_gap_gate: dict[str, Any] | None,
+    market: str,
+) -> str:
+    if local_trade_gap_gate is None:
+        return LOCAL_TRADE_GAP_NOT_RUN_STATUS
+    validation_status_by_market = local_trade_gap_gate.get("validation_status_by_market", {})
+    if not isinstance(validation_status_by_market, dict):
+        return LOCAL_TRADE_GAP_FAILED_STATUS
+    return str(validation_status_by_market.get(market, LOCAL_TRADE_GAP_NOT_IN_SCOPE_STATUS))
+
+
+def _with_local_trade_validation_fields(
+    row: dict[str, object],
+    local_trade_gap_gate: dict[str, Any] | None,
+) -> dict[str, object]:
+    enriched = row.copy()
+    market = str(row.get("market", ""))
+    report_paths = (
+        local_trade_gap_gate.get("report_paths", {})
+        if isinstance(local_trade_gap_gate, dict)
+        else {}
+    )
+    enriched["local_trade_gap_validation_status"] = (
+        _local_trade_validation_status_for_market(local_trade_gap_gate, market)
+    )
+    enriched["local_trade_gap_gate_status"] = (
+        str(local_trade_gap_gate.get("status", "NOT_RUN"))
+        if isinstance(local_trade_gap_gate, dict)
+        else "NOT_RUN"
+    )
+    enriched["local_trade_gap_gate_window"] = (
+        local_trade_gap_gate.get("window") if isinstance(local_trade_gap_gate, dict) else None
+    )
+    enriched["local_trade_gap_gate_report_json"] = (
+        report_paths.get("json") if isinstance(report_paths, dict) else None
+    )
+    enriched["local_trade_gap_gate_caveat"] = (
+        local_trade_gap_gate.get("caveat") if isinstance(local_trade_gap_gate, dict) else None
+    )
+    return enriched
+
+
+def phase2_exit_code(
+    results: Iterable[ValidationResult],
+    local_trade_gap_gate: dict[str, Any] | None = None,
+) -> int:
+    if any(result.failures for result in results):
+        return 1
+    if local_trade_gap_gate is not None and local_trade_gap_gate.get("status") != "PASS":
+        return 1
+    return 0
 
 
 def current_git_commit() -> str:
@@ -1381,9 +1586,13 @@ def write_reports(
     *,
     input_root: Path | None = None,
     output_root: Path | None = None,
+    local_trade_gap_gate: dict[str, Any] | None = None,
 ) -> None:
     reports_root.mkdir(parents=True, exist_ok=True)
     rows = [result.to_dict() for result in results]
+    report_rows = [
+        _with_local_trade_validation_fields(row, local_trade_gap_gate) for row in rows
+    ]
     csv_rows = [result.to_csv_row() for result in results]
     script_path = Path(__file__).resolve()
     resolved_input_root = input_root or infer_artifact_root(rows, "input_path")
@@ -1401,11 +1610,22 @@ def write_reports(
         for row in rows
         if row["failures"]
     ]
-    failure_count = int(sum(row["failure_count"] for row in rows))
+    gate_failed = (
+        local_trade_gap_gate is not None and local_trade_gap_gate.get("status") != "PASS"
+    )
+    if gate_failed:
+        run_failures.append(
+            {
+                "gate": "local_trade_ohlcv_gap_gate",
+                "status": local_trade_gap_gate.get("status"),
+                "failures": local_trade_gap_gate.get("failures", []),
+            }
+        )
+    failure_count = int(sum(row["failure_count"] for row in rows)) + (1 if gate_failed else 0)
     warning_count = int(sum(row["warning_count"] for row in rows))
     status = (
         "FAIL"
-        if any(row["status"] == "FAIL" for row in rows)
+        if gate_failed or any(row["status"] == "FAIL" for row in rows)
         else "WARN"
         if any(row["status"] == "WARN" for row in rows)
         else "PASS"
@@ -1444,7 +1664,8 @@ def write_reports(
         **provenance,
         "stage": "causal_base",
         "status": status,
-        "files": rows,
+        "local_trade_ohlcv_gap_gate": local_trade_gap_gate,
+        "files": report_rows,
         "summary": {
             "file_count": len(rows),
             "pass_count": sum(r["status"] == "PASS" for r in rows),
@@ -1475,6 +1696,11 @@ def write_reports(
             "degraded_threshold_breached_files": int(
                 sum(bool(r["degraded_threshold_breached"]) for r in rows)
             ),
+            "local_trade_ohlcv_gap_gate_status": (
+                local_trade_gap_gate.get("status")
+                if isinstance(local_trade_gap_gate, dict)
+                else "NOT_RUN"
+            ),
         },
     }
 
@@ -1482,6 +1708,7 @@ def write_reports(
         **provenance,
         "stage": "causal_base",
         "status": status,
+        "local_trade_ohlcv_gap_gate": local_trade_gap_gate,
         "outputs": [
             {
                 "market": row["market"],
@@ -1536,9 +1763,18 @@ def write_reports(
                 "warnings": row["warnings"],
                 "failure_count": row["failure_count"],
                 "failures": row["failures"],
+                "local_trade_gap_validation_status": row[
+                    "local_trade_gap_validation_status"
+                ],
+                "local_trade_gap_gate_status": row["local_trade_gap_gate_status"],
+                "local_trade_gap_gate_window": row["local_trade_gap_gate_window"],
+                "local_trade_gap_gate_report_json": row[
+                    "local_trade_gap_gate_report_json"
+                ],
+                "local_trade_gap_gate_caveat": row["local_trade_gap_gate_caveat"],
                 "status": row["status"],
             }
-            for row in rows
+            for row in report_rows
         ],
         "summary": validation_json["summary"],
     }
@@ -1608,6 +1844,19 @@ def main() -> int:
             f"warnings={len(result.warnings)} failures={len(result.failures)}"
         )
 
+    local_trade_gap_gate = build_local_trade_ohlcv_gap_gate(
+        markets=sorted({result.market for result in results}),
+        raw_root=raw_root,
+        causal_root=output_root,
+        reports_root=reports_root,
+        profile_config_path=profile_config_path,
+    )
+    print(
+        "local_trade_ohlcv_gap_gate "
+        f"status={local_trade_gap_gate['status']} "
+        f"markets={len(local_trade_gap_gate['selected_markets'])}"
+    )
+
     write_reports(
         results,
         reports_root,
@@ -1615,8 +1864,9 @@ def main() -> int:
         profile_config_path,
         input_root=raw_root,
         output_root=output_root,
+        local_trade_gap_gate=local_trade_gap_gate,
     )
-    return 1 if any(result.failures for result in results) else 0
+    return phase2_exit_code(results, local_trade_gap_gate)
 
 
 if __name__ == "__main__":

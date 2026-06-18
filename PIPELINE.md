@@ -222,6 +222,10 @@ python -m scripts.phase2_causal_base.build_causal_base_data --profile tier_1
 Inputs:
 
 - `data/raw/{market}/{year}.parquet`
+- Local audit DBN archives:
+  - `data/dbn/ohlcv_1m/{market}/{year}/{chunk_start}_{chunk_end}.dbn.zst`
+  - `data/dbn/definition/{market}/{year}/{chunk_start}_{chunk_end}.dbn.zst`
+  - `data/dbn/trades/{market}/{year}/{chunk_start}_{chunk_end}.dbn.zst`
 - `configs/alpha_tiered.yaml`
 - `configs/market_sessions.yaml`
 
@@ -229,17 +233,27 @@ Outputs:
 
 - `data/causally_gated_normalized/{market}/{year}.parquet`
 - `reports/causal_base/`
+  - `local_trade_ohlcv_gap_crosscheck_2025_2026.json`
+  - `local_trade_ohlcv_gap_crosscheck_2025_2026.md`
 
 Acceptance checks:
 
 - Output market-years match the resolved profile.
 - `ts_event` has been converted to `ts`.
 - Session, synthetic-row, roll-window, and degraded-row warnings are explicit.
+- For each processed market, synthetic missing OHLCV-1m minutes in
+  `[2025-06-18, 2026-06-13)` are cross-checked against local `trades` DBN
+  archives. A passing market validates older years by Databento no-trade
+  convention evidence only; older years are not independently re-proven.
 - Production/research profiles fail when strict raw metadata is missing.
 
 Stop conditions:
 
 - Missing raw inputs for expected profile market-years.
+- Missing or invalid OHLCV, definition, or trades DBN coverage for the
+  `[2025-06-18, 2026-06-13)` local-trades audit window.
+- Trade rows, unresolved adjacent contract context, or unverified coverage
+  appear inside synthetic missing OHLCV-1m minutes.
 - Synthetic/degraded/roll-window thresholds exceed configured limits.
 - Session config is missing or hardcoded calendar fallback is required without
   an explicit reason.
@@ -565,7 +579,9 @@ Next valid work:
 - Contract-specific execution mapping is still required before live-readiness
   claims.
 - Independent historical L1/trades proof for all gap cases is unavailable under
-  the current subscription.
+  the current subscription; Phase 2 local-trades gap proof is limited to
+  `[2025-06-18, 2026-06-13)` and older years rely on a documented convention
+  inference.
 - Several future-stage concepts from the old `project_layout.md` were
   aspirational and are not current runnable commands. This file documents the
   current implemented command surface.
