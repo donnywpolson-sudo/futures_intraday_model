@@ -2,7 +2,6 @@
 
 Use in Codex Plan Mode / read-only.
 
-```text
 MODE: PLAN / READ-ONLY META-AUDIT ONLY.
 You are auditing the audit prompt below against the actual current repo.
 Do not edit files.
@@ -104,4 +103,3 @@ List wording needed to prevent writes, artifact regeneration, unsafe tests, WFA/
 Return a revised token-efficient audit prompt that matches this repo exactly.
 Here is the audit prompt to meta-audit:
 <PASTE MAIN AUDIT PROMPT HERE>
-```

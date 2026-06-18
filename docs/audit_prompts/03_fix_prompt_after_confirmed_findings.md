@@ -2,7 +2,6 @@
 
 Use in regular/write-capable Codex mode, not Plan Mode.
 
-```text
 MODE: IMPLEMENT CONFIRMED FATAL/HIGH FIXES ONLY.
 You are fixing confirmed audit findings in the current intraday futures repo.
 Do not run in read-only/Plan Mode.
@@ -110,4 +109,3 @@ List rebuild/WFA/Phase 8 commands only if guards/tests pass and the finding actu
 Ready to rebuild Tier 1 artifacts: Yes/No
 Why:
 Next exact action:
-```
