@@ -24,8 +24,9 @@ TIER_2_UNIVERSE = [
     "GC",
     "SI",
     "HG",
-    "PL",
     "SR3",
+    "SR1",
+    "TN",
     "ZT",
     "ZF",
     "ZN",
@@ -37,11 +38,12 @@ TIER_2_UNIVERSE = [
     "6E",
     "6J",
     "6M",
-    "6N",
-    "6S",
     "ZC",
     "ZS",
+    "ZL",
+    "ZM",
     "ZW",
+    "KE",
     "LE",
     "HE",
 ]
@@ -57,9 +59,14 @@ EXCLUDED = [
 
 PRODUCT_AVAILABLE_START_YEAR = {
     # Expected unavailable years, not local data gaps:
-    # RTY 2010-2016 and SR3 2010-2017 do not resolve in Databento GLBX.MDP3.
+    # RTY 2010-2016 and SOFR roots 2010-2017 do not resolve in Databento GLBX.MDP3.
+    "KE": 2013,
     "RTY": 2017,
+    "SR1": 2018,
     "SR3": 2018,
+    "TN": 2016,
+    "ZL": 2011,
+    "ZM": 2011,
 }
 
 REQUIRED_COST_KEYS = [
@@ -141,8 +148,8 @@ def check_profile(config: dict[str, Any], requested_profile: str) -> tuple[dict[
         errors.append(f"profile markets outside supported universe: {','.join(unknown_markets)}")
     if resolved.startswith("tier_3") and markets != TIER_2_UNIVERSE:
         errors.append("profile markets do not exactly match full-universe tier order and membership")
-    if resolved.startswith("tier_3") and (len(markets) != 31 or len(set(markets)) != 31):
-        errors.append("profile markets must contain exactly 31 unique markets")
+    if resolved.startswith("tier_3") and (len(markets) != 33 or len(set(markets)) != 33):
+        errors.append("profile markets must contain exactly 33 unique markets")
 
     excluded_present = sorted(set(markets) & set(EXCLUDED))
     if excluded_present:

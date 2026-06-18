@@ -26,7 +26,7 @@ Confirm current directory, git branch, git status --short, and that this repo ha
 - configs/models.yaml
 - configs/costs.yaml
 - configs/market_sessions.yaml
-- CURRENT_PIPELINE.md
+- PIPELINE.md
 - manifests/
 - manifests/feature_sets/
 - manifests/feature_hypotheses/
@@ -75,7 +75,7 @@ Rules:
 - Keep generated artifacts out of git.
 - Do not rebuild full Tier 1 artifacts.
 - If a rebuild is needed, list the command only.
-- Do not update CURRENT_PIPELINE.md unless the pasted finding explicitly requires a documentation update.
+- Do not update PIPELINE.md unless the pasted finding explicitly requires a documentation update.
 - Do not change manifests/feature_sets/ or manifests/feature_hypotheses/ unless the pasted finding explicitly concerns registry/status correctness.
 - Do not mark any feature set FROZEN or WFA-allowed from rejected/no-go evidence.
 - Do not advance rejected Phase 9 branches:

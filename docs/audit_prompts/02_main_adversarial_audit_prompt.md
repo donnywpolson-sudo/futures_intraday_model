@@ -11,7 +11,7 @@ Identity gate:
 - Confirm current directory, git remote, git branch, and git status --short --branch.
 - Treat pre-existing changes as user-owned.
 - Confirm top-level files and existence of:
-  - CURRENT_PIPELINE.md
+  - PIPELINE.md
   - configs/alpha_tiered.yaml
   - configs/models.yaml
   - configs/costs.yaml
@@ -58,7 +58,7 @@ Scope:
 - Expected current alias: tier_1 -> tier_1_research.
 - Expected current Tier 1 research scope: ES, CL, ZN, 6E for 2023-2024; verify from config instead of hardcoding.
 - Do not audit tier_1_holdout or tier_1_forward except for leakage/contamination checks.
-- Use CURRENT_PIPELINE.md only as stale-suspect orientation; independently verify all claims.
+- Use PIPELINE.md as orientation; independently verify all claims.
 - Treat root planning/docs files as orientation only, not pipeline truth:
   - RESOURCES.md
 - Ignore _archive/ unless auditing cleanup/provenance explicitly.
@@ -81,7 +81,7 @@ Rules:
 - Do not regenerate artifacts.
 - Do not overwrite data/reports.
 - Do not stage.
-- Do not update CURRENT_PIPELINE.md.
+- Do not update PIPELINE.md.
 - Do not run WFA, Phase 8, prediction-combine scripts, feature/label/causal rebuilds, or experiment ledger writers.
 - Do not write or overwrite data, reports, predictions, logs, caches, generated JSON/CSV, or model artifacts.
 - Prefer static inspection.

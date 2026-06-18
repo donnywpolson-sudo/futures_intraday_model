@@ -42,7 +42,7 @@ Tasks:
 1. Inspect current repo structure.
 2. Inspect configs/alpha_tiered.yaml.
 3. Identify actual Tier 1 scope/profile/markets/years.
-4. Inspect CURRENT_PIPELINE.md as stale-suspect orientation, not source of truth.
+4. Inspect PIPELINE.md as orientation, then independently verify all claims.
 5. Inspect docs/audit_prompts/ for existing prompt style and required sections.
 6. Identify actual pipeline scripts, Phase 9 research harnesses, data folders, report folders, manifest folders, test files, and config names.
 7. Inspect current no-go/audit evidence under reports/pipeline_audit/, reports/phase8_failure_breakdown/, reports/model_selection/, and reports/experiments/ where present.

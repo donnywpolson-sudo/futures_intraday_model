@@ -1,6 +1,7 @@
 version: 1
 
-# Market coverage follows configs/alpha_tiered.yaml full_markets.
+# Required market coverage follows configs/alpha_tiered.yaml full_markets.
+# Demoted legacy roots may remain for ad hoc historical processing.
 # Project-wide excluded: E7, J7, QI, QO, ZQ, PA.
 #
 # Cost model convention:
@@ -342,6 +343,34 @@ markets:
     exchange_fee_source_key: ibkr_cme_fee_recovery
     exchange_product_group: cme_interest_rate_futures
 
+  SR1:
+    <<: *standard_costs
+    family: rates
+    tick_size: 0.005
+    tick_value: 20.835
+    point_value: 4167.0
+    exchange_fee_recovery_dollars: 1.25
+    fees_per_side_dollars: 1.27
+    round_turn_cost_ticks: 2.203504
+    round_turn_cost_dollars: 45.91
+    cost_source: ibkr_non_member_cme_interest_rate_futures_2026_06_14
+    exchange_fee_source_key: ibkr_cme_fee_recovery
+    exchange_product_group: cme_interest_rate_futures
+
+  TN:
+    <<: *standard_costs
+    family: rates
+    tick_size: 0.015625
+    tick_value: 15.625
+    point_value: 1000.0
+    exchange_fee_recovery_dollars: 0.80
+    fees_per_side_dollars: 0.82
+    round_turn_cost_ticks: 2.21376
+    round_turn_cost_dollars: 34.59
+    cost_source: ibkr_non_member_cbot_us_treasury_futures_2026_06_14
+    exchange_fee_source_key: ibkr_cbot_fee_recovery
+    exchange_product_group: cbot_us_treasury_futures
+
   ZT:
     <<: *standard_costs
     family: rates
@@ -441,7 +470,49 @@ markets:
     exchange_fee_source_key: ibkr_cbot_fee_recovery
     exchange_product_group: cbot_ags_electronic_futures
 
+  ZL:
+    <<: *standard_costs
+    family: ag_livestock
+    tick_size: 0.01
+    tick_value: 6.0
+    point_value: 600.0
+    exchange_fee_recovery_dollars: 2.15
+    fees_per_side_dollars: 2.17
+    round_turn_cost_ticks: 3.006667
+    round_turn_cost_dollars: 18.04
+    cost_source: ibkr_non_member_cbot_ags_electronic_futures_2026_06_14
+    exchange_fee_source_key: ibkr_cbot_fee_recovery
+    exchange_product_group: cbot_ags_electronic_futures
+
+  ZM:
+    <<: *standard_costs
+    family: ag_livestock
+    tick_size: 0.1
+    tick_value: 10.0
+    point_value: 100.0
+    exchange_fee_recovery_dollars: 2.15
+    fees_per_side_dollars: 2.17
+    round_turn_cost_ticks: 2.604
+    round_turn_cost_dollars: 26.04
+    cost_source: ibkr_non_member_cbot_ags_electronic_futures_2026_06_14
+    exchange_fee_source_key: ibkr_cbot_fee_recovery
+    exchange_product_group: cbot_ags_electronic_futures
+
   ZW:
+    <<: *standard_costs
+    family: ag_livestock
+    tick_size: 0.25
+    tick_value: 12.5
+    point_value: 50.0
+    exchange_fee_recovery_dollars: 2.15
+    fees_per_side_dollars: 2.17
+    round_turn_cost_ticks: 2.4832
+    round_turn_cost_dollars: 31.04
+    cost_source: ibkr_non_member_cbot_ags_electronic_futures_2026_06_14
+    exchange_fee_source_key: ibkr_cbot_fee_recovery
+    exchange_product_group: cbot_ags_electronic_futures
+
+  KE:
     <<: *standard_costs
     family: ag_livestock
     tick_size: 0.25

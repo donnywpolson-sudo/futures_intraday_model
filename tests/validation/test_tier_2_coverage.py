@@ -37,7 +37,7 @@ STALE_REFERENCE_PATTERNS = (
     "target" + "_28",
     "primary_" + "universe",
 )
-REFERENCE_ROOTS = ("README.md", "build/project_layout.md", "configs", "tests", "scripts")
+REFERENCE_ROOTS = ("README.md", "PIPELINE.md", "configs", "tests", "scripts")
 
 
 def _namespace(
@@ -92,7 +92,8 @@ def test_default_profile_exists_aliases_resolve_and_retired_profiles_absent() ->
     profiles = config["profiles"]
     aliases = config["aliases"]
 
-    assert config["default_profile"] in profiles
+    assert config["default_profile"] == "tier_1"
+    assert resolve_profile_name(config["default_profile"], aliases) in profiles
     for alias, target in aliases.items():
         assert resolve_profile_name(alias, aliases) in profiles
         assert target in aliases or target in profiles
@@ -115,8 +116,10 @@ def test_tier_3_profile_matches_exact_universe_and_years() -> None:
 
     markets = profiles[FULL_UNIVERSE_PROFILE]["markets"]
     assert markets == TIER_2_UNIVERSE
-    assert len(markets) == 31
-    assert len(set(markets)) == 31
+    assert len(markets) == 33
+    assert len(set(markets)) == 33
+    assert {"SR1", "TN", "ZL", "ZM", "KE"}.issubset(markets)
+    assert {"6N", "6S", "PL"}.isdisjoint(markets)
     assert EXCLUDED == ["E7", "J7", "PA", "QI", "QO", "ZQ"]
     assert set(markets).isdisjoint(EXCLUDED)
     assert profiles[FULL_UNIVERSE_PROFILE]["years"] == list(range(2010, 2025))
@@ -220,7 +223,16 @@ def test_coverage_gate_passes_on_tmp_complete_tree(tmp_path: Path) -> None:
 def test_coverage_gate_skips_product_unavailable_years(tmp_path: Path) -> None:
     config = ROOT / "configs" / "alpha_tiered.yaml"
     _touch_complete_tree(tmp_path, list(range(2010, 2025)))
-    for market, years in {"RTY": range(2010, 2017), "SR3": range(2010, 2018)}.items():
+    unavailable = {
+        "KE": range(2010, 2013),
+        "RTY": range(2010, 2017),
+        "SR1": range(2010, 2018),
+        "SR3": range(2010, 2018),
+        "TN": range(2010, 2016),
+        "ZL": range(2010, 2011),
+        "ZM": range(2010, 2011),
+    }
+    for market, years in unavailable.items():
         for year in years:
             (tmp_path / "data" / "raw" / market / f"{year}.parquet").unlink()
 
@@ -229,15 +241,28 @@ def test_coverage_gate_skips_product_unavailable_years(tmp_path: Path) -> None:
     assert report["status"] == "PASS"
     assert report["artifact_checks"]["raw"]["missing"] == []
     assert report["artifact_checks"]["raw"]["unavailable_by_market"] == {
+        "KE": list(range(2010, 2013)),
         "RTY": list(range(2010, 2017)),
+        "SR1": list(range(2010, 2018)),
         "SR3": list(range(2010, 2018)),
+        "TN": list(range(2010, 2016)),
+        "ZL": list(range(2010, 2011)),
+        "ZM": list(range(2010, 2011)),
     }
 
 
 def test_coverage_gate_skips_unavailable_years_across_artifact_stages(tmp_path: Path) -> None:
     config = ROOT / "configs" / "alpha_tiered.yaml"
     _touch_complete_tree(tmp_path, list(range(2010, 2025)))
-    unavailable = {"RTY": range(2010, 2017), "SR3": range(2010, 2018)}
+    unavailable = {
+        "KE": range(2010, 2013),
+        "RTY": range(2010, 2017),
+        "SR1": range(2010, 2018),
+        "SR3": range(2010, 2018),
+        "TN": range(2010, 2016),
+        "ZL": range(2010, 2011),
+        "ZM": range(2010, 2011),
+    }
     roots = (
         tmp_path / "data" / "raw",
         tmp_path / "data" / "causally_gated_normalized",
@@ -255,8 +280,13 @@ def test_coverage_gate_skips_unavailable_years_across_artifact_stages(tmp_path: 
     for stage in ("raw", "causal", "labels", "features"):
         assert report["artifact_checks"][stage]["missing"] == []
         assert report["artifact_checks"][stage]["unavailable_by_market"] == {
+            "KE": list(range(2010, 2013)),
             "RTY": list(range(2010, 2017)),
+            "SR1": list(range(2010, 2018)),
             "SR3": list(range(2010, 2018)),
+            "TN": list(range(2010, 2016)),
+            "ZL": list(range(2010, 2011)),
+            "ZM": list(range(2010, 2011)),
         }
 
 

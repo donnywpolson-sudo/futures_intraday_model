@@ -1,4 +1,11 @@
-default_profile: tier_1_research
+default_profile: tier_1
+
+# Public research ladder:
+# - tier_0: smoke only; never alpha evidence.
+# - tier_1: core recent alpha research.
+# - tier_2: balanced robustness expansion.
+# - tier_3: full-universe long-horizon stress.
+# Keep *_holdout and *_forward profiles locked out of research selection.
 
 paths:
   raw_root: data/raw
@@ -24,7 +31,7 @@ defaults:
 
   core_markets: &core_markets ["ES", "CL", "ZN", "6E"]
   balanced_markets: &balanced_markets ["ES", "NQ", "CL", "NG", "GC", "HG", "SR3", "ZN", "ZB", "6E", "6J", "6B", "ZC", "ZS", "LE"]
-  full_markets: &full_markets ["ES", "NQ", "RTY", "YM", "CL", "NG", "RB", "HO", "GC", "SI", "HG", "PL", "SR3", "ZT", "ZF", "ZN", "ZB", "UB", "6A", "6B", "6C", "6E", "6J", "6M", "6N", "6S", "ZC", "ZS", "ZW", "LE", "HE"]
+  full_markets: &full_markets ["ES", "NQ", "RTY", "YM", "CL", "NG", "RB", "HO", "GC", "SI", "HG", "SR3", "SR1", "TN", "ZT", "ZF", "ZN", "ZB", "UB", "6A", "6B", "6C", "6E", "6J", "6M", "ZC", "ZS", "ZL", "ZM", "ZW", "KE", "LE", "HE"]
 
   core_market_families: &core_market_families
     ES: equity_index
@@ -61,8 +68,9 @@ defaults:
     GC: metals
     SI: metals
     HG: metals
-    PL: metals
     SR3: rates
+    SR1: rates
+    TN: rates
     ZT: rates
     ZF: rates
     ZN: rates
@@ -74,11 +82,12 @@ defaults:
     6E: fx
     6J: fx
     6M: fx
-    6N: fx
-    6S: fx
     ZC: ag_livestock
     ZS: ag_livestock
+    ZL: ag_livestock
+    ZM: ag_livestock
     ZW: ag_livestock
+    KE: ag_livestock
     LE: ag_livestock
     HE: ag_livestock
 
@@ -179,7 +188,7 @@ profile_requirements:
 
 profiles:
   tier_0:
-    description: "Smoke test: ES, 2024."
+    description: "Tier 0 smoke: ES, 2024."
     intent: smoke_test
     requirement_set: production_like
     settings_profile: smoke
@@ -197,7 +206,7 @@ profiles:
     forbid_research_use: true
 
   tier_1_research:
-    description: "Core research: ES/CL/ZN/6E, 2023-2024."
+    description: "Tier 1 research: core family-diverse markets, 2023-2024."
     intent: core_recent_research
     requirement_set: production_like
     settings_profile: recent_research
@@ -206,7 +215,7 @@ profiles:
     market_families: *core_market_families
 
   tier_1_holdout:
-    description: "Core holdout: ES/CL/ZN/6E, 2025."
+    description: "Tier 1 locked holdout: core markets, 2025."
     intent: core_final_holdout
     requirement_set: production_like
     settings_profile: recent_research
@@ -216,7 +225,7 @@ profiles:
     market_families: *core_market_families
 
   tier_1_forward:
-    description: "Core forward: ES/CL/ZN/6E, 2026."
+    description: "Tier 1 forward validation: core markets, 2026."
     intent: core_forward_validation
     requirement_set: production_like
     settings_profile: recent_research
@@ -226,7 +235,7 @@ profiles:
     market_families: *core_market_families
 
   tier_2_research:
-    description: "Balanced research: 15 markets, 2018-2024."
+    description: "Tier 2 robustness: 15 balanced markets, 2018-2024."
     intent: balanced_medium_research
     requirement_set: production_like
     settings_profile: long_research
@@ -235,7 +244,7 @@ profiles:
     market_families: *balanced_market_families
 
   tier_2_holdout:
-    description: "Balanced holdout: 15 markets, 2025."
+    description: "Tier 2 locked holdout: 15 balanced markets, 2025."
     intent: balanced_final_holdout
     requirement_set: production_like
     settings_profile: long_research
@@ -245,7 +254,7 @@ profiles:
     market_families: *balanced_market_families
 
   tier_2_forward:
-    description: "Balanced forward: 15 markets, 2026."
+    description: "Tier 2 forward validation: 15 balanced markets, 2026."
     intent: balanced_forward_validation
     requirement_set: production_like
     settings_profile: long_research
@@ -255,7 +264,7 @@ profiles:
     market_families: *balanced_market_families
 
   tier_3_research:
-    description: "Full-universe research: 31 markets, 2010-2024."
+    description: "Tier 3 full stress: 33 markets, 2010-2024."
     intent: full_universe_long_research
     requirement_set: production_like
     settings_profile: long_research
@@ -266,7 +275,7 @@ profiles:
     market_families: *full_market_families
 
   tier_3_holdout:
-    description: "Full-universe holdout: 31 markets, 2025."
+    description: "Tier 3 locked holdout: 33 markets, 2025."
     intent: full_universe_final_holdout
     requirement_set: production_like
     settings_profile: long_research
@@ -278,7 +287,7 @@ profiles:
     market_families: *full_market_families
 
   tier_3_forward:
-    description: "Full-universe forward: 31 markets, 2026."
+    description: "Tier 3 forward validation: 33 markets, 2026."
     intent: full_universe_forward_validation
     requirement_set: production_like
     settings_profile: long_research
@@ -298,18 +307,21 @@ profiles:
     forbid_research_use: true
 
 aliases:
+  # Primary research ladder aliases.
   tier_0_smoke: tier_0
   tier_1: tier_1_research
+  tier_2: tier_2_research
+  tier_3: tier_3_research
+  # Backward-compatible research aliases.
   tier_1_core: tier_1_research
   tier_1_core_recent: tier_1_research
   tier_1_recent: tier_1_research
+  tier_2_long: tier_2_research
+  # Locked validation aliases.
   tier_1_final_holdout: tier_1_holdout
   tier_1_forward_2026: tier_1_forward
-  tier_2: tier_2_research
-  tier_2_long: tier_2_research
   tier_2_final_holdout: tier_2_holdout
   tier_2_forward_2026: tier_2_forward
-  tier_3: tier_3_research
   tier_3_final_holdout: tier_3_holdout
   tier_3_forward_2026: tier_3_forward
   all_raw: all_raw

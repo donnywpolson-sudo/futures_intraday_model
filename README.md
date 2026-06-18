@@ -1,12 +1,35 @@
-# Quant Project
+# Futures Intraday Model
 
 Intraday futures research pipeline using Databento continuous-contract 1-minute OHLCV data.
 
-## Environment
+## New Machine Setup
 
-Use Python 3.11.
+These steps assume the new machine only has the files cloned from GitHub. Local data, reports, virtual environments, and secrets are intentionally not stored in GitHub.
 
-PowerShell:
+### 1. Install prerequisites
+
+Install:
+
+```text
+Git
+Python 3.11
+```
+
+Confirm PowerShell can see them:
+
+```powershell
+git --version
+python --version
+```
+
+### 2. Clone the repo
+
+```powershell
+git clone https://github.com/donnywpolson-sudo/futures_intraday_model.git futures_intraday_model
+cd futures_intraday_model
+```
+
+### 3. Create the Python environment
 
 ```powershell
 python -m venv .venv
@@ -15,161 +38,61 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-## Databento API Key
-
-Put the Databento API key in `secrets/databento.env`:
+When returning to the project later, reactivate the environment before running scripts:
 
 ```powershell
-Set-Content -Path .\secrets\databento.env -Value 'DATABENTO_API_KEY="YOUR_KEY"' -Encoding utf8
+.\.venv\Scripts\activate
 ```
 
-The raw downloader reads `secrets/databento.env` first, then `databento.env` at
-the project root. Both forms are git-ignored and may contain either
-`DATABENTO_API_KEY=...` or the raw key as the only non-comment line.
+### 4. Add the Databento API key
 
-## Raw Data Ingest
-
-Phase 1A implementation: `scripts/phase1A_download/download_databento_raw.py`.
-Phase 1B implementation: `scripts/phase1B_convert/convert_databento_raw.py`.
-
-Phase 1A archives both required Databento DBN/DBN.ZST schemas by default:
-
-```text
-data/dbn/ohlcv_1m/{market}/{year}/{chunk_start}_{chunk_end}.dbn.zst
-data/dbn/definition/{market}/{year}/{chunk_start}_{chunk_end}.dbn.zst
-```
-
-Phase 1B converts and stitches DBN chunks into immutable raw parquet:
-
-```text
-data/raw/{market}/{year}.parquet
-```
+Create the ignored local secrets folder and key file:
 
 ```powershell
-python -m scripts.phase1B_convert.convert_databento_raw --dbn-root data\dbn\ohlcv_1m --raw-root data\raw
+New-Item -ItemType Directory -Force .\secrets
+Set-Content -Path .\secrets\databento.env -Value 'DATABENTO_API_KEY="YOUR_KEY_HERE"' -Encoding utf8
 ```
 
-Smoke test:
+Do not commit `secrets/`, `.env`, API keys, raw data, reports, or model outputs.
 
-```powershell
-python -m scripts.phase1A_download.download_databento_raw --symbols ES --start 2026-01-01 --end 2026-01-03 --dry-run
-```
-
-Full Phase 1A archive:
-
-```powershell
-python -m scripts.phase1A_download.download_databento_raw --universe extended_cme --start-year 2010 --end-year 2026 --end-date 2026-06-10
-```
-
-Project-wide excluded markets: `E7`, `J7`, `QI`, `QO`, `ZQ`, `PA`.
-
-The downloader does not replace existing files unless `--overwrite` is passed.
-
-## Project Profiles
-
-Operational profiles live in `configs/alpha_tiered.yaml`.
-
-```text
-tier_0 = ES smoke test
-tier_1 = ES/CL/ZN/6E recent core
-tier_2 = 15-market balanced research
-tier_3 = exact 31-market GLBX-only long universe
-all_raw = inventory only
-metadata_optional_test = unit-test only
-```
-
-Default profile: `tier_1_research` (`tier_1` alias).
-
-Use `tier_1` for current Phase 1-4 debugging. `tier_1` results do not
-prove `tier_3` performance; `tier_3` is the actual research universe. Missing
-Tier-3 data must fail stage validation clearly, not silently shrink the
-universe.
-
-## Causal Base
-
-Canonical implementation: `scripts/phase2_causal_base/build_causal_base_data.py`.
-
-Build the normalized causal base for the tier-1 core set:
-
-```powershell
-python -m scripts.phase2_causal_base.build_causal_base_data --profile tier_1
-```
-
-Output:
-
-```text
-data/causally_gated_normalized/{market}/{year}.parquet
-reports/causal_base/
-```
-
-## Labels
-
-Canonical implementation: `scripts/phase3_labels/build_labels.py`.
-
-Build labels for the tier-1 core set:
-
-```powershell
-python -m scripts.phase3_labels.build_labels --profile tier_1
-```
-
-Output:
-
-```text
-data/labeled/{market}/{year}.parquet
-reports/labels/
-```
-
-## Baseline Feature Matrix
-
-Canonical implementation: `scripts/phase4_features/build_baseline_features.py`.
-
-Build baseline feature matrices for the tier-1 core set:
-
-```powershell
-python -m scripts.phase4_features.build_baseline_features --profile tier_1
-```
-
-Output:
-
-```text
-data/feature_matrices/baseline/{market}/{year}.parquet
-data/feature_matrices/baseline/feature_cols.json
-reports/features_baseline/
-```
-
-## WFA And Model Diagnostics
-
-Build walk-forward splits, train baseline controls, and evaluate saved
-out-of-sample predictions:
-
-```powershell
-python -m scripts.phase5_wfa.build_wfa_splits --profile tier_1
-python -m scripts.phase7_wfa.run_wfa --profile tier_1 --matrix baseline --run baseline
-python -m scripts.phase8_model_selection.evaluate_predictions --run baseline
-```
-
-Phase 8 produces research diagnostics, not a live execution simulator. Model
-promotion requires positive costed out-of-sample policy metrics and passing
-promotion gates.
-
-## Tests
+### 5. Verify the checkout
 
 ```powershell
 python -m pytest -q
 ```
 
-## Simple GitHub Sync
+### 6. Pipeline and data rebuilds
 
-Stage, commit, rebase, and push all non-risky local changes from this computer to GitHub:
+Use `PIPELINE.md` for the authoritative downloader smoke test, DBN archive
+download, DBN-to-parquet conversion, phase order, commands, acceptance checks,
+and stop conditions. Keep runnable pipeline commands there so setup docs do not
+drift.
 
-```powershell
-python push_github.py
+Generated local outputs are ignored by Git:
+
+```text
+data/
+reports/
+models/
+outputs/
+logs/
+cache/
 ```
 
-Pull GitHub changes onto this computer before working:
+Profile definitions live in `configs/alpha_tiered.yaml`.
+
+### 7. Sync with GitHub
+
+Pull latest code before working:
 
 ```powershell
 python pull_github.py
 ```
 
-`push_github.py` prints changed files, blocks risky data/secret/output paths, runs tests, creates backup branches, stages with `git add -A`, commits, pulls with `--rebase`, and pushes. Raw data and generated reports stay out of GitHub.
+Push safe code/docs changes after working:
+
+```powershell
+python push_github.py
+```
+
+`push_github.py` blocks risky data, secret, and output paths before pushing.

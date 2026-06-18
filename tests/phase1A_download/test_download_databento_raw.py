@@ -52,6 +52,7 @@ from scripts.phase1A_download.download_databento_raw import (
     pipeline_raw_ready_for_run,
     parse_symbols,
     preflight_auth,
+    PRODUCT_AVAILABLE_START,
     resolve_databento_api_key,
     symbol_for_product,
     store_to_required_dataframe,
@@ -248,6 +249,16 @@ def test_parse_symbols_current_and_extended() -> None:
         {"E7", "J7", "PA", "QI", "QO", "ZQ"}
     )
     assert len(EXTENDED_CME) > len(CURRENT_20)
+
+
+def test_extended_glbx_universe_tracks_strict_tier3_v2_roots() -> None:
+    assert {"SR1", "TN", "ZL", "ZM", "KE"}.issubset(EXTENDED_CME)
+    assert {"6N", "6S", "PL"}.isdisjoint(EXTENDED_CME)
+    assert PRODUCT_AVAILABLE_START[(CME_DATASET, "KE")] == date(2013, 1, 1)
+    assert PRODUCT_AVAILABLE_START[(CME_DATASET, "SR1")] == date(2018, 4, 23)
+    assert PRODUCT_AVAILABLE_START[(CME_DATASET, "TN")] == date(2016, 1, 1)
+    assert PRODUCT_AVAILABLE_START[(CME_DATASET, "ZL")] == date(2011, 1, 1)
+    assert PRODUCT_AVAILABLE_START[(CME_DATASET, "ZM")] == date(2011, 1, 1)
 
 
 def test_parse_symbols_custom_normalizes_and_sorts() -> None:
@@ -555,7 +566,7 @@ def test_iter_range_tasks_builds_market_year_dbn_files(tmp_path: Path) -> None:
 
 def test_iter_range_tasks_clips_products_to_product_available_start(tmp_path: Path) -> None:
     tasks = iter_range_tasks(
-        ["RTY", "SR3"],
+        ["KE", "RTY", "SR3", "TN", "ZL", "ZM"],
         start="2010-01-01",
         end="2019-01-01",
         output_root=tmp_path / "raw",
@@ -567,9 +578,34 @@ def test_iter_range_tasks_clips_products_to_product_available_start(tmp_path: Pa
     )
 
     assert [(task.product, task.year, task.start, task.end) for task in tasks] == [
+        ("KE", 2013, "2013-01-01", "2014-01-01"),
+        ("KE", 2014, "2014-01-01", "2015-01-01"),
+        ("KE", 2015, "2015-01-01", "2016-01-01"),
+        ("KE", 2016, "2016-01-01", "2017-01-01"),
+        ("KE", 2017, "2017-01-01", "2018-01-01"),
+        ("KE", 2018, "2018-01-01", "2019-01-01"),
         ("RTY", 2017, "2017-06-05", "2018-01-01"),
         ("RTY", 2018, "2018-01-01", "2019-01-01"),
         ("SR3", 2018, "2018-04-23", "2019-01-01"),
+        ("TN", 2016, "2016-01-01", "2017-01-01"),
+        ("TN", 2017, "2017-01-01", "2018-01-01"),
+        ("TN", 2018, "2018-01-01", "2019-01-01"),
+        ("ZL", 2011, "2011-01-01", "2012-01-01"),
+        ("ZL", 2012, "2012-01-01", "2013-01-01"),
+        ("ZL", 2013, "2013-01-01", "2014-01-01"),
+        ("ZL", 2014, "2014-01-01", "2015-01-01"),
+        ("ZL", 2015, "2015-01-01", "2016-01-01"),
+        ("ZL", 2016, "2016-01-01", "2017-01-01"),
+        ("ZL", 2017, "2017-01-01", "2018-01-01"),
+        ("ZL", 2018, "2018-01-01", "2019-01-01"),
+        ("ZM", 2011, "2011-01-01", "2012-01-01"),
+        ("ZM", 2012, "2012-01-01", "2013-01-01"),
+        ("ZM", 2013, "2013-01-01", "2014-01-01"),
+        ("ZM", 2014, "2014-01-01", "2015-01-01"),
+        ("ZM", 2015, "2015-01-01", "2016-01-01"),
+        ("ZM", 2016, "2016-01-01", "2017-01-01"),
+        ("ZM", 2017, "2017-01-01", "2018-01-01"),
+        ("ZM", 2018, "2018-01-01", "2019-01-01"),
     ]
 
 

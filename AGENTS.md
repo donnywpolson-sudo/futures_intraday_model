@@ -41,6 +41,17 @@ Quant research/model-building policy:
 * For intraday futures, account for sessions, rolls, tick/point values, spreads, liquidity regime, partial fills, rejected orders, latency assumptions, and capacity before trusting PnL.
 * Add or change risk controls before increasing strategy aggressiveness: max loss, position limits, volatility targeting, kill switch, stale-data guards, and order throttles.
 
+Minimum acceptance checklist before trusting WFA/model results:
+
+* Raw data coverage and missing-bar handling checked.
+* Instrument definitions, tick size, point value, contract rolls, and session boundaries verified.
+* Target construction, timestamp alignment, feature windows, and NaN handling checked for leakage.
+* Walk-forward split boundaries, purge/embargo, and locked out-of-sample windows verified.
+* Commission, fees, spread, slippage, delay, capacity, and contract multiplier assumptions enabled or explicitly documented.
+* Simple baseline comparison included before accepting ML or complex model improvements.
+* Result manifest records config, data scope, validation windows, costs, warnings, and failure modes.
+* No post-test retuning or cherry-picked metric is used as acceptance evidence.
+
 Audited-answer policy:
 
 * For material finance, quant research, trading, model-selection, data-integrity, backtest, execution, or external factual claims, answer as if the output will be audited.

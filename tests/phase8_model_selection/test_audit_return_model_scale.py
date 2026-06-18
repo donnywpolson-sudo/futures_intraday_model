@@ -13,6 +13,7 @@ from scripts.phase8_model_selection.audit_return_model_scale import (  # noqa: E
     build_return_model_scale_audit,
     main,
 )
+from scripts.profile_scope import profile_config_hash  # noqa: E402
 
 
 def _write_models_config(path: Path) -> Path:
@@ -71,12 +72,32 @@ def _write_feature_matrix(root: Path) -> Path:
     return root
 
 
-def _write_split_plan(path: Path) -> Path:
+def _write_profile_config(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        """
+profiles:
+  fixture:
+    markets: ["ES"]
+    years: [2024]
+aliases: {}
+""".strip(),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _write_split_plan(path: Path, *, models_config: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    profile_config = _write_profile_config(path.parents[2] / "configs" / "alpha_tiered.yaml")
     path.write_text(
         json.dumps(
             {
                 "profile": "fixture",
+                "resolved_profile": "fixture",
+                "config_hash": profile_config_hash([profile_config, models_config]),
+                "script_hash": "fixture-script-hash",
+                "input_file_hashes": {},
                 "markets": ["ES"],
                 "years": [2024],
                 "folds": [
@@ -105,7 +126,7 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
     predictions_root = tmp_path / "data" / "predictions"
     reports_root = tmp_path / "reports" / "wfa"
     models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
-    split_plan = _write_split_plan(reports_root / "split_plan.json")
+    split_plan = _write_split_plan(reports_root / "split_plan.json", models_config=models_config)
     run_wfa(
         profile="fixture",
         matrix="baseline",

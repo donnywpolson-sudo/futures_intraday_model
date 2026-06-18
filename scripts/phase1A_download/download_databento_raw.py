@@ -67,8 +67,13 @@ DATASET_AVAILABLE_START = {
 # Databento GLBX.MDP3 has venue-level OHLCV coverage from 2010-06-06, but
 # these continuous futures roots do not resolve before their product windows.
 PRODUCT_AVAILABLE_START = {
+    (CME_DATASET, "KE"): date(2013, 1, 1),
     (CME_DATASET, "RTY"): date(2017, 6, 5),
+    (CME_DATASET, "SR1"): date(2018, 4, 23),
     (CME_DATASET, "SR3"): date(2018, 4, 23),
+    (CME_DATASET, "TN"): date(2016, 1, 1),
+    (CME_DATASET, "ZL"): date(2011, 1, 1),
+    (CME_DATASET, "ZM"): date(2011, 1, 1),
 }
 FATAL_ERROR_MARKERS = (
     "401",
@@ -129,13 +134,15 @@ EXTENDED_CME = sorted(
             "6A",
             "6C",
             "6M",
-            "6N",
-            "6S",
-            "PL",
+            "KE",
             "RB",
             "HO",
+            "SR1",
+            "TN",
             "UB",
             "ZF",
+            "ZL",
+            "ZM",
             "ZT",
         ]
     )

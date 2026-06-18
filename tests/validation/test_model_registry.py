@@ -19,7 +19,7 @@ from scripts.validation.model_registry import (
 
 ROOT = Path(__file__).resolve().parents[2]
 MODELS_CONFIG = ROOT / "configs" / "models.yaml"
-LAYOUT = ROOT / "project_layout.md"
+PIPELINE = ROOT / "PIPELINE.md"
 
 
 def _config() -> dict:
@@ -144,15 +144,14 @@ def test_frozen_model_immutability() -> None:
     assert "data/frozen_models/phase5_v1/calibration_config.yaml" in frozen["model_artifacts"]
 
 
-def test_project_layout_downstream_ml_consistency() -> None:
-    text = LAYOUT.read_text(encoding="utf-8")
+def test_pipeline_downstream_ml_consistency() -> None:
+    text = PIPELINE.read_text(encoding="utf-8")
 
     for phrase in (
-        "Phase 7A linear controls",
-        "Phase 7B HistGradientBoosting challengers",
-        "Phase 7C optional LightGBM/XGBoost challengers",
-        "Phase 8A calibration/model comparison",
-        "frozen feature + model + calibration + policy set",
-        "trend-danger / do-not-fade classifier",
+        "| 5 | WFA split plan",
+        "| 6 | WFA model training/OOS predictions",
+        "| 8 | Prediction evaluation/model selection",
+        "Final holdout is not consumed for selection/calibration.",
+        "reports/model_selection/",
     ):
         assert phrase in text

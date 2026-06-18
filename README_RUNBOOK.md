@@ -65,44 +65,14 @@ files.
 If external/cloud backup exists, restore ignored directories such as `data/`,
 `reports/`, and `models/` before rebuilding.
 
-If raw data must be redownloaded, start with a dry run:
-
-```powershell
-python -m scripts.phase1A_download.download_databento_raw --symbols ES --start 2026-01-01 --end 2026-01-03 --dry-run
-```
-
-Then run a bounded archive job. Existing non-empty outputs are skipped unless
-`--overwrite` is passed.
-
-```powershell
-python -m scripts.phase1A_download.download_databento_raw --universe extended_cme --start-year 2010 --end-year 2026 --end-date 2026-06-10 --workers 4
-```
-
-Phase 1A writes DBN/ZST archives under `data/dbn/`. Phase 1B converts DBN
-archives into raw parquet under `data/raw/`:
-
-```powershell
-python -m scripts.phase1B_convert.convert_databento_raw --dbn-root data\dbn\ohlcv_1m --raw-root data\raw
-```
+If raw data must be redownloaded, use `PIPELINE.md` for the authoritative
+dry-run, bounded archive job, DBN layout, conversion command, acceptance checks,
+and stop conditions.
 
 ## Pipeline Rebuild Order
 
-Use `tier_1` for smoke and debugging before broader runs.
-
-```powershell
-python -m scripts.phase2_causal_base.build_causal_base_data --profile tier_1
-python -m scripts.phase3_labels.build_labels --profile tier_1
-python -m scripts.phase4_features.build_baseline_features --profile tier_1
-python -m scripts.phase5_wfa.build_wfa_splits --profile tier_1
-python -m scripts.phase7_wfa.run_wfa --profile tier_1 --matrix baseline --run baseline
-python -m scripts.phase8_model_selection.evaluate_predictions --run baseline
-```
-
-Validation coverage check:
-
-```powershell
-python -m scripts.validation.check_tier_2_coverage --profile tier_1 --stage all
-```
+Use `PIPELINE.md` for the authoritative pipeline rebuild order, validation
+coverage command, phase commands, acceptance checks, and current stop rules.
 
 ## Smoke Tests
 
