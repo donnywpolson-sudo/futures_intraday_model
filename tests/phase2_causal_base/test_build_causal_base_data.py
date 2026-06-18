@@ -287,6 +287,54 @@ def test_causal_base_schema_synthetic_and_source_lineage(tmp_path: Path) -> None
     assert output["calendar_coverage_status"].eq("config_backed").all()
 
 
+def test_causal_base_preserves_raw_enrichment_metadata_columns(tmp_path: Path) -> None:
+    raw_path = tmp_path / "data" / "raw_enriched_candidate" / "ES" / "2024.parquet"
+    out_path = tmp_path / "data" / "causally_gated_normalized" / "ES" / "2024.parquet"
+    rows = [
+        {
+            "rtype": 33,
+            "publisher_id": 1,
+            "instrument_id": 100,
+            "symbol": "ESH4",
+            "ts_event": "2024-01-02T15:00:00Z",
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.5,
+            "volume": 10,
+            "data_quality_status": "available",
+            "data_quality_degraded": False,
+            "status_ts_event": "2024-01-02T14:59:00Z",
+            "status_action_name": "TRADING",
+            "status_missing": False,
+            "status_stale": False,
+            "stat_opening_price": 100.25,
+            "stat_opening_price_ts_event": "2024-01-02T14:58:00Z",
+            "stat_opening_price_missing": False,
+            "statistics_missing": False,
+            "statistics_stale": False,
+        }
+    ]
+    _write_raw(raw_path, rows)
+
+    result = process_file(raw_path, out_path, profile="metadata_optional_test")
+
+    output = pd.read_parquet(out_path)
+    for column in [
+        "status_ts_event",
+        "status_action_name",
+        "status_missing",
+        "stat_opening_price",
+        "stat_opening_price_ts_event",
+        "statistics_missing",
+    ]:
+        assert column in output.columns
+    assert result.raw_enrichment_column_count == 9
+    assert result.status_enrichment_missing_rows == 0
+    assert result.statistics_enrichment_missing_rows == 0
+    assert output.loc[0, "stat_opening_price"] == 100.25
+
+
 def test_roll_boundary_sets_window_and_blocks_causal_valid(tmp_path: Path) -> None:
     raw_path = tmp_path / "data" / "raw" / "CL" / "2024.parquet"
     out_path = tmp_path / "data" / "causally_gated_normalized" / "CL" / "2024.parquet"

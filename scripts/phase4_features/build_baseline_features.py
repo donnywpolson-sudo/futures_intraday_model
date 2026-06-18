@@ -308,6 +308,7 @@ FORBIDDEN_FEATURE_COLUMNS = {
     "session_data_quality_degraded",
     "trainable_data_quality",
 }
+FORBIDDEN_FEATURE_PREFIXES = ("status_", "stat_", "statistics_")
 
 REQUIRED_INPUT_COLUMNS = [
     "ts",
@@ -1334,7 +1335,9 @@ def validate_registry(feature_cols: list[str]) -> list[str]:
     forbidden = [
         col
         for col in feature_cols
-        if col in FORBIDDEN_FEATURE_COLUMNS or col.startswith("target_")
+        if col in FORBIDDEN_FEATURE_COLUMNS
+        or col.startswith("target_")
+        or any(col.startswith(prefix) for prefix in FORBIDDEN_FEATURE_PREFIXES)
     ]
     if forbidden:
         failures.append(f"forbidden columns in feature_cols: {forbidden}")

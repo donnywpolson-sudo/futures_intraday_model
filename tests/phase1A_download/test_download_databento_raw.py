@@ -37,6 +37,8 @@ from scripts.phase1A_download.download_databento_raw import (
     dry_run_plan_path,
     effective_output_root,
     effective_raw_format,
+    enrich_with_statistics_metadata,
+    enrich_with_status_metadata,
     execute_download,
     execute_batch_downloads,
     estimate_cost,
@@ -48,6 +50,7 @@ from scripts.phase1A_download.download_databento_raw import (
     is_retryable_stream_error,
     iter_month_ranges,
     iter_year_tasks,
+    load_optional_schema_frame_for_group,
     main,
     load_databento_api_key_from_file,
     normalize_api_key,
@@ -1944,6 +1947,200 @@ def test_convert_dbn_archive_uses_point_in_time_definition_metadata(
     assert out["raw_symbol"].tolist() == ["ESH4", "ESM4"]
     assert out["tick_size"].tolist() == [0.25, 0.50]
     assert out["contract_multiplier_or_point_value"].tolist() == [50.0, 5.0]
+
+
+def test_optional_status_statistics_enrichment_is_causal_and_instrument_scoped() -> None:
+    bars = pd.DataFrame(
+        {
+            "ts_event": [
+                pd.Timestamp("2024-01-02T15:00:00Z"),
+                pd.Timestamp("2024-01-02T15:02:00Z"),
+                pd.Timestamp("2024-01-02T15:02:00Z"),
+            ],
+            "open": [1.0, 2.0, 3.0],
+            "high": [1.1, 2.1, 3.1],
+            "low": [0.9, 1.9, 2.9],
+            "close": [1.0, 2.0, 3.0],
+            "volume": [10, 20, 30],
+            "rtype": [33, 33, 33],
+            "publisher_id": [1, 1, 1],
+            "instrument_id": [100, 100, 200],
+            "symbol": ["ESH4", "ESH4", "NQH4"],
+        }
+    )
+    status = pd.DataFrame(
+        {
+            "ts_event": [
+                pd.Timestamp("2024-01-02T14:59:00Z"),
+                pd.Timestamp("2024-01-02T15:03:00Z"),
+                pd.Timestamp("2024-01-02T15:01:00Z"),
+            ],
+            "instrument_id": [100, 100, 200],
+            "action": [1, 8, 7],
+            "reason": [0, 0, 0],
+            "trading_event": [0, 0, 2],
+            "is_trading": ["N", "N", "Y"],
+            "is_quoting": ["Y", "N", "Y"],
+            "is_short_sell_restricted": ["N", "N", "N"],
+        }
+    )
+    statistics = pd.DataFrame(
+        {
+            "ts_event": [
+                pd.Timestamp("2024-01-02T14:58:00Z"),
+                pd.Timestamp("2024-01-02T15:03:00Z"),
+                pd.Timestamp("2024-01-02T15:01:00Z"),
+            ],
+            "instrument_id": [100, 100, 200],
+            "stat_type": [1, 1, 9],
+            "price": [99.0, 101.0, pd.NA],
+            "quantity": [0, 0, 500],
+        }
+    )
+
+    enriched = enrich_with_status_metadata(bars, status)
+    enriched = enrich_with_statistics_metadata(enriched, statistics)
+
+    assert enriched.loc[0, "status_action_name"] == "PRE_OPEN"
+    assert enriched.loc[1, "status_action_name"] == "PRE_OPEN"
+    assert enriched.loc[2, "status_action_name"] == "TRADING"
+    assert bool(enriched.loc[2, "status_is_trading"]) is True
+    assert enriched.loc[1, "stat_opening_price"] == 99.0
+    assert pd.isna(enriched.loc[2, "stat_opening_price"])
+    assert enriched.loc[2, "stat_open_interest"] == 500
+
+
+def test_missing_optional_schema_dbns_warn_and_emit_null_fields(tmp_path: Path) -> None:
+    bars = pd.DataFrame(
+        {
+            "ts_event": [pd.Timestamp("2024-01-02T15:00:00Z")],
+            "open": [1.0],
+            "high": [1.1],
+            "low": [0.9],
+            "close": [1.0],
+            "volume": [10],
+            "rtype": [33],
+            "publisher_id": [1],
+            "instrument_id": [100],
+            "symbol": ["ESH4"],
+        }
+    )
+
+    loaded = load_optional_schema_frame_for_group(
+        tmp_path / "data" / "dbn",
+        "status",
+        "ES",
+        2024,
+        policy="warn",
+    )
+    enriched = enrich_with_status_metadata(bars, loaded.frame)
+
+    assert loaded.frame is None
+    assert loaded.warnings
+    assert enriched["status_missing"].tolist() == [True]
+    assert enriched["status_source_file"].isna().all()
+
+
+def test_convert_dbn_archive_stages_optional_schema_hashes_and_columns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dbn_root = tmp_path / "data" / "dbn" / "ohlcv_1m"
+    optional_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw_enriched_candidate"
+    dbn_path = dbn_root / "ES" / "2024" / "2024-01-01_2025-01-01.dbn.zst"
+    definition_path = optional_root / "definition" / "ES" / "2024" / "2024-01-01_2025-01-01.dbn.zst"
+    status_path = optional_root / "status" / "ES" / "2024" / "2024-01-01_2025-01-01.dbn.zst"
+    statistics_path = optional_root / "statistics" / "ES" / "2024" / "2024-01-01_2025-01-01.dbn.zst"
+    for path, payload, schema in [
+        (dbn_path, b"ohlcv", "ohlcv-1m"),
+        (definition_path, b"definition", "definition"),
+        (status_path, b"status", "status"),
+        (statistics_path, b"statistics", "statistics"),
+    ]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        _write_raw_manifest(path, schema=schema)
+
+    ohlcv_df = pd.DataFrame(
+        {
+            "ts_event": [pd.Timestamp("2024-01-02T15:00:00Z")],
+            "open": [1.0],
+            "high": [1.1],
+            "low": [0.9],
+            "close": [1.0],
+            "volume": [10],
+            "rtype": [33],
+            "publisher_id": [1],
+            "instrument_id": [100],
+            "symbol": ["ESH4"],
+        }
+    )
+    definition_df = pd.DataFrame(
+        {
+            "ts_event": [pd.Timestamp("2024-01-01T00:00:00Z")],
+            "instrument_id": [100],
+            "raw_symbol": ["ESH4"],
+            "min_price_increment": [0.25],
+            "contract_multiplier": [50.0],
+        }
+    )
+    status_df = pd.DataFrame(
+        {
+            "ts_event": [pd.Timestamp("2024-01-02T14:59:00Z")],
+            "instrument_id": [100],
+            "action": [7],
+            "reason": [0],
+            "trading_event": [0],
+            "is_trading": ["Y"],
+            "is_quoting": ["Y"],
+            "is_short_sell_restricted": ["N"],
+        }
+    )
+    statistics_df = pd.DataFrame(
+        {
+            "ts_event": [pd.Timestamp("2024-01-02T14:58:00Z")],
+            "instrument_id": [100],
+            "stat_type": [1],
+            "price": [100.25],
+            "quantity": [0],
+        }
+    )
+
+    class FakeDBNStore:
+        @classmethod
+        def from_file(cls, path: Path) -> FakeStore:
+            frames = {
+                dbn_path: ohlcv_df,
+                definition_path: definition_df,
+                status_path: status_df,
+                statistics_path: statistics_df,
+            }
+            return FakeStore(frames[path].copy())
+
+    monkeypatch.setitem(
+        sys.modules,
+        "databento",
+        types.SimpleNamespace(DBNStore=FakeDBNStore),
+    )
+
+    results = convert_dbn_archive_to_raw(
+        dbn_root,
+        raw_root,
+        condition_by_group={("ES", 2024): {"2024-01-02": "available"}},
+        optional_schemas=("status", "statistics"),
+        optional_dbn_root=optional_root,
+    )
+
+    output_path = raw_root / "ES" / "2024.parquet"
+    out = pd.read_parquet(output_path)
+    assert results[0]["status"] == "ok"
+    assert out["status_action_name"].tolist() == ["TRADING"]
+    assert out["stat_opening_price"].tolist() == [100.25]
+    assert results[0]["input_hashes"][status_path.as_posix()]
+    assert results[0]["input_hashes"][statistics_path.as_posix()]
+    assert results[0]["optional_schema_match_summary"]["status"]["matched_rows"] == 1
+    assert results[0]["optional_schema_warning_count"] == 0
 
 
 def test_estimate_cost_stops_on_auth_failure(tmp_path: Path) -> None:

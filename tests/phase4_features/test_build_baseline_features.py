@@ -14,6 +14,7 @@ from scripts.phase4_features.build_baseline_features import (
     FEATURE_COLS,
     FeatureResult,
     FORBIDDEN_FEATURE_COLUMNS,
+    FORBIDDEN_FEATURE_PREFIXES,
     PHASE3_LABEL_SEMANTICS_ID,
     REGIME_LABEL_COLUMNS,
     add_base_market_features,
@@ -430,6 +431,11 @@ def test_registry_excludes_targets_audit_source_and_forbidden_columns() -> None:
     injected = validate_registry([*FEATURE_COLS, "target_ret_15m"])
     assert injected
     assert any("forbidden columns" in failure for failure in injected)
+    assert FORBIDDEN_FEATURE_PREFIXES == ("status_", "stat_", "statistics_")
+    raw_enrichment_injected = validate_registry(
+        [*FEATURE_COLS, "status_action_name", "stat_open_interest"]
+    )
+    assert any("forbidden columns" in failure for failure in raw_enrichment_injected)
 
 
 def _process_fixture(

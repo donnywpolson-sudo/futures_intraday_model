@@ -91,6 +91,8 @@ Core artifact flow:
 ```text
 data/dbn/ohlcv_1m/{market}/{year}/{chunk_start}_{chunk_end}.dbn.zst
 data/dbn/definition/{market}/{year}/{chunk_start}_{chunk_end}.dbn.zst
+data/dbn/status/{market}/{year}/{chunk_start}_{chunk_end}.dbn.zst       (optional staged enrichment)
+data/dbn/statistics/{market}/{year}/{chunk_start}_{chunk_end}.dbn.zst   (optional staged enrichment)
 -> data/raw/{market}/{year}.parquet
 -> data/causally_gated_normalized/{market}/{year}.parquet
 -> data/labeled/{market}/{year}.parquet
@@ -185,14 +187,23 @@ Command:
 python -m scripts.phase1B_convert.convert_databento_raw --dbn-root data\dbn\ohlcv_1m --raw-root data\raw
 ```
 
+Staged optional enrichment candidate:
+
+```powershell
+python -m scripts.phase1B_convert.convert_databento_raw --symbols ES,CL,ZN,6E --dbn-root data\dbn\ohlcv_1m --raw-root data\raw_enriched_candidate --reports-root reports\raw_ingest\raw_enriched_candidate_tier1 --include-optional-schemas status,statistics --optional-dbn-root data\dbn
+```
+
 Inputs:
 
 - `data/dbn/ohlcv_1m/...`
 - `data/dbn/definition/...`
+- Optional staged enrichment inputs: `data/dbn/status/...` and
+  `data/dbn/statistics/...`
 
 Outputs:
 
 - `data/raw/{market}/{year}.parquet`
+- Optional staged candidate only: `data/raw_enriched_candidate/{market}/{year}.parquet`
 - Raw parquet manifests under `reports/raw_ingest/`.
 
 Acceptance checks:
@@ -201,6 +212,12 @@ Acceptance checks:
 - Definition-derived fields are present, including `raw_symbol` and `tick_size`.
 - Raw rows preserve `ts_event`.
 - No missing definition coverage for any OHLCV `instrument_id`.
+- Optional status/statistics enrichment preserves OHLCV 1-minute grain: one row
+  per OHLCV bar. Optional records are causal as-of joined by `instrument_id` and
+  `ts_event`; they never define additional rows.
+- Optional enrichment is staged in `data/raw_enriched_candidate` first. Promotion
+  into canonical `data/raw` requires a separate explicit approval after row-count
+  and schema validation against the trusted baseline.
 
 Stop conditions:
 
@@ -241,6 +258,8 @@ Acceptance checks:
 - Output market-years match the resolved profile.
 - `ts_event` has been converted to `ts`.
 - Session, synthetic-row, roll-window, and degraded-row warnings are explicit.
+- Staged status/statistics enrichment columns, when present, remain raw
+  metadata/audit fields and are reported with missing/stale counts.
 - For each processed market, synthetic missing OHLCV-1m minutes in
   `[2025-06-18, 2026-06-13)` are cross-checked against local `trades` DBN
   archives. A passing market validates older years by Databento no-trade
@@ -320,6 +339,9 @@ Outputs:
 Acceptance checks:
 
 - Feature registry excludes target, leakage, timestamp, and metadata columns.
+- Raw status/statistics enrichment columns are excluded from default features;
+  model use requires a later feature-hypothesis change with leakage checks and
+  registry updates.
 - Feature rows line up with label rows.
 - Baseline features are causal and do not use final-holdout full-sample
   statistics.

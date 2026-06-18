@@ -188,6 +188,74 @@ ORDERED_OUTPUT_COLUMNS = [
     "data_quality_degraded",
 ]
 
+OPTIONAL_RAW_SCHEMAS = ("status", "statistics")
+OPTIONAL_SCHEMA_POLICIES = ("warn", "require")
+STATUS_ENRICHMENT_COLUMNS = [
+    "status_ts_event",
+    "status_action",
+    "status_action_name",
+    "status_reason",
+    "status_reason_name",
+    "status_trading_event",
+    "status_trading_event_name",
+    "status_is_trading",
+    "status_is_quoting",
+    "status_is_short_sell_restricted",
+    "status_source_file",
+    "status_source_sha256",
+    "status_missing",
+    "status_stale",
+]
+STATUS_ACTION_NAMES = {
+    0: "NONE",
+    1: "PRE_OPEN",
+    2: "PRE_CROSS",
+    3: "QUOTING",
+    4: "CROSS",
+    5: "ROTATION",
+    6: "NEW_PRICE_INDICATION",
+    7: "TRADING",
+    8: "HALT",
+    9: "PAUSE",
+    10: "SUSPEND",
+    11: "PRE_CLOSE",
+    12: "CLOSE",
+    13: "POST_CLOSE",
+    14: "SSR_CHANGE",
+    15: "NOT_AVAILABLE_FOR_TRADING",
+}
+TRADING_EVENT_NAMES = {
+    0: "NONE",
+    1: "NO_CANCEL",
+    2: "CHANGE_TRADING_SESSION",
+    3: "IMPLIED_MATCHING_ON",
+    4: "IMPLIED_MATCHING_OFF",
+}
+STAT_TYPE_FIELDS = {
+    1: ("opening_price", "price"),
+    3: ("settlement_price", "price"),
+    4: ("session_low", "price"),
+    5: ("session_high", "price"),
+    6: ("cleared_volume", "quantity"),
+    9: ("open_interest", "quantity"),
+    10: ("fixing_price", "price"),
+    11: ("close_price", "price"),
+    13: ("vwap", "price"),
+}
+STATISTICS_ENRICHMENT_COLUMNS = [
+    column
+    for stat_name in [field[0] for field in STAT_TYPE_FIELDS.values()]
+    for column in (
+        f"stat_{stat_name}",
+        f"stat_{stat_name}_ts_event",
+        f"stat_{stat_name}_source_file",
+        f"stat_{stat_name}_source_sha256",
+        f"stat_{stat_name}_missing",
+    )
+] + [
+    "statistics_missing",
+    "statistics_stale",
+]
 PRICE_TYPE = "float"
 PRICE_SCALE_POLICY = "databento_dbnstore_to_df_price_type_float"
 
@@ -219,6 +287,15 @@ class DatasetConditionInfo(TypedDict):
     raw: list[dict[str, object]]
     conditions: dict[str, str]
     degraded_dates: list[str]
+
+
+@dataclass(frozen=True)
+class OptionalSchemaFrame:
+    schema: str
+    frame: pd.DataFrame | None
+    paths: list[Path]
+    input_hashes: dict[str, str]
+    warnings: list[str]
 
 
 class DatabentoMetadataClient(Protocol):
@@ -1397,6 +1474,382 @@ def enrich_with_definition_metadata(df: pd.DataFrame, definitions: pd.DataFrame)
     return merged
 
 
+def parse_optional_schemas(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    schemas = tuple(part.strip().lower() for part in value.split(",") if part.strip())
+    unsupported = sorted(set(schemas) - set(OPTIONAL_RAW_SCHEMAS))
+    if unsupported:
+        raise ValueError(
+            "--include-optional-schemas supports only "
+            + ",".join(OPTIONAL_RAW_SCHEMAS)
+            + f"; got {','.join(unsupported)}"
+        )
+    return tuple(dict.fromkeys(schemas))
+
+
+def optional_schema_root_for_dbn_root(optional_dbn_root: Path, schema: str) -> Path:
+    schema_path = schema_path_name(schema)
+    if optional_dbn_root.name == schema_path:
+        return optional_dbn_root
+    if optional_dbn_root.name == schema_path_name(SCHEMA):
+        return optional_dbn_root.parent / schema_path
+    if optional_dbn_root.name == VENDOR:
+        return optional_dbn_root / schema_path
+    return optional_dbn_root / schema_path
+
+
+def optional_schema_paths_for_group(
+    optional_dbn_root: Path,
+    schema: str,
+    product: str,
+    year: int,
+) -> list[Path]:
+    base = optional_schema_root_for_dbn_root(optional_dbn_root, schema)
+    canonical_dir = base / product / str(year)
+    paths: list[Path] = []
+    if canonical_dir.exists():
+        paths.extend(iter_dbn_files(canonical_dir))
+    legacy_candidates = [
+        base / product / f"{year}.dbn.zst",
+        optional_dbn_root / VENDOR / schema_path_name(schema) / product / f"{year}.dbn.zst",
+    ]
+    for candidate in legacy_candidates:
+        if candidate.exists() and is_dbn_file(candidate):
+            paths.append(candidate)
+    return sorted(set(paths))
+
+
+def _frame_from_store(path: Path) -> pd.DataFrame:
+    import databento as db
+
+    store = db.DBNStore.from_file(path)
+    df_or_frames = cast(DatabentoStore, store).to_df()
+    if isinstance(df_or_frames, pd.DataFrame):
+        frame = df_or_frames.copy()
+    else:
+        frame = pd.concat(df_or_frames, ignore_index=False)
+    if frame.index.name is not None and frame.index.name not in frame.columns:
+        frame = frame.reset_index()
+    return frame
+
+
+def load_optional_schema_frame_for_group(
+    optional_dbn_root: Path,
+    schema: str,
+    product: str,
+    year: int,
+    *,
+    policy: str = "warn",
+) -> OptionalSchemaFrame:
+    if schema not in OPTIONAL_RAW_SCHEMAS:
+        raise ValueError(f"unsupported optional schema: {schema}")
+    if policy not in OPTIONAL_SCHEMA_POLICIES:
+        raise ValueError(f"unsupported optional schema policy: {policy}")
+
+    paths = optional_schema_paths_for_group(optional_dbn_root, schema, product, year)
+    warnings: list[str] = []
+    input_hashes: dict[str, str] = {}
+    frames: list[pd.DataFrame] = []
+    if not paths:
+        message = (
+            f"missing optional {schema} DBN files for {product} {year}: "
+            f"{optional_schema_root_for_dbn_root(optional_dbn_root, schema).as_posix()}"
+        )
+        if policy == "require":
+            raise ValueError(message)
+        warnings.append(message)
+        return OptionalSchemaFrame(schema=schema, frame=None, paths=[], input_hashes={}, warnings=warnings)
+
+    for path in paths:
+        manifest_failures = validate_raw_file_manifest(
+            path,
+            expected_schema=schema,
+            expected_market=product,
+            expected_year=year,
+        )
+        if manifest_failures:
+            message = f"{schema} manifest validation failed for {path.as_posix()}: " + "; ".join(manifest_failures)
+            if policy == "require":
+                raise ValueError(message)
+            warnings.append(message)
+            continue
+        try:
+            digest = file_sha256(path)
+            frame = _frame_from_store(path)
+        except Exception as exc:
+            message = f"{schema} DBN decode failed for {path.as_posix()}: {exc}"
+            if policy == "require":
+                raise ValueError(message) from exc
+            warnings.append(message)
+            continue
+        frame = frame.copy()
+        frame["_optional_source_file"] = path.as_posix()
+        frame["_optional_source_sha256"] = digest
+        frames.append(frame)
+        input_hashes[path.as_posix()] = digest
+
+    if not frames:
+        message = f"no usable optional {schema} DBN rows for {product} {year}"
+        if policy == "require":
+            raise ValueError(message)
+        warnings.append(message)
+        return OptionalSchemaFrame(schema=schema, frame=None, paths=paths, input_hashes=input_hashes, warnings=warnings)
+    return OptionalSchemaFrame(
+        schema=schema,
+        frame=pd.concat(frames, ignore_index=False),
+        paths=paths,
+        input_hashes=input_hashes,
+        warnings=warnings,
+    )
+
+
+def _asof_join_by_instrument(
+    left: pd.DataFrame,
+    right: pd.DataFrame,
+    *,
+    right_ts_col: str,
+) -> pd.DataFrame:
+    if right.empty:
+        return left
+    left_work = left.copy()
+    left_work["_row_order"] = range(len(left_work))
+    left_work["_ohlcv_ts_event"] = pd.to_datetime(left_work["ts_event"], utc=True, errors="coerce")
+    if left_work["_ohlcv_ts_event"].isna().any():
+        raise ValueError("OHLCV has invalid ts_event for optional schema as-of join")
+
+    right_work = right.copy()
+    right_work[right_ts_col] = pd.to_datetime(right_work[right_ts_col], utc=True, errors="coerce")
+    right_work = right_work[right_work[right_ts_col].notna()].copy()
+    if right_work.empty:
+        return left
+    right_work = right_work.sort_values(["instrument_id", right_ts_col], kind="mergesort")
+
+    merged_parts: list[pd.DataFrame] = []
+    for instrument_id, left_group in left_work.groupby("instrument_id", sort=False, dropna=False):
+        right_group = right_work.loc[right_work["instrument_id"] == instrument_id].drop(columns=["instrument_id"])
+        if right_group.empty:
+            merged_parts.append(left_group)
+            continue
+        merged_parts.append(
+            pd.merge_asof(
+                left_group.sort_values("_ohlcv_ts_event", kind="mergesort"),
+                right_group.sort_values(right_ts_col, kind="mergesort"),
+                left_on="_ohlcv_ts_event",
+                right_on=right_ts_col,
+                direction="backward",
+                allow_exact_matches=True,
+            )
+        )
+    return (
+        pd.concat(merged_parts, ignore_index=True)
+        .sort_values("_row_order", kind="mergesort")
+        .drop(columns=["_row_order", "_ohlcv_ts_event"], errors="ignore")
+    )
+
+
+def _enum_int(value: object) -> int | None:
+    if pd.isna(value):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        try:
+            return int(getattr(value, "value"))
+        except (TypeError, ValueError):
+            return None
+
+
+def _enum_name(value: object, mapping: dict[int, str]) -> str | None:
+    parsed = _enum_int(value)
+    if parsed is None:
+        return None
+    return mapping.get(parsed, str(parsed))
+
+
+def _tristate_to_bool(value: object) -> object:
+    if pd.isna(value):
+        return pd.NA
+    text = str(value).strip().lower()
+    if text in {"y", "yes", "true", "1", "89", "tristate.yes"}:
+        return True
+    if text in {"n", "no", "false", "0", "78", "tristate.no"}:
+        return False
+    return pd.NA
+
+
+def enrich_with_status_metadata(df: pd.DataFrame, status: pd.DataFrame | None) -> pd.DataFrame:
+    enriched = df.copy()
+    if status is None or status.empty:
+        for column in STATUS_ENRICHMENT_COLUMNS:
+            enriched[column] = pd.NA
+        enriched["status_missing"] = True
+        enriched["status_stale"] = True
+        return enriched
+
+    required = {"ts_event", "instrument_id", "action", "reason", "trading_event"}
+    missing = sorted(required - set(status.columns))
+    if missing:
+        raise ValueError("status missing required fields: " + ",".join(missing))
+
+    keep = [
+        "ts_event",
+        "instrument_id",
+        "action",
+        "reason",
+        "trading_event",
+        "is_trading",
+        "is_quoting",
+        "is_short_sell_restricted",
+        "_optional_source_file",
+        "_optional_source_sha256",
+    ]
+    latest = status[[col for col in keep if col in status.columns]].copy()
+    latest = latest.rename(
+        columns={
+            "ts_event": "status_ts_event",
+            "action": "status_action",
+            "reason": "status_reason",
+            "trading_event": "status_trading_event",
+            "is_trading": "status_is_trading",
+            "is_quoting": "status_is_quoting",
+            "is_short_sell_restricted": "status_is_short_sell_restricted",
+            "_optional_source_file": "status_source_file",
+            "_optional_source_sha256": "status_source_sha256",
+        }
+    )
+    latest["status_ts_event"] = pd.to_datetime(latest["status_ts_event"], utc=True, errors="coerce")
+    latest = latest[latest["status_ts_event"].notna()].copy()
+    latest["status_action_name"] = latest["status_action"].map(lambda value: _enum_name(value, STATUS_ACTION_NAMES))
+    latest["status_reason_name"] = latest["status_reason"].map(lambda value: None if pd.isna(value) else str(value))
+    latest["status_trading_event_name"] = latest["status_trading_event"].map(
+        lambda value: _enum_name(value, TRADING_EVENT_NAMES)
+    )
+    for column in ("status_is_trading", "status_is_quoting", "status_is_short_sell_restricted"):
+        if column in latest.columns:
+            latest[column] = latest[column].map(_tristate_to_bool).astype("boolean")
+        else:
+            latest[column] = pd.NA
+
+    dedupe_cols = ["instrument_id", "status_ts_event"]
+    latest = latest.sort_values(dedupe_cols, kind="mergesort").drop_duplicates(dedupe_cols, keep="last")
+    enriched = _asof_join_by_instrument(enriched, latest, right_ts_col="status_ts_event")
+    for column in STATUS_ENRICHMENT_COLUMNS:
+        if column not in enriched.columns:
+            enriched[column] = pd.NA
+    enriched["status_missing"] = enriched["status_ts_event"].isna()
+    enriched["status_stale"] = enriched["status_missing"]
+    return enriched
+
+
+def enrich_with_statistics_metadata(df: pd.DataFrame, statistics: pd.DataFrame | None) -> pd.DataFrame:
+    enriched = df.copy()
+    if statistics is None or statistics.empty:
+        for column in STATISTICS_ENRICHMENT_COLUMNS:
+            enriched[column] = pd.NA
+        for stat_name, _ in STAT_TYPE_FIELDS.values():
+            enriched[f"stat_{stat_name}_missing"] = True
+        enriched["statistics_missing"] = True
+        enriched["statistics_stale"] = True
+        return enriched
+
+    required = {"ts_event", "instrument_id", "stat_type"}
+    missing = sorted(required - set(statistics.columns))
+    if missing:
+        raise ValueError("statistics missing required fields: " + ",".join(missing))
+
+    stats = statistics.copy()
+    for source_col in ("_optional_source_file", "_optional_source_sha256"):
+        if source_col not in stats.columns:
+            stats[source_col] = pd.NA
+    stats["_stat_type_int"] = stats["stat_type"].map(_enum_int)
+    stats["ts_event"] = pd.to_datetime(stats["ts_event"], utc=True, errors="coerce")
+    stats = stats[stats["_stat_type_int"].isin(STAT_TYPE_FIELDS) & stats["ts_event"].notna()].copy()
+    for stat_type, (stat_name, value_column) in STAT_TYPE_FIELDS.items():
+        stat_rows = stats.loc[stats["_stat_type_int"] == stat_type].copy()
+        if stat_rows.empty:
+            enriched[f"stat_{stat_name}"] = pd.NA
+            enriched[f"stat_{stat_name}_ts_event"] = pd.NaT
+            enriched[f"stat_{stat_name}_source_file"] = pd.NA
+            enriched[f"stat_{stat_name}_source_sha256"] = pd.NA
+            enriched[f"stat_{stat_name}_missing"] = True
+            continue
+        value_source = value_column if value_column in stat_rows.columns else "price"
+        if value_source not in stat_rows.columns and "quantity" in stat_rows.columns:
+            value_source = "quantity"
+        if value_source not in stat_rows.columns:
+            enriched[f"stat_{stat_name}"] = pd.NA
+            enriched[f"stat_{stat_name}_ts_event"] = pd.NaT
+            enriched[f"stat_{stat_name}_source_file"] = pd.NA
+            enriched[f"stat_{stat_name}_source_sha256"] = pd.NA
+            enriched[f"stat_{stat_name}_missing"] = True
+            continue
+        right = stat_rows[
+            [
+                "instrument_id",
+                "ts_event",
+                value_source,
+                "_optional_source_file",
+                "_optional_source_sha256",
+            ]
+        ].copy()
+        right = right.rename(
+            columns={
+                "ts_event": f"stat_{stat_name}_ts_event",
+                value_source: f"stat_{stat_name}",
+                "_optional_source_file": f"stat_{stat_name}_source_file",
+                "_optional_source_sha256": f"stat_{stat_name}_source_sha256",
+            }
+        )
+        right[f"stat_{stat_name}"] = pd.to_numeric(right[f"stat_{stat_name}"], errors="coerce")
+        dedupe_cols = ["instrument_id", f"stat_{stat_name}_ts_event"]
+        right = right.sort_values(dedupe_cols, kind="mergesort").drop_duplicates(dedupe_cols, keep="last")
+        enriched = _asof_join_by_instrument(enriched, right, right_ts_col=f"stat_{stat_name}_ts_event")
+        if f"stat_{stat_name}_ts_event" not in enriched.columns:
+            enriched[f"stat_{stat_name}_ts_event"] = pd.NaT
+        enriched[f"stat_{stat_name}_missing"] = enriched[f"stat_{stat_name}_ts_event"].isna()
+
+    for column in STATISTICS_ENRICHMENT_COLUMNS:
+        if column not in enriched.columns:
+            enriched[column] = pd.NA
+    missing_cols = [f"stat_{stat_name}_missing" for stat_name, _ in STAT_TYPE_FIELDS.values()]
+    enriched["statistics_missing"] = enriched[missing_cols].all(axis=1)
+    enriched["statistics_stale"] = enriched["statistics_missing"]
+    return enriched
+
+
+def optional_schema_match_summary(df: pd.DataFrame, requested_schemas: Iterable[str]) -> dict[str, object]:
+    summary: dict[str, object] = {}
+    rows = int(len(df))
+    if "status" in requested_schemas and "status_missing" in df.columns:
+        missing = int(df["status_missing"].fillna(True).astype(bool).sum())
+        summary["status"] = {
+            "rows": rows,
+            "matched_rows": rows - missing,
+            "missing_rows": missing,
+            "match_rate": round((rows - missing) / rows, 6) if rows else 0.0,
+        }
+    if "statistics" in requested_schemas:
+        stat_summary: dict[str, object] = {"rows": rows, "stats": {}}
+        for stat_name, _ in STAT_TYPE_FIELDS.values():
+            col = f"stat_{stat_name}_missing"
+            if col not in df.columns:
+                continue
+            missing = int(df[col].fillna(True).astype(bool).sum())
+            cast(dict[str, object], stat_summary["stats"])[stat_name] = {
+                "matched_rows": rows - missing,
+                "missing_rows": missing,
+                "match_rate": round((rows - missing) / rows, 6) if rows else 0.0,
+            }
+        if "statistics_missing" in df.columns:
+            overall_missing = int(df["statistics_missing"].fillna(True).astype(bool).sum())
+            stat_summary["matched_rows"] = rows - overall_missing
+            stat_summary["missing_rows"] = overall_missing
+            stat_summary["match_rate"] = round((rows - overall_missing) / rows, 6) if rows else 0.0
+        summary["statistics"] = stat_summary
+    return summary
+
+
 def fetch_conditions_by_group(
     client: DatabentoMetadataHolder,
     tasks: Iterable[DownloadTask],
@@ -1478,7 +1931,19 @@ def convert_dbn_archive_to_raw(
     products: set[str] | None = None,
     condition_by_group: dict[tuple[str, int], dict[str, str]] | None = None,
     default_quality_status: str = "metadata_unavailable",
+    optional_schemas: Iterable[str] = (),
+    optional_dbn_root: Path | None = None,
+    optional_schema_policy: str = "warn",
 ) -> list[dict[str, object]]:
+    requested_optional_schemas = tuple(dict.fromkeys(optional_schemas))
+    unsupported_optional = sorted(set(requested_optional_schemas) - set(OPTIONAL_RAW_SCHEMAS))
+    if unsupported_optional:
+        raise ValueError("unsupported optional schemas: " + ",".join(unsupported_optional))
+    if optional_schema_policy not in OPTIONAL_SCHEMA_POLICIES:
+        raise ValueError("unsupported optional schema policy: " + optional_schema_policy)
+    effective_optional_dbn_root = optional_dbn_root or (
+        dbn_root.parent if dbn_root.name == schema_path_name(SCHEMA) else dbn_root
+    )
     source_paths = list(paths) if paths is not None else discovery_dbn_files(dbn_root, raw_root)
     entries = archive_entries_for_paths(source_paths, dbn_root, products=products)
     groups: dict[tuple[str, int], list[Path]] = {}
@@ -1501,6 +1966,9 @@ def convert_dbn_archive_to_raw(
             else "metadata_unavailable"
         )
         quality_default = "available" if vendor_quality_available else default_quality_status
+        optional_warnings: list[str] = []
+        optional_match_summary: dict[str, object] = {}
+        optional_input_paths: dict[str, list[str]] = {schema: [] for schema in requested_optional_schemas}
         try:
             for path in group_paths:
                 manifest_failures = validate_raw_file_manifest(
@@ -1548,6 +2016,36 @@ def convert_dbn_archive_to_raw(
                     kind="mergesort",
                 )
                 df = enrich_with_definition_metadata(df, definitions)
+                optional_frames: dict[str, pd.DataFrame | None] = {}
+                for schema in requested_optional_schemas:
+                    loaded = load_optional_schema_frame_for_group(
+                        effective_optional_dbn_root,
+                        schema,
+                        product,
+                        year,
+                        policy=optional_schema_policy,
+                    )
+                    optional_frames[schema] = loaded.frame
+                    optional_warnings.extend(loaded.warnings)
+                    optional_input_paths[schema] = [path.as_posix() for path in loaded.paths]
+                    input_hashes.update(loaded.input_hashes)
+                if "status" in requested_optional_schemas:
+                    try:
+                        df = enrich_with_status_metadata(df, optional_frames.get("status"))
+                    except Exception as exc:
+                        if optional_schema_policy == "require":
+                            raise
+                        optional_warnings.append(f"status enrichment failed; emitted null fields: {exc}")
+                        df = enrich_with_status_metadata(df, None)
+                if "statistics" in requested_optional_schemas:
+                    try:
+                        df = enrich_with_statistics_metadata(df, optional_frames.get("statistics"))
+                    except Exception as exc:
+                        if optional_schema_policy == "require":
+                            raise
+                        optional_warnings.append(f"statistics enrichment failed; emitted null fields: {exc}")
+                        df = enrich_with_statistics_metadata(df, None)
+                optional_match_summary = optional_schema_match_summary(df, requested_optional_schemas)
                 df["datetime_utc"] = pd.to_datetime(df["ts_event"], utc=True, errors="coerce")
                 df["market"] = product
                 df["year"] = year
@@ -1568,8 +2066,15 @@ def convert_dbn_archive_to_raw(
                     "source_file",
                     "source_sha256",
                 ]
+                optional_cols: list[str] = []
+                if "status" in requested_optional_schemas:
+                    optional_cols.extend(STATUS_ENRICHMENT_COLUMNS)
+                if "statistics" in requested_optional_schemas:
+                    optional_cols.extend(STATISTICS_ENRICHMENT_COLUMNS)
                 output_columns = ORDERED_OUTPUT_COLUMNS + [
                     col for col in readiness_cols if col in df.columns and col not in ORDERED_OUTPUT_COLUMNS
+                ] + [
+                    col for col in optional_cols if col in df.columns and col not in ORDERED_OUTPUT_COLUMNS
                 ]
                 write_required_dataframe_parquet(df[output_columns], out)
                 check = validate_download(out)
@@ -1604,7 +2109,13 @@ def convert_dbn_archive_to_raw(
                     "vendor_quality_available": vendor_quality_available,
                     "definition_point_in_time_enforced": True,
                     "definition_metadata_policy": "latest definition row per instrument_id at or before OHLCV ts_event",
-                    "warnings": [],
+                    "optional_schemas": list(requested_optional_schemas),
+                    "optional_schema_policy": optional_schema_policy,
+                    "optional_dbn_root": effective_optional_dbn_root.as_posix(),
+                    "optional_schema_input_paths": optional_input_paths,
+                    "optional_schema_match_summary": optional_match_summary,
+                    "optional_schema_warning_count": len(optional_warnings),
+                    "warnings": optional_warnings,
                     "validation": check,
                     "elapsed_seconds": elapsed,
                     **summary,
@@ -1631,6 +2142,12 @@ def convert_dbn_archive_to_raw(
                     "price_scale_policy": PRICE_SCALE_POLICY,
                     "data_quality_source": data_quality_source,
                     "vendor_quality_available": vendor_quality_available,
+                    "optional_schemas": list(requested_optional_schemas),
+                    "optional_schema_policy": optional_schema_policy,
+                    "optional_dbn_root": effective_optional_dbn_root.as_posix(),
+                    "optional_schema_input_paths": optional_input_paths,
+                    "optional_schema_warning_count": len(optional_warnings),
+                    "warnings": optional_warnings,
                     "error": str(exc),
                     "elapsed_seconds": elapsed,
                 }
@@ -1670,6 +2187,16 @@ def build_raw_ingest_manifest(
             for symbol in cast(list[object], item.get("decoded_symbols", []))
         }
     )
+    optional_schemas = sorted(
+        {
+            str(schema)
+            for item in results
+            for schema in cast(list[object], item.get("optional_schemas", []))
+        }
+    )
+    optional_warning_count = int(
+        sum(int(item.get("optional_schema_warning_count") or 0) for item in results)
+    )
     return {
         "stage": "raw_ingest",
         "mode": mode,
@@ -1684,6 +2211,8 @@ def build_raw_ingest_manifest(
         "price_scale_policy": PRICE_SCALE_POLICY,
         "data_quality_fields": QUALITY_OUTPUT_COLUMNS,
         "data_quality_sources": data_quality_sources,
+        "optional_schemas": optional_schemas,
+        "optional_schema_warning_count": optional_warning_count,
         "vendor_quality_available": (
             all(bool(item.get("vendor_quality_available")) for item in results)
             if results
@@ -2795,6 +3324,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dbn-root", default=DEFAULT_DBN_OUT)
     parser.add_argument("--raw-root", default=DEFAULT_RAW_OUT)
     parser.add_argument("--reports-root", default=DEFAULT_REPORTS_ROOT)
+    parser.add_argument(
+        "--include-optional-schemas",
+        default="",
+        help="Comma-separated optional L0 schemas to as-of enrich onto OHLCV rows; supports status,statistics.",
+    )
+    parser.add_argument(
+        "--optional-dbn-root",
+        default="data/dbn",
+        help="Root containing optional schema DBNs, e.g. data/dbn/status/{market}/{year}.",
+    )
+    parser.add_argument(
+        "--optional-schema-policy",
+        choices=OPTIONAL_SCHEMA_POLICIES,
+        default="warn",
+        help="warn emits null optional fields when optional DBNs are absent/invalid; require fails conversion.",
+    )
     parser.add_argument("--out", help="Legacy output root override; prefer --dbn-root or --raw-root.")
     parser.add_argument("--plan-out", help="Override download plan path; defaults under --reports-root.")
     parser.add_argument("--chunk", choices=["none", "day", "month", "year"], default="year")
@@ -2840,6 +3385,10 @@ def main() -> int:
 
     if args.mode == "convert-parquet":
         products = None
+        try:
+            optional_schemas = parse_optional_schemas(args.include_optional_schemas)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
         if args.symbols:
             try:
                 products = set(parse_symbols(args.symbols, "custom"))
@@ -2862,6 +3411,9 @@ def main() -> int:
             paths=[entry.path for entry in entries],
             products=products,
             condition_by_group=condition_by_group,
+            optional_schemas=optional_schemas,
+            optional_dbn_root=Path(args.optional_dbn_root),
+            optional_schema_policy=args.optional_schema_policy,
         )
         write_json(report_path(args, "databento_convert_results.json"), results)
         write_json(

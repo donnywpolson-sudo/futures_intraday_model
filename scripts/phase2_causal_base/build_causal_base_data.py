@@ -171,6 +171,7 @@ OUTPUT_COLUMNS = [
     "roll_detection_source",
     "roll_policy_status",
 ]
+RAW_ENRICHMENT_COLUMN_PREFIXES = ("status_", "stat_", "statistics_")
 
 SESSION_TEMPLATE = "cme_globex_17_16_ct"
 EXCHANGE_TZ = "America/Chicago"
@@ -284,6 +285,12 @@ class ValidationResult:
     symbol_nonnull_count: int = 0
     instrument_id_nonnull_count: int = 0
     instrument_id_nunique: int = 0
+    raw_enrichment_column_count: int = 0
+    raw_enrichment_columns: list[str] = field(default_factory=list)
+    status_enrichment_missing_rows: int = 0
+    status_enrichment_stale_rows: int = 0
+    statistics_enrichment_missing_rows: int = 0
+    statistics_enrichment_stale_rows: int = 0
     missing_required_raw_cols: list[str] = field(default_factory=list)
     missing_audit_cols: list[str] = field(default_factory=list)
     duplicate_timestamps: int = 0
@@ -322,6 +329,7 @@ class ValidationResult:
         data = self.to_dict()
         data["required_raw_schema_cols"] = ";".join(self.required_raw_schema_cols)
         data["raw_schema_missing_cols"] = ";".join(self.raw_schema_missing_cols)
+        data["raw_enrichment_columns"] = ";".join(self.raw_enrichment_columns)
         data["missing_required_raw_cols"] = ";".join(self.missing_required_raw_cols)
         data["missing_audit_cols"] = ";".join(self.missing_audit_cols)
         data["warnings"] = ";".join(self.warnings)
@@ -1251,8 +1259,23 @@ def _build_causal_invalid_reason(df: pd.DataFrame, missing_required_raw_cols: li
     return reasons
 
 
-def _coerce_output_types(df: pd.DataFrame) -> pd.DataFrame:
+def _raw_enrichment_columns(df: pd.DataFrame) -> list[str]:
+    return [
+        column
+        for column in df.columns
+        if column not in OUTPUT_COLUMNS
+        and any(column.startswith(prefix) for prefix in RAW_ENRICHMENT_COLUMN_PREFIXES)
+    ]
+
+
+def _coerce_output_types(df: pd.DataFrame, extra_columns: Iterable[str] | None = None) -> pd.DataFrame:
+    extra_output_columns = [
+        column for column in (extra_columns or []) if column not in OUTPUT_COLUMNS
+    ]
     for col in OUTPUT_COLUMNS:
+        if col not in df.columns:
+            df[col] = pd.NA
+    for col in extra_output_columns:
         if col not in df.columns:
             df[col] = pd.NA
 
@@ -1303,7 +1326,7 @@ def _coerce_output_types(df: pd.DataFrame) -> pd.DataFrame:
     df["synthetic_gap_reason"] = df["synthetic_gap_reason"].astype("string")
     df["causal_invalid_reason"] = df["causal_invalid_reason"].fillna("").astype("string")
 
-    return df[OUTPUT_COLUMNS]
+    return df[OUTPUT_COLUMNS + extra_output_columns]
 
 
 def process_file(
@@ -1368,6 +1391,25 @@ def process_file(
     )
     if result.failures or current_raw is None:
         return result
+    enrichment_columns = _raw_enrichment_columns(current_raw)
+    result.raw_enrichment_columns = enrichment_columns
+    result.raw_enrichment_column_count = len(enrichment_columns)
+    if "status_missing" in current_raw.columns:
+        result.status_enrichment_missing_rows = int(
+            current_raw["status_missing"].fillna(True).astype(bool).sum()
+        )
+    if "status_stale" in current_raw.columns:
+        result.status_enrichment_stale_rows = int(
+            current_raw["status_stale"].fillna(True).astype(bool).sum()
+        )
+    if "statistics_missing" in current_raw.columns:
+        result.statistics_enrichment_missing_rows = int(
+            current_raw["statistics_missing"].fillna(True).astype(bool).sum()
+        )
+    if "statistics_stale" in current_raw.columns:
+        result.statistics_enrichment_stale_rows = int(
+            current_raw["statistics_stale"].fillna(True).astype(bool).sum()
+        )
 
     result.metadata_available = result.instrument_id_nonnull_count > 0
     result.roll_detection_available = result.metadata_available
@@ -1461,6 +1503,7 @@ def process_file(
         "early_close_calendar_available",
         "calendar_coverage_status",
     ]
+    base_cols.extend(col for col in enrichment_columns if col in df.columns)
     df = df[base_cols]
 
     synthetic = _build_synthetic_rows(
@@ -1469,6 +1512,9 @@ def process_file(
         calendar,
     )
     if not synthetic.empty:
+        for col in enrichment_columns:
+            if col not in synthetic.columns:
+                synthetic[col] = pd.NA
         df = pd.concat([df, synthetic[base_cols]], ignore_index=True)
 
     df = _add_roll_fields(df, roll_window_bars)
@@ -1572,7 +1618,10 @@ def process_file(
             f"sessions={result.degraded_session_rows}"
         )
 
-    output = _coerce_output_types(df.sort_values("ts", kind="mergesort").reset_index(drop=True))
+    output = _coerce_output_types(
+        df.sort_values("ts", kind="mergesort").reset_index(drop=True),
+        extra_columns=enrichment_columns,
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output.to_parquet(output_path, index=False)
     return result
