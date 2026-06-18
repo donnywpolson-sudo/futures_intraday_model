@@ -473,8 +473,9 @@ def _resolve_adjacent_contract(
 
 
 def _synthetic_work_frame(causal: pd.DataFrame, causal_ts: pd.Series, raw_ts: pd.Series) -> pd.DataFrame:
-    synthetic = causal.loc[causal["is_synthetic"].fillna(False).astype(bool)].copy()
-    work = synthetic.reset_index(drop=True)
+    synthetic = causal.loc[causal["is_synthetic"].fillna(False).astype(bool)]
+    columns = [column for column in ("synthetic_gap_id", "synthetic_gap_size_minutes") if column in synthetic.columns]
+    work = synthetic.loc[:, columns].reset_index(drop=True).copy()
     work["_ts"] = causal_ts.loc[synthetic.index].reset_index(drop=True)
     work = work.dropna(subset=["_ts"]).sort_values("_ts", kind="mergesort").reset_index(drop=True)
     raw_values = set(raw_ts.dropna().astype("int64").tolist())
@@ -543,7 +544,7 @@ def _default_trade_frame_reader(path: Path, chunk_size: int) -> Iterator[pd.Data
     import databento as db
 
     store = db.DBNStore.from_file(path)
-    frames = store.to_df(count=chunk_size, pretty_ts=True, map_symbols=True, schema="trades")
+    frames = store.to_df(count=chunk_size, pretty_ts=False, map_symbols=False, schema="trades")
     if isinstance(frames, pd.DataFrame):
         yield frames
     else:
@@ -556,6 +557,13 @@ def _trade_timestamp_series(frame: pd.DataFrame, path: Path) -> pd.Series:
     if isinstance(frame.index, pd.DatetimeIndex):
         return pd.Series(pd.to_datetime(frame.index, utc=True, errors="coerce"), index=frame.index)
     return _timestamp_column(frame, path)
+
+
+def _trade_minute_series(frame: pd.DataFrame, path: Path) -> pd.Series:
+    if "ts_event" in frame.columns and pd.api.types.is_numeric_dtype(frame["ts_event"]):
+        values = pd.to_numeric(frame["ts_event"], errors="coerce")
+        return (values // 60_000_000_000 * 60_000_000_000).astype("Int64")
+    return _trade_timestamp_series(frame, path).dt.floor("min").astype("int64")
 
 
 def _scan_trade_archives(
@@ -590,8 +598,9 @@ def _scan_trade_archives(
                 if required_ids and "instrument_id" not in frame.columns:
                     failures.append(f"trade frame missing instrument_id: {_relative_path(path)}")
                     continue
-                ts = _trade_timestamp_series(frame, path).dt.floor("min")
-                work = pd.DataFrame({"minute": ts.astype("int64")})
+                work = pd.DataFrame({"minute": _trade_minute_series(frame, path)})
+                work = work.dropna(subset=["minute"])
+                work["minute"] = work["minute"].astype("int64")
                 if "instrument_id" in frame.columns:
                     work["instrument_id"] = pd.to_numeric(frame["instrument_id"], errors="coerce")
                 else:
