@@ -80,6 +80,30 @@ python scripts\live_smoke_databento.py --start 0 --max-records 5 --timeout-secon
 When `--save-dbn` is used, raw live DBN is written to a timestamped ignored
 file under `data/live_raw/`.
 
+## Optional Databento Live Chart
+
+The live chart is optional research/paper observation only. It does not place
+orders, connect to brokers, access accounts, perform live inference, or change
+the historical research/backtest pipeline.
+
+The chart dependency is not required for normal setup or tests. Install it only
+when you want the local lightweight-charts window:
+
+```powershell
+python -m pip install "lightweight-charts>=2.1,<3"
+```
+
+Run a bounded chart smoke only when `DATABENTO_API_KEY` is already set:
+
+```powershell
+python apps\live_chart_lightweight.py --symbols ES.c.0 --start 0 --max-records 50 --timeout-seconds 120
+```
+
+V1 stops by `--max-records`, `--timeout-seconds`, Ctrl+C, or SDK error; chart
+window-close detection is best-effort only. No live signals are implemented;
+any future paper signal module must be planned separately and checked against
+causal feature parity before touching model paths.
+
 ## Restore Or Redownload Raw Data
 
 If external/cloud backup exists, restore ignored directories such as `data/`,
