@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import yaml
 
+from scripts.phase1A_download.download_databento_raw import (
+    CME_DATASET,
+    DownloadTask,
+    build_raw_file_manifest,
+    symbol_for_product,
+)
 from scripts.validation.check_dbn_archive_coverage import (
     DEFAULT_SCHEMAS,
     build_report,
@@ -24,11 +31,31 @@ def _write_config(path: Path, markets: list[str], years: list[int]) -> Path:
     return path
 
 
-def _touch_expected_archive(path: str) -> None:
-    archive = Path(path)
+def _touch_expected_archive(row: dict[str, object]) -> None:
+    archive = Path(str(row["path"]))
     archive.parent.mkdir(parents=True, exist_ok=True)
     archive.write_bytes(b"dbn")
-    archive.with_name(f"{archive.name}.manifest.json").write_text("{}", encoding="utf-8")
+    schema = str(row["schema"])
+    market = str(row["market"])
+    stype_in = "parent" if schema == "definition" else "continuous"
+    task = DownloadTask(
+        dataset=CME_DATASET,
+        product=market,
+        year=int(row["year"]),
+        start=str(row["start"]),
+        end=str(row["end"]),
+        symbol=symbol_for_product(market, stype_in),
+        output_path=archive.as_posix(),
+        schema=schema,
+        stype_in=stype_in,
+        stype_out="instrument_id",
+        chunk="year",
+        raw_format="dbn-zstd",
+    )
+    archive.with_name(f"{archive.name}.manifest.json").write_text(
+        json.dumps(build_raw_file_manifest(task, archive, job_id="job-test", request_status="ok"), indent=2),
+        encoding="utf-8",
+    )
 
 
 def test_dbn_archive_coverage_fails_closed_for_missing_strict_tier3_v2_roots(tmp_path: Path) -> None:
@@ -57,7 +84,7 @@ def test_dbn_archive_coverage_passes_with_ohlcv_definition_and_manifests(tmp_pat
     dbn_root = tmp_path / "data" / "dbn" / "ohlcv_1m"
     seed = build_report(config_path=config, profile="tier_3_research", dbn_root=dbn_root)
     for row in seed["missing_archives"]:
-        _touch_expected_archive(str(row["path"]))
+        _touch_expected_archive(row)
 
     report = build_report(config_path=config, profile="tier_3_research", dbn_root=dbn_root)
 
@@ -65,6 +92,8 @@ def test_dbn_archive_coverage_passes_with_ohlcv_definition_and_manifests(tmp_pat
     assert report["schemas"] == list(DEFAULT_SCHEMAS)
     assert report["missing_archive_count"] == 0
     assert report["missing_manifest_count"] == 0
+    assert report["invalid_manifest_count"] == 0
+    assert report["extra_market_dir_count"] == 0
 
 
 def test_dbn_archive_coverage_can_ignore_manifests_for_archive_only_probe(tmp_path: Path) -> None:
@@ -88,3 +117,47 @@ def test_dbn_archive_coverage_can_ignore_manifests_for_archive_only_probe(tmp_pa
     assert strict["missing_archive_count"] == 0
     assert strict["missing_manifest_count"] == 2
     assert archive_only["status"] == "PASS"
+
+
+def test_dbn_archive_coverage_checks_supported_schema_aliases_and_extra_dirs(tmp_path: Path) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2024])
+    dbn_root = tmp_path / "data" / "dbn" / "ohlcv_1m"
+    seed = build_report(
+        config_path=config,
+        profile="tier_3_research",
+        dbn_root=dbn_root,
+        schemas=("tick-all",),
+    )
+
+    assert seed["schemas"] == ["mbp-1", "trades"]
+    assert seed["expected_archive_count"] == 2
+
+
+def test_dbn_archive_coverage_flags_invalid_manifests_and_extra_market_dirs(tmp_path: Path) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2024])
+    dbn_root = tmp_path / "data" / "dbn" / "ohlcv_1m"
+    seed = build_report(
+        config_path=config,
+        profile="tier_3_research",
+        dbn_root=dbn_root,
+        schemas=("trades",),
+    )
+    row = seed["missing_archives"][0]
+    _touch_expected_archive(row)
+    manifest_path = Path(str(row["manifest_path"]))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema"] = "mbp-1"
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    (tmp_path / "data" / "dbn" / "trades" / "6N").mkdir(parents=True)
+
+    report = build_report(
+        config_path=config,
+        profile="tier_3_research",
+        dbn_root=dbn_root,
+        schemas=("trades",),
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["missing_archive_count"] == 0
+    assert report["invalid_manifest_count"] == 1
+    assert report["extra_market_dirs_by_schema"] == {"trades": ["6N"]}

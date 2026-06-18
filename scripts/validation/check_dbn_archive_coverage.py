@@ -18,8 +18,12 @@ from scripts.phase1A_download.download_databento_raw import (  # noqa: E402
     CME_DATASET,
     DEFAULT_DBN_OUT,
     SCHEMA,
+    dbn_schema_root,
     iter_range_tasks,
+    resolve_requested_schemas,
+    validate_raw_file_manifest,
 )
+from scripts.phase1_raw_contract import SCHEMA_ALIASES, SUPPORTED_SCHEMAS  # noqa: E402
 from scripts.validation.check_tier_2_coverage import (  # noqa: E402
     load_yaml,
     resolve_profile_name,
@@ -111,6 +115,55 @@ def _count_by_market(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
+def resolve_schema_args(schemas: tuple[str, ...] | None) -> tuple[str, ...]:
+    resolved: list[str] = []
+    for schema in schemas or DEFAULT_SCHEMAS:
+        for item in resolve_requested_schemas(schema):
+            if item not in resolved:
+                resolved.append(item)
+    return tuple(resolved)
+
+
+def _extra_market_dirs_by_schema(
+    *,
+    dbn_root: Path,
+    schemas: tuple[str, ...],
+    markets: list[str],
+) -> dict[str, list[str]]:
+    allowed = set(markets)
+    extras: dict[str, list[str]] = {}
+    for schema in schemas:
+        root = dbn_schema_root(dbn_root, schema)
+        if not root.is_dir():
+            continue
+        extra_dirs = sorted(
+            child.name
+            for child in root.iterdir()
+            if child.is_dir() and child.name not in allowed
+        )
+        if extra_dirs:
+            extras[schema] = extra_dirs
+    return extras
+
+
+def _invalid_manifests(rows: list[dict[str, Any]], *, require_manifests: bool) -> list[dict[str, Any]]:
+    if not require_manifests:
+        return []
+    invalid: list[dict[str, Any]] = []
+    for row in rows:
+        if not row["manifest_present"]:
+            continue
+        failures = validate_raw_file_manifest(
+            Path(str(row["path"])),
+            expected_schema=str(row["schema"]),
+            expected_market=str(row["market"]),
+            expected_year=int(row["year"]),
+        )
+        if failures:
+            invalid.append({**row, "manifest_failures": failures})
+    return invalid
+
+
 def build_report(
     *,
     config_path: Path,
@@ -120,6 +173,7 @@ def build_report(
     require_manifests: bool = True,
 ) -> dict[str, Any]:
     resolved, markets, years = _profile_markets_and_years(config_path, profile)
+    schemas = resolve_schema_args(schemas)
     rows = _expected_archive_rows(
         markets=markets,
         years=years,
@@ -128,11 +182,22 @@ def build_report(
     )
     missing_archives = [row for row in rows if not row["archive_present"]]
     missing_manifests = [row for row in rows if not row["manifest_present"]]
+    invalid_manifests = _invalid_manifests(rows, require_manifests=require_manifests)
+    extra_market_dirs = _extra_market_dirs_by_schema(
+        dbn_root=dbn_root,
+        schemas=schemas,
+        markets=markets,
+    )
+    extra_market_dir_count = sum(len(items) for items in extra_market_dirs.values())
     failures: list[str] = []
     if missing_archives:
         failures.append(f"missing DBN archives: {len(missing_archives)}")
     if require_manifests and missing_manifests:
         failures.append(f"missing DBN archive manifests: {len(missing_manifests)}")
+    if invalid_manifests:
+        failures.append(f"invalid DBN archive manifests: {len(invalid_manifests)}")
+    if extra_market_dirs:
+        failures.append(f"extra DBN market directories: {extra_market_dir_count}")
 
     return {
         "status": "FAIL" if failures else "PASS",
@@ -147,10 +212,14 @@ def build_report(
         "expected_archive_count": len(rows),
         "missing_archive_count": len(missing_archives),
         "missing_manifest_count": len(missing_manifests),
+        "invalid_manifest_count": len(invalid_manifests),
+        "extra_market_dir_count": extra_market_dir_count,
         "missing_archives_by_market": _count_by_market(rows, "archive_present"),
         "missing_manifests_by_market": _count_by_market(rows, "manifest_present"),
+        "extra_market_dirs_by_schema": extra_market_dirs,
         "missing_archives": missing_archives,
         "missing_manifests": missing_manifests,
+        "invalid_manifests": invalid_manifests,
     }
 
 
@@ -162,7 +231,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--schema",
         action="append",
-        choices=DEFAULT_SCHEMAS,
+        choices=[*SUPPORTED_SCHEMAS, *SCHEMA_ALIASES],
         dest="schemas",
         help="Schema to check; defaults to ohlcv-1m and definition.",
     )
@@ -177,7 +246,7 @@ def main() -> int:
         config_path=Path(args.config),
         profile=str(args.profile),
         dbn_root=Path(args.dbn_root),
-        schemas=tuple(args.schemas or DEFAULT_SCHEMAS),
+        schemas=resolve_schema_args(tuple(args.schemas or DEFAULT_SCHEMAS)),
         require_manifests=not args.allow_missing_manifests,
     )
     if args.report_out:
@@ -187,7 +256,8 @@ def main() -> int:
 
     print(
         "status={status} expected_archives={expected_archive_count} "
-        "missing_archives={missing_archive_count} missing_manifests={missing_manifest_count}".format(**report)
+        "missing_archives={missing_archive_count} missing_manifests={missing_manifest_count} "
+        "invalid_manifests={invalid_manifest_count} extra_market_dirs={extra_market_dir_count}".format(**report)
     )
     return 0 if report["status"] == "PASS" else 1
 

@@ -5,7 +5,44 @@ from __future__ import annotations
 VENDOR = "databento"
 REQUIRED_DATASET = "GLBX.MDP3"
 REQUIRED_SCHEMAS = ("ohlcv-1m", "definition")
-SCHEMA_PATHS = {"ohlcv-1m": "ohlcv_1m", "definition": "definition"}
+HISTORY_SCHEMAS = (
+    "definition",
+    "ohlcv-1d",
+    "ohlcv-1h",
+    "ohlcv-1m",
+    "ohlcv-1s",
+    "status",
+    "statistics",
+)
+TICK_SCHEMAS = ("mbp-1", "trades")
+SUPPORTED_SCHEMAS = (
+    "ohlcv-1m",
+    "definition",
+    "ohlcv-1d",
+    "ohlcv-1h",
+    "ohlcv-1s",
+    "status",
+    "statistics",
+    "mbp-1",
+    "trades",
+)
+SCHEMA_ALIASES = {
+    "all": REQUIRED_SCHEMAS,
+    "history-all": HISTORY_SCHEMAS,
+    "tick-all": TICK_SCHEMAS,
+    "raw-all": SUPPORTED_SCHEMAS,
+}
+SCHEMA_PATHS = {
+    "definition": "definition",
+    "mbp-1": "mbp-1",
+    "ohlcv-1d": "ohlcv_1d",
+    "ohlcv-1h": "ohlcv_1h",
+    "ohlcv-1m": "ohlcv_1m",
+    "ohlcv-1s": "ohlcv_1s",
+    "statistics": "statistics",
+    "status": "status",
+    "trades": "trades",
+}
 EXPECTED_ENCODING = "dbn"
 EXPECTED_COMPRESSION = "zstd"
 

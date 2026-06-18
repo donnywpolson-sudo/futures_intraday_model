@@ -34,11 +34,14 @@ from scripts.phase1_raw_contract import (  # noqa: E402
     DEFINITION_METADATA_FIELDS,
     EXPECTED_COMPRESSION,
     EXPECTED_ENCODING,
+    SCHEMA_ALIASES,
     REQUIRED_DATASET,
     REQUIRED_DEFINITION_FIELDS,
     REQUIRED_MANIFEST_FIELDS,
     REQUIRED_SCHEMAS,
     SCHEMA_PATHS,
+    SUPPORTED_SCHEMAS,
+    TICK_SCHEMAS,
     VENDOR,
 )
 
@@ -101,6 +104,7 @@ RETRYABLE_STREAM_ERROR_MARKERS = (
     "504",
 )
 DBN_DOWNLOAD_MODES = {"download-dbn", "all", "batch"}
+ZERO_COST_DISK_CUSHION = 1.20
 
 CURRENT_20 = [
     "6B",
@@ -372,6 +376,14 @@ def schema_path_name(schema: str) -> str:
     return SCHEMA_PATHS[schema]
 
 
+def resolve_requested_schemas(schema: str) -> list[str]:
+    if schema in SCHEMA_ALIASES:
+        return list(SCHEMA_ALIASES[schema])
+    if schema in SUPPORTED_SCHEMAS:
+        return [schema]
+    raise ValueError(f"unsupported raw schema: {schema}")
+
+
 def dbn_schema_root(output_root: Path, schema: str) -> Path:
     if schema == SCHEMA:
         return output_root
@@ -464,6 +476,40 @@ def iter_range_tasks(
                     raw_format=raw_format,
                 )
             )
+    return tasks
+
+
+def build_tasks_for_schemas(
+    products: Iterable[str],
+    *,
+    schemas: Iterable[str],
+    start: str,
+    end: str,
+    output_root: Path,
+    chunk: str,
+    mode: str,
+    raw_format: str,
+    dataset: str | None,
+    stype_in: str,
+    stype_out: str,
+) -> list[DownloadTask]:
+    tasks: list[DownloadTask] = []
+    for schema in schemas:
+        tasks.extend(
+            iter_range_tasks(
+                products,
+                start=start,
+                end=end,
+                output_root=output_root,
+                chunk=chunk,
+                mode=mode,
+                raw_format=raw_format,
+                dataset=dataset,
+                schema=schema,
+                stype_in=stype_in,
+                stype_out=stype_out,
+            )
+        )
     return tasks
 
 
@@ -1858,6 +1904,268 @@ def estimate_cost(
     return estimates
 
 
+def task_key(task: DownloadTask | dict[str, object]) -> tuple[object, ...]:
+    if isinstance(task, DownloadTask):
+        return (
+            task.dataset,
+            task.product,
+            task.year,
+            task.start,
+            task.end,
+            task.schema,
+            task.output_path,
+        )
+    return (
+        task.get("dataset"),
+        task.get("product"),
+        task.get("year"),
+        task.get("start"),
+        task.get("end"),
+        task.get("schema"),
+        task.get("output_path"),
+    )
+
+
+def split_existing_and_pending_tasks(
+    tasks: list[DownloadTask],
+    *,
+    overwrite: bool,
+) -> tuple[list[DownloadTask], list[DownloadTask]]:
+    if overwrite:
+        return [], tasks
+    existing: list[DownloadTask] = []
+    pending: list[DownloadTask] = []
+    for task in tasks:
+        if has_non_empty_output(Path(task.output_path)):
+            existing.append(task)
+        else:
+            pending.append(task)
+    return existing, pending
+
+
+def billable_size_to_int(value: object) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value >= 0 and value.is_integer() else None
+    if isinstance(value, str):
+        text = value.strip()
+        if text.isdigit():
+            return int(text)
+    return None
+
+
+def exact_zero_cost_estimate(estimate: dict[str, object]) -> bool:
+    cost = estimate.get("estimated_cost_usd")
+    return (
+        estimate.get("status") == "ok"
+        and isinstance(cost, (int, float))
+        and not isinstance(cost, bool)
+        and float(cost) >= 0.0
+        and float(cost) == 0.0
+    )
+
+
+def disk_free_bytes(path: Path) -> int:
+    probe = path
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    return shutil.disk_usage(probe).free
+
+
+def earliest_pending_tasks_by_schema_product(
+    tasks: list[DownloadTask],
+    *,
+    overwrite: bool,
+    schemas: set[str],
+) -> list[DownloadTask]:
+    _existing, pending = split_existing_and_pending_tasks(tasks, overwrite=overwrite)
+    first_by_key: dict[tuple[str, str], DownloadTask] = {}
+    for task in pending:
+        if task.schema not in schemas:
+            continue
+        key = (task.schema, task.product)
+        current = first_by_key.get(key)
+        if current is None or (task.start, task.end) < (current.start, current.end):
+            first_by_key[key] = task
+    return [first_by_key[key] for key in sorted(first_by_key)]
+
+
+def zero_cost_start_search(
+    client: DatabentoMetadataHolder,
+    products: list[str],
+    *,
+    start: str,
+    end: str,
+    schemas: list[str],
+    output_root: Path,
+    chunk: str,
+    mode: str,
+    raw_format: str,
+    dataset: str | None,
+    stype_in: str,
+    stype_out: str,
+    overwrite: bool,
+) -> tuple[str, list[dict[str, object]]]:
+    tick_schemas = [schema for schema in schemas if schema in TICK_SCHEMAS]
+    if not tick_schemas:
+        return start, []
+
+    candidate = date.fromisoformat(start)
+    final_end = date.fromisoformat(end)
+    attempts: list[dict[str, object]] = []
+    while candidate < final_end:
+        candidate_tasks: list[DownloadTask] = []
+        for schema in tick_schemas:
+            candidate_tasks.extend(
+                iter_range_tasks(
+                    products,
+                    start=candidate.isoformat(),
+                    end=end,
+                    output_root=output_root,
+                    chunk=chunk,
+                    mode=mode,
+                    raw_format=raw_format,
+                    dataset=dataset,
+                    schema=schema,
+                    stype_in=stype_in,
+                    stype_out=stype_out,
+                )
+            )
+        first_pending = earliest_pending_tasks_by_schema_product(
+            candidate_tasks,
+            overwrite=overwrite,
+            schemas=set(tick_schemas),
+        )
+        if not first_pending:
+            attempts.append(
+                {
+                    "candidate_start": candidate.isoformat(),
+                    "status": "accepted_no_pending_tick_tasks",
+                    "estimated_task_count": 0,
+                }
+            )
+            return candidate.isoformat(), attempts
+
+        estimates = estimate_cost(client, first_pending)
+        fatal_errors = [
+            item
+            for item in estimates
+            if item.get("status") == "estimate_error"
+            and is_fatal_error(RuntimeError(str(item.get("error", ""))))
+        ]
+        zero_count = sum(1 for item in estimates if exact_zero_cost_estimate(item))
+        attempts.append(
+            {
+                "candidate_start": candidate.isoformat(),
+                "status": "accepted" if zero_count == len(first_pending) and not fatal_errors else "rejected",
+                "estimated_task_count": len(first_pending),
+                "zero_cost_count": zero_count,
+                "estimate_error_count": sum(1 for item in estimates if item.get("status") == "estimate_error"),
+                "fatal_error_count": len(fatal_errors),
+            }
+        )
+        if fatal_errors:
+            return start, attempts
+        if zero_count == len(first_pending):
+            return candidate.isoformat(), attempts
+        candidate += timedelta(days=1)
+
+    attempts.append(
+        {
+            "candidate_start": None,
+            "status": "no_zero_cost_start_found",
+            "estimated_task_count": 0,
+        }
+    )
+    return start, attempts
+
+
+def build_zero_cost_gate(
+    client: DatabentoMetadataHolder,
+    tasks: list[DownloadTask],
+    *,
+    overwrite: bool,
+    output_root: Path,
+) -> tuple[dict[str, object], list[DownloadTask], list[dict[str, object]]]:
+    existing, pending = split_existing_and_pending_tasks(tasks, overwrite=overwrite)
+    estimates = estimate_cost(client, pending) if pending else []
+    zero_estimate_keys = {
+        task_key(estimate)
+        for estimate in estimates
+        if exact_zero_cost_estimate(estimate)
+    }
+    downloadable_pending = [
+        task for task in pending if task_key(task) in zero_estimate_keys
+    ]
+
+    billable_total = 0
+    billable_failures: list[str] = []
+    for estimate in estimates:
+        if task_key(estimate) not in zero_estimate_keys:
+            continue
+        size = billable_size_to_int(estimate.get("billable_size"))
+        if size is None:
+            billable_failures.append(
+                f"{estimate.get('schema')} {estimate.get('product')} {estimate.get('start')}->{estimate.get('end')}: invalid billable_size"
+            )
+            continue
+        billable_total += size
+
+    free_bytes = disk_free_bytes(output_root)
+    required_with_cushion = int(billable_total * ZERO_COST_DISK_CUSHION)
+    failures: list[str] = []
+    if billable_failures:
+        failures.extend(billable_failures)
+    if required_with_cushion > free_bytes:
+        failures.append(
+            f"estimated billable_size with {ZERO_COST_DISK_CUSHION:.2f}x cushion exceeds free disk: {required_with_cushion} > {free_bytes}"
+        )
+
+    fatal_estimates = [
+        item
+        for item in estimates
+        if item.get("status") == "estimate_error"
+        and is_fatal_error(RuntimeError(str(item.get("error", ""))))
+    ]
+    missing_estimate_count = max(0, len(pending) - len(estimates))
+    if fatal_estimates:
+        failures.append(f"fatal Databento estimate errors: {len(fatal_estimates)}")
+    if missing_estimate_count:
+        failures.append(f"missing cost estimates: {missing_estimate_count}")
+    if pending and not downloadable_pending:
+        failures.append("no pending tasks had exact zero estimated cost")
+
+    selected_tasks = existing if failures else existing + downloadable_pending
+    report = {
+        "status": "FAIL" if failures else "PASS",
+        "failures": failures,
+        "existing_task_count": len(existing),
+        "pending_task_count": len(pending),
+        "estimated_task_count": len(estimates),
+        "missing_estimate_count": missing_estimate_count,
+        "downloadable_zero_cost_task_count": len(downloadable_pending),
+        "skipped_nonzero_or_invalid_cost_count": sum(
+            1
+            for item in estimates
+            if item.get("status") == "ok" and not exact_zero_cost_estimate(item)
+        ),
+        "skipped_estimate_error_count": sum(
+            1 for item in estimates if item.get("status") == "estimate_error"
+        ),
+        "zero_cost_billable_size": billable_total,
+        "free_disk_bytes": free_bytes,
+        "required_free_disk_bytes_with_cushion": required_with_cushion,
+        "disk_cushion": ZERO_COST_DISK_CUSHION,
+        "selected_task_count": len(selected_tasks),
+        "selected_tasks": [asdict(task) for task in selected_tasks],
+        "estimates": estimates,
+    }
+    return report, selected_tasks, estimates
+
+
 def execute_download(
     client: DatabentoClient,
     tasks: list[DownloadTask],
@@ -2472,7 +2780,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--symbols", "--markets", dest="symbols", help="Comma-separated product roots, e.g. ES,NQ,CL")
     parser.add_argument("--dataset", help=f"Override dataset for every requested market; only {CME_DATASET} is allowed")
-    parser.add_argument("--schema", choices=[*REQUIRED_SCHEMAS, "all"], default="all")
+    parser.add_argument(
+        "--schema",
+        choices=[*SUPPORTED_SCHEMAS, *SCHEMA_ALIASES],
+        default="all",
+    )
     parser.add_argument("--stype-in", default=STYPE_IN, help="Default continuous. Use parent for symbols like ES.FUT.")
     parser.add_argument("--stype-out", default=STYPE_OUT)
     parser.add_argument("--start", help="Inclusive start date, e.g. 2023-01-01. Overrides --start-year.")
@@ -2503,6 +2815,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--convert-existing", action="store_true", help="Convert existing local .dbn/.dbn.zst files to adjacent Parquet files and exit without API calls.")
     parser.add_argument("--convert-in", help="Input file or root directory for legacy --convert-existing. Defaults to --dbn-root.")
     parser.add_argument("--estimate-cost", action="store_true")
+    parser.add_argument("--zero-cost-only", action="store_true", help="Estimate pending tasks and submit only tasks with exact 0.0 estimated cost.")
+    parser.add_argument("--zero-cost-start-search", action="store_true", help="For tick schemas, move the requested start forward to the first shared exact-zero-cost date.")
     parser.add_argument("--overwrite", action="store_true")
     return parser
 
@@ -2592,12 +2906,62 @@ def main() -> int:
     plan_out = effective_plan_out(args)
     output_role = output_role_for_run(args.mode, raw_format, output_root)
     pipeline_raw_ready = pipeline_raw_ready_for_run(args.mode, raw_format, output_root)
-    requested_schemas = list(REQUIRED_SCHEMAS) if args.schema == "all" else [args.schema]
-    tasks: list[DownloadTask] = []
-    for schema in requested_schemas:
-        tasks.extend(
-            iter_range_tasks(
+    requested_schemas = resolve_requested_schemas(args.schema)
+    if args.zero_cost_only and args.mode not in DBN_DOWNLOAD_MODES:
+        raise SystemExit("--zero-cost-only requires --mode download-dbn, batch, or all")
+    if args.zero_cost_start_search:
+        if not args.zero_cost_only:
+            raise SystemExit("--zero-cost-start-search requires --zero-cost-only")
+        non_tick_schemas = [schema for schema in requested_schemas if schema not in TICK_SCHEMAS]
+        if non_tick_schemas:
+            raise SystemExit("--zero-cost-start-search only supports mbp-1/trades tick schemas")
+
+    tasks = build_tasks_for_schemas(
+        products,
+        schemas=requested_schemas,
+        start=start,
+        end=end,
+        output_root=output_root,
+        chunk=args.chunk,
+        mode=args.mode,
+        raw_format=raw_format,
+        dataset=args.dataset,
+        stype_in=args.stype_in,
+        stype_out=args.stype_out,
+    )
+    client: DatabentoClient | None = None
+    zero_cost_start_report: dict[str, object] | None = None
+    if not args.dry_run and args.zero_cost_start_search:
+        print("CLIENT_INIT Databento historical client", flush=True)
+        client = get_client()
+        resolved_start, start_attempts = zero_cost_start_search(
+            client,
+            products,
+            start=start,
+            end=end,
+            schemas=requested_schemas,
+            output_root=output_root,
+            chunk=args.chunk,
+            mode=args.mode,
+            raw_format=raw_format,
+            dataset=args.dataset,
+            stype_in=args.stype_in,
+            stype_out=args.stype_out,
+            overwrite=args.overwrite,
+        )
+        zero_cost_start_report = {
+            "requested_start": start,
+            "resolved_start": resolved_start,
+            "end": end,
+            "schemas": requested_schemas,
+            "attempt_count": len(start_attempts),
+            "attempts": start_attempts,
+        }
+        if resolved_start != start:
+            start = resolved_start
+            tasks = build_tasks_for_schemas(
                 products,
+                schemas=requested_schemas,
                 start=start,
                 end=end,
                 output_root=output_root,
@@ -2605,11 +2969,9 @@ def main() -> int:
                 mode=args.mode,
                 raw_format=raw_format,
                 dataset=args.dataset,
-                schema=schema,
                 stype_in=args.stype_in,
                 stype_out=args.stype_out,
             )
-        )
 
     plan = {
         "mode": args.mode,
@@ -2617,6 +2979,9 @@ def main() -> int:
         "raw_format": raw_format,
         "schema": args.schema,
         "schemas": requested_schemas,
+        "zero_cost_only": args.zero_cost_only,
+        "zero_cost_start_search": args.zero_cost_start_search,
+        "zero_cost_start_search_report": zero_cost_start_report,
         "stype_in": args.stype_in,
         "stype_out": args.stype_out,
         "start": start,
@@ -2659,19 +3024,84 @@ def main() -> int:
 
     write_json(plan_out, plan)
 
-    print("CLIENT_INIT Databento historical client", flush=True)
-    client = get_client()
+    if zero_cost_start_report is not None:
+        write_json(
+            report_path(args, "databento_zero_cost_start_search.json"),
+            {
+                **zero_cost_start_report,
+                "generated_at": plan["generated_at"],
+                "run_id": plan["run_id"],
+                "plan_hash": plan["plan_hash"],
+            },
+        )
+
+    if client is None:
+        print("CLIENT_INIT Databento historical client", flush=True)
+        client = get_client()
     if args.estimate_cost:
-        estimates = estimate_cost(client, tasks)
+        gate: dict[str, object] | None = None
+        if args.zero_cost_only:
+            gate, gated_tasks, estimates = build_zero_cost_gate(
+                client,
+                tasks,
+                overwrite=args.overwrite,
+                output_root=output_root,
+            )
+            gate["gated_task_count"] = len(gated_tasks)
+        else:
+            estimates = estimate_cost(client, tasks)
         estimates = add_result_provenance(estimates, plan)
+        if gate is not None:
+            gate["estimates"] = estimates
+            gate["generated_at"] = plan["generated_at"]
+            gate["run_id"] = plan["run_id"]
+            gate["plan_hash"] = plan["plan_hash"]
+            write_json(report_path(args, "databento_zero_cost_gate.json"), gate)
         write_json(report_path(args, "databento_cost_estimate.json"), estimates)
         total = sum(
             float(cast(Any, item.get("estimated_cost_usd", 0.0))) for item in estimates
         )
         errors = sum(1 for item in estimates if item.get("status") == "estimate_error")
+        zero_downloadable = (
+            int(cast(Any, gate.get("downloadable_zero_cost_task_count", 0)))
+            if gate is not None
+            else 0
+        )
         print(f"TOTAL_ESTIMATED_COST_USD {total:.4f}")
         print(f"TOTAL_ESTIMATE_ERRORS {errors}")
+        if gate is not None:
+            print(
+                f"ZERO_COST_GATE status={gate['status']} "
+                f"downloadable={zero_downloadable} "
+                f"billable_size={gate['zero_cost_billable_size']}"
+            )
+            return 0 if gate["status"] == "PASS" else 1
         return 0
+
+    if args.zero_cost_only:
+        gate, gated_tasks, estimates = build_zero_cost_gate(
+            client,
+            tasks,
+            overwrite=args.overwrite,
+            output_root=output_root,
+        )
+        estimates = add_result_provenance(estimates, plan)
+        gate["estimates"] = estimates
+        gate["generated_at"] = plan["generated_at"]
+        gate["run_id"] = plan["run_id"]
+        gate["plan_hash"] = plan["plan_hash"]
+        gate["gated_task_count"] = len(gated_tasks)
+        write_json(report_path(args, "databento_zero_cost_gate.json"), gate)
+        write_json(report_path(args, "databento_cost_estimate.json"), estimates)
+        print(
+            f"ZERO_COST_GATE status={gate['status']} "
+            f"downloadable={gate['downloadable_zero_cost_task_count']} "
+            f"billable_size={gate['zero_cost_billable_size']}",
+            flush=True,
+        )
+        if gate["status"] != "PASS":
+            return 1
+        tasks = gated_tasks
 
     pending = first_pending_download(tasks, overwrite=args.overwrite)
     if pending is None:

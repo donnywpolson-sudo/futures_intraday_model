@@ -25,10 +25,13 @@ from scripts.phase1A_download.download_databento_raw import (
     build_dbn_download_manifest,
     batch_split_duration_for_chunk,
     build_raw_file_manifest,
+    build_tasks_for_schemas,
+    build_zero_cost_gate,
     condition_is_degraded,
     convert_dbn_archive_to_raw,
     convert_dbn_files_to_parquet,
     dataset_for_product,
+    dbn_schema_root,
     dbn_chunk_manifest_rows,
     dbn_parquet_path,
     dry_run_plan_path,
@@ -53,6 +56,7 @@ from scripts.phase1A_download.download_databento_raw import (
     parse_symbols,
     preflight_auth,
     PRODUCT_AVAILABLE_START,
+    resolve_requested_schemas,
     resolve_databento_api_key,
     symbol_for_product,
     store_to_required_dataframe,
@@ -60,6 +64,14 @@ from scripts.phase1A_download.download_databento_raw import (
     validate_raw_file_manifest,
     write_json,
     write_store_parquet,
+    zero_cost_start_search,
+)
+from scripts.phase1_raw_contract import (  # noqa: E402
+    HISTORY_SCHEMAS,
+    REQUIRED_SCHEMAS,
+    SCHEMA_PATHS,
+    SUPPORTED_SCHEMAS,
+    TICK_SCHEMAS,
 )
 
 
@@ -90,6 +102,56 @@ class FailingMetadata:
 class FailingClient:
     metadata = FailingMetadata()
     timeseries = FailingTimeseries()
+
+
+def _request_key(schema: str, symbol: str, start: str, end: str) -> tuple[str, str, str, str]:
+    return (schema, symbol, start, end)
+
+
+def _task_request_key(task: DownloadTask) -> tuple[str, str, str, str]:
+    return _request_key(task.schema, task.symbol, task.start, task.end)
+
+
+class CostMetadata(FailingMetadata):
+    def __init__(
+        self,
+        *,
+        costs: dict[tuple[str, str, str, str], float] | None = None,
+        sizes: dict[tuple[str, str, str, str], int] | None = None,
+        errors: dict[tuple[str, str, str, str], Exception] | None = None,
+        default_cost: float = 0.0,
+        default_size: int = 0,
+    ) -> None:
+        self.costs = costs or {}
+        self.sizes = sizes or {}
+        self.errors = errors or {}
+        self.default_cost = default_cost
+        self.default_size = default_size
+        self.calls: list[dict[str, object]] = []
+
+    def _key(self, kwargs: dict[str, object]) -> tuple[str, str, str, str]:
+        return _request_key(
+            str(kwargs["schema"]),
+            str(kwargs["symbols"]),
+            str(kwargs["start"]),
+            str(kwargs["end"]),
+        )
+
+    def get_cost(self, **kwargs: object) -> float:
+        self.calls.append(kwargs)
+        key = self._key(kwargs)
+        if key in self.errors:
+            raise self.errors[key]
+        return self.costs.get(key, self.default_cost)
+
+    def get_billable_size(self, **kwargs: object) -> object:
+        key = self._key(kwargs)
+        return self.sizes.get(key, self.default_size)
+
+
+class CostClient:
+    def __init__(self, metadata: CostMetadata) -> None:
+        self.metadata = metadata
 
 
 class SplitRetryTimeseries:
@@ -222,16 +284,17 @@ def install_fake_databento_store(
 
 
 def _write_raw_manifest(path: Path, *, schema: str, market: str = "ES", year: int = 2024) -> None:
+    stype_in = "parent" if schema == "definition" else "continuous"
     task = DownloadTask(
         dataset=CME_DATASET,
         product=market,
         year=year,
         start=f"{year}-01-01",
         end=f"{year + 1}-01-01",
-        symbol=f"{market}.v.0" if schema == "ohlcv-1m" else f"{market}.FUT",
+        symbol=symbol_for_product(market, stype_in),
         output_path=path.as_posix(),
         schema=schema,
-        stype_in="continuous" if schema == "ohlcv-1m" else "parent",
+        stype_in=stype_in,
         stype_out="instrument_id",
         chunk="year",
         raw_format="dbn-zstd",
@@ -239,6 +302,31 @@ def _write_raw_manifest(path: Path, *, schema: str, market: str = "ES", year: in
     write_json(
         path.with_name(f"{path.name}.manifest.json"),
         build_raw_file_manifest(task, path, job_id="job-test", request_status="ok"),
+    )
+
+
+def _dbn_task(
+    path: Path,
+    *,
+    schema: str = "ohlcv-1m",
+    market: str = "ES",
+    start: str = "2024-01-01",
+    end: str = "2025-01-01",
+) -> DownloadTask:
+    stype_in = "parent" if schema == "definition" else "continuous"
+    return DownloadTask(
+        dataset=CME_DATASET,
+        product=market,
+        year=date.fromisoformat(start).year,
+        start=start,
+        end=end,
+        symbol=symbol_for_product(market, stype_in),
+        output_path=path.as_posix(),
+        schema=schema,
+        stype_in=stype_in,
+        stype_out="instrument_id",
+        chunk="year",
+        raw_format="dbn-zstd",
     )
 
 
@@ -357,6 +445,65 @@ def test_symbol_for_product_preserves_continuous_default_and_supports_parent() -
     assert symbol_for_product("ES", "continuous") == "ES.v.0"
     assert symbol_for_product("ES", "parent") == "ES.FUT"
     assert symbol_for_product("ESM4", "raw_symbol") == "ESM4"
+
+
+def test_schema_aliases_preserve_legacy_all_and_expand_new_groups() -> None:
+    assert resolve_requested_schemas("all") == list(REQUIRED_SCHEMAS)
+    assert resolve_requested_schemas("history-all") == list(HISTORY_SCHEMAS)
+    assert resolve_requested_schemas("tick-all") == list(TICK_SCHEMAS)
+    assert resolve_requested_schemas("raw-all") == list(SUPPORTED_SCHEMAS)
+    assert resolve_requested_schemas("trades") == ["trades"]
+
+
+def test_all_supported_dbn_schemas_write_to_expected_roots(tmp_path: Path) -> None:
+    dbn_root = tmp_path / "data" / "dbn" / "ohlcv_1m"
+    tasks = build_tasks_for_schemas(
+        ["ES"],
+        schemas=SUPPORTED_SCHEMAS,
+        start="2024-01-01",
+        end="2025-01-01",
+        output_root=dbn_root,
+        chunk="year",
+        mode="download-dbn",
+        raw_format="dbn-zstd",
+        dataset=CME_DATASET,
+        stype_in="continuous",
+        stype_out="instrument_id",
+    )
+
+    assert len(tasks) == len(SUPPORTED_SCHEMAS)
+    by_schema = {task.schema: task for task in tasks}
+    for schema in SUPPORTED_SCHEMAS:
+        path = Path(by_schema[schema].output_path)
+        assert path.parent.parent.parent == dbn_schema_root(dbn_root, schema)
+        assert path.parent.parent.name == "ES"
+        assert path.parent.name == "2024"
+        assert path.name == "2024-01-01_2025-01-01.dbn.zst"
+        assert path.parent.parent.parent.name == SCHEMA_PATHS[schema]
+
+
+def test_only_definition_uses_parent_symbology(tmp_path: Path) -> None:
+    tasks = build_tasks_for_schemas(
+        ["ES"],
+        schemas=("definition", "mbp-1", "trades"),
+        start="2024-01-01",
+        end="2024-01-02",
+        output_root=tmp_path / "data" / "dbn" / "ohlcv_1m",
+        chunk="day",
+        mode="download-dbn",
+        raw_format="dbn-zstd",
+        dataset=CME_DATASET,
+        stype_in="continuous",
+        stype_out="instrument_id",
+    )
+    by_schema = {task.schema: task for task in tasks}
+
+    assert by_schema["definition"].stype_in == "parent"
+    assert by_schema["definition"].symbol == "ES.FUT"
+    assert by_schema["mbp-1"].stype_in == "continuous"
+    assert by_schema["mbp-1"].symbol == "ES.v.0"
+    assert by_schema["trades"].stype_in == "continuous"
+    assert by_schema["trades"].symbol == "ES.v.0"
 
 
 def test_normalize_api_key_strips_wrapping_noise() -> None:
@@ -1825,6 +1972,126 @@ def test_estimate_cost_stops_on_auth_failure(tmp_path: Path) -> None:
 
     assert len(results) == 1
     assert results[0]["status"] == "estimate_error"
+
+
+def test_zero_cost_gate_downloads_only_exact_zero_pending_tasks(tmp_path: Path) -> None:
+    existing_path = tmp_path / "data" / "dbn" / "ohlcv_1m" / "ES" / "2023" / "2023-01-01_2024-01-01.dbn.zst"
+    zero_path = tmp_path / "data" / "dbn" / "ohlcv_1m" / "ES" / "2024" / "2024-01-01_2025-01-01.dbn.zst"
+    nonzero_path = tmp_path / "data" / "dbn" / "ohlcv_1m" / "ES" / "2025" / "2025-01-01_2026-01-01.dbn.zst"
+    error_path = tmp_path / "data" / "dbn" / "ohlcv_1m" / "ES" / "2026" / "2026-01-01_2026-06-13.dbn.zst"
+    existing_path.parent.mkdir(parents=True)
+    existing_path.write_bytes(b"existing")
+    existing_task = _dbn_task(existing_path, start="2023-01-01", end="2024-01-01")
+    zero_task = _dbn_task(zero_path, start="2024-01-01", end="2025-01-01")
+    nonzero_task = _dbn_task(nonzero_path, start="2025-01-01", end="2026-01-01")
+    error_task = _dbn_task(error_path, start="2026-01-01", end="2026-06-13")
+    metadata = CostMetadata(
+        costs={
+            _task_request_key(zero_task): 0.0,
+            _task_request_key(nonzero_task): 2.5,
+        },
+        sizes={_task_request_key(zero_task): 128},
+        errors={_task_request_key(error_task): RuntimeError("temporary estimate failure")},
+    )
+
+    report, selected, estimates = build_zero_cost_gate(
+        CostClient(metadata),
+        [existing_task, zero_task, nonzero_task, error_task],
+        overwrite=False,
+        output_root=tmp_path,
+    )
+
+    assert report["status"] == "PASS"
+    assert selected == [existing_task, zero_task]
+    assert len(estimates) == 3
+    assert report["existing_task_count"] == 1
+    assert report["downloadable_zero_cost_task_count"] == 1
+    assert report["skipped_nonzero_or_invalid_cost_count"] == 1
+    assert report["skipped_estimate_error_count"] == 1
+    assert report["zero_cost_billable_size"] == 128
+    assert _task_request_key(existing_task) not in {
+        _request_key(
+            str(call["schema"]),
+            str(call["symbols"]),
+            str(call["start"]),
+            str(call["end"]),
+        )
+        for call in metadata.calls
+    }
+
+
+def test_zero_cost_gate_requires_exact_zero(tmp_path: Path) -> None:
+    near_zero_task = _dbn_task(
+        tmp_path / "data" / "dbn" / "trades" / "ES" / "2025" / "2025-06-13_2026-06-13.dbn.zst",
+        schema="trades",
+        start="2025-06-13",
+        end="2026-06-13",
+    )
+    negative_task = _dbn_task(
+        tmp_path / "data" / "dbn" / "mbp-1" / "ES" / "2025" / "2025-06-13_2026-06-13.dbn.zst",
+        schema="mbp-1",
+        start="2025-06-13",
+        end="2026-06-13",
+    )
+    metadata = CostMetadata(
+        costs={
+            _task_request_key(near_zero_task): 0.000000001,
+            _task_request_key(negative_task): -0.01,
+        }
+    )
+
+    report, selected, _estimates = build_zero_cost_gate(
+        CostClient(metadata),
+        [near_zero_task, negative_task],
+        overwrite=False,
+        output_root=tmp_path,
+    )
+
+    assert report["status"] == "FAIL"
+    assert selected == []
+    assert report["downloadable_zero_cost_task_count"] == 0
+    assert report["skipped_nonzero_or_invalid_cost_count"] == 2
+    assert "no pending tasks had exact zero estimated cost" in report["failures"]
+
+
+def test_zero_cost_start_search_advances_to_first_shared_zero_date(tmp_path: Path) -> None:
+    first_day_tasks = build_tasks_for_schemas(
+        ["ES"],
+        schemas=TICK_SCHEMAS,
+        start="2025-06-13",
+        end="2025-06-14",
+        output_root=tmp_path / "data" / "dbn" / "ohlcv_1m",
+        chunk="day",
+        mode="download-dbn",
+        raw_format="dbn-zstd",
+        dataset=CME_DATASET,
+        stype_in="continuous",
+        stype_out="instrument_id",
+    )
+    metadata = CostMetadata(
+        costs={_task_request_key(task): 1.0 for task in first_day_tasks},
+        default_cost=0.0,
+    )
+
+    resolved, attempts = zero_cost_start_search(
+        CostClient(metadata),
+        ["ES"],
+        start="2025-06-13",
+        end="2025-06-16",
+        schemas=list(TICK_SCHEMAS),
+        output_root=tmp_path / "data" / "dbn" / "ohlcv_1m",
+        chunk="day",
+        mode="download-dbn",
+        raw_format="dbn-zstd",
+        dataset=CME_DATASET,
+        stype_in="continuous",
+        stype_out="instrument_id",
+        overwrite=False,
+    )
+
+    assert resolved == "2025-06-14"
+    assert [attempt["status"] for attempt in attempts] == ["rejected", "accepted"]
+    assert attempts[1]["zero_cost_count"] == 2
 
 
 def test_plan_and_results_share_run_id_and_plan_hash() -> None:
