@@ -4,15 +4,19 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import importlib
+import os
 import queue
+import re
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Callable, Sequence, TextIO
+from typing import Any, Callable, Mapping, Sequence, TextIO
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
@@ -28,10 +32,22 @@ DEFAULT_DATASET = "GLBX.MDP3"
 DEFAULT_SCHEMA = "ohlcv-1m"
 DEFAULT_SYMBOLS = "ES.c.0"
 DEFAULT_STYPE_IN = "continuous"
-DEFAULT_LOOKBACK_HOURS = 6.0
+DEFAULT_LOOKBACK_HOURS = 24.0
 DEFAULT_MAX_RECORDS = 0
 DEFAULT_TIMEOUT_SECONDS: float | None = None
 DEFAULT_NO_DATA_WARNING_SECONDS = 60.0
+DEFAULT_CHART_TIMEFRAME = "1m"
+DEFAULT_CHART_TIMEFRAMES = "1m,5m,15m,30m,1h"
+DEFAULT_DISPLAY_TZ = "local"
+VSCODE_RUN_BUTTON_ARGS = (
+    "--lookback-hours",
+    "24",
+    "--timeout-seconds",
+    "120",
+    "--no-data-warning-seconds",
+    "15",
+)
+VSCODE_ENV_KEYS = ("VSCODE_PID", "VSCODE_CWD", "VSCODE_IPC_HOOK_CLI")
 API_KEY_ENV = "DATABENTO_API_KEY"
 ROOT_API_KEY_FILE = ROOT / "databento.env"
 FIXED_PRICE_SCALE = 1_000_000_000
@@ -39,6 +55,7 @@ UNDEF_PRICE = 9_223_372_036_854_775_807
 OHLCV_FIELDS = ("ts_event", "open", "high", "low", "close", "volume")
 OHLCV_PAYLOAD_FIELDS = ("open", "high", "low", "close", "volume")
 ALWAYS_REPORTED_RECORD_TYPE_MARKERS = ("Error",)
+TIMEFRAME_PATTERN = re.compile(r"^(\d+)([smh])$")
 CHART_INSTALL_MESSAGE = (
     'Missing lightweight-charts package; install optional chart support with: '
     'python -m pip install "lightweight-charts>=2.1,<3"'
@@ -54,6 +71,15 @@ class ChartStatus:
     latest_time: datetime | None = None
     last_close: float | None = None
     status_line_printed: bool = False
+
+
+@dataclass
+class ChartDisplayState:
+    raw_candles: list[dict[str, CandleValue]]
+    timeframe: str
+    timeframe_seconds: int
+    display_tz: tzinfo
+    display_tz_name: str
 
 
 def nonnegative_int(value: str) -> int:
@@ -77,12 +103,114 @@ def positive_float(value: str) -> float:
     return parsed
 
 
+def normalize_timeframe(value: str) -> str:
+    text = value.strip().lower()
+    match = TIMEFRAME_PATTERN.fullmatch(text)
+    if match is None:
+        raise argparse.ArgumentTypeError("timeframe must look like 1m, 5m, 15m, or 1h")
+    amount = int(match.group(1))
+    if amount <= 0:
+        raise argparse.ArgumentTypeError("timeframe amount must be > 0")
+    return f"{amount}{match.group(2)}"
+
+
+def timeframe_seconds(value: str) -> int:
+    timeframe = normalize_timeframe(value)
+    amount = int(timeframe[:-1])
+    unit = timeframe[-1]
+    if unit == "s":
+        return amount
+    if unit == "m":
+        return amount * 60
+    if unit == "h":
+        return amount * 60 * 60
+    raise argparse.ArgumentTypeError(f"unsupported timeframe unit: {unit}")
+
+
+def parse_chart_timeframes(value: str) -> tuple[str, ...]:
+    timeframes = tuple(
+        dict.fromkeys(
+            normalize_timeframe(part)
+            for part in value.split(",")
+            if part.strip()
+        )
+    )
+    if not timeframes:
+        raise argparse.ArgumentTypeError("must include at least one chart timeframe")
+    return timeframes
+
+
+def parse_ohlcv_schema_seconds(schema: str) -> int | None:
+    prefix = "ohlcv-"
+    if not schema.startswith(prefix):
+        return None
+    try:
+        return timeframe_seconds(schema[len(prefix) :])
+    except argparse.ArgumentTypeError:
+        return None
+
+
+def validate_chart_timeframe(
+    *,
+    chart_timeframe: str,
+    chart_timeframes: tuple[str, ...],
+    schema: str,
+) -> str | None:
+    if chart_timeframe not in chart_timeframes:
+        return (
+            f"--chart-timeframe {chart_timeframe!r} must be included in "
+            f"--chart-timeframes {','.join(chart_timeframes)!r}."
+        )
+    source_seconds = parse_ohlcv_schema_seconds(schema)
+    if source_seconds is None:
+        return None
+    for option in chart_timeframes:
+        option_seconds = timeframe_seconds(option)
+        if option_seconds < source_seconds or option_seconds % source_seconds != 0:
+            return (
+                f"chart timeframe {option!r} cannot be built from schema {schema!r}; "
+                "use the same or a larger multiple of the source OHLCV interval."
+            )
+    return None
+
+
+def resolve_display_tz(value: str) -> tuple[tzinfo, str]:
+    text = value.strip()
+    if not text or text.lower() == "local":
+        local_tz = datetime.now().astimezone().tzinfo
+        return local_tz or timezone.utc, "local"
+    if text.lower() in {"utc", "z"}:
+        return timezone.utc, "UTC"
+    try:
+        return ZoneInfo(text), text
+    except ZoneInfoNotFoundError as exc:
+        raise argparse.ArgumentTypeError(f"unknown timezone: {value}") from exc
+
+
 def parse_start(value: str | None) -> str | int | None:
     if value is None or value == "":
         return None
     if value == "0":
         return 0
     return value
+
+
+def is_vscode_environment(env: Mapping[str, str] | None = None) -> bool:
+    source = os.environ if env is None else env
+    if source.get("TERM_PROGRAM", "").lower() == "vscode":
+        return True
+    return any(bool(source.get(key)) for key in VSCODE_ENV_KEYS)
+
+
+def resolve_main_argv(
+    argv: Sequence[str] | None = None,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> list[str]:
+    values = list(sys.argv[1:] if argv is None else argv)
+    if values:
+        return values
+    return list(VSCODE_RUN_BUTTON_ARGS)
 
 
 def utc_now() -> datetime:
@@ -118,6 +246,12 @@ def format_close(value: float | None) -> str:
     return f"{value:.2f}"
 
 
+def display_time_label(value: datetime | None, display_tz: tzinfo) -> str:
+    if value is None:
+        return "n/a"
+    return value.astimezone(display_tz).strftime("%Y-%m-%d %H:%M:%S %Z").strip()
+
+
 def format_chart_status(status: ChartStatus) -> str:
     return (
         f"records={status.records_updated} "
@@ -132,14 +266,18 @@ def format_chart_title(
     symbols: str,
     schema: str,
     mode: str,
+    chart_timeframe: str,
+    display_tz: tzinfo,
+    display_tz_name: str,
     status: ChartStatus | None = None,
 ) -> str:
     if status is None or status.latest_time is None:
-        return f"{symbols} {schema} | connecting"
+        return f"{symbols} {chart_timeframe} from {schema} | {display_tz_name} display | connecting"
     return (
-        f"{symbols} {schema} | {mode} | "
-        f"first={format_utc_time(status.first_time)} "
-        f"last={format_utc_time(status.latest_time)}"
+        f"{symbols} {chart_timeframe} from {schema} | {mode} | "
+        f"{display_time_label(status.first_time, display_tz)} to "
+        f"{display_time_label(status.latest_time, display_tz)} | "
+        f"UTC last={format_utc_time(status.latest_time)}"
     )
 
 
@@ -214,6 +352,53 @@ def normalize_ts_event(value: object) -> datetime:
     else:
         dt = dt.astimezone(timezone.utc)
     return dt
+
+
+def floor_timeframe(value: datetime, seconds: int) -> datetime:
+    timestamp = int(normalize_ts_event(value).timestamp())
+    return datetime.fromtimestamp(timestamp - (timestamp % seconds), tz=timezone.utc)
+
+
+def chart_display_time(value: object, display_tz: tzinfo) -> datetime:
+    utc_value = normalize_ts_event(value)
+    return utc_value.astimezone(display_tz).replace(tzinfo=None)
+
+
+def aggregate_candles(
+    candles: Sequence[dict[str, CandleValue]],
+    *,
+    seconds: int,
+) -> list[dict[str, CandleValue]]:
+    aggregated: dict[datetime, dict[str, CandleValue]] = {}
+    for candle in candles:
+        bucket = floor_timeframe(normalize_ts_event(candle["time"]), seconds)
+        if bucket not in aggregated:
+            aggregated[bucket] = {
+                "time": bucket,
+                "open": float(candle["open"]),
+                "high": float(candle["high"]),
+                "low": float(candle["low"]),
+                "close": float(candle["close"]),
+                "volume": int(candle["volume"]),
+            }
+            continue
+
+        current = aggregated[bucket]
+        current["high"] = max(float(current["high"]), float(candle["high"]))
+        current["low"] = min(float(current["low"]), float(candle["low"]))
+        current["close"] = float(candle["close"])
+        current["volume"] = int(current["volume"]) + int(candle["volume"])
+    return list(aggregated.values())
+
+
+def candle_for_display(
+    candle: dict[str, CandleValue],
+    *,
+    display_tz: tzinfo,
+) -> dict[str, CandleValue]:
+    displayed = dict(candle)
+    displayed["time"] = chart_display_time(candle["time"], display_tz)
+    return displayed
 
 
 def record_value(record: object, name: str) -> object:
@@ -357,7 +542,14 @@ def call_if_available(target: object, name: str, **kwargs: object) -> None:
         method()
 
 
-def configure_chart(chart: object, title: str) -> None:
+def configure_chart(
+    chart: object,
+    title: str,
+    *,
+    timeframe_options: Sequence[str] = (),
+    selected_timeframe: str | None = None,
+    on_timeframe_change: Callable[[object], None] | None = None,
+) -> None:
     call_if_available(
         chart,
         "layout",
@@ -384,6 +576,33 @@ def configure_chart(chart: object, title: str) -> None:
     )
     call_if_available(chart, "legend", visible=True)
     update_chart_title(chart, title)
+    configure_timeframe_switcher(
+        chart,
+        timeframe_options=timeframe_options,
+        selected_timeframe=selected_timeframe,
+        on_timeframe_change=on_timeframe_change,
+    )
+
+
+def configure_timeframe_switcher(
+    chart: object,
+    *,
+    timeframe_options: Sequence[str],
+    selected_timeframe: str | None,
+    on_timeframe_change: Callable[[object], None] | None,
+) -> None:
+    if not timeframe_options or selected_timeframe is None:
+        return
+    topbar = getattr(chart, "topbar", None)
+    switcher = getattr(topbar, "switcher", None)
+    if not callable(switcher):
+        return
+    switcher(
+        "timeframe",
+        tuple(timeframe_options),
+        default=selected_timeframe,
+        func=on_timeframe_change,
+    )
 
 
 def update_chart_title(chart: object, title: str) -> None:
@@ -427,8 +646,28 @@ def update_chart_candle(chart: object, series: object, *, initialize: bool) -> N
         to_frame = getattr(series, "to_frame", None)
         if callable(set_data) and callable(to_frame):
             set_data(to_frame().T)
-            return
+        return
     chart.update(series)
+
+
+def replace_chart_candles(
+    chart: object,
+    candles: Sequence[dict[str, CandleValue]],
+    *,
+    series_factory: Callable[[dict[str, CandleValue]], Any],
+) -> None:
+    set_data = getattr(chart, "set", None)
+    if not callable(set_data):
+        return
+
+    pandas_module = importlib.import_module("pandas")
+    frame = pandas_module.DataFrame(candles)
+    if not frame.empty:
+        frame["time"] = pandas_module.to_datetime(frame["time"])
+        if getattr(frame["time"].dt, "tz", None) is not None:
+            frame["time"] = frame["time"].dt.tz_localize(None)
+        frame["time"] = frame["time"].astype("datetime64[ns]")
+    set_data(frame)
 
 
 def apply_candle_status(status: ChartStatus, candle: dict[str, CandleValue]) -> None:
@@ -439,6 +678,41 @@ def apply_candle_status(status: ChartStatus, candle: dict[str, CandleValue]) -> 
     status.latest_time = candle_time
     status.last_close = close
     status.records_updated += 1
+
+
+def render_chart_display(
+    display: ChartDisplayState,
+    *,
+    chart: object,
+    series_factory: Callable[[dict[str, CandleValue]], Any],
+    status: ChartStatus,
+    symbols: str,
+    schema: str,
+    mode: str,
+    stdout: TextIO,
+) -> None:
+    aggregated = aggregate_candles(
+        display.raw_candles,
+        seconds=display.timeframe_seconds,
+    )
+    display_candles = [
+        candle_for_display(candle, display_tz=display.display_tz)
+        for candle in aggregated
+    ]
+    replace_chart_candles(chart, display_candles, series_factory=series_factory)
+    update_chart_title(
+        chart,
+        format_chart_title(
+            symbols=symbols,
+            schema=schema,
+            mode=mode,
+            chart_timeframe=display.timeframe,
+            display_tz=display.display_tz,
+            display_tz_name=display.display_tz_name,
+            status=status,
+        ),
+    )
+    emit_status_line(status, stdout)
 
 
 def emit_status_line(status: ChartStatus, stdout: TextIO) -> None:
@@ -463,16 +737,27 @@ def apply_chart_candle(
     schema: str,
     mode: str,
     stdout: TextIO,
+    chart_timeframe: str | None = None,
+    display_tz: tzinfo = timezone.utc,
+    display_tz_name: str = "UTC",
 ) -> None:
     update_chart_candle(
         chart,
-        series_factory(candle),
+        series_factory(candle_for_display(candle, display_tz=display_tz)),
         initialize=status.records_updated == 0,
     )
     apply_candle_status(status, candle)
     update_chart_title(
         chart,
-        format_chart_title(symbols=symbols, schema=schema, mode=mode, status=status),
+        format_chart_title(
+            symbols=symbols,
+            schema=schema,
+            mode=mode,
+            chart_timeframe=chart_timeframe or schema.removeprefix("ohlcv-"),
+            display_tz=display_tz,
+            display_tz_name=display_tz_name,
+            status=status,
+        ),
     )
     emit_status_line(status, stdout)
 
@@ -495,6 +780,76 @@ def stop_live_client(live: object | None) -> None:
         wait_for_close()
     except Exception:
         return
+
+
+def build_timeframe_callback(
+    timeframe_queue: queue.Queue[str],
+) -> Callable[[object], None]:
+    def handle_timeframe_change(chart: object) -> None:
+        try:
+            selected = chart.topbar["timeframe"].value
+        except Exception:
+            return
+        timeframe_queue.put(str(selected))
+
+    return handle_timeframe_change
+
+
+def drain_timeframe_queue(
+    timeframe_queue: queue.Queue[str],
+    *,
+    display: ChartDisplayState,
+    chart_timeframes: Sequence[str],
+) -> bool:
+    changed = False
+    allowed = set(chart_timeframes)
+    while True:
+        try:
+            selected = timeframe_queue.get_nowait()
+        except queue.Empty:
+            return changed
+        if selected not in allowed or selected == display.timeframe:
+            continue
+        display.timeframe = selected
+        display.timeframe_seconds = timeframe_seconds(selected)
+        changed = True
+
+
+def parse_chart_event_message(chart: object, response: str) -> tuple[Callable[..., object], list[str]]:
+    name, raw_args = response.split("_~_", 1)
+    args = raw_args.split(";;;")
+    handlers = getattr(getattr(chart, "win"), "handlers")
+    return handlers[name], args
+
+
+def drain_chart_event_queue(chart: object, stderr: TextIO) -> bool:
+    chart_cls = type(chart)
+    webview_handler = getattr(chart_cls, "WV", None)
+    emit_queue = getattr(webview_handler, "emit_queue", None)
+    if emit_queue is None:
+        return False
+
+    chart_closed = False
+    while not emit_queue.empty():
+        response = emit_queue.get()
+        if response == "exit":
+            exit_chart = getattr(webview_handler, "exit", None)
+            if callable(exit_chart):
+                exit_chart()
+            if hasattr(chart, "is_alive"):
+                setattr(chart, "is_alive", False)
+            chart_closed = True
+            continue
+
+        try:
+            func, args = parse_chart_event_message(chart, response)
+            if asyncio.iscoroutinefunction(func):
+                asyncio.run(func(*args))
+            else:
+                func(*args)
+        except Exception as exc:
+            print(f"Chart UI event skipped: {exc}", file=stderr)
+    return chart_closed
 
 
 @dataclass
@@ -531,6 +886,9 @@ def drain_chart_queue(
     *,
     chart: object,
     series_factory: Callable[[dict[str, CandleValue]], Any],
+    display: ChartDisplayState,
+    timeframe_queue: queue.Queue[str],
+    chart_timeframes: Sequence[str],
     max_records: int,
     timeout_seconds: float | None,
     no_data_warning_seconds: float,
@@ -553,6 +911,26 @@ def drain_chart_queue(
     no_data_warned = False
 
     while max_records == 0 or status.records_updated < max_records:
+        if drain_chart_event_queue(chart, stderr):
+            chart_closed = True
+            break
+
+        if drain_timeframe_queue(
+            timeframe_queue,
+            display=display,
+            chart_timeframes=chart_timeframes,
+        ):
+            render_chart_display(
+                display,
+                chart=chart,
+                series_factory=series_factory,
+                status=status,
+                symbols=symbols,
+                schema=schema,
+                mode=mode,
+                stdout=stdout,
+            )
+
         if not chart_is_alive(chart):
             chart_closed = True
             break
@@ -588,8 +966,10 @@ def drain_chart_queue(
                 no_data_warned = True
             continue
 
-        apply_chart_candle(
-            candle,
+        display.raw_candles.append(candle)
+        apply_candle_status(status, candle)
+        render_chart_display(
+            display,
             chart=chart,
             series_factory=series_factory,
             status=status,
@@ -619,6 +999,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--schema", default=DEFAULT_SCHEMA)
     parser.add_argument("--symbols", default=DEFAULT_SYMBOLS)
     parser.add_argument("--stype-in", default=DEFAULT_STYPE_IN)
+    parser.add_argument(
+        "--chart-timeframe",
+        type=normalize_timeframe,
+        default=DEFAULT_CHART_TIMEFRAME,
+        help="Initial displayed chart timeframe; must be in --chart-timeframes.",
+    )
+    parser.add_argument(
+        "--chart-timeframes",
+        default=DEFAULT_CHART_TIMEFRAMES,
+        help="Comma-separated topbar chart timeframes built from the source OHLCV feed.",
+    )
+    parser.add_argument(
+        "--display-tz",
+        default=DEFAULT_DISPLAY_TZ,
+        help="Timezone for chart axis/title display: local, UTC, or an IANA name.",
+    )
     window_group = parser.add_mutually_exclusive_group()
     window_group.add_argument(
         "--start",
@@ -629,7 +1025,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--lookback-hours",
         type=positive_float,
         default=None,
-        help="Replay this many hours before now; default is 6.",
+        help="Replay this many hours before now; default is 24.",
     )
     window_group.add_argument(
         "--lookback-days",
@@ -691,6 +1087,23 @@ def run_live_chart(
         )
         return 2
 
+    try:
+        chart_timeframes = parse_chart_timeframes(args.chart_timeframes)
+        chart_timeframe = normalize_timeframe(args.chart_timeframe)
+        display_tz, display_tz_name = resolve_display_tz(args.display_tz)
+    except argparse.ArgumentTypeError as exc:
+        print(str(exc), file=stderr)
+        return 2
+
+    timeframe_error = validate_chart_timeframe(
+        chart_timeframe=chart_timeframe,
+        chart_timeframes=chart_timeframes,
+        schema=args.schema,
+    )
+    if timeframe_error is not None:
+        print(timeframe_error, file=stderr)
+        return 2
+
     if db_module is None:
         try:
             db_module = import_databento()
@@ -712,10 +1125,18 @@ def run_live_chart(
         series_factory = series_factory or runtime_series_factory
 
     candle_queue: queue.Queue[dict[str, CandleValue]] = queue.Queue()
+    timeframe_queue: queue.Queue[str] = queue.Queue()
     live = None
     chart = None
     status = ChartStatus()
     mode = "historical+live" if args.historical_backfill else "live replay"
+    display = ChartDisplayState(
+        raw_candles=[],
+        timeframe=chart_timeframe,
+        timeframe_seconds=timeframe_seconds(chart_timeframe),
+        display_tz=display_tz,
+        display_tz_name=display_tz_name,
+    )
 
     try:
         chart = chart_factory()
@@ -725,7 +1146,13 @@ def run_live_chart(
                 symbols=args.symbols,
                 schema=args.schema,
                 mode=mode,
+                chart_timeframe=display.timeframe,
+                display_tz=display.display_tz,
+                display_tz_name=display.display_tz_name,
             ),
+            timeframe_options=chart_timeframes,
+            selected_timeframe=display.timeframe,
+            on_timeframe_change=build_timeframe_callback(timeframe_queue),
         )
         show_chart(chart)
         symbols = parse_symbols(args.symbols)
@@ -744,8 +1171,11 @@ def run_live_chart(
                 end=historical_end,
             )
             for candle in historical_store_to_candles(store):
-                apply_chart_candle(
-                    candle,
+                display.raw_candles.append(candle)
+                apply_candle_status(status, candle)
+            if display.raw_candles:
+                render_chart_display(
+                    display,
                     chart=chart,
                     series_factory=series_factory,
                     status=status,
@@ -771,6 +1201,9 @@ def run_live_chart(
             candle_queue,
             chart=chart,
             series_factory=series_factory,
+            display=display,
+            timeframe_queue=timeframe_queue,
+            chart_timeframes=chart_timeframes,
             max_records=args.max_records,
             timeout_seconds=args.timeout_seconds,
             no_data_warning_seconds=args.no_data_warning_seconds,
@@ -808,7 +1241,7 @@ def run_live_chart(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_arg_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(resolve_main_argv(argv))
     return run_live_chart(args)
 
 
