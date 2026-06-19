@@ -13,7 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from apps import live_chart_lightweight as live_chart
+from . import live_chart_lightweight as live_chart
 
 
 @dataclass
