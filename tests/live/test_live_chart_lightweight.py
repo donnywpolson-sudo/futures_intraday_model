@@ -118,6 +118,15 @@ class FakeChartNoAlive(FakeChart):
         del self.is_alive
 
 
+class FakeChartCloseAfterTwoUpdates(FakeChart):
+    def __init__(self) -> None:
+        super().__init__()
+        del self.is_alive
+
+    def is_alive(self) -> bool:
+        return len(self.updates) < 2
+
+
 class FakeFrame:
     @property
     def T(self) -> "FakeFrame":
@@ -144,7 +153,9 @@ def _args(*values: str):
     return live_chart.build_arg_parser().parse_args(list(values))
 
 
-def _series_factory(candle: dict[str, int | float]) -> dict[str, int | float]:
+def _series_factory(
+    candle: dict[str, live_chart.CandleValue],
+) -> dict[str, live_chart.CandleValue]:
     return dict(candle)
 
 
@@ -185,6 +196,14 @@ def test_missing_key_exits_before_runtime_imports(monkeypatch: pytest.MonkeyPatc
     assert "Missing DATABENTO_API_KEY" in stderr.getvalue()
 
 
+def test_default_args_replay_and_run_until_closed() -> None:
+    args = _args()
+
+    assert args.start == "0"
+    assert args.max_records == 0
+    assert args.timeout_seconds is None
+
+
 def test_fixed_price_to_float_scales_databento_prices() -> None:
     assert live_chart.fixed_price_to_float(5_500_250_000_000) == 5500.25
     assert live_chart.fixed_price_to_float(5500.25) == 5500.25
@@ -193,14 +212,16 @@ def test_fixed_price_to_float_scales_databento_prices() -> None:
         live_chart.fixed_price_to_float(live_chart.UNDEF_PRICE)
 
 
-def test_normalize_ts_event_returns_utc_epoch_seconds() -> None:
-    assert live_chart.normalize_ts_event(1_718_717_460_000_000_000) == 1_718_717_460
-    assert live_chart.normalize_ts_event("2024-06-18T13:31:00Z") == 1_718_717_460
+def test_normalize_ts_event_returns_utc_datetime() -> None:
+    expected = datetime(2024, 6, 18, 13, 31, tzinfo=timezone.utc)
+
+    assert live_chart.normalize_ts_event(1_718_717_460_000_000_000) == expected
+    assert live_chart.normalize_ts_event("2024-06-18T13:31:00Z") == expected
     assert (
         live_chart.normalize_ts_event(
             datetime(2024, 6, 18, 13, 31, tzinfo=timezone.utc)
         )
-        == 1_718_717_460
+        == expected
     )
 
 
@@ -208,7 +229,7 @@ def test_ohlcv_record_to_candle_converts_required_fields() -> None:
     candle = live_chart.ohlcv_record_to_candle(FakeOHLCVRecord())
 
     assert candle == {
-        "time": 1_718_717_460,
+        "time": datetime(2024, 6, 18, 13, 31, tzinfo=timezone.utc),
         "open": 5500.0,
         "high": 5501.0,
         "low": 5499.75,
@@ -397,3 +418,33 @@ def test_chart_without_alive_state_is_bounded_by_max_records() -> None:
     assert chart.closed is True
     assert len(chart.updates) == 1
     assert "records_updated=1" in stdout.getvalue()
+
+
+def test_unlimited_max_records_runs_until_chart_closes() -> None:
+    FakeLive.instances.clear()
+    FakeLive.records = [
+        FakeOHLCVRecord(),
+        FakeOHLCVRecord(close=5_500_500_000_000),
+        FakeOHLCVRecord(close=5_501_000_000_000),
+    ]
+    FakeChart.instances.clear()
+    stdout = StringIO()
+
+    result = live_chart.run_live_chart(
+        _args("--max-records", "0"),
+        db_module=FakeDB("databento"),
+        chart_factory=FakeChartCloseAfterTwoUpdates,
+        series_factory=_series_factory,
+        env={"DATABENTO_API_KEY": "db-test"},
+        stdout=stdout,
+    )
+
+    live = FakeLive.instances[-1]
+    chart = FakeChart.instances[-1]
+    assert result == 0
+    assert live.subscribe_calls[-1]["start"] == 0
+    assert live.stopped is True
+    assert chart.closed is True
+    assert len(chart.updates) == 2
+    assert "records_updated=2" in stdout.getvalue()
+    assert "chart_closed=True" in stdout.getvalue()

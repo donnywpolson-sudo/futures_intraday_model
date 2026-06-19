@@ -25,8 +25,9 @@ DEFAULT_DATASET = "GLBX.MDP3"
 DEFAULT_SCHEMA = "ohlcv-1m"
 DEFAULT_SYMBOLS = "ES.c.0"
 DEFAULT_STYPE_IN = "continuous"
-DEFAULT_MAX_RECORDS = 50
-DEFAULT_TIMEOUT_SECONDS = 120.0
+DEFAULT_START = "0"
+DEFAULT_MAX_RECORDS = 0
+DEFAULT_TIMEOUT_SECONDS: float | None = None
 API_KEY_ENV = "DATABENTO_API_KEY"
 FIXED_PRICE_SCALE = 1_000_000_000
 UNDEF_PRICE = 9_223_372_036_854_775_807
@@ -37,12 +38,13 @@ CHART_INSTALL_MESSAGE = (
     'Missing lightweight-charts package; install optional chart support with: '
     'python -m pip install "lightweight-charts>=2.1,<3"'
 )
+CandleValue = datetime | int | float
 
 
-def positive_int(value: str) -> int:
+def nonnegative_int(value: str) -> int:
     parsed = int(value)
-    if parsed < 1:
-        raise argparse.ArgumentTypeError("must be >= 1")
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be >= 0")
     return parsed
 
 
@@ -94,8 +96,8 @@ def fixed_price_to_float(value: object) -> float:
     raise ValueError(f"unsupported price type: {type(value).__name__}")
 
 
-def normalize_ts_event(value: object) -> int:
-    """Return UTC epoch seconds, the intraday time format accepted by the chart."""
+def normalize_ts_event(value: object) -> datetime:
+    """Return a UTC datetime; lightweight_charts misreads numeric seconds as ms."""
 
     if value is None:
         raise ValueError("ts_event is missing")
@@ -103,14 +105,14 @@ def normalize_ts_event(value: object) -> int:
         raise ValueError("ts_event must be a timestamp")
     if isinstance(value, int):
         if value > 100_000_000_000_000_000:
-            return value // 1_000_000_000
+            return datetime.fromtimestamp(value / 1_000_000_000, tz=timezone.utc)
         if value > 100_000_000_000_000:
-            return value // 1_000_000
+            return datetime.fromtimestamp(value / 1_000_000, tz=timezone.utc)
         if value > 100_000_000_000:
-            return value // 1_000
-        return value
+            return datetime.fromtimestamp(value / 1_000, tz=timezone.utc)
+        return datetime.fromtimestamp(value, tz=timezone.utc)
     if isinstance(value, float):
-        return normalize_ts_event(int(value))
+        return datetime.fromtimestamp(value, tz=timezone.utc)
     if isinstance(value, datetime):
         dt = value
     elif isinstance(value, str):
@@ -127,7 +129,7 @@ def normalize_ts_event(value: object) -> int:
         dt = dt.replace(tzinfo=timezone.utc)
     else:
         dt = dt.astimezone(timezone.utc)
-    return int(dt.timestamp())
+    return dt
 
 
 def record_value(record: object, name: str) -> object:
@@ -137,7 +139,7 @@ def record_value(record: object, name: str) -> object:
     return value() if callable(value) else value
 
 
-def ohlcv_record_to_candle(record: object) -> dict[str, int | float]:
+def ohlcv_record_to_candle(record: object) -> dict[str, CandleValue]:
     missing = missing_ohlcv_fields(record)
     if missing:
         raise ValueError(
@@ -176,7 +178,7 @@ def import_databento() -> ModuleType:
     return importlib.import_module("databento")
 
 
-def import_chart_runtime() -> tuple[type[Any], Callable[[dict[str, int | float]], Any]]:
+def import_chart_runtime() -> tuple[type[Any], Callable[[dict[str, CandleValue]], Any]]:
     try:
         chart_module = importlib.import_module("lightweight_charts")
     except ModuleNotFoundError as exc:
@@ -195,7 +197,7 @@ def import_chart_runtime() -> tuple[type[Any], Callable[[dict[str, int | float]]
 
 
 def build_record_callback(
-    candle_queue: queue.Queue[dict[str, int | float]],
+    candle_queue: queue.Queue[dict[str, CandleValue]],
     *,
     stderr: TextIO,
 ) -> Callable[[object], None]:
@@ -320,29 +322,37 @@ class ChartRunResult:
 
 
 def drain_chart_queue(
-    candle_queue: queue.Queue[dict[str, int | float]],
+    candle_queue: queue.Queue[dict[str, CandleValue]],
     *,
     chart: object,
-    series_factory: Callable[[dict[str, int | float]], Any],
+    series_factory: Callable[[dict[str, CandleValue]], Any],
     max_records: int,
-    timeout_seconds: float,
+    timeout_seconds: float | None,
     clock: Callable[[], float] = time.monotonic,
 ) -> ChartRunResult:
-    deadline = clock() + timeout_seconds
+    deadline = None if timeout_seconds is None else clock() + timeout_seconds
     records_updated = 0
     chart_closed = False
 
-    while records_updated < max_records:
+    while max_records == 0 or records_updated < max_records:
         if not chart_is_alive(chart):
             chart_closed = True
             break
 
-        remaining = deadline - clock()
-        if remaining <= 0:
-            return ChartRunResult(records_updated, timed_out=True, chart_closed=False)
+        if deadline is None:
+            wait_seconds = 0.10
+        else:
+            remaining = deadline - clock()
+            if remaining <= 0:
+                return ChartRunResult(
+                    records_updated,
+                    timed_out=True,
+                    chart_closed=False,
+                )
+            wait_seconds = min(0.10, remaining)
 
         try:
-            candle = candle_queue.get(timeout=min(0.10, remaining))
+            candle = candle_queue.get(timeout=wait_seconds)
         except queue.Empty:
             continue
 
@@ -374,14 +384,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stype-in", default=DEFAULT_STYPE_IN)
     parser.add_argument(
         "--start",
-        default=None,
-        help="Live replay start. Use 0 for intraday replay from start of day.",
+        default=DEFAULT_START,
+        help="Live replay start. Use 0 for all available intraday replay.",
     )
-    parser.add_argument("--max-records", type=positive_int, default=DEFAULT_MAX_RECORDS)
+    parser.add_argument(
+        "--max-records",
+        type=nonnegative_int,
+        default=DEFAULT_MAX_RECORDS,
+        help="Maximum OHLCV records to plot before stopping. Use 0 for unlimited.",
+    )
     parser.add_argument(
         "--timeout-seconds",
         type=nonnegative_float,
         default=DEFAULT_TIMEOUT_SECONDS,
+        help="Maximum runtime after subscription. Omit for no timeout.",
     )
     return parser
 
@@ -392,7 +408,7 @@ def run_live_chart(
     env: dict[str, str] | None = None,
     db_module: ModuleType | None = None,
     chart_factory: Callable[[], object] | None = None,
-    series_factory: Callable[[dict[str, int | float]], Any] | None = None,
+    series_factory: Callable[[dict[str, CandleValue]], Any] | None = None,
     stdout: TextIO = sys.stdout,
     stderr: TextIO = sys.stderr,
 ) -> int:
@@ -421,7 +437,7 @@ def run_live_chart(
         chart_factory = chart_factory or chart_cls
         series_factory = series_factory or runtime_series_factory
 
-    candle_queue: queue.Queue[dict[str, int | float]] = queue.Queue()
+    candle_queue: queue.Queue[dict[str, CandleValue]] = queue.Queue()
     live = None
     chart = None
 
