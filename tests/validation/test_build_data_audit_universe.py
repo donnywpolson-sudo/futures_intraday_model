@@ -35,6 +35,7 @@ def _args(
     decision_path: Path | None = None,
     diagnostics: list[str] | None = None,
     accept_databento_convention: bool = False,
+    require_all_profile_market_years_usable: bool = False,
 ) -> Namespace:
     return Namespace(
         decision_table_json=str(decision_path or tmp_path / "reports" / "decisions.json"),
@@ -44,6 +45,7 @@ def _args(
         json_out=str(tmp_path / "reports" / "universe.json"),
         md_out=str(tmp_path / "reports" / "universe.md"),
         require_usable=False,
+        require_all_profile_market_years_usable=require_all_profile_market_years_usable,
         accept_databento_ohlcv_no_trade_convention=accept_databento_convention,
     )
 
@@ -165,6 +167,22 @@ def test_databento_ohlcv_convention_relaxes_ohlcv_only_quarantine_for_diagnostic
     assert (
         report["policy"]["databento_ohlcv_no_trade_convention"]["wfa_usage"]
         == "does not make quarantined OHLCV-only rows WFA-usable"
+    )
+
+
+def test_require_all_profile_market_years_usable_fails_closed_when_any_scope_row_is_not_usable(
+    tmp_path: Path,
+) -> None:
+    _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    _write_decisions(tmp_path / "reports" / "decisions.json", _complete_rows())
+
+    report = build_universe(_args(tmp_path, require_all_profile_market_years_usable=True))
+
+    assert report["status"] == "FAIL"
+    assert report["policy"]["require_all_profile_market_years_usable"] is True
+    assert any(
+        "not all profile market-years are usable_for_wfa" in failure
+        for failure in report["failures"]
     )
 
 

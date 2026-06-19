@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -26,6 +27,7 @@ from scripts.phase1A_download.download_databento_raw import (  # noqa: E402
     file_sha256,
     iter_dbn_files,
     iter_range_tasks,
+    raw_file_manifest_path,
     schema_path_name,
     validate_raw_file_manifest,
 )
@@ -52,6 +54,7 @@ RAW_REQUIRED_COLUMNS = [
 ]
 RAW_OPTIONAL_AUDIT_COLUMNS = ["market", "year", "contract_multiplier_or_point_value"]
 DEFINITION_COMPARE_COLUMNS = ["raw_symbol", "tick_size", "contract_multiplier_or_point_value"]
+MAX_HASH_WORKERS = 4
 
 
 def _schema_root(dbn_root: Path, schema: str) -> Path:
@@ -184,6 +187,7 @@ def _validate_manifest_paths(
     index: dict[tuple[str, int], list[Path]],
     *,
     schema: str,
+    file_hashes: dict[Path, str] | None = None,
 ) -> list[dict[str, Any]]:
     invalid: list[dict[str, Any]] = []
     for (market, year), paths in sorted(index.items()):
@@ -193,6 +197,7 @@ def _validate_manifest_paths(
                 expected_schema=schema,
                 expected_market=market,
                 expected_year=year,
+                file_sha256_value=file_hashes.get(path) if file_hashes is not None else None,
             )
             if failures:
                 invalid.append(
@@ -205,6 +210,39 @@ def _validate_manifest_paths(
                     }
                 )
     return invalid
+
+
+def _dbn_paths_to_hash(*indexes: dict[tuple[str, int], list[Path]]) -> list[Path]:
+    paths = {
+        path
+        for index in indexes
+        for group_paths in index.values()
+        for path in group_paths
+        if raw_file_manifest_path(path).exists()
+    }
+    return sorted(paths, key=lambda path: path.as_posix())
+
+
+def _build_file_hash_cache(*indexes: dict[tuple[str, int], list[Path]]) -> dict[Path, str]:
+    paths = _dbn_paths_to_hash(*indexes)
+    if not paths:
+        return {}
+    workers = min(MAX_HASH_WORKERS, len(paths))
+    if workers == 1:
+        return {path: file_sha256(path) for path in paths}
+    hashes: dict[Path, str] = {}
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(file_sha256, path): path for path in paths}
+        for future in as_completed(futures):
+            path = futures[future]
+            hashes[path] = future.result()
+    return hashes
+
+
+def _cached_file_sha256(path: Path, file_hashes: dict[Path, str] | None) -> str:
+    if file_hashes is not None and path in file_hashes:
+        return file_hashes[path]
+    return file_sha256(path)
 
 
 def _validate_raw_schema_and_values(
@@ -288,12 +326,13 @@ def _validate_source_hashes(
     key: tuple[str, int],
     df: pd.DataFrame,
     ohlcv_paths: list[Path],
+    file_hashes: dict[Path, str] | None = None,
 ) -> dict[str, Any] | None:
     market, year = key
     if "source_sha256" not in df.columns:
         return {"market": market, "year": year, "failure": "missing source_sha256"}
     raw_hashes = _split_semicolon_values(df["source_sha256"])
-    local_hashes = {file_sha256(path) for path in ohlcv_paths}
+    local_hashes = {_cached_file_sha256(path, file_hashes) for path in ohlcv_paths}
     missing = sorted(raw_hashes - local_hashes)
     if missing:
         return {
@@ -384,6 +423,7 @@ def build_report(
     ohlcv_index = _index_schema_dbns(dbn_root, SCHEMA)
     definition_index = _index_schema_dbns(dbn_root, "definition")
     raw_index = _index_raw_files(raw_root)
+    file_hashes = _build_file_hash_cache(ohlcv_index, definition_index)
 
     missing_ohlcv = sorted(expected - set(ohlcv_index))
     missing_definition = sorted(expected - set(definition_index))
@@ -396,8 +436,10 @@ def build_report(
     raw_only = sorted(set(raw_index) - (set(ohlcv_index) & set(definition_index)))
     dbn_only_inventory = sorted((set(ohlcv_index) & set(definition_index)) - set(raw_index))
 
-    invalid_manifests = _validate_manifest_paths(ohlcv_index, schema=SCHEMA)
-    invalid_manifests.extend(_validate_manifest_paths(definition_index, schema="definition"))
+    invalid_manifests = _validate_manifest_paths(ohlcv_index, schema=SCHEMA, file_hashes=file_hashes)
+    invalid_manifests.extend(
+        _validate_manifest_paths(definition_index, schema="definition", file_hashes=file_hashes)
+    )
 
     raw_schema_failures: list[dict[str, Any]] = []
     source_hash_mismatches: list[dict[str, Any]] = []
@@ -412,7 +454,12 @@ def build_report(
         if failures:
             raw_schema_failures.append({**_row(key, path=path.as_posix()), "failures": failures})
         if key in ohlcv_index:
-            mismatch = _validate_source_hashes(key=key, df=df, ohlcv_paths=ohlcv_index[key])
+            mismatch = _validate_source_hashes(
+                key=key,
+                df=df,
+                ohlcv_paths=ohlcv_index[key],
+                file_hashes=file_hashes,
+            )
             if mismatch:
                 source_hash_mismatches.append(mismatch)
         else:

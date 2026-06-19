@@ -327,6 +327,16 @@ def build_universe(args: argparse.Namespace) -> dict[str, Any]:
     diagnostic_only = [row for row in market_years if row["audit_status"] == "diagnostic_only"]
     if args.require_usable and not usable:
         failures.append("no usable market-years after applying data audit universe policy")
+    if getattr(args, "require_all_profile_market_years_usable", False):
+        if not args.profile:
+            failures.append("--require-all-profile-market-years-usable requires --profile")
+        not_usable = [row for row in market_years if row["usable_for_wfa"] is not True]
+        if not_usable:
+            pairs = ", ".join(f"{row['market']} {row['year']}" for row in not_usable)
+            failures.append(
+                "not all profile market-years are usable_for_wfa under data audit universe policy: "
+                + pairs
+            )
     return {
         "generated_at_utc": datetime.now(UTC).isoformat(),
         "status": "FAIL" if failures else "PASS",
@@ -357,6 +367,9 @@ def build_universe(args: argparse.Namespace) -> dict[str, Any]:
             },
             "diagnostic_only_markets": sorted(diagnostic_markets),
             "missing_or_unrecognized_decisions_fail_closed": True,
+            "require_all_profile_market_years_usable": bool(
+                getattr(args, "require_all_profile_market_years_usable", False)
+            ),
         },
         "summary": {
             "market_year_count": len(market_years),
@@ -427,6 +440,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json-out", required=True)
     parser.add_argument("--md-out")
     parser.add_argument("--require-usable", action="store_true")
+    parser.add_argument("--require-all-profile-market-years-usable", action="store_true")
     parser.add_argument(
         "--accept-databento-ohlcv-no-trade-convention",
         action="store_true",

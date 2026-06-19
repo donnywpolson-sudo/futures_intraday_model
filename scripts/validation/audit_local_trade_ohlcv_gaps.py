@@ -27,6 +27,8 @@ from scripts.phase1_raw_contract import REQUIRED_DATASET, SCHEMA_PATHS  # noqa: 
 
 
 SCHEMAS_TO_VERIFY = ("ohlcv-1m", "definition", "trades")
+LOCAL_TRADES_SCHEMA_ACCESS_START = "2025-06-18"
+LOCAL_TRADES_SCHEMA_ACCESS_END = "2026-06-13"
 VERIFIED_NO_TRADE = "verified_no_trade_rows_inside_ohlcv_gap"
 TRADE_ACTIVITY = "trade_activity_inside_ohlcv_gap"
 UNVERIFIED_MISSING_COVERAGE = "unverified_missing_trade_coverage"
@@ -35,8 +37,11 @@ NO_MISSING = "no_missing_ohlcv_minutes"
 PENDING = "pending_trade_scan"
 CAVEAT = (
     "A passing local trades cross-check supports a Databento OHLCV no-trade "
-    "convention assumption for similar archives; it does not independently "
-    "prove every older market-year minute is complete."
+    "convention assumption inside the configured local trades schema access "
+    f"window [{LOCAL_TRADES_SCHEMA_ACCESS_START}, {LOCAL_TRADES_SCHEMA_ACCESS_END}); "
+    "downstream Tier 1 data-audit policy may apply this as a dataset-wide "
+    "same-market OHLCV validation assumption, but it is not direct trades proof "
+    "outside the access window."
 )
 
 TradeFrameReader = Callable[[Path, int], Iterable[pd.DataFrame]]
@@ -58,6 +63,17 @@ def _utc_ts(value: str | pd.Timestamp) -> pd.Timestamp:
 
 def _utc_iso(ts: pd.Timestamp) -> str:
     return _utc_ts(ts).isoformat().replace("+00:00", "Z")
+
+
+def _validate_local_trades_access_window(start: pd.Timestamp, end: pd.Timestamp) -> None:
+    access_start = _utc_ts(LOCAL_TRADES_SCHEMA_ACCESS_START)
+    access_end = _utc_ts(LOCAL_TRADES_SCHEMA_ACCESS_END)
+    if start < access_start or end > access_end:
+        raise ValueError(
+            "requested local trades window "
+            f"[{_utc_iso(start)}, {_utc_iso(end)}) is outside configured local trades schema "
+            f"access window [{_utc_iso(access_start)}, {_utc_iso(access_end)})"
+        )
 
 
 def _timestamp_column(frame: pd.DataFrame, path: Path) -> pd.Series:
@@ -674,6 +690,19 @@ def _selected_trade_paths(
     ]
 
 
+def _raw_path_for_market_year(
+    raw_root: Path,
+    raw_overlay_root: Path | None,
+    market: str,
+    year: int,
+) -> Path:
+    if raw_overlay_root is not None:
+        overlay_path = raw_overlay_root / market / f"{year}.parquet"
+        if overlay_path.exists():
+            return overlay_path
+    return raw_root / market / f"{year}.parquet"
+
+
 def audit_market_year(
     *,
     market: str,
@@ -681,13 +710,14 @@ def audit_market_year(
     start: pd.Timestamp,
     end: pd.Timestamp,
     raw_root: Path,
+    raw_overlay_root: Path | None,
     causal_root: Path,
     preflight: dict[str, Any],
     chunk_size: int,
     max_gap_windows: int | None,
     trade_frame_reader: TradeFrameReader,
 ) -> dict[str, Any]:
-    raw_path = raw_root / market / f"{year}.parquet"
+    raw_path = _raw_path_for_market_year(raw_root, raw_overlay_root, market, year)
     causal_path = causal_root / market / f"{year}.parquet"
     failures = _market_year_coverage_failures(preflight, market, start, end)
     raw, raw_ts, raw_failures = _read_parquet_with_ts(raw_path)
@@ -821,6 +851,7 @@ def build_report(
     end = _utc_ts(str(args.end))
     if end <= start:
         raise ValueError("--end must be after --start")
+    _validate_local_trades_access_window(start, end)
     if int(args.chunk_size) <= 0:
         raise ValueError("--chunk-size must be > 0")
     if args.max_gap_windows is not None and int(args.max_gap_windows) <= 0:
@@ -866,6 +897,9 @@ def build_report(
                         start=year_start,
                         end=year_end,
                         raw_root=Path(args.raw_root),
+                        raw_overlay_root=Path(args.raw_overlay_root)
+                        if getattr(args, "raw_overlay_root", None)
+                        else None,
                         causal_root=Path(args.causal_root),
                         preflight=preflight,
                         chunk_size=int(args.chunk_size),
@@ -897,8 +931,15 @@ def build_report(
         "inventory_only": bool(args.inventory_only),
         "scope": scope,
         "window": {"start": _utc_iso(start), "end": _utc_iso(end)},
+        "local_trades_schema_access": {
+            "start": _utc_iso(_utc_ts(LOCAL_TRADES_SCHEMA_ACCESS_START)),
+            "end": _utc_iso(_utc_ts(LOCAL_TRADES_SCHEMA_ACCESS_END)),
+        },
         "dbn_root": _relative_path(Path(args.dbn_root)),
         "raw_root": _relative_path(Path(args.raw_root)),
+        "raw_overlay_root": _relative_path(Path(args.raw_overlay_root))
+        if getattr(args, "raw_overlay_root", None)
+        else None,
         "causal_root": _relative_path(Path(args.causal_root)),
         "chunk_size": int(args.chunk_size),
         "max_gap_windows": args.max_gap_windows,
@@ -968,10 +1009,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile-config", default="configs/alpha_tiered.yaml")
     parser.add_argument("--profiles", nargs="+", default=["tier_3_holdout", "tier_3_forward"])
     parser.add_argument("--markets", nargs="*")
-    parser.add_argument("--start", default="2025-06-18")
-    parser.add_argument("--end", default="2026-06-13")
+    parser.add_argument("--start", default=LOCAL_TRADES_SCHEMA_ACCESS_START)
+    parser.add_argument("--end", default=LOCAL_TRADES_SCHEMA_ACCESS_END)
     parser.add_argument("--dbn-root", default="data/dbn")
     parser.add_argument("--raw-root", default="data/raw")
+    parser.add_argument("--raw-overlay-root")
     parser.add_argument("--causal-root", default="data/causally_gated_normalized")
     parser.add_argument("--json-out", default="reports/pipeline_audit/local_trade_ohlcv_gap_crosscheck_2025_2026.json")
     parser.add_argument("--md-out", default="reports/pipeline_audit/local_trade_ohlcv_gap_crosscheck_2025_2026.md")

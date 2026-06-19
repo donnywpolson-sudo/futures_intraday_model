@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
+import pytest
 import yaml
 
 from scripts.phase1A_download.download_databento_raw import (
@@ -141,6 +142,7 @@ def _args(root: Path, *, inventory_only: bool = False) -> argparse.Namespace:
         end="2025-06-19",
         dbn_root=str(root / "data" / "dbn"),
         raw_root=str(root / "data" / "raw"),
+        raw_overlay_root=None,
         causal_root=str(root / "data" / "causally_gated_normalized"),
         json_out=str(root / "reports" / "audit.json"),
         md_out=str(root / "reports" / "audit.md"),
@@ -176,6 +178,16 @@ def test_default_window_is_end_exclusive_through_2026_06_12() -> None:
 
     assert args.start == "2025-06-18"
     assert args.end == "2026-06-13"
+
+
+def test_requested_window_outside_local_trades_access_fails_closed(tmp_path: Path) -> None:
+    _write_config(tmp_path / "configs" / "alpha_tiered.yaml", ["ES"])
+    args = _args(tmp_path, inventory_only=True)
+    args.start = "2023-01-01"
+    args.end = "2025-01-01"
+
+    with pytest.raises(ValueError, match="outside configured local trades schema access window"):
+        build_report(args, trade_frame_reader=FakeTradeReader([]))
 
 
 def test_missing_trade_market_fails_closed(tmp_path: Path) -> None:
@@ -240,6 +252,28 @@ def test_synthetic_gap_with_trade_row_fails_gap(tmp_path: Path) -> None:
     assert report["status"] == "FAIL"
     assert gap["classification"] == TRADE_ACTIVITY
     assert gap["trade_rows_inside_ohlcv_gap"] == 1
+
+
+def test_raw_overlay_path_suppresses_repaired_gap(tmp_path: Path) -> None:
+    _write_config(tmp_path / "configs" / "alpha_tiered.yaml", ["ES"])
+    _write_all_archives(tmp_path / "data" / "dbn")
+    _write_raw_causal(tmp_path)
+    overlay_path = tmp_path / "data" / "raw_repaired" / "ES" / "2025.parquet"
+    raw = pd.read_parquet(tmp_path / "data" / "raw" / "ES" / "2025.parquet")
+    repaired_row = raw.iloc[[0]].copy()
+    repaired_row["ts"] = pd.Timestamp("2025-06-18T00:01:00Z")
+    overlay_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.concat([raw, repaired_row], ignore_index=True).to_parquet(overlay_path, index=False)
+    args = _args(tmp_path)
+    args.raw_overlay_root = str(tmp_path / "data" / "raw_repaired")
+    reader = FakeTradeReader([_trade_frame(["2025-06-18T00:01:30Z"])])
+
+    report = build_report(args, trade_frame_reader=reader)
+
+    assert report["status"] == "PASS"
+    assert report["summary"]["missing_minute_count"] == 0
+    assert reader.calls == []
+    assert report["market_years"][0]["paths"]["raw"].endswith("data/raw_repaired/ES/2025.parquet")
 
 
 def test_unresolved_adjacent_contract_fails_closed(tmp_path: Path) -> None:

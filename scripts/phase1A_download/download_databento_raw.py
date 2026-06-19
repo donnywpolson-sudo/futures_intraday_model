@@ -3217,6 +3217,7 @@ def validate_raw_file_manifest(
     *,
     expected_market: str | None = None,
     expected_year: int | None = None,
+    file_sha256_value: str | None = None,
 ) -> list[str]:
     manifest_path = raw_file_manifest_path(path)
     failures: list[str] = []
@@ -3245,7 +3246,8 @@ def validate_raw_file_manifest(
         failures.append("manifest path mismatch")
     if int(manifest.get("file_size_bytes") or 0) <= 0:
         failures.append("manifest file_size_bytes invalid")
-    if manifest.get("file_sha256") != file_sha256(path):
+    actual_sha256 = file_sha256_value if file_sha256_value is not None else file_sha256(path)
+    if manifest.get("file_sha256") != actual_sha256:
         failures.append("checksum mismatch")
     if expected_year is not None:
         try:
