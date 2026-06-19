@@ -1,3 +1,5 @@
+# Meta-Audit Prompt
+
 Use in Codex Plan Mode / read-only.
 
 MODE: PLAN / READ-ONLY META-AUDIT ONLY.
