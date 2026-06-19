@@ -13,7 +13,7 @@ import signal
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from types import ModuleType
@@ -34,16 +34,16 @@ DEFAULT_DATASET = "GLBX.MDP3"
 DEFAULT_SCHEMA = "ohlcv-1m"
 DEFAULT_SYMBOLS = "ES.c.0"
 DEFAULT_STYPE_IN = "continuous"
-DEFAULT_LOOKBACK_HOURS = 24.0
+DEFAULT_LOOKBACK_HOURS = 168.0
 DEFAULT_MAX_RECORDS = 0
 DEFAULT_TIMEOUT_SECONDS: float | None = None
 DEFAULT_NO_DATA_WARNING_SECONDS = 60.0
 DEFAULT_CHART_TIMEFRAME = "1m"
-DEFAULT_CHART_TIMEFRAMES = "1m,5m,15m,30m,1h"
+DEFAULT_CHART_TIMEFRAMES = "1m,5m,15m,30m,1h,4h,1d"
 DEFAULT_DISPLAY_TZ = "local"
 VSCODE_RUN_BUTTON_ARGS = (
     "--lookback-hours",
-    "24",
+    "168",
     "--timeout-seconds",
     "120",
     "--no-data-warning-seconds",
@@ -58,7 +58,18 @@ UNDEF_PRICE = 9_223_372_036_854_775_807
 OHLCV_FIELDS = ("ts_event", "open", "high", "low", "close", "volume")
 OHLCV_PAYLOAD_FIELDS = ("open", "high", "low", "close", "volume")
 ALWAYS_REPORTED_RECORD_TYPE_MARKERS = ("Error",)
-TIMEFRAME_PATTERN = re.compile(r"^(\d+)([smh])$")
+TIMEFRAME_PATTERN = re.compile(r"^(\d+)([smhd])$")
+START_CLAMP_PATTERN = re.compile(r"Must be\s+([^,\s]+)\s+or later", re.IGNORECASE)
+CHART_RENDER_BATCH_RECORDS = 2_000
+CHART_RENDER_BATCH_WAIT_SECONDS = 0.01
+CHART_RENDER_THROTTLE_SECONDS = 0.25
+TOPBAR_STATUS_NAME = "status"
+LOADING_STATUS_TEXT = "Loading replay candles..."
+EXCHANGE_TZ_NAME = "America/Chicago"
+RTH_OPEN_HOUR = 8
+RTH_OPEN_MINUTE = 30
+GLOBEX_OPEN_HOUR = 17
+GLOBEX_OPEN_MINUTE = 0
 CHART_INSTALL_MESSAGE = (
     'Missing lightweight-charts package; install optional chart support with: '
     'python -m pip install "lightweight-charts>=2.1,<3"'
@@ -83,6 +94,17 @@ class ChartDisplayState:
     timeframe_seconds: int
     display_tz: tzinfo
     display_tz_name: str
+    loading: bool = True
+    session_marker_objects: list[Any] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ProviderStartClamp:
+    allowed_start: datetime
+    message: str
+
+
+ChartQueueItem = dict[str, CandleValue] | ProviderStartClamp
 
 
 def nonnegative_int(value: str) -> int:
@@ -110,7 +132,7 @@ def normalize_timeframe(value: str) -> str:
     text = value.strip().lower()
     match = TIMEFRAME_PATTERN.fullmatch(text)
     if match is None:
-        raise argparse.ArgumentTypeError("timeframe must look like 1m, 5m, 15m, or 1h")
+        raise argparse.ArgumentTypeError("timeframe must look like 1m, 5m, 15m, 1h, 4h, or 1d")
     amount = int(match.group(1))
     if amount <= 0:
         raise argparse.ArgumentTypeError("timeframe amount must be > 0")
@@ -127,6 +149,8 @@ def timeframe_seconds(value: str) -> int:
         return amount * 60
     if unit == "h":
         return amount * 60 * 60
+    if unit == "d":
+        return amount * 24 * 60 * 60
     raise argparse.ArgumentTypeError(f"unsupported timeframe unit: {unit}")
 
 
@@ -295,6 +319,12 @@ def display_time_label(value: datetime | None, display_tz: tzinfo) -> str:
     return value.astimezone(display_tz).strftime("%Y-%m-%d %H:%M:%S %Z").strip()
 
 
+def short_display_time_label(value: datetime | None, display_tz: tzinfo) -> str:
+    if value is None:
+        return "n/a"
+    return value.astimezone(display_tz).strftime("%H:%M")
+
+
 def format_chart_status(status: ChartStatus) -> str:
     return (
         f"records={status.records_updated} "
@@ -322,6 +352,40 @@ def format_chart_title(
         f"{display_time_label(status.latest_time, display_tz)} | "
         f"UTC last={format_utc_time(status.latest_time)}"
     )
+
+
+def format_topbar_status(
+    *,
+    symbols: str,
+    display: ChartDisplayState,
+    status: ChartStatus,
+) -> str:
+    if display.loading:
+        return f"Loading... {status.records_updated:,} bars"
+    return (
+        f"{symbols} {display.timeframe} | {status.records_updated:,} bars | "
+        f"last {short_display_time_label(status.latest_time, display.display_tz)}"
+    )
+
+
+def safe_topbar_text(value: str) -> str:
+    return value.replace('"', "'").replace("\n", " ")
+
+
+def configure_status_text(chart: object, text: str) -> None:
+    topbar = getattr(chart, "topbar", None)
+    textbox = getattr(topbar, "textbox", None)
+    if callable(textbox):
+        textbox(TOPBAR_STATUS_NAME, safe_topbar_text(text), align="right")
+
+
+def update_chart_status_text(chart: object, text: str) -> None:
+    topbar = getattr(chart, "topbar", None)
+    getter = getattr(topbar, "get", None)
+    widget = getter(TOPBAR_STATUS_NAME) if callable(getter) else None
+    setter = getattr(widget, "set", None)
+    if callable(setter):
+        setter(safe_topbar_text(text))
 
 
 def parse_symbols(value: str) -> str | list[str]:
@@ -444,11 +508,117 @@ def candle_for_display(
     return displayed
 
 
+def session_marker_specs(
+    display: ChartDisplayState,
+    status: ChartStatus,
+) -> list[tuple[datetime, str, str]]:
+    if display.timeframe == "1d" or status.first_time is None or status.latest_time is None:
+        return []
+    try:
+        exchange_tz = ZoneInfo(EXCHANGE_TZ_NAME)
+    except ZoneInfoNotFoundError:
+        return []
+
+    first_utc = normalize_ts_event(status.first_time)
+    latest_utc = normalize_ts_event(status.latest_time)
+    current_day = first_utc.astimezone(exchange_tz).date()
+    end_day = latest_utc.astimezone(exchange_tz).date()
+    specs: list[tuple[datetime, str, str]] = []
+
+    while current_day <= end_day:
+        anchors = (
+            (RTH_OPEN_HOUR, RTH_OPEN_MINUTE, "RTH", "#5b8def"),
+            (GLOBEX_OPEN_HOUR, GLOBEX_OPEN_MINUTE, "Globex", "#8a94a6"),
+        )
+        for hour, minute, label, color in anchors:
+            exchange_time = datetime(
+                current_day.year,
+                current_day.month,
+                current_day.day,
+                hour,
+                minute,
+                tzinfo=exchange_tz,
+            )
+            utc_time = exchange_time.astimezone(timezone.utc)
+            if first_utc <= utc_time <= latest_utc:
+                specs.append((chart_display_time(utc_time, display.display_tz), label, color))
+        current_day += timedelta(days=1)
+    return specs
+
+
+def clear_session_markers(display: ChartDisplayState) -> None:
+    for marker in display.session_marker_objects:
+        delete = getattr(marker, "delete", None)
+        if callable(delete):
+            try:
+                delete()
+            except Exception:
+                pass
+    display.session_marker_objects.clear()
+
+
+def refresh_session_markers(
+    chart: object,
+    display: ChartDisplayState,
+    status: ChartStatus,
+) -> None:
+    clear_session_markers(display)
+    vertical_line = getattr(chart, "vertical_line", None)
+    if not callable(vertical_line):
+        return
+    for marker_time, label, color in session_marker_specs(display, status):
+        try:
+            marker = vertical_line(
+                marker_time,
+                color=color,
+                width=1,
+                style="dotted",
+                text=label,
+            )
+        except Exception:
+            continue
+        display.session_marker_objects.append(marker)
+
+
 def record_value(record: object, name: str) -> object:
     if not hasattr(record, name):
         raise ValueError(f"missing field: {name}")
     value = getattr(record, name)
     return value() if callable(value) else value
+
+
+def record_error_text(record: object) -> str:
+    values: list[str] = []
+    for name in ("err", "message", "msg"):
+        if not hasattr(record, name):
+            continue
+        try:
+            value = record_value(record, name)
+        except Exception:
+            continue
+        if value:
+            values.append(str(value))
+    return " ".join(values)
+
+
+def parse_allowed_start_from_text(value: str) -> datetime | None:
+    match = START_CLAMP_PATTERN.search(value)
+    if match is None:
+        return None
+    try:
+        return normalize_ts_event(match.group(1))
+    except Exception:
+        return None
+
+
+def provider_start_clamp_from_record(record: object) -> ProviderStartClamp | None:
+    if "Error" not in type(record).__name__:
+        return None
+    text = record_error_text(record)
+    allowed_start = parse_allowed_start_from_text(text)
+    if allowed_start is None:
+        return None
+    return ProviderStartClamp(allowed_start=allowed_start, message=text)
 
 
 def ohlcv_record_to_candle(record: object) -> dict[str, CandleValue]:
@@ -558,14 +728,23 @@ def import_chart_runtime() -> tuple[type[Any], Callable[[dict[str, CandleValue]]
 
 
 def build_record_callback(
-    candle_queue: queue.Queue[dict[str, CandleValue]],
+    candle_queue: queue.Queue[ChartQueueItem],
     *,
     stderr: TextIO,
+    allow_start_clamp: bool = True,
 ) -> Callable[[object], None]:
     def handle_record(record: object) -> None:
         try:
             candle = ohlcv_record_to_candle(record)
         except Exception as exc:
+            start_clamp = (
+                provider_start_clamp_from_record(record)
+                if allow_start_clamp
+                else None
+            )
+            if start_clamp is not None:
+                candle_queue.put(start_clamp)
+                return
             if should_ignore_record(record, exc):
                 return
             print(describe_record_skip(record, exc), file=stderr)
@@ -592,6 +771,7 @@ def configure_chart(
     timeframe_options: Sequence[str] = (),
     selected_timeframe: str | None = None,
     on_timeframe_change: Callable[[object], None] | None = None,
+    status_text: str = LOADING_STATUS_TEXT,
 ) -> None:
     call_if_available(
         chart,
@@ -617,7 +797,37 @@ def configure_chart(
         up_color="rgba(38, 166, 154, 0.45)",
         down_color="rgba(239, 83, 80, 0.45)",
     )
-    call_if_available(chart, "legend", visible=True)
+    call_if_available(
+        chart,
+        "legend",
+        visible=True,
+        ohlc=True,
+        percent=False,
+        color_based_on_candle=True,
+        font_size=12,
+        font_family="Arial",
+    )
+    call_if_available(chart, "precision", precision=2)
+    call_if_available(
+        chart,
+        "crosshair",
+        vert_color="#9aa4b2",
+        horz_color="#9aa4b2",
+        vert_style="large_dashed",
+        horz_style="large_dashed",
+        vert_label_background_color="#2f3542",
+        horz_label_background_color="#2f3542",
+    )
+    call_if_available(
+        chart,
+        "price_scale",
+        scale_margin_top=0.10,
+        scale_margin_bottom=0.18,
+        border_visible=True,
+        border_color="#2a2e39",
+        text_color="#d1d4dc",
+        minimum_width=80,
+    )
     update_chart_title(chart, title)
     configure_timeframe_switcher(
         chart,
@@ -625,6 +835,7 @@ def configure_chart(
         selected_timeframe=selected_timeframe,
         on_timeframe_change=on_timeframe_change,
     )
+    configure_status_text(chart, status_text)
 
 
 def configure_timeframe_switcher(
@@ -723,6 +934,38 @@ def apply_candle_status(status: ChartStatus, candle: dict[str, CandleValue]) -> 
     status.records_updated += 1
 
 
+def append_display_candle(
+    display: ChartDisplayState,
+    status: ChartStatus,
+    candle: dict[str, CandleValue],
+) -> None:
+    display.raw_candles.append(candle)
+    apply_candle_status(status, candle)
+
+
+def append_display_candle_batch(
+    candle_queue: queue.Queue[ChartQueueItem],
+    *,
+    first_candle: dict[str, CandleValue],
+    display: ChartDisplayState,
+    status: ChartStatus,
+    max_records: int,
+) -> bool:
+    append_display_candle(display, status, first_candle)
+    while (
+        status.records_updated < max_records or max_records == 0
+    ) and len(display.raw_candles) % CHART_RENDER_BATCH_RECORDS != 0:
+        try:
+            candle = candle_queue.get(timeout=CHART_RENDER_BATCH_WAIT_SECONDS)
+        except queue.Empty:
+            return True
+        if isinstance(candle, ProviderStartClamp):
+            candle_queue.put(candle)
+            return False
+        append_display_candle(display, status, candle)
+    return candle_queue.empty()
+
+
 def render_chart_display(
     display: ChartDisplayState,
     *,
@@ -743,6 +986,7 @@ def render_chart_display(
         for candle in aggregated
     ]
     replace_chart_candles(chart, display_candles, series_factory=series_factory)
+    refresh_session_markers(chart, display, status)
     update_chart_title(
         chart,
         format_chart_title(
@@ -754,6 +998,10 @@ def render_chart_display(
             display_tz_name=display.display_tz_name,
             status=status,
         ),
+    )
+    update_chart_status_text(
+        chart,
+        format_topbar_status(symbols=symbols, display=display, status=status),
     )
     emit_status_line(status, stdout)
 
@@ -823,6 +1071,22 @@ def stop_live_client(live: object | None) -> None:
         wait_for_close()
     except Exception:
         return
+
+
+def clear_queue_values(values: queue.Queue[ChartQueueItem]) -> None:
+    while True:
+        try:
+            values.get_nowait()
+        except queue.Empty:
+            return
+
+
+def reset_status(status: ChartStatus) -> None:
+    status.records_updated = 0
+    status.first_time = None
+    status.latest_time = None
+    status.last_close = None
+    status.status_line_printed = False
 
 
 def build_timeframe_callback(
@@ -904,6 +1168,8 @@ class ChartRunResult:
     latest_time: datetime | None = None
     last_close: float | None = None
     no_data_warned: bool = False
+    retry_start: datetime | None = None
+    provider_message: str | None = None
 
 
 def chart_result(
@@ -912,6 +1178,8 @@ def chart_result(
     timed_out: bool,
     chart_closed: bool,
     no_data_warned: bool,
+    retry_start: datetime | None = None,
+    provider_message: str | None = None,
 ) -> ChartRunResult:
     return ChartRunResult(
         records_updated=status.records_updated,
@@ -921,11 +1189,13 @@ def chart_result(
         latest_time=status.latest_time,
         last_close=status.last_close,
         no_data_warned=no_data_warned,
+        retry_start=retry_start,
+        provider_message=provider_message,
     )
 
 
 def drain_chart_queue(
-    candle_queue: queue.Queue[dict[str, CandleValue]],
+    candle_queue: queue.Queue[ChartQueueItem],
     *,
     chart: object,
     series_factory: Callable[[dict[str, CandleValue]], Any],
@@ -952,6 +1222,8 @@ def drain_chart_queue(
     )
     chart_closed = False
     no_data_warned = False
+    last_render_at = started_at
+    pending_render = False
 
     while max_records == 0 or status.records_updated < max_records:
         if drain_chart_event_queue(chart, stderr):
@@ -963,6 +1235,8 @@ def drain_chart_queue(
             display=display,
             chart_timeframes=chart_timeframes,
         ):
+            if status.records_updated > 0:
+                display.loading = False
             render_chart_display(
                 display,
                 chart=chart,
@@ -973,6 +1247,8 @@ def drain_chart_queue(
                 mode=mode,
                 stdout=stdout,
             )
+            last_render_at = clock()
+            pending_render = False
 
         if not chart_is_alive(chart):
             chart_closed = True
@@ -993,8 +1269,33 @@ def drain_chart_queue(
             wait_seconds = min(0.10, remaining)
 
         try:
-            candle = candle_queue.get(timeout=wait_seconds)
+            item = candle_queue.get(timeout=wait_seconds)
         except queue.Empty:
+            if pending_render:
+                if status.records_updated > 0:
+                    display.loading = False
+                render_chart_display(
+                    display,
+                    chart=chart,
+                    series_factory=series_factory,
+                    status=status,
+                    symbols=symbols,
+                    schema=schema,
+                    mode=mode,
+                    stdout=stdout,
+                )
+                last_render_at = clock()
+                pending_render = False
+            elif display.loading and status.records_updated > 0:
+                display.loading = False
+                update_chart_status_text(
+                    chart,
+                    format_topbar_status(
+                        symbols=symbols,
+                        display=display,
+                        status=status,
+                    ),
+                )
             if (
                 warning_deadline is not None
                 and not no_data_warned
@@ -1009,18 +1310,49 @@ def drain_chart_queue(
                 no_data_warned = True
             continue
 
-        display.raw_candles.append(candle)
-        apply_candle_status(status, candle)
-        render_chart_display(
-            display,
-            chart=chart,
-            series_factory=series_factory,
+        if isinstance(item, ProviderStartClamp):
+            return chart_result(
+                status,
+                timed_out=False,
+                chart_closed=False,
+                no_data_warned=no_data_warned,
+                retry_start=item.allowed_start,
+                provider_message=item.message,
+            )
+
+        queue_drained = append_display_candle_batch(
+            candle_queue,
+            first_candle=item,
+            display=display,
             status=status,
-            symbols=symbols,
-            schema=schema,
-            mode=mode,
-            stdout=stdout,
+            max_records=max_records,
         )
+        pending_render = True
+        update_chart_status_text(
+            chart,
+            format_topbar_status(symbols=symbols, display=display, status=status),
+        )
+        now_after_batch = clock()
+        max_records_reached = max_records != 0 and status.records_updated >= max_records
+        if (
+            queue_drained
+            or max_records_reached
+            or now_after_batch - last_render_at >= CHART_RENDER_THROTTLE_SECONDS
+        ):
+            if queue_drained and status.records_updated > 0:
+                display.loading = False
+            render_chart_display(
+                display,
+                chart=chart,
+                series_factory=series_factory,
+                status=status,
+                symbols=symbols,
+                schema=schema,
+                mode=mode,
+                stdout=stdout,
+            )
+            last_render_at = now_after_batch
+            pending_render = False
 
     return chart_result(
         status,
@@ -1068,7 +1400,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--lookback-hours",
         type=positive_float,
         default=None,
-        help="Replay this many hours before now; default is 24.",
+        help="Replay this many hours before now; default is 168.",
     )
     window_group.add_argument(
         "--lookback-days",
@@ -1167,7 +1499,6 @@ def run_live_chart(
         chart_factory = chart_factory or chart_cls
         series_factory = series_factory or runtime_series_factory
 
-    candle_queue: queue.Queue[dict[str, CandleValue]] = queue.Queue()
     timeframe_queue: queue.Queue[str] = queue.Queue()
     live = None
     chart = None
@@ -1196,6 +1527,7 @@ def run_live_chart(
             timeframe_options=chart_timeframes,
             selected_timeframe=display.timeframe,
             on_timeframe_change=build_timeframe_callback(timeframe_queue),
+            status_text=LOADING_STATUS_TEXT,
         )
         show_chart(chart)
         symbols = parse_symbols(args.symbols)
@@ -1229,35 +1561,84 @@ def run_live_chart(
                 )
             live_start = historical_end
 
-        live = db_module.Live(key=api_key)
-        live.subscribe(
-            dataset=args.dataset,
-            schema=args.schema,
-            symbols=symbols,
-            stype_in=args.stype_in,
-            start=live_start,
-        )
-        live.add_callback(build_record_callback(candle_queue, stderr=stderr))
-        live.start()
+        retried_clamped_start = False
+        while True:
+            candle_queue: queue.Queue[ChartQueueItem] = queue.Queue()
+            live = db_module.Live(key=api_key)
+            try:
+                live.subscribe(
+                    dataset=args.dataset,
+                    schema=args.schema,
+                    symbols=symbols,
+                    stype_in=args.stype_in,
+                    start=live_start,
+                )
+            except Exception as exc:
+                retry_start = parse_allowed_start_from_text(str(exc))
+                if retry_start is None or retried_clamped_start:
+                    raise
+                stop_live_client(live)
+                live = None
+                retried_clamped_start = True
+                live_start = retry_start
+                display.loading = True
+                update_chart_status_text(
+                    chart,
+                    f"{LOADING_STATUS_TEXT} retrying from {format_utc_time(live_start)}",
+                )
+                continue
 
-        result = drain_chart_queue(
-            candle_queue,
-            chart=chart,
-            series_factory=series_factory,
-            display=display,
-            timeframe_queue=timeframe_queue,
-            chart_timeframes=chart_timeframes,
-            max_records=args.max_records,
-            timeout_seconds=args.timeout_seconds,
-            no_data_warning_seconds=args.no_data_warning_seconds,
-            status=status,
-            symbols=args.symbols,
-            schema=args.schema,
-            mode=mode,
-            stdout=stdout,
-            stderr=stderr,
-            clock=clock,
-        )
+            live.add_callback(
+                build_record_callback(
+                    candle_queue,
+                    stderr=stderr,
+                    allow_start_clamp=not retried_clamped_start,
+                )
+            )
+            live.start()
+
+            result = drain_chart_queue(
+                candle_queue,
+                chart=chart,
+                series_factory=series_factory,
+                display=display,
+                timeframe_queue=timeframe_queue,
+                chart_timeframes=chart_timeframes,
+                max_records=args.max_records,
+                timeout_seconds=args.timeout_seconds,
+                no_data_warning_seconds=args.no_data_warning_seconds,
+                status=status,
+                symbols=args.symbols,
+                schema=args.schema,
+                mode=mode,
+                stdout=stdout,
+                stderr=stderr,
+                clock=clock,
+            )
+            if result.retry_start is None or retried_clamped_start:
+                break
+
+            finish_status_line(status, stdout)
+            print(
+                "Databento replay start too old; retrying from "
+                f"{format_utc_time(result.retry_start)}.",
+                file=stdout,
+            )
+            stop_live_client(live)
+            live = None
+            clear_queue_values(candle_queue)
+            clear_session_markers(display)
+            display.raw_candles.clear()
+            display.loading = True
+            reset_status(status)
+            replace_chart_candles(chart, [], series_factory=series_factory)
+            update_chart_status_text(
+                chart,
+                f"{LOADING_STATUS_TEXT} retrying from {format_utc_time(result.retry_start)}",
+            )
+            live_start = result.retry_start
+            retried_clamped_start = True
+
         finish_status_line(status, stdout)
         print(
             "Live chart stopped: "

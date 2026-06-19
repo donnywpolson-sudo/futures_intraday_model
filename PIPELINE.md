@@ -138,8 +138,8 @@ Generated staging roots:
 - `data/raw_alignment_candidate_missing_fill`: temporary candidates for missing
   canonical raw market-years that have local OHLCV and definition DBNs.
 - `data/raw_enriched_candidate`: temporary status/statistics enrichment
-  candidate output. It remains OHLCV 1-minute grained and is not a canonical
-  Phase 1B output.
+  candidate output. It remains OHLCV 1-minute grained and is not a separate
+  schema-level parquet dataset.
 
 These staging roots are ignored generated artifacts. They are not normal
 downstream inputs, and promotion into `data/raw` requires separate explicit
@@ -155,7 +155,8 @@ cd C:\Users\donny\Desktop\futures_intraday_model
 
 ### 1A. Download DBN Archives
 
-Purpose: archive immutable Databento OHLCV and definition DBN/ZST chunks.
+Purpose: archive immutable Databento DBN/ZST chunks. This phase downloads
+source archives only; it does not create canonical raw parquet.
 
 Command pattern:
 
@@ -197,8 +198,10 @@ Stop conditions:
 
 ### 1B. Convert DBN To Raw Parquet
 
-Purpose: validate DBN chunks plus definition metadata and stitch them into raw
-market-year parquet.
+Purpose: validate DBN chunks plus definition metadata and stitch them into one
+OHLCV 1-minute grained raw market-year parquet dataset. Definition, status, and
+statistics records are joined onto OHLCV rows as metadata/enrichment columns;
+Phase 1B does not create separate parquet datasets for each DBN schema.
 
 Command:
 
@@ -234,6 +237,8 @@ Acceptance checks:
 - Optional status/statistics enrichment preserves OHLCV 1-minute grain: one row
   per OHLCV bar. Optional records are causal as-of joined by `instrument_id` and
   `ts_event`; they never define additional rows.
+- Optional status/statistics enrichment is raw metadata/audit context until a
+  separate leakage-safe feature-hypothesis change promotes any field to features.
 - Optional enrichment is staged in `data/raw_enriched_candidate` first. Promotion
   into canonical `data/raw` requires a separate explicit approval after row-count
   and schema validation against the trusted baseline.
@@ -256,6 +261,19 @@ Command:
 python -m scripts.validation.audit_raw_dbn_alignment --config configs/alpha_tiered.yaml --profile tier_3 --dbn-root data\dbn --raw-root data\raw --json-out reports\raw_ingest\raw_dbn_alignment.json --md-out reports\raw_ingest\raw_dbn_alignment.md
 ```
 
+Optional enrichment audit:
+
+```powershell
+python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data\dbn --schema ohlcv-1m --schema definition --schema status --schema statistics --optional-schema status --report-out reports\raw_readiness\dbn_four_schema_coverage_tier3_research_optional_status.json
+python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_holdout --dbn-root data\dbn --schema ohlcv-1m --schema definition --schema status --schema statistics --optional-schema status --report-out reports\raw_readiness\dbn_four_schema_coverage_tier3_holdout_optional_status.json
+python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_forward --dbn-root data\dbn --schema ohlcv-1m --schema definition --schema status --schema statistics --optional-schema status --end-date 2026-06-13 --report-out reports\raw_readiness\dbn_four_schema_coverage_tier3_forward_partial.json
+python -m scripts.validation.audit_enriched_raw_optional_schemas --raw-root data\raw --dbn-root data\dbn --json-out reports\raw_readiness\raw_enriched_optional_schema_audit.json --md-out reports\raw_readiness\raw_enriched_optional_schema_audit.md
+```
+
+`status` is optional metadata in these checks; missing status archives/manifests
+must remain visible as optional gaps. Forward 2026 coverage is bounded to the
+known local archive horizon, `2026-06-13`, not a full-year archive expectation.
+
 Candidate comparison commands:
 
 ```powershell
@@ -273,6 +291,8 @@ Acceptance checks:
   candidates, not silently ignored.
 - Staged candidates are compared against canonical `data/raw` before any
   promotion decision.
+- Optional status/statistics audit separates core OHLCV/definition readiness
+  from optional-enrichment readiness and alpha-input caveats.
 
 Streamlining policy:
 
@@ -321,6 +341,8 @@ Acceptance checks:
   `[2025-06-18, 2026-06-13)` are cross-checked against local `trades` DBN
   archives. A passing market validates older years by Databento no-trade
   convention evidence only; older years are not independently re-proven.
+- The local trades gate proves no trade rows inside scanned synthetic OHLCV gap
+  windows only; it is not a universal proof that no trades occurred everywhere.
 - Production/research profiles fail when strict raw metadata is missing.
 
 Stop conditions:

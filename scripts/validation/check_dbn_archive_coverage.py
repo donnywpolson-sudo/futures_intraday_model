@@ -23,7 +23,7 @@ from scripts.phase1A_download.download_databento_raw import (  # noqa: E402
     resolve_requested_schemas,
     validate_raw_file_manifest,
 )
-from scripts.phase1_raw_contract import SCHEMA_ALIASES, SUPPORTED_SCHEMAS  # noqa: E402
+from scripts.phase1_raw_contract import SCHEMA_ALIASES, SCHEMA_PATHS, SUPPORTED_SCHEMAS  # noqa: E402
 from scripts.validation.check_tier_2_coverage import (  # noqa: E402
     load_yaml,
     resolve_profile_name,
@@ -31,6 +31,7 @@ from scripts.validation.check_tier_2_coverage import (  # noqa: E402
 
 
 DEFAULT_SCHEMAS = (SCHEMA, "definition")
+_SCHEMA_ROOT_NAMES = set(SCHEMA_PATHS.values())
 
 
 def _non_empty_file(path: Path) -> bool:
@@ -66,9 +67,10 @@ def _expected_archive_rows(
     years: list[int],
     dbn_root: Path,
     schemas: tuple[str, ...],
+    end_date: str | None = None,
 ) -> list[dict[str, Any]]:
     start = f"{min(years)}-01-01"
-    end = f"{max(years) + 1}-01-01"
+    end = end_date or f"{max(years) + 1}-01-01"
     selected_years = set(years)
     rows: list[dict[str, Any]] = []
 
@@ -105,13 +107,19 @@ def _expected_archive_rows(
     return rows
 
 
-def _count_by_market(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
+def _count_rows_by_market(rows: list[dict[str, Any]]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for row in rows:
-        if row[field]:
-            continue
         market = str(row["market"])
         counts[market] = counts.get(market, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _count_rows_by_schema(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        schema = str(row["schema"])
+        counts[schema] = counts.get(schema, 0) + 1
     return dict(sorted(counts.items()))
 
 
@@ -122,6 +130,29 @@ def resolve_schema_args(schemas: tuple[str, ...] | None) -> tuple[str, ...]:
             if item not in resolved:
                 resolved.append(item)
     return tuple(resolved)
+
+
+def resolve_optional_schema_args(schemas: tuple[str, ...] | None) -> tuple[str, ...]:
+    resolved: list[str] = []
+    for schema in schemas or ():
+        if schema in SCHEMA_ALIASES:
+            raise ValueError(f"optional schema must be concrete, got alias {schema!r}")
+        for item in resolve_requested_schemas(schema):
+            if item not in resolved:
+                resolved.append(item)
+    return tuple(resolved)
+
+
+def _normalize_dbn_root(dbn_root: Path) -> Path:
+    root = Path(dbn_root)
+    ohlcv_root_name = SCHEMA_PATHS[SCHEMA]
+    if root.name == ohlcv_root_name:
+        return root
+    if root.name in _SCHEMA_ROOT_NAMES:
+        return root.parent / ohlcv_root_name
+    if root.name == "dbn" or (root / ohlcv_root_name).exists():
+        return root / ohlcv_root_name
+    return root
 
 
 def _extra_market_dirs_by_schema(
@@ -171,20 +202,30 @@ def build_report(
     dbn_root: Path,
     schemas: tuple[str, ...] = DEFAULT_SCHEMAS,
     require_manifests: bool = True,
+    optional_schemas: tuple[str, ...] = (),
+    end_date: str | None = None,
 ) -> dict[str, Any]:
     resolved, markets, years = _profile_markets_and_years(config_path, profile)
     schemas = resolve_schema_args(schemas)
+    optional_schemas = resolve_optional_schema_args(optional_schemas)
+    optional_schema_set = set(optional_schemas)
+    effective_dbn_root = _normalize_dbn_root(dbn_root)
     rows = _expected_archive_rows(
         markets=markets,
         years=years,
-        dbn_root=dbn_root,
+        dbn_root=effective_dbn_root,
         schemas=schemas,
+        end_date=end_date,
     )
-    missing_archives = [row for row in rows if not row["archive_present"]]
-    missing_manifests = [row for row in rows if not row["manifest_present"]]
+    required_rows = [row for row in rows if str(row["schema"]) not in optional_schema_set]
+    optional_rows = [row for row in rows if str(row["schema"]) in optional_schema_set]
+    missing_archives = [row for row in required_rows if not row["archive_present"]]
+    missing_optional_archives = [row for row in optional_rows if not row["archive_present"]]
+    missing_manifests = [row for row in required_rows if not row["manifest_present"]]
+    missing_optional_manifests = [row for row in optional_rows if not row["manifest_present"]]
     invalid_manifests = _invalid_manifests(rows, require_manifests=require_manifests)
     extra_market_dirs = _extra_market_dirs_by_schema(
-        dbn_root=dbn_root,
+        dbn_root=effective_dbn_root,
         schemas=schemas,
         markets=markets,
     )
@@ -206,19 +247,33 @@ def build_report(
         "resolved_profile": resolved,
         "dataset": CME_DATASET,
         "dbn_root": dbn_root.as_posix(),
+        "effective_dbn_root": effective_dbn_root.as_posix(),
         "schemas": list(schemas),
+        "optional_schemas": list(optional_schemas),
         "markets": markets,
         "years": years,
+        "audit_start": f"{min(years)}-01-01",
+        "audit_end": end_date or f"{max(years) + 1}-01-01",
         "expected_archive_count": len(rows),
         "missing_archive_count": len(missing_archives),
+        "missing_optional_archive_count": len(missing_optional_archives),
         "missing_manifest_count": len(missing_manifests),
+        "missing_optional_manifest_count": len(missing_optional_manifests),
         "invalid_manifest_count": len(invalid_manifests),
         "extra_market_dir_count": extra_market_dir_count,
-        "missing_archives_by_market": _count_by_market(rows, "archive_present"),
-        "missing_manifests_by_market": _count_by_market(rows, "manifest_present"),
+        "missing_archives_by_market": _count_rows_by_market(missing_archives),
+        "missing_optional_archives_by_market": _count_rows_by_market(missing_optional_archives),
+        "missing_archives_by_schema": _count_rows_by_schema(missing_archives),
+        "missing_optional_archives_by_schema": _count_rows_by_schema(missing_optional_archives),
+        "missing_manifests_by_market": _count_rows_by_market(missing_manifests),
+        "missing_optional_manifests_by_market": _count_rows_by_market(missing_optional_manifests),
+        "missing_manifests_by_schema": _count_rows_by_schema(missing_manifests),
+        "missing_optional_manifests_by_schema": _count_rows_by_schema(missing_optional_manifests),
         "extra_market_dirs_by_schema": extra_market_dirs,
         "missing_archives": missing_archives,
+        "missing_optional_archives": missing_optional_archives,
         "missing_manifests": missing_manifests,
+        "missing_optional_manifests": missing_optional_manifests,
         "invalid_manifests": invalid_manifests,
     }
 
@@ -235,6 +290,14 @@ def parse_args() -> argparse.Namespace:
         dest="schemas",
         help="Schema to check; defaults to ohlcv-1m and definition.",
     )
+    parser.add_argument(
+        "--optional-schema",
+        action="append",
+        choices=SUPPORTED_SCHEMAS,
+        dest="optional_schemas",
+        help="Schema whose missing archives/manifests should be reported as optional gaps.",
+    )
+    parser.add_argument("--end-date", help="Exclusive end date for partial current-year audits, YYYY-MM-DD.")
     parser.add_argument("--allow-missing-manifests", action="store_true")
     parser.add_argument("--report-out")
     return parser.parse_args()
@@ -248,6 +311,8 @@ def main() -> int:
         dbn_root=Path(args.dbn_root),
         schemas=resolve_schema_args(tuple(args.schemas or DEFAULT_SCHEMAS)),
         require_manifests=not args.allow_missing_manifests,
+        optional_schemas=resolve_optional_schema_args(tuple(args.optional_schemas or ())),
+        end_date=args.end_date,
     )
     if args.report_out:
         out = Path(args.report_out)
@@ -257,6 +322,8 @@ def main() -> int:
     print(
         "status={status} expected_archives={expected_archive_count} "
         "missing_archives={missing_archive_count} missing_manifests={missing_manifest_count} "
+        "missing_optional_archives={missing_optional_archive_count} "
+        "missing_optional_manifests={missing_optional_manifest_count} "
         "invalid_manifests={invalid_manifest_count} extra_market_dirs={extra_market_dir_count}".format(**report)
     )
     return 0 if report["status"] == "PASS" else 1

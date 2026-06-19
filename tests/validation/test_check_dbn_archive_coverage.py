@@ -96,6 +96,20 @@ def test_dbn_archive_coverage_passes_with_ohlcv_definition_and_manifests(tmp_pat
     assert report["extra_market_dir_count"] == 0
 
 
+def test_dbn_archive_coverage_accepts_parent_dbn_root(tmp_path: Path) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2018])
+    dbn_root = tmp_path / "data" / "dbn"
+    seed = build_report(config_path=config, profile="tier_3_research", dbn_root=dbn_root)
+    for row in seed["missing_archives"]:
+        _touch_expected_archive(row)
+
+    report = build_report(config_path=config, profile="tier_3_research", dbn_root=dbn_root)
+
+    assert report["status"] == "PASS"
+    assert report["effective_dbn_root"].endswith("data/dbn/ohlcv_1m")
+    assert report["missing_archive_count"] == 0
+
+
 def test_dbn_archive_coverage_can_ignore_manifests_for_archive_only_probe(tmp_path: Path) -> None:
     config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2024])
     dbn_root = tmp_path / "data" / "dbn" / "ohlcv_1m"
@@ -117,6 +131,92 @@ def test_dbn_archive_coverage_can_ignore_manifests_for_archive_only_probe(tmp_pa
     assert strict["missing_archive_count"] == 0
     assert strict["missing_manifest_count"] == 2
     assert archive_only["status"] == "PASS"
+
+
+def test_dbn_archive_coverage_reports_optional_status_gaps_without_failure(tmp_path: Path) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2024])
+    dbn_root = tmp_path / "data" / "dbn"
+    seed = build_report(
+        config_path=config,
+        profile="tier_3_research",
+        dbn_root=dbn_root,
+        schemas=("ohlcv-1m", "definition", "status"),
+        optional_schemas=("status",),
+    )
+    for row in seed["missing_archives"]:
+        if row["schema"] != "status":
+            _touch_expected_archive(row)
+
+    report = build_report(
+        config_path=config,
+        profile="tier_3_research",
+        dbn_root=dbn_root,
+        schemas=("ohlcv-1m", "definition", "status"),
+        optional_schemas=("status",),
+    )
+
+    assert report["status"] == "PASS"
+    assert report["missing_archive_count"] == 0
+    assert report["missing_manifest_count"] == 0
+    assert report["missing_optional_archive_count"] == 1
+    assert report["missing_optional_manifest_count"] == 1
+    assert report["missing_optional_archives_by_schema"] == {"status": 1}
+
+
+def test_dbn_archive_coverage_still_fails_missing_required_schema(tmp_path: Path) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2024])
+    dbn_root = tmp_path / "data" / "dbn"
+    seed = build_report(
+        config_path=config,
+        profile="tier_3_research",
+        dbn_root=dbn_root,
+        schemas=("ohlcv-1m", "definition", "status"),
+        optional_schemas=("status",),
+    )
+    for row in seed["missing_archives"]:
+        if row["schema"] == "ohlcv-1m":
+            _touch_expected_archive(row)
+
+    report = build_report(
+        config_path=config,
+        profile="tier_3_research",
+        dbn_root=dbn_root,
+        schemas=("ohlcv-1m", "definition", "status"),
+        optional_schemas=("status",),
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["missing_archive_count"] == 1
+    assert report["missing_archives_by_schema"] == {"definition": 1}
+    assert report["missing_optional_archive_count"] == 1
+
+
+def test_dbn_archive_coverage_uses_partial_current_year_end_date(tmp_path: Path) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2026])
+    dbn_root = tmp_path / "data" / "dbn"
+    seed = build_report(
+        config_path=config,
+        profile="tier_3_research",
+        dbn_root=dbn_root,
+        schemas=("ohlcv-1m", "definition"),
+        end_date="2026-06-13",
+    )
+
+    assert seed["expected_archive_count"] == 2
+    assert all("2026-01-01_2026-06-13.dbn.zst" in row["path"] for row in seed["missing_archives"])
+
+    for row in seed["missing_archives"]:
+        _touch_expected_archive(row)
+    report = build_report(
+        config_path=config,
+        profile="tier_3_research",
+        dbn_root=dbn_root,
+        schemas=("ohlcv-1m", "definition"),
+        end_date="2026-06-13",
+    )
+
+    assert report["status"] == "PASS"
+    assert report["audit_end"] == "2026-06-13"
 
 
 def test_dbn_archive_coverage_checks_supported_schema_aliases_and_extra_dirs(tmp_path: Path) -> None:
