@@ -3,11 +3,12 @@ from __future__ import annotations
 import importlib
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from types import ModuleType
 
+import pandas as pd
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -71,8 +72,39 @@ class FakeLive:
         self.block_timeout = timeout
 
 
+class FakeHistoricalStore:
+    def __init__(self, frame: pd.DataFrame) -> None:
+        self.frame = frame
+        self.to_df_calls: list[dict[str, object]] = []
+
+    def to_df(self, **kwargs: object) -> pd.DataFrame:
+        self.to_df_calls.append(kwargs)
+        return self.frame
+
+
+class FakeTimeseries:
+    def __init__(self, store: FakeHistoricalStore) -> None:
+        self.store = store
+        self.get_range_calls: list[dict[str, object]] = []
+
+    def get_range(self, **kwargs: object) -> FakeHistoricalStore:
+        self.get_range_calls.append(kwargs)
+        return self.store
+
+
+class FakeHistorical:
+    instances: list["FakeHistorical"] = []
+    store = FakeHistoricalStore(pd.DataFrame())
+
+    def __init__(self, key: str) -> None:
+        self.key = key
+        self.timeseries = FakeTimeseries(self.store)
+        FakeHistorical.instances.append(self)
+
+
 class FakeDB(ModuleType):
     Live = FakeLive
+    Historical = FakeHistorical
 
 
 class FakeChart:
@@ -159,6 +191,30 @@ def _series_factory(
     return dict(candle)
 
 
+class StepClock:
+    def __init__(self) -> None:
+        self.value = 0.0
+
+    def __call__(self) -> float:
+        self.value += 1.0
+        return self.value
+
+
+def _historical_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "ts_event": pd.Timestamp("2024-06-18T13:30:00Z"),
+                "open": 5499.0,
+                "high": 5500.0,
+                "low": 5498.5,
+                "close": 5499.5,
+                "volume": 12,
+            }
+        ]
+    )
+
+
 def test_module_import_does_not_import_databento_or_chart(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -196,12 +252,44 @@ def test_missing_key_exits_before_runtime_imports(monkeypatch: pytest.MonkeyPatc
     assert "Missing DATABENTO_API_KEY" in stderr.getvalue()
 
 
-def test_default_args_replay_and_run_until_closed() -> None:
+def test_default_args_resolve_six_hour_lookback() -> None:
     args = _args()
+    now = datetime(2024, 6, 18, 20, tzinfo=timezone.utc)
 
-    assert args.start == "0"
+    assert args.start is None
+    assert args.lookback_hours is None
+    assert args.lookback_days is None
+    assert live_chart.resolve_window_start(args, now=now) == now - timedelta(hours=6)
     assert args.max_records == 0
     assert args.timeout_seconds is None
+
+
+def test_explicit_window_args_resolve_start_and_lookbacks() -> None:
+    now = datetime(2024, 6, 18, 20, tzinfo=timezone.utc)
+
+    assert (
+        live_chart.resolve_window_start(_args("--lookback-hours", "2"), now=now)
+        == now - timedelta(hours=2)
+    )
+    assert (
+        live_chart.resolve_window_start(_args("--lookback-days", "2"), now=now)
+        == now - timedelta(days=2)
+    )
+    assert (
+        live_chart.resolve_window_start(
+            _args("--start", "2026-06-18T13:30:00Z"),
+            now=now,
+        )
+        == "2026-06-18T13:30:00Z"
+    )
+    assert live_chart.resolve_window_start(_args("--start", "0"), now=now) == 0
+
+
+def test_window_args_are_mutually_exclusive() -> None:
+    with pytest.raises(SystemExit):
+        _args("--start", "0", "--lookback-hours", "1")
+    with pytest.raises(SystemExit):
+        _args("--lookback-hours", "1", "--lookback-days", "1")
 
 
 def test_fixed_price_to_float_scales_databento_prices() -> None:
@@ -337,7 +425,13 @@ def test_first_chart_candle_uses_set_when_supported() -> None:
 
 def test_live_chart_subscribes_and_updates_from_queue() -> None:
     FakeLive.instances.clear()
-    FakeLive.records = [FakeOHLCVRecord(), FakeOHLCVRecord(close=5_500_500_000_000)]
+    FakeLive.records = [
+        FakeOHLCVRecord(),
+        FakeOHLCVRecord(
+            ts_event=1_718_717_520_000_000_000,
+            close=5_500_500_000_000,
+        ),
+    ]
     FakeChart.instances.clear()
     stdout = StringIO()
 
@@ -369,7 +463,22 @@ def test_live_chart_subscribes_and_updates_from_queue() -> None:
     assert chart.closed is True
     assert len(chart.updates) == 2
     assert chart.updates[-1]["close"] == 5500.5
-    assert "records_updated=2" in stdout.getvalue()
+    output = stdout.getvalue()
+    assert "records=2" in output
+    assert "first=2024-06-18T13:31:00Z" in output
+    assert "latest=2024-06-18T13:32:00Z" in output
+    assert "last_close=5500.50" in output
+    assert "records_updated=2" in output
+    assert chart.calls[-1] == (
+        "watermark",
+        {
+            "text": (
+                "ES.c.0 ohlcv-1m | live replay | "
+                "first=2024-06-18T13:31:00Z last=2024-06-18T13:32:00Z"
+            ),
+            "color": "rgba(209, 212, 220, 0.20)",
+        },
+    )
 
 
 def test_timeout_stops_client_without_records() -> None:
@@ -431,7 +540,7 @@ def test_unlimited_max_records_runs_until_chart_closes() -> None:
     stdout = StringIO()
 
     result = live_chart.run_live_chart(
-        _args("--max-records", "0"),
+        _args("--start", "0", "--max-records", "0"),
         db_module=FakeDB("databento"),
         chart_factory=FakeChartCloseAfterTwoUpdates,
         series_factory=_series_factory,
@@ -448,3 +557,96 @@ def test_unlimited_max_records_runs_until_chart_closes() -> None:
     assert len(chart.updates) == 2
     assert "records_updated=2" in stdout.getvalue()
     assert "chart_closed=True" in stdout.getvalue()
+
+
+def test_no_data_warning_prints_once_before_timeout() -> None:
+    FakeLive.instances.clear()
+    FakeLive.records = []
+    FakeChart.instances.clear()
+    stdout = StringIO()
+    stderr = StringIO()
+
+    result = live_chart.run_live_chart(
+        _args(
+            "--max-records",
+            "1",
+            "--timeout-seconds",
+            "2",
+            "--no-data-warning-seconds",
+            "1",
+        ),
+        db_module=FakeDB("databento"),
+        chart_factory=FakeChart,
+        series_factory=_series_factory,
+        env={"DATABENTO_API_KEY": "db-test"},
+        stdout=stdout,
+        stderr=stderr,
+        clock=StepClock(),
+    )
+
+    assert result == 0
+    assert "No OHLCV records received after 1s" in stderr.getvalue()
+    assert stdout.getvalue().count("Live chart stopped:") == 1
+    assert "timed_out=True" in stdout.getvalue()
+
+
+def test_historical_backfill_seeds_chart_before_live_subscription() -> None:
+    FakeLive.instances.clear()
+    FakeLive.records = [
+        FakeOHLCVRecord(
+            ts_event=1_718_717_520_000_000_000,
+            close=5_500_500_000_000,
+        )
+    ]
+    FakeHistorical.instances.clear()
+    FakeHistorical.store = FakeHistoricalStore(_historical_frame())
+    FakeChart.instances.clear()
+    stdout = StringIO()
+    now = datetime(2024, 6, 18, 14, tzinfo=timezone.utc)
+
+    result = live_chart.run_live_chart(
+        _args("--historical-backfill", "--lookback-hours", "1", "--max-records", "2"),
+        db_module=FakeDB("databento"),
+        chart_factory=FakeChart,
+        series_factory=_series_factory,
+        env={"DATABENTO_API_KEY": "db-test"},
+        stdout=stdout,
+        now=now,
+    )
+
+    historical = FakeHistorical.instances[-1]
+    live = FakeLive.instances[-1]
+    chart = FakeChart.instances[-1]
+    assert result == 0
+    assert historical.timeseries.get_range_calls == [
+        {
+            "dataset": "GLBX.MDP3",
+            "schema": "ohlcv-1m",
+            "symbols": "ES.c.0",
+            "stype_in": "continuous",
+            "start": now - timedelta(hours=1),
+            "end": now,
+        }
+    ]
+    assert FakeHistorical.store.to_df_calls == [
+        {"price_type": "float", "pretty_ts": True, "map_symbols": True}
+    ]
+    assert live.subscribe_calls[-1]["start"] == now
+    assert len(chart.updates) == 2
+    assert chart.updates[0]["close"] == 5499.5
+    assert chart.updates[-1]["close"] == 5500.5
+    assert "historical+live" in chart.calls[-1][1]["text"]
+    assert "records_updated=2" in stdout.getvalue()
+
+
+def test_historical_backfill_rejects_unbounded_start_zero() -> None:
+    stderr = StringIO()
+
+    result = live_chart.run_live_chart(
+        _args("--historical-backfill", "--start", "0"),
+        env={"DATABENTO_API_KEY": "db-test"},
+        stderr=stderr,
+    )
+
+    assert result == 2
+    assert "requires a bounded" in stderr.getvalue()
