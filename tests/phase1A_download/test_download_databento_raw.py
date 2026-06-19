@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
+import pyarrow.parquet as pq
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -66,6 +67,7 @@ from scripts.phase1A_download.download_databento_raw import (
     validate_download,
     validate_raw_file_manifest,
     write_json,
+    write_required_dataframe_parquet,
     write_store_parquet,
     zero_cost_start_search,
 )
@@ -2039,6 +2041,81 @@ def test_missing_optional_schema_dbns_warn_and_emit_null_fields(tmp_path: Path) 
     assert loaded.warnings
     assert enriched["status_missing"].tolist() == [True]
     assert enriched["status_source_file"].isna().all()
+
+
+def test_raw_writer_normalizes_optional_enrichment_schema(tmp_path: Path) -> None:
+    base = {
+        "ts_event": [pd.Timestamp("2024-01-02T15:00:00Z")],
+        "open": [1.0],
+        "high": [1.1],
+        "low": [0.9],
+        "close": [1.0],
+        "volume": [10],
+        "rtype": [33],
+        "publisher_id": [1],
+        "instrument_id": [100],
+        "symbol": ["ESH4"],
+        "data_quality_status": ["available"],
+        "data_quality_degraded": [False],
+        "datetime_utc": [pd.Timestamp("2024-01-02T15:00:00Z")],
+        "market": ["ES"],
+        "year": [2024],
+        "raw_symbol": ["ESH4"],
+        "tick_size": [0.25],
+        "contract_multiplier_or_point_value": [50],
+        "expiration": [pd.Timestamp("2024-03-15T00:00:00Z")],
+        "maturity_year": [2024],
+        "maturity_month": [3],
+        "source_schema": ["ohlcv-1m"],
+        "source_dataset": [CME_DATASET],
+        "source_file": ["ohlcv.dbn.zst"],
+        "source_sha256": ["abc"],
+    }
+    optional_values = {
+        "status_ts_event": [pd.Timestamp("2024-01-02T14:59:00Z")],
+        "status_action": [7],
+        "status_action_name": ["TRADING"],
+        "status_reason": [0],
+        "status_reason_name": ["0"],
+        "status_trading_event": [0],
+        "status_trading_event_name": ["NONE"],
+        "status_is_trading": [True],
+        "status_is_quoting": [True],
+        "status_is_short_sell_restricted": [False],
+        "status_source_file": ["status.dbn.zst"],
+        "status_source_sha256": ["def"],
+        "status_missing": [False],
+        "status_stale": [False],
+        "stat_fixing_price": [100.25],
+        "stat_fixing_price_ts_event": [pd.Timestamp("2024-01-02T14:58:00Z")],
+        "stat_fixing_price_source_file": ["statistics.dbn.zst"],
+        "stat_fixing_price_source_sha256": ["ghi"],
+        "stat_fixing_price_missing": [False],
+        "statistics_missing": [False],
+        "statistics_stale": [False],
+    }
+    optional_nulls = {column: [pd.NA] for column in optional_values}
+    optional_nulls["status_missing"] = [True]
+    optional_nulls["status_stale"] = [True]
+    optional_nulls["stat_fixing_price_missing"] = [True]
+    optional_nulls["statistics_missing"] = [True]
+    optional_nulls["statistics_stale"] = [True]
+
+    populated = pd.DataFrame({**base, **optional_values})
+    all_null = pd.DataFrame({**base, **optional_nulls})
+    populated_path = tmp_path / "populated.parquet"
+    all_null_path = tmp_path / "all_null.parquet"
+
+    write_required_dataframe_parquet(populated, populated_path)
+    write_required_dataframe_parquet(all_null, all_null_path)
+
+    populated_signature = tuple(
+        (field.name, str(field.type)) for field in pq.ParquetFile(populated_path).schema_arrow
+    )
+    all_null_signature = tuple(
+        (field.name, str(field.type)) for field in pq.ParquetFile(all_null_path).schema_arrow
+    )
+    assert populated_signature == all_null_signature
 
 
 def test_convert_dbn_archive_stages_optional_schema_hashes_and_columns(

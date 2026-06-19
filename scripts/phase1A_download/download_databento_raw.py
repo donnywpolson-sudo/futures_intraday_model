@@ -258,6 +258,78 @@ STATISTICS_ENRICHMENT_COLUMNS = [
 ]
 PRICE_TYPE = "float"
 PRICE_SCALE_POLICY = "databento_dbnstore_to_df_price_type_float"
+RAW_TIMESTAMP_COLUMNS = {
+    "ts_event",
+    "datetime_utc",
+    "expiration",
+    "status_ts_event",
+    *[
+        f"stat_{stat_name}_ts_event"
+        for stat_name, _ in STAT_TYPE_FIELDS.values()
+    ],
+}
+RAW_STRING_COLUMNS = {
+    "symbol",
+    "data_quality_status",
+    "market",
+    "raw_symbol",
+    "source_schema",
+    "source_dataset",
+    "source_file",
+    "source_sha256",
+    "status_action_name",
+    "status_reason_name",
+    "status_trading_event_name",
+    "status_source_file",
+    "status_source_sha256",
+    *[
+        f"stat_{stat_name}_{suffix}"
+        for stat_name, _ in STAT_TYPE_FIELDS.values()
+        for suffix in ("source_file", "source_sha256")
+    ],
+}
+RAW_BOOL_COLUMNS = {
+    "data_quality_degraded",
+    "status_is_trading",
+    "status_is_quoting",
+    "status_is_short_sell_restricted",
+    "status_missing",
+    "status_stale",
+    "statistics_missing",
+    "statistics_stale",
+    *[
+        f"stat_{stat_name}_missing"
+        for stat_name, _ in STAT_TYPE_FIELDS.values()
+    ],
+}
+RAW_FLOAT_COLUMNS = {
+    "open",
+    "high",
+    "low",
+    "close",
+    "tick_size",
+    *[
+        f"stat_{stat_name}"
+        for stat_name, _ in STAT_TYPE_FIELDS.values()
+    ],
+}
+RAW_UINT_COLUMNS = {
+    "volume": "uint64",
+    "rtype": "uint8",
+    "publisher_id": "uint16",
+    "instrument_id": "uint32",
+}
+RAW_NULLABLE_UINT_COLUMNS = {
+    "maturity_year": "UInt16",
+    "maturity_month": "UInt8",
+    "status_action": "UInt16",
+    "status_reason": "UInt16",
+    "status_trading_event": "UInt16",
+}
+RAW_NULLABLE_INT_COLUMNS = {
+    "year": "Int64",
+    "contract_multiplier_or_point_value": "Int32",
+}
 
 
 @dataclass(frozen=True)
@@ -826,10 +898,36 @@ def write_store_parquet(
     write_required_dataframe_parquet(df, path)
 
 
+def normalize_raw_output_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    normalized = df.copy()
+    for column in RAW_TIMESTAMP_COLUMNS & set(normalized.columns):
+        normalized[column] = pd.to_datetime(
+            normalized[column],
+            utc=True,
+            errors="coerce",
+        ).astype(pd.DatetimeTZDtype(unit="ns", tz="UTC"))
+    for column in RAW_STRING_COLUMNS & set(normalized.columns):
+        normalized[column] = normalized[column].astype("string")
+    for column in RAW_BOOL_COLUMNS & set(normalized.columns):
+        normalized[column] = normalized[column].astype("boolean")
+    for column in RAW_FLOAT_COLUMNS & set(normalized.columns):
+        normalized[column] = pd.to_numeric(normalized[column], errors="coerce").astype("float64")
+    for column, dtype in RAW_UINT_COLUMNS.items():
+        if column in normalized.columns:
+            normalized[column] = pd.to_numeric(normalized[column], errors="raise").astype(dtype)
+    for column, dtype in RAW_NULLABLE_UINT_COLUMNS.items():
+        if column in normalized.columns:
+            normalized[column] = pd.to_numeric(normalized[column], errors="coerce").astype(dtype)
+    for column, dtype in RAW_NULLABLE_INT_COLUMNS.items():
+        if column in normalized.columns:
+            normalized[column] = pd.to_numeric(normalized[column], errors="coerce").astype(dtype)
+    return normalized
+
+
 def write_required_dataframe_parquet(df: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f"{path.name}.tmp")
-    df.to_parquet(tmp_path, index=False)
+    tmp_path = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
+    normalize_raw_output_dtypes(df).to_parquet(tmp_path, index=False)
     check = validate_download(tmp_path)
     if not check["valid"]:
         tmp_path.unlink(missing_ok=True)
