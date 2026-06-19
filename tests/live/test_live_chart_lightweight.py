@@ -25,6 +25,19 @@ class FakeOHLCVRecord:
     volume: int = 42
 
 
+class SystemMsg:
+    msg = "heartbeat"
+
+
+class SymbolMappingMsg:
+    stype_in_symbol = "ES.v.0"
+    stype_out_symbol = "ESM6"
+
+
+class ErrorMsg:
+    msg = "subscription error"
+
+
 class FakeLive:
     instances: list["FakeLive"] = []
     records: list[object] = [FakeOHLCVRecord()]
@@ -35,6 +48,7 @@ class FakeLive:
         self.callbacks: list[object] = []
         self.started = False
         self.stopped = False
+        self.block_timeout: float | None = None
         FakeLive.instances.append(self)
 
     def subscribe(self, **kwargs: object) -> int:
@@ -52,6 +66,9 @@ class FakeLive:
 
     def stop(self) -> None:
         self.stopped = True
+
+    def block_for_close(self, timeout: float | None = None) -> None:
+        self.block_timeout = timeout
 
 
 class FakeDB(ModuleType):
@@ -207,6 +224,62 @@ def test_callback_pushes_candle_to_queue_without_chart_update() -> None:
     assert stderr.getvalue() == ""
 
 
+def test_callback_ignores_databento_control_messages() -> None:
+    candle_queue = live_chart.queue.Queue()
+    stderr = StringIO()
+    callback = live_chart.build_record_callback(candle_queue, stderr=stderr)
+
+    callback(SystemMsg())
+    callback(SymbolMappingMsg())
+
+    assert candle_queue.empty()
+    assert stderr.getvalue() == ""
+
+
+def test_callback_ignores_unknown_non_ohlcv_records_without_payload() -> None:
+    class UnknownRecord:
+        ts_event = 1_718_717_460_000_000_000
+
+    candle_queue = live_chart.queue.Queue()
+    stderr = StringIO()
+    callback = live_chart.build_record_callback(candle_queue, stderr=stderr)
+
+    callback(UnknownRecord())
+
+    assert candle_queue.empty()
+    assert stderr.getvalue() == ""
+
+
+def test_callback_reports_malformed_ohlcv_like_records() -> None:
+    class MissingVolumeRecord:
+        ts_event = 1_718_717_460_000_000_000
+        open = 5_500_000_000_000
+        high = 5_501_000_000_000
+        low = 5_499_750_000_000
+        close = 5_500_250_000_000
+
+    candle_queue = live_chart.queue.Queue()
+    stderr = StringIO()
+    callback = live_chart.build_record_callback(candle_queue, stderr=stderr)
+
+    callback(MissingVolumeRecord())
+
+    assert candle_queue.empty()
+    assert "Skipping MissingVolumeRecord" in stderr.getvalue()
+    assert "missing fields" in stderr.getvalue()
+
+
+def test_callback_reports_error_records() -> None:
+    candle_queue = live_chart.queue.Queue()
+    stderr = StringIO()
+    callback = live_chart.build_record_callback(candle_queue, stderr=stderr)
+
+    callback(ErrorMsg())
+
+    assert candle_queue.empty()
+    assert "Skipping ErrorMsg" in stderr.getvalue()
+
+
 def test_live_chart_subscribes_and_updates_from_queue() -> None:
     FakeLive.instances.clear()
     FakeLive.records = [FakeOHLCVRecord(), FakeOHLCVRecord(close=5_500_500_000_000)]
@@ -236,6 +309,7 @@ def test_live_chart_subscribes_and_updates_from_queue() -> None:
     ]
     assert live.started is True
     assert live.stopped is True
+    assert live.block_timeout == 1.0
     assert chart.shown is True
     assert chart.closed is True
     assert len(chart.updates) == 2

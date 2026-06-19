@@ -30,6 +30,9 @@ DEFAULT_TIMEOUT_SECONDS = 120.0
 API_KEY_ENV = "DATABENTO_API_KEY"
 FIXED_PRICE_SCALE = 1_000_000_000
 UNDEF_PRICE = 9_223_372_036_854_775_807
+OHLCV_FIELDS = ("ts_event", "open", "high", "low", "close", "volume")
+OHLCV_PAYLOAD_FIELDS = ("open", "high", "low", "close", "volume")
+ALWAYS_REPORTED_RECORD_TYPE_MARKERS = ("Error",)
 CHART_INSTALL_MESSAGE = (
     'Missing lightweight-charts package; install optional chart support with: '
     'python -m pip install "lightweight-charts>=2.1,<3"'
@@ -135,11 +138,7 @@ def record_value(record: object, name: str) -> object:
 
 
 def ohlcv_record_to_candle(record: object) -> dict[str, int | float]:
-    missing = [
-        field
-        for field in ("ts_event", "open", "high", "low", "close", "volume")
-        if not hasattr(record, field)
-    ]
+    missing = missing_ohlcv_fields(record)
     if missing:
         raise ValueError(
             f"{type(record).__name__} is not an OHLCV record; missing fields: "
@@ -158,6 +157,19 @@ def ohlcv_record_to_candle(record: object) -> dict[str, int | float]:
 
 def describe_record_skip(record: object, exc: Exception) -> str:
     return f"Skipping {type(record).__name__}: {exc}"
+
+
+def missing_ohlcv_fields(record: object) -> list[str]:
+    return [field for field in OHLCV_FIELDS if not hasattr(record, field)]
+
+
+def should_ignore_record(record: object, exc: Exception) -> bool:
+    record_type = type(record).__name__
+    if any(marker in record_type for marker in ALWAYS_REPORTED_RECORD_TYPE_MARKERS):
+        return False
+    if "missing fields" not in str(exc):
+        return False
+    return not any(hasattr(record, field) for field in OHLCV_PAYLOAD_FIELDS)
 
 
 def import_databento() -> ModuleType:
@@ -191,6 +203,8 @@ def build_record_callback(
         try:
             candle = ohlcv_record_to_candle(record)
         except Exception as exc:
+            if should_ignore_record(record, exc):
+                return
             print(describe_record_skip(record, exc), file=stderr)
             return
         candle_queue.put(candle)
@@ -266,6 +280,26 @@ def cleanup_chart(chart: object | None) -> None:
         if callable(method):
             method()
             return
+
+
+def stop_live_client(live: object | None) -> None:
+    if live is None:
+        return
+
+    stop = getattr(live, "stop", None)
+    if callable(stop):
+        stop()
+
+    wait_for_close = getattr(live, "block_for_close", None)
+    if not callable(wait_for_close):
+        return
+
+    try:
+        wait_for_close(timeout=1.0)
+    except TypeError:
+        wait_for_close()
+    except Exception:
+        return
 
 
 @dataclass
@@ -414,10 +448,7 @@ def run_live_chart(
         print(f"Databento live chart failed: {exc}", file=stderr)
         return 1
     finally:
-        if live is not None:
-            stop = getattr(live, "stop", None)
-            if callable(stop):
-                stop()
+        stop_live_client(live)
         cleanup_chart(chart)
 
 
