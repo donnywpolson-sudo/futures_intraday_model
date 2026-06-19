@@ -1,4 +1,21 @@
-# Meta-Audit Prompt
+#!/usr/bin/env python
+"""Run the meta-audit prompt against the main adversarial audit prompt.
+
+Default usage:
+  python scripts/dev/audit_prompts/01_meta_audit_prompt.py
+"""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+import subprocess
+import sys
+
+
+DEFAULT_AUDIT_PROMPT = "02_main_adversarial_audit_prompt.md"
+
+META_AUDIT_PROMPT = r"""# Meta-Audit Prompt
 
 Use in Codex Plan Mode / read-only.
 
@@ -115,3 +132,116 @@ Return a revised token-efficient audit prompt that matches this repo exactly.
 Audit prompt to meta-audit by default:
 scripts/dev/audit_prompts/02_main_adversarial_audit_prompt.md
 If a prompt was pasted instead, audit the pasted prompt and note that it differs from the repo file.
+"""
+
+
+def resolve_prompt_path(raw_path: str | None, script_path: Path) -> Path:
+    if raw_path:
+        prompt_path = Path(raw_path)
+        if not prompt_path.is_absolute():
+            prompt_path = Path.cwd() / prompt_path
+        return prompt_path.resolve()
+    return script_path.with_name(DEFAULT_AUDIT_PROMPT).resolve()
+
+
+def repo_root_from_script(script_path: Path) -> Path:
+    return script_path.parents[3]
+
+
+def build_prompt(prompt_path: Path) -> str:
+    return (
+        META_AUDIT_PROMPT.rstrip()
+        + "\n\n# Audit Prompt Under Review\n"
+        + f"Audit this file now: {prompt_path}\n"
+        + "Do not require a pasted prompt. Inspect the file directly.\n"
+    )
+
+
+def run_codex_exec(
+    *,
+    codex_bin: str,
+    model: str | None,
+    prompt: str,
+    repo_root: Path,
+) -> int:
+    command = [
+        codex_bin,
+        "exec",
+        "--ephemeral",
+        "--sandbox",
+        "read-only",
+        "--ask-for-approval",
+        "never",
+        "--cd",
+        str(repo_root),
+    ]
+    if model:
+        command.extend(["--model", model])
+    command.append("-")
+
+    try:
+        return subprocess.run(command, input=prompt, text=True, check=False).returncode
+    except FileNotFoundError:
+        sys.stderr.write(
+            f"Codex CLI not found: {codex_bin}\n"
+            "Install/sign in to Codex CLI or pass --codex-bin.\n"
+        )
+        return 127
+    except PermissionError as exc:
+        sys.stderr.write(f"Unable to launch Codex CLI: {exc}\n")
+        return 126
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run the read-only meta-audit against the main adversarial audit "
+            "prompt through codex exec."
+        )
+    )
+    parser.add_argument(
+        "--prompt",
+        help=(
+            "Optional audit prompt path to embed. Defaults to "
+            f"{DEFAULT_AUDIT_PROMPT} next to this script."
+        ),
+    )
+    parser.add_argument(
+        "--codex-bin",
+        default="codex",
+        help="Codex CLI executable to run. Defaults to codex.",
+    )
+    parser.add_argument(
+        "--model",
+        help="Optional Codex model override.",
+    )
+    parser.add_argument(
+        "--print-prompt",
+        action="store_true",
+        help="Print the generated meta-audit prompt without running Codex.",
+    )
+    args = parser.parse_args(argv)
+
+    script_path = Path(__file__).resolve()
+    repo_root = repo_root_from_script(script_path)
+    prompt_path = resolve_prompt_path(args.prompt, script_path)
+
+    if not prompt_path.exists():
+        sys.stderr.write(f"Audit prompt not found: {prompt_path}\n")
+        return 2
+
+    prompt = build_prompt(prompt_path)
+    if args.print_prompt:
+        sys.stdout.write(prompt)
+        return 0
+
+    return run_codex_exec(
+        codex_bin=args.codex_bin,
+        model=args.model,
+        prompt=prompt,
+        repo_root=repo_root,
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

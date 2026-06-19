@@ -44,7 +44,9 @@ Confirm current directory, git branch, git status --short, and that this repo ha
 If this is not the intraday futures model repo, stop and say:
 Wrong repo selected - switch repo/folder before fixing.
 Confirmed findings to fix:
+
 <PASTE ONLY CONFIRMED FATAL/HIGH FINDINGS HERE>
+
 Rules:
 - Fix only confirmed bugs.
 - If a finding is ambiguous, stale, unsupported, or not reproducible from current repo evidence, do not patch it; report why.

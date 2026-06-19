@@ -18,7 +18,7 @@ Communication/token policy:
 * Keep intermediate messages under 20 words unless reporting a blocker.
 * Prefer targeted searches/snippets over full-file reads.
 * Do not dump long logs, full files, or full diffs unless required.
-* Report only: blockers, files changed, commands run, validation result, metric/schema/row-count changes, and unresolved risks.
+* Report only: blockers, added/removed/modified summary, validation result, metric/schema/row-count changes, unexpected tracked/generated artifacts, unresolved risks, and Codex goal usage/completion when available.
 * For ordered multi-task prompts, finish only the current task and stop after reporting unless explicitly told to continue.
 * If a broad read/search would consume lots of context, narrow it first or ask.
 
@@ -91,7 +91,29 @@ Validation:
 * Run the narrowest relevant test/check after edits.
 * For data/model/WFA changes, report exact commands, files changed, metrics changed, row-count changes, and warnings.
 * After validation, run `git status --short` and confirm generated artifacts are not tracked.
-* Final reports after edits must include files changed, commands run, tests/checks run, validation result, git status summary, and unresolved risks.
+* Final reports after edits must use this compact shape:
+
+```text
+Added:
+- ...
+
+Removed:
+- ...
+
+Modified:
+- ...
+
+Validation:
+- Command:
+- Result:
+
+Remaining risks:
+- ...
+
+Goal marked complete. Usage: ... tokens, about ... seconds.
+```
+
+* Include unexpected tracked/generated artifacts only when present. Do not include a full git status summary unless needed to report that risk.
 
 ## Codex command sandbox handling
 
