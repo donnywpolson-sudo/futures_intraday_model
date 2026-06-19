@@ -22,7 +22,7 @@ from scripts.phase1A_download.download_databento_raw import (  # noqa: E402
     enrich_with_definition_metadata,
     file_sha256,
 )
-from scripts.validation.audit_raw_dbn_alignment import (  # noqa: E402
+from scripts.phase1C_validate.audit_raw_dbn_alignment import (  # noqa: E402
     DEFINITION_COMPARE_COLUMNS,
     RAW_OPTIONAL_AUDIT_COLUMNS,
     RAW_REQUIRED_COLUMNS,

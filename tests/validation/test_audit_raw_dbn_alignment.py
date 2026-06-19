@@ -16,7 +16,7 @@ from scripts.phase1A_download.download_databento_raw import (
     schema_path_name,
     symbol_for_product,
 )
-from scripts.validation.audit_raw_dbn_alignment import build_report
+from scripts.phase1C_validate.audit_raw_dbn_alignment import build_report
 from scripts.validation.triage_raw_dbn_alignment import (
     build_definition_path_report,
     build_definition_drilldown,

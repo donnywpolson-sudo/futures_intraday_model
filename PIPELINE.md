@@ -110,7 +110,7 @@ Implemented phase numbering:
 |---:|---|---|---|
 | 1A | DBN archive download | `scripts.phase1A_download.download_databento_raw` | `data/dbn/.../*.dbn.zst` |
 | 1B | Raw parquet stitch | `scripts.phase1B_convert.convert_databento_raw` | `data/raw/{market}/{year}.parquet` |
-| 1C | Raw readiness gate | `scripts.validation.audit_raw_dbn_alignment` | `reports/raw_ingest/raw_dbn_alignment*.{json,md}` |
+| 1C | Raw readiness gate | `scripts.phase1C_validate.audit_raw_dbn_alignment` | `reports/raw_ingest/raw_dbn_alignment*.{json,md}` |
 | 2 | Causal base | `scripts.phase2_causal_base.build_causal_base_data` | `data/causally_gated_normalized/{market}/{year}.parquet` |
 | 3 | Labels/targets | `scripts.phase3_labels.build_labels` | `data/labeled/{market}/{year}.parquet` |
 | 4 | Baseline features | `scripts.phase4_features.build_baseline_features` | `data/feature_matrices/baseline/{market}/{year}.parquet` |
@@ -258,7 +258,7 @@ before Phase 2 consumes it.
 Command:
 
 ```powershell
-python -m scripts.validation.audit_raw_dbn_alignment --config configs/alpha_tiered.yaml --profile tier_3 --dbn-root data\dbn --raw-root data\raw --json-out reports\raw_ingest\raw_dbn_alignment.json --md-out reports\raw_ingest\raw_dbn_alignment.md
+python -m scripts.phase1C_validate.audit_raw_dbn_alignment --config configs/alpha_tiered.yaml --profile tier_3 --dbn-root data\dbn --raw-root data\raw --json-out reports\raw_ingest\raw_dbn_alignment.json --md-out reports\raw_ingest\raw_dbn_alignment.md
 ```
 
 Optional enrichment audit:
