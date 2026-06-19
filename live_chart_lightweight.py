@@ -9,6 +9,8 @@ import importlib
 import os
 import queue
 import re
+import signal
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -47,6 +49,7 @@ VSCODE_RUN_BUTTON_ARGS = (
     "--no-data-warning-seconds",
     "15",
 )
+VSCODE_RUN_CHILD_ENV = "LIVE_CHART_LIGHTWEIGHT_RUN_CHILD"
 VSCODE_ENV_KEYS = ("VSCODE_PID", "VSCODE_CWD", "VSCODE_IPC_HOOK_CLI")
 API_KEY_ENV = "DATABENTO_API_KEY"
 ROOT_API_KEY_FILE = ROOT / "databento.env"
@@ -211,6 +214,46 @@ def resolve_main_argv(
     if values:
         return values
     return list(VSCODE_RUN_BUTTON_ARGS)
+
+
+def should_launch_vscode_run_child(
+    raw_args: Sequence[str],
+    *,
+    env: Mapping[str, str] | None = None,
+) -> bool:
+    source = os.environ if env is None else env
+    return (
+        not raw_args
+        and is_vscode_environment(source)
+        and not source.get(VSCODE_RUN_CHILD_ENV)
+    )
+
+
+def launch_vscode_run_child(stderr: TextIO = sys.stderr) -> int:
+    env = dict(os.environ)
+    env[VSCODE_RUN_CHILD_ENV] = "1"
+    command = [sys.executable, str(Path(__file__).resolve()), *VSCODE_RUN_BUTTON_ARGS]
+    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    previous_handler = signal.getsignal(signal.SIGINT)
+    try:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        process = subprocess.Popen(
+            command,
+            cwd=str(ROOT),
+            env=env,
+            creationflags=creationflags,
+        )
+    finally:
+        signal.signal(signal.SIGINT, previous_handler)
+
+    try:
+        return process.wait()
+    except KeyboardInterrupt:
+        print(
+            "VS Code interrupted the launcher; live chart child process is still running.",
+            file=stderr,
+        )
+        return 0
 
 
 def utc_now() -> datetime:
@@ -1240,8 +1283,11 @@ def run_live_chart(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    if should_launch_vscode_run_child(raw_args):
+        return launch_vscode_run_child()
     parser = build_arg_parser()
-    args = parser.parse_args(resolve_main_argv(argv))
+    args = parser.parse_args(resolve_main_argv(raw_args))
     return run_live_chart(args)
 
 
