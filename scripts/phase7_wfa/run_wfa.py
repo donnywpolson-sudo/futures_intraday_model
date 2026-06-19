@@ -841,6 +841,16 @@ def run_wfa(
             raise SystemExit("--fold-shard-index must be between 1 and --fold-shard-count")
     resolved_profile_config = _resolved_profile_config(profile_config, models_config)
     profile_scope = load_profile_scope(profile, resolved_profile_config)
+    if (
+        feature_set_path is None
+        and (
+            profile_scope.requested_profile == "tier_1"
+            or profile_scope.resolved_profile == "tier_1_research"
+        )
+    ):
+        raise SystemExit(
+            "Tier 1 WFA execution requires --feature-set with a FROZEN allowed_for_wfa manifest"
+        )
     feature_set = resolve_feature_set(input_root, feature_cols_path, feature_set_path)
     feature_cols = feature_set.feature_cols
     resolved_feature_config_path = feature_set.config_path

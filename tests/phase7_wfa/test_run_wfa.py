@@ -118,6 +118,14 @@ def _write_feature_set(
     return path
 
 
+def _write_tier1_feature_set(tmp_path: Path, *, features: list[str] | None = None) -> Path:
+    return _write_feature_set(
+        tmp_path / "manifests" / "feature_sets" / "tier1_fixture_feature_set.json",
+        features=features
+        or ["feature_train_only_marker", "feature_signal", "feature_fade_signal"],
+    )
+
+
 def _write_profile_config(
     path: Path,
     *,
@@ -332,6 +340,11 @@ def _run_scope_guard(
     input_root = _feature_root(tmp_path)
     (input_root / "feature_cols.json").parent.mkdir(parents=True, exist_ok=True)
     (input_root / "feature_cols.json").write_text(json.dumps(["feature_signal"]), encoding="utf-8")
+    feature_set = (
+        _write_tier1_feature_set(tmp_path)
+        if requested_profile in {"tier_1", "tier_1_research"}
+        else None
+    )
     models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
     split_plan = _write_scope_guard_split_plan(
         tmp_path / "reports" / "wfa" / "split_plan.json",
@@ -351,6 +364,7 @@ def _run_scope_guard(
         reports_root=tmp_path / "reports" / "wfa",
         models_config=models_config,
         profile_config=Path("configs/alpha_tiered.yaml"),
+        feature_set_path=feature_set,
     )
 
 
@@ -548,6 +562,7 @@ def test_scope_guard_rejects_split_plan_missing_provenance(tmp_path: Path) -> No
     input_root = _feature_root(tmp_path)
     (input_root / "feature_cols.json").parent.mkdir(parents=True, exist_ok=True)
     (input_root / "feature_cols.json").write_text(json.dumps(["feature_signal"]), encoding="utf-8")
+    feature_set = _write_tier1_feature_set(tmp_path)
     models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
     split_plan = _write_scope_guard_split_plan(
         tmp_path / "reports" / "wfa" / "split_plan.json",
@@ -570,6 +585,7 @@ def test_scope_guard_rejects_split_plan_missing_provenance(tmp_path: Path) -> No
             reports_root=tmp_path / "reports" / "wfa",
             models_config=models_config,
             profile_config=Path("configs/alpha_tiered.yaml"),
+            feature_set_path=feature_set,
         )
 
     assert "reason=missing provenance field config_hash" in str(excinfo.value)
@@ -581,6 +597,7 @@ def test_scope_guard_rejects_split_plan_stale_config_hash(tmp_path: Path) -> Non
     input_root = _feature_root(tmp_path)
     (input_root / "feature_cols.json").parent.mkdir(parents=True, exist_ok=True)
     (input_root / "feature_cols.json").write_text(json.dumps(["feature_signal"]), encoding="utf-8")
+    feature_set = _write_tier1_feature_set(tmp_path)
     models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
     split_plan = _write_scope_guard_split_plan(
         tmp_path / "reports" / "wfa" / "split_plan.json",
@@ -603,6 +620,7 @@ def test_scope_guard_rejects_split_plan_stale_config_hash(tmp_path: Path) -> Non
             reports_root=tmp_path / "reports" / "wfa",
             models_config=models_config,
             profile_config=Path("configs/alpha_tiered.yaml"),
+            feature_set_path=feature_set,
         )
 
     assert "reason=config_hash mismatch" in str(excinfo.value)
@@ -629,6 +647,7 @@ def test_valid_tier1_split_plan_passes_scope_guard(tmp_path: Path) -> None:
     )
     _write_feature_matrix(input_root, market=scope.markets[0], year=scope.years[0])
     _write_feature_matrix(input_root, market=scope.markets[0], year=scope.years[1])
+    feature_set = _write_tier1_feature_set(tmp_path)
 
     manifest = run_wfa(
         profile="tier_1",
@@ -640,6 +659,7 @@ def test_valid_tier1_split_plan_passes_scope_guard(tmp_path: Path) -> None:
         reports_root=reports_root,
         models_config=models_config,
         profile_config=Path("configs/alpha_tiered.yaml"),
+        feature_set_path=feature_set,
         data_audit_universe_json=data_audit,
         max_folds=1,
     )
@@ -651,21 +671,27 @@ def test_valid_tier1_split_plan_passes_scope_guard(tmp_path: Path) -> None:
     assert manifest["data_audit_universe"]["status_counts"] == {"usable": len(scope.markets)}
 
 
-def test_tier1_run_wfa_requires_data_audit_universe_json(tmp_path: Path) -> None:
+def test_tier1_run_wfa_requires_feature_set_manifest(tmp_path: Path) -> None:
     scope = load_profile_scope("tier_1", Path("configs/alpha_tiered.yaml"))
     assert scope is not None
     input_root = _feature_root(tmp_path)
     (input_root / "feature_cols.json").parent.mkdir(parents=True, exist_ok=True)
     (input_root / "feature_cols.json").write_text(json.dumps(["feature_signal"]), encoding="utf-8")
     models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    data_audit = _write_multi_data_audit_universe(
+        tmp_path / "reports" / "pipeline_audit" / "universe.json",
+        markets=scope.markets,
+        year=scope.years[-1],
+    )
     split_plan = _write_scope_guard_split_plan(
         tmp_path / "reports" / "wfa" / "split_plan.json",
         markets=scope.markets,
         years=scope.years,
         models_config=models_config,
+        data_audit_universe=load_data_audit_universe(data_audit).evidence(),
     )
 
-    with pytest.raises(SystemExit, match="Tier 1 WFA execution requires"):
+    with pytest.raises(SystemExit, match="Tier 1 WFA execution requires --feature-set"):
         run_wfa(
             profile="tier_1",
             matrix="baseline",
@@ -676,6 +702,37 @@ def test_tier1_run_wfa_requires_data_audit_universe_json(tmp_path: Path) -> None
             reports_root=tmp_path / "reports" / "wfa",
             models_config=models_config,
             profile_config=Path("configs/alpha_tiered.yaml"),
+            data_audit_universe_json=data_audit,
+        )
+
+
+def test_tier1_run_wfa_requires_data_audit_universe_json(tmp_path: Path) -> None:
+    scope = load_profile_scope("tier_1", Path("configs/alpha_tiered.yaml"))
+    assert scope is not None
+    input_root = _feature_root(tmp_path)
+    (input_root / "feature_cols.json").parent.mkdir(parents=True, exist_ok=True)
+    (input_root / "feature_cols.json").write_text(json.dumps(["feature_signal"]), encoding="utf-8")
+    feature_set = _write_tier1_feature_set(tmp_path)
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    split_plan = _write_scope_guard_split_plan(
+        tmp_path / "reports" / "wfa" / "split_plan.json",
+        markets=scope.markets,
+        years=scope.years,
+        models_config=models_config,
+    )
+
+    with pytest.raises(SystemExit, match="Tier 1 WFA execution requires --data-audit-universe-json"):
+        run_wfa(
+            profile="tier_1",
+            matrix="baseline",
+            run="baseline",
+            input_root=input_root,
+            split_plan=split_plan,
+            predictions_root=tmp_path / "data" / "predictions",
+            reports_root=tmp_path / "reports" / "wfa",
+            models_config=models_config,
+            profile_config=Path("configs/alpha_tiered.yaml"),
+            feature_set_path=feature_set,
         )
 
 
