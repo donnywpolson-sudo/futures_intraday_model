@@ -4,6 +4,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.artifact_freeze.freeze_research_artifacts import freeze_research_artifacts
@@ -15,7 +17,13 @@ def _write_json(path: Path, payload: object) -> Path:
     return path
 
 
-def _write_freeze_inputs(tmp_path: Path, *, missing_tier3_count: int = 0) -> dict[str, Path]:
+def _write_freeze_inputs(
+    tmp_path: Path,
+    *,
+    missing_tier3_count: int = 0,
+    phase8_overrides: dict[str, object] | None = None,
+    anti_overfit_overrides: dict[str, object] | None = None,
+) -> dict[str, Path]:
     feature_root = tmp_path / "data" / "feature_matrices" / "baseline"
     for name, payload in {
         "feature_cols.json": ["feature_a"],
@@ -49,13 +57,41 @@ def _write_freeze_inputs(tmp_path: Path, *, missing_tier3_count: int = 0) -> dic
         tmp_path / "reports" / "wfa" / "baseline_predictions_manifest.json",
         {
             "failure_count": 0,
+            "run": "baseline",
+            "profile": "tier_1",
+            "resolved_profile": "tier_1_research",
             "stale_output_path_exists": False,
             "artifact_evidence_ready": True,
         },
     )
+    phase8_payload: dict[str, object] = {
+        "run": "baseline",
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "promoted": True,
+        "research_alpha_ready": True,
+        "model_promotion_allowed": True,
+        "blockers": [],
+        "failure_count": 0,
+        "final_holdout_touched": False,
+        "trading_semantics_changed": False,
+    }
+    if phase8_overrides:
+        phase8_payload.update(phase8_overrides)
     phase8_decision = _write_json(
         tmp_path / "reports" / "phase8" / "alpha_promotion_decision.json",
-        {"promoted": False, "blockers": ["net negative"], "final_holdout_touched": False, "trading_semantics_changed": False},
+        phase8_payload,
+    )
+    anti_overfit_payload: dict[str, object] = {
+        "profile": "tier_1",
+        "robustness_status": "PASS",
+        "failures": [],
+    }
+    if anti_overfit_overrides:
+        anti_overfit_payload.update(anti_overfit_overrides)
+    anti_overfit = _write_json(
+        tmp_path / "reports" / "experiments" / "anti_overfit_audit.json",
+        anti_overfit_payload,
     )
     models = _write_json(tmp_path / "configs" / "models.yaml", {"policy": {}})
     costs = _write_json(tmp_path / "configs" / "costs.yaml", {"markets": {}})
@@ -66,6 +102,7 @@ def _write_freeze_inputs(tmp_path: Path, *, missing_tier3_count: int = 0) -> dic
         "split_plan": split_plan,
         "predictions_manifest": predictions_manifest,
         "phase8_decision": phase8_decision,
+        "anti_overfit": anti_overfit,
         "models": models,
         "costs": costs,
     }
@@ -82,6 +119,7 @@ def test_freeze_research_artifacts_writes_manifest_after_guards_pass(tmp_path: P
         split_plan_path=paths["split_plan"],
         predictions_manifest_path=paths["predictions_manifest"],
         phase8_decision_path=paths["phase8_decision"],
+        anti_overfit_audit_path=paths["anti_overfit"],
         models_config=paths["models"],
         costs_config=paths["costs"],
         feature_manifest_path=paths["feature_manifest"],
@@ -91,7 +129,10 @@ def test_freeze_research_artifacts_writes_manifest_after_guards_pass(tmp_path: P
     assert manifest["failure_count"] == 0
     assert manifest["final_holdout_touched"] is False
     assert manifest["used_final_holdout_for_tuning"] is False
-    assert manifest["phase8_promoted"] is False
+    assert manifest["phase8_promoted"] is True
+    assert manifest["phase8_model_promotion_allowed"] is True
+    assert manifest["phase8_blockers"] == []
+    assert manifest["anti_overfit_status"] == "PASS"
     frozen_manifest = tmp_path / "artifacts" / "frozen" / "fixture-freeze" / "manifest.json"
     assert frozen_manifest.exists()
 
@@ -107,6 +148,7 @@ def test_freeze_refuses_incomplete_tier3_features(tmp_path: Path) -> None:
         split_plan_path=paths["split_plan"],
         predictions_manifest_path=paths["predictions_manifest"],
         phase8_decision_path=paths["phase8_decision"],
+        anti_overfit_audit_path=paths["anti_overfit"],
         models_config=paths["models"],
         costs_config=paths["costs"],
         feature_manifest_path=paths["feature_manifest"],
@@ -115,3 +157,61 @@ def test_freeze_refuses_incomplete_tier3_features(tmp_path: Path) -> None:
     assert manifest["frozen"] is False
     assert manifest["failure_count"] > 0
     assert "Tier-3 Phase 4 incomplete" in " ".join(manifest["failures"])
+
+
+@pytest.mark.parametrize(
+    ("phase8_overrides", "expected"),
+    [
+        ({"promoted": False}, "Phase 8 decision promoted is not true"),
+        ({"model_promotion_allowed": False}, "model_promotion_allowed is not true"),
+        ({"blockers": ["net negative"]}, "Phase 8 decision blockers are not empty"),
+        ({"profile": "tier_2"}, "Phase 8 decision profile mismatch"),
+    ],
+)
+def test_freeze_rejects_unpromoted_blocked_or_profile_mismatched_phase8(
+    tmp_path: Path,
+    phase8_overrides: dict[str, object],
+    expected: str,
+) -> None:
+    paths = _write_freeze_inputs(tmp_path, phase8_overrides=phase8_overrides)
+
+    manifest = freeze_research_artifacts(
+        freeze_id="bad-phase8",
+        freeze_root=tmp_path / "artifacts" / "frozen",
+        feature_root=paths["feature_root"],
+        phase4_audit_path=paths["phase4_audit"],
+        split_plan_path=paths["split_plan"],
+        predictions_manifest_path=paths["predictions_manifest"],
+        phase8_decision_path=paths["phase8_decision"],
+        anti_overfit_audit_path=paths["anti_overfit"],
+        models_config=paths["models"],
+        costs_config=paths["costs"],
+        feature_manifest_path=paths["feature_manifest"],
+    )
+
+    assert manifest["frozen"] is False
+    assert expected in " ".join(manifest["failures"])
+
+
+def test_freeze_rejects_failed_anti_overfit_audit(tmp_path: Path) -> None:
+    paths = _write_freeze_inputs(
+        tmp_path,
+        anti_overfit_overrides={"robustness_status": "FAIL", "failures": ["sparse"]},
+    )
+
+    manifest = freeze_research_artifacts(
+        freeze_id="bad-anti-overfit",
+        freeze_root=tmp_path / "artifacts" / "frozen",
+        feature_root=paths["feature_root"],
+        phase4_audit_path=paths["phase4_audit"],
+        split_plan_path=paths["split_plan"],
+        predictions_manifest_path=paths["predictions_manifest"],
+        phase8_decision_path=paths["phase8_decision"],
+        anti_overfit_audit_path=paths["anti_overfit"],
+        models_config=paths["models"],
+        costs_config=paths["costs"],
+        feature_manifest_path=paths["feature_manifest"],
+    )
+
+    assert manifest["frozen"] is False
+    assert "anti-overfit audit status is not PASS" in " ".join(manifest["failures"])

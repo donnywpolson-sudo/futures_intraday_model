@@ -198,17 +198,23 @@ def test_run_level_audit_reports_row_vs_run_cost_and_overlap(tmp_path: Path) -> 
     )
 
     row_run = report["row_vs_run_level"]
-    assert row_run["row_level"]["trade_count"] == 3
-    assert row_run["run_count"] == 2
+    assert row_run["row_level"]["trade_count"] == 1
+    assert row_run["run_count"] == 1
     assert row_run["one_bar_run_count"] == 1
-    assert row_run["max_rows_per_run"] == 2
-    assert row_run["gross_return_dollars"] == 150.0
-    assert row_run["row_level_cost_dollars"] == 30.0
-    assert row_run["run_level_estimated_cost_dollars"] == 20.0
-    assert row_run["row_level_net_dollars"] == 120.0
-    assert row_run["run_level_estimated_net_dollars"] == 130.0
+    assert row_run["max_rows_per_run"] == 1
+    assert row_run["gross_return_dollars"] == 50.0
+    assert row_run["row_level_cost_dollars"] == 10.0
+    assert row_run["run_level_estimated_cost_dollars"] == 10.0
+    assert row_run["row_level_net_dollars"] == 40.0
+    assert row_run["run_level_estimated_net_dollars"] == 40.0
+    assert report["execution_netting"] == {
+        "policy": "max_one_contract_non_overlapping_target_window",
+        "candidate_trade_count": 3,
+        "executed_trade_count": 1,
+        "blocked_by_execution_overlap": 2,
+    }
     assert report["non_overlapping_target_windows"]["selected_trade_count"] == 1
-    assert report["non_overlapping_target_windows"]["skipped_overlap_count"] == 2
+    assert report["non_overlapping_target_windows"]["skipped_overlap_count"] == 0
     assert json.loads(json_out.read_text(encoding="utf-8"))["run"] == "fixture"
     assert "Run-level costs are a diagnostic sensitivity only" in md_out.read_text(encoding="utf-8")
 
@@ -220,7 +226,10 @@ def test_run_level_audit_fails_closed_without_target_windows(tmp_path: Path) -> 
     )
     costs = _write_costs(tmp_path / "configs" / "costs.yaml")
 
-    with pytest.raises(SystemExit, match="policy frame missing required diagnostic columns"):
+    with pytest.raises(
+        SystemExit,
+        match="policy executable signals missing target_entry_ts/target_exit_ts",
+    ):
         build_policy_run_level_overlap_audit(
             predictions_path=predictions,
             costs_config=costs,
@@ -255,5 +264,6 @@ def test_run_level_audit_cli_writes_report(tmp_path: Path) -> None:
     assert result == 0
     payload = json.loads(json_out.read_text(encoding="utf-8"))
     assert payload["diagnostic_only"] is True
-    assert payload["row_vs_run_level"]["run_count"] == 2
+    assert payload["row_vs_run_level"]["run_count"] == 1
+    assert payload["execution_netting"]["blocked_by_execution_overlap"] == 2
     assert md_out.exists()

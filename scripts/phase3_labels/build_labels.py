@@ -569,12 +569,31 @@ def _true_range_ticks(df: pd.DataFrame, tick_size: float) -> pd.Series:
     high = pd.to_numeric(df["high"], errors="coerce")
     low = pd.to_numeric(df["low"], errors="coerce")
     close = pd.to_numeric(df["close"], errors="coerce")
-    prev_close = close.shift(1)
+    session = df["session_segment_id"].astype("string")
+    valid = (
+        _as_bool(df, "causal_valid")
+        & _as_bool(df, "valid_ohlcv", default=True)
+        & ~_as_bool(df, "is_synthetic")
+        & ~_as_bool(df, "boundary_session_flag")
+        & ~_as_bool(df, "roll_window_flag")
+        & ~_as_bool(df, "roll_boundary_flag")
+        & _price_valid(high)
+        & _price_valid(low)
+        & _price_valid(close)
+    )
+    run_start = session.ne(session.shift()).fillna(True) | ~valid | ~valid.shift(
+        fill_value=False
+    )
+    run_id = pd.Series(run_start.to_numpy(dtype=bool), index=df.index).cumsum()
+    prev_close = close.groupby(run_id, dropna=False).shift(1)
     true_range = pd.concat(
         [(high - low).abs(), (high - prev_close).abs(), (low - prev_close).abs()],
         axis=1,
-    ).max(axis=1)
-    return true_range.rolling(ATR_LOOKBACK_BARS, min_periods=1).mean() / tick_size
+    ).max(axis=1).where(valid)
+    atr = true_range.groupby(run_id, dropna=False).rolling(
+        ATR_LOOKBACK_BARS, min_periods=1
+    ).mean()
+    return atr.reset_index(level=0, drop=True) / tick_size
 
 
 def _future_extreme(df: pd.DataFrame, column: str, horizon_offset: int, op: str) -> pd.Series:

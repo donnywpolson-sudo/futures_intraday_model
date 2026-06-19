@@ -315,6 +315,38 @@ def test_adaptive_atr_threshold_uses_past_only_data() -> None:
     assert labeled.loc[0, "fade_long_success_15m"] == True
 
 
+def test_adaptive_atr_resets_at_invalid_rows_and_session_boundaries() -> None:
+    rows = _base_rows(count=60)
+    for row in rows:
+        row["open"] = 100.0
+        row["high"] = 100.25
+        row["low"] = 99.75
+        row["close"] = 100.0
+
+    rows[0]["high"] = 120.0
+    rows[0]["low"] = 80.0
+    rows[1]["valid_ohlcv"] = False
+    rows[4]["high"] = 100.50
+
+    for idx in range(0, 22):
+        rows[idx]["session_segment_id"] = "session_prev"
+    for idx in range(22, len(rows)):
+        rows[idx]["session_segment_id"] = "session_next"
+    rows[21]["high"] = 120.0
+    rows[21]["low"] = 80.0
+    rows[24]["high"] = 100.50
+
+    labeled = add_labels(
+        pd.DataFrame(rows),
+        load_market_config("ES", Path("missing.yaml")),
+    )
+
+    assert labeled.loc[2, "target_valid"] == True
+    assert labeled.loc[2, "fade_long_success_15m"] == True
+    assert labeled.loc[22, "target_valid"] == True
+    assert labeled.loc[22, "fade_long_success_15m"] == True
+
+
 def test_fade_and_30m_regime_labels() -> None:
     rows = _base_rows(count=45)
     for row in rows:

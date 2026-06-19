@@ -19,6 +19,12 @@ import pandas as pd
 import yaml
 
 from scripts.profile_scope import scope_authority_metadata
+from scripts.validation.feature_leakage_guard import (
+    FORBIDDEN_FEATURE_COLUMNS,
+    FORBIDDEN_FEATURE_PREFIXES,
+    REGIME_LABEL_COLUMNS,
+    forbidden_feature_columns,
+)
 
 warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
 
@@ -250,65 +256,6 @@ FEATURE_COLS = [feature for features in FEATURE_FAMILIES.values() for feature in
 FEATURE_TO_FAMILY = {
     feature: family for family, features in FEATURE_FAMILIES.items() for feature in features
 }
-
-REGIME_LABEL_COLUMNS = [
-    "mae_ticks_15m",
-    "mfe_ticks_15m",
-    "fade_long_success_15m",
-    "fade_short_success_15m",
-    "target_fade_long_success_15m",
-    "target_fade_short_success_15m",
-    "target_fade_success_15m",
-    "trend_danger_up_30m",
-    "trend_danger_down_30m",
-    "target_trend_danger_long_30m",
-    "target_trend_danger_short_30m",
-    "target_trend_danger_30m",
-    "revert_to_vwap_30m",
-    "revert_to_session_mid_30m",
-]
-
-FORBIDDEN_FEATURE_COLUMNS = {
-    "ts",
-    "market",
-    "year",
-    "session_id",
-    "session_date",
-    "session_segment_id",
-    "raw_row_present",
-    "is_synthetic",
-    "causal_valid",
-    "valid_ohlcv",
-    "inside_session",
-    "boundary_session_flag",
-    "feature_input_valid",
-    "feature_row_valid",
-    "training_row_valid",
-    "target_valid",
-    "target_invalid_reason",
-    *REGIME_LABEL_COLUMNS,
-    "rtype",
-    "publisher_id",
-    "instrument_id",
-    "symbol",
-    "source_path",
-    "source_file_hash",
-    "source_row_number",
-    "raw_schema_variant",
-    "timestamp_source",
-    "metadata_available",
-    "roll_detection_available",
-    "roll_detection_source",
-    "roll_policy_status",
-    "synthetic_gap_id",
-    "synthetic_gap_size_minutes",
-    "synthetic_gap_reason",
-    "data_quality_status",
-    "data_quality_degraded",
-    "session_data_quality_degraded",
-    "trainable_data_quality",
-}
-FORBIDDEN_FEATURE_PREFIXES = ("status_", "stat_", "statistics_")
 
 REQUIRED_INPUT_COLUMNS = [
     "ts",
@@ -1332,13 +1279,7 @@ def validate_registry(feature_cols: list[str]) -> list[str]:
     bad_prefix = [col for col in feature_cols if not col.startswith("feature_")]
     if bad_prefix:
         failures.append(f"feature columns without feature_ prefix: {bad_prefix}")
-    forbidden = [
-        col
-        for col in feature_cols
-        if col in FORBIDDEN_FEATURE_COLUMNS
-        or col.startswith("target_")
-        or any(col.startswith(prefix) for prefix in FORBIDDEN_FEATURE_PREFIXES)
-    ]
+    forbidden = forbidden_feature_columns(feature_cols)
     if forbidden:
         failures.append(f"forbidden columns in feature_cols: {forbidden}")
     missing_family = [col for col in feature_cols if col not in FEATURE_TO_FAMILY]

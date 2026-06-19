@@ -68,11 +68,19 @@ def _policy() -> PolicyConfig:
 
 def _promotion_gate(**overrides: object) -> PromotionGateConfig:
     values = {
+        "min_gross_return_dollars": 1.0,
         "min_net_return_dollars": 1.0,
         "min_net_sharpe_like": 0.0,
         "max_cost_drag_to_abs_gross": 1.0,
         "max_turnover_per_bar": 1.0,
-        "min_trade_count": 1,
+        "min_trade_count": 100,
+        "min_market_count": 2,
+        "min_traded_market_count": 2,
+        "min_fold_count": 4,
+        "min_traded_fold_count": 4,
+        "min_oos_span_days": 30.0,
+        "max_single_market_trade_share": 0.75,
+        "max_single_fold_trade_share": 0.50,
         "require_positive_net_all_markets": True,
         "require_positive_net_all_folds": True,
     }
@@ -280,18 +288,22 @@ def test_policy_metrics_block_trend_danger_and_fade_filter(tmp_path: Path) -> No
     turnover = pd.read_csv(result["turnover_path"])
 
     assert metrics["live_execution_ready"] is False
-    assert metrics["execution_realism"] == "research_round_turn_cost_assumption_only"
-    assert metrics["research_alpha_ready"] is True
-    assert metrics["model_promotion_allowed"] is True
+    assert metrics["execution_realism"] == "research_non_overlapping_target_window_execution_policy"
+    assert metrics["execution_policy"] == "max_one_contract_non_overlapping_target_window"
+    assert metrics["research_alpha_ready"] is False
+    assert metrics["model_promotion_allowed"] is False
     assert phase8_metrics["metrics"]["overall"]["net_return_dollars"] == 80.0
-    assert decision["promoted"] is True
+    assert decision["promoted"] is False
+    assert decision["model_promotion_allowed"] is False
+    assert "trade_count 2 below minimum 100" in decision["blockers"]
+    assert "market_count 1 below minimum 2" in decision["blockers"]
     assert decision["final_holdout_touched"] is False
     assert decision["trading_semantics_changed"] is False
     assert decision["used_final_holdout_for_tuning"] is False
     assert selection["selection_status"] == "NOT_SELECTED_BASELINE_DIAGNOSTICS_ONLY"
     assert selection["selected_model_id"] is None
-    assert selection["research_alpha_ready"] is True
-    assert selection["model_promotion_allowed"] is True
+    assert selection["research_alpha_ready"] is False
+    assert selection["model_promotion_allowed"] is False
     assert calibration["status"] == "NO_CALIBRATION_APPLIED"
     assert set(comparison["model_id"]) == {
         "ridge_return_v1",
@@ -300,6 +312,76 @@ def test_policy_metrics_block_trend_danger_and_fade_filter(tmp_path: Path) -> No
         "logistic_trend_danger_v1",
     }
     assert turnover.loc[0, "trade_count"] == 2
+
+
+def test_policy_metrics_net_overlapping_target_windows_before_costs(tmp_path: Path) -> None:
+    prediction_path = _write_predictions(
+        tmp_path / "data" / "predictions" / "baseline" / "oos_predictions.parquet"
+    )
+    predictions = pd.read_parquet(prediction_path)
+    keep_timestamps = sorted(predictions["timestamp"].dropna().unique())[:2]
+    predictions = predictions[predictions["timestamp"].isin(keep_timestamps)].copy()
+    first_timestamp = pd.Timestamp(keep_timestamps[0])
+    overlap_timestamp = first_timestamp + pd.Timedelta(minutes=5)
+    predictions.loc[predictions["timestamp"].eq(keep_timestamps[1]), "timestamp"] = overlap_timestamp
+    predictions.loc[predictions["timestamp"].eq(overlap_timestamp), "target_entry_ts"] = (
+        overlap_timestamp + pd.Timedelta(minutes=1)
+    )
+    predictions.loc[predictions["timestamp"].eq(overlap_timestamp), "target_exit_ts"] = (
+        overlap_timestamp + pd.Timedelta(minutes=16)
+    )
+    keep_timestamps = [first_timestamp, overlap_timestamp]
+    for timestamp in keep_timestamps:
+        predictions.loc[predictions["timestamp"].eq(timestamp), "p_long"] = 0.70
+        predictions.loc[predictions["timestamp"].eq(timestamp), "p_short"] = 0.20
+        predictions.loc[predictions["timestamp"].eq(timestamp), "p_flat"] = 0.10
+        predictions.loc[predictions["timestamp"].eq(timestamp), "p_fade_success"] = 0.80
+        predictions.loc[predictions["timestamp"].eq(timestamp), "p_trend_danger"] = 0.20
+        predictions.loc[predictions["timestamp"].eq(timestamp), "execution_open"] = 100.0
+        predictions.loc[predictions["timestamp"].eq(timestamp), "execution_close"] = 101.0
+    predictions.loc[predictions["target_name"].eq("target_ret_15m"), "p_long"] = None
+    predictions.loc[predictions["target_name"].eq("target_ret_15m"), "p_short"] = None
+    predictions.loc[predictions["target_name"].eq("target_ret_15m"), "p_flat"] = None
+    predictions.loc[predictions["target_name"].eq("target_fade_success_15m"), "p_fade_success"] = 0.80
+    predictions.loc[predictions["target_name"].eq("target_trend_danger_30m"), "p_trend_danger"] = 0.20
+    predictions.to_parquet(prediction_path, index=False)
+    manifest_path = _write_manifest(
+        tmp_path / "reports" / "wfa" / "baseline_predictions_manifest.json",
+        prediction_path,
+        overrides={"prediction_count": int(len(predictions))},
+    )
+    costs_path = _write_costs(tmp_path / "configs" / "costs.yaml")
+    models_path = _write_models(tmp_path / "configs" / "models.yaml")
+
+    result = evaluate_predictions(
+        predictions_path=prediction_path,
+        predictions_manifest=manifest_path,
+        costs_config=costs_path,
+        models_config=models_path,
+        metrics_root=tmp_path / "reports" / "metrics",
+        model_selection_root=tmp_path / "reports" / "model_selection",
+        run="baseline",
+        policy=_policy(),
+        promotion_gate=_promotion_gate(
+            min_trade_count=1,
+            min_market_count=1,
+            min_traded_market_count=1,
+            min_fold_count=1,
+            min_traded_fold_count=1,
+            min_oos_span_days=0.0,
+            max_single_market_trade_share=1.0,
+            max_single_fold_trade_share=1.0,
+        ),
+    )
+
+    overall = result["policy_metrics"]["overall"]
+    assert result["failure_count"] == 0
+    assert overall["candidate_trade_count"] == 2
+    assert overall["trade_count"] == 1
+    assert overall["blocked_by_execution_overlap"] == 1
+    assert overall["gross_return_dollars"] == 50.0
+    assert overall["cost_dollars"] == 10.0
+    assert overall["net_return_dollars"] == 40.0
 
 
 @pytest.mark.parametrize(
@@ -433,6 +515,51 @@ def test_promotion_gate_blocks_bad_alpha_even_when_structure_passes(tmp_path: Pa
     metrics = json.loads(result["metrics_path"].read_text(encoding="utf-8"))
     assert metrics["research_policy_metrics_ready"] is True
     assert metrics["research_alpha_ready"] is False
+
+
+def test_locked_negative_wfa_fixture_blocks_promotion_even_when_structure_passes(
+    tmp_path: Path,
+) -> None:
+    prediction_path = _write_predictions(
+        tmp_path / "data" / "predictions" / "baseline" / "oos_predictions.parquet"
+    )
+    predictions = pd.read_parquet(prediction_path)
+    timestamps = sorted(predictions["timestamp"].dropna().unique())
+    predictions.loc[predictions["timestamp"].eq(timestamps[0]), "execution_close"] = 99.0
+    predictions.loc[predictions["timestamp"].eq(timestamps[3]), "execution_close"] = 102.0
+    predictions.to_parquet(prediction_path, index=False)
+    manifest_path = _write_manifest(
+        tmp_path / "reports" / "wfa" / "baseline_predictions_manifest.json",
+        prediction_path,
+    )
+    costs_path = _write_costs(tmp_path / "configs" / "costs.yaml")
+    models_path = _write_models(tmp_path / "configs" / "models.yaml")
+
+    result = evaluate_predictions(
+        predictions_path=prediction_path,
+        predictions_manifest=manifest_path,
+        costs_config=costs_path,
+        models_config=models_path,
+        metrics_root=tmp_path / "reports" / "metrics",
+        model_selection_root=tmp_path / "reports" / "model_selection",
+        run="baseline",
+        policy=_policy(),
+        promotion_gate=_promotion_gate(
+            min_trade_count=1,
+            min_market_count=1,
+            min_traded_market_count=1,
+            min_fold_count=1,
+            min_traded_fold_count=1,
+            min_oos_span_days=0.0,
+            max_single_market_trade_share=1.0,
+            max_single_fold_trade_share=1.0,
+        ),
+    )
+
+    gate = result["promotion_gate"]
+    assert result["policy_metrics"]["overall"]["gross_return_dollars"] < 0.0
+    assert gate["model_promotion_allowed"] is False
+    assert any("gross_return_dollars" in blocker for blocker in gate["promotion_blockers"])
 
 
 def test_phase8_blocks_final_holdout_predictions_for_selection(tmp_path: Path) -> None:

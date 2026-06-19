@@ -27,6 +27,7 @@ from scripts.validation.data_audit_universe_guard import (
     data_audit_evidence_matches,
     load_data_audit_universe,
 )
+from scripts.validation.feature_leakage_guard import forbidden_feature_columns
 from scripts.profile_scope import (
     DEFAULT_PROFILE_CONFIG,
     ProfileScope,
@@ -318,8 +319,9 @@ def load_feature_cols(input_root: Path, feature_cols_path: Path | None = None) -
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, list) or not all(isinstance(item, str) for item in payload):
         raise SystemExit(f"invalid feature column registry: {_relative_path(path)}")
-    if any(item.startswith("target_") for item in payload):
-        raise SystemExit("feature column registry contains target columns")
+    forbidden = forbidden_feature_columns(payload)
+    if forbidden:
+        raise SystemExit(f"feature column registry contains forbidden columns: {forbidden}")
     return list(payload), path
 
 
@@ -331,8 +333,9 @@ def _validate_feature_list(features: object, context: str) -> list[str]:
     duplicates = sorted({item for item in features if features.count(item) > 1})
     if duplicates:
         raise SystemExit(f"feature column registry contains duplicates: {duplicates}")
-    if any(item.startswith("target_") for item in features):
-        raise SystemExit("feature column registry contains target columns")
+    forbidden = forbidden_feature_columns(features)
+    if forbidden:
+        raise SystemExit(f"feature column registry contains forbidden columns: {forbidden}")
     return list(features)
 
 

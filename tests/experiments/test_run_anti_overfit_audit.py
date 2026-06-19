@@ -25,21 +25,23 @@ def _metrics(
     if market_breakdown:
         summaries.extend(
             [
-                {"scope": "market", "market": "ES", "net_return_dollars": 100.0},
-                {"scope": "market", "market": "CL", "net_return_dollars": 100.0},
+                {"scope": "market", "market": "ES", "net_return_dollars": 100.0, "trade_count": 100},
+                {"scope": "market", "market": "CL", "net_return_dollars": 100.0, "trade_count": 100},
             ]
         )
     if fold_breakdown:
         summaries.extend(
             [
-                {"scope": "fold", "fold_id": "f1", "net_return_dollars": 100.0},
-                {"scope": "fold", "fold_id": "f2", "net_return_dollars": 100.0},
+                {"scope": "fold", "fold_id": "f1", "net_return_dollars": 100.0, "trade_count": 100},
+                {"scope": "fold", "fold_id": "f2", "net_return_dollars": 100.0, "trade_count": 100},
             ]
         )
     overall = {
         "gross_return_dollars": gross,
         "cost_dollars": cost,
         "net_return_dollars": net,
+        "trade_count": 200,
+        "oos_span_days": 45.0,
     }
     if turnover is not None:
         overall["turnover_per_bar"] = turnover

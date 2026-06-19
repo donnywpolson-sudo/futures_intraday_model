@@ -10,8 +10,8 @@ Find what is wrong and how to fix it. Be token-efficient. No reassurance. No gen
 
 Allowed inspection only:
 - Use static read-only commands only: `rg`, `git status/log/show/diff`, `Test-Path`, `Get-ChildItem`, `Get-Content`, and parse-only snippets that do not import project modules, write files, create caches, or run scripts.
-- Do not run tests, `py_compile`, WFA, Phase 8, Phase 9 harnesses, rebuilds, report writers, ledger writers, or artifact generators.
-- If a command would create/overwrite data, reports, predictions, logs, JSON/CSV, parquet, DBN, zst, caches, or model artifacts, list it only.
+- Do not run tests, `py_compile`, WFA, Phase 8, Phase 9 harnesses, rebuilds, report writers, ledger writers, freeze/final-holdout scripts, hygiene scripts, or artifact generators.
+- If a command would create/overwrite data, reports, predictions, logs, JSON/CSV, parquet, DBN, zst, caches, model artifacts, or `artifacts/frozen`, list it only.
 
 Identity gate:
 - Confirm current directory, git branch/status with `git status --short --branch`, remote from `.git/config` or other read-only git metadata, and top-level files.
@@ -44,10 +44,13 @@ Identity gate:
   - `reports/source_gap_audit/`
   - `reports/raw_data_snapshot/`
   - `reports/validation/`
+  - `reports/final_holdout/`
+  - `artifacts/frozen/`
 - If this is not the intraday futures model repo, stop with:
   Wrong repo selected - switch repo/folder before audit.
 
 Canonical scripts to inspect, not run:
+- `scripts/run_wfa.py`
 - `scripts/phase1A_download/download_databento_raw.py`
 - `scripts/phase1B_convert/convert_databento_raw.py`
 - `scripts/phase1C_validate/audit_raw_dbn_alignment.py`
@@ -68,6 +71,13 @@ Canonical scripts to inspect, not run:
 - `scripts/phase9_research/liquidity_cost_state_harness.py`
 - `scripts/phase9_research/directional_path_quality_target_harness.py`
 - relevant `scripts/validation/` raw-readiness, provenance, and data-audit guard scripts
+- `scripts/experiments/run_anti_overfit_audit.py`
+- `scripts/experiments/robustness_gate.py`
+- `scripts/experiments/ledger.py`
+- `scripts/final_holdout/guard_final_holdout.py`
+- `scripts/artifact_freeze/freeze_research_artifacts.py`
+- `scripts/check_git_hygiene.py`
+- `scripts/utilities/precommit_block_generated_artifacts.py`
 
 Scope:
 - Repo: current working directory only.
@@ -87,7 +97,7 @@ Current feature/target research state to verify, not assume:
 - Allowed statuses are `CANDIDATE`, `DISCOVERY_PASS`, `CONFIRMATION_PASS`, `FROZEN`, `REJECTED`, `RETIRED`, `QUARANTINED`.
 - Only `FROZEN` may be WFA-allowed.
 - `liquidity_cost_state_features_v1` is `REJECTED`; do not recommend WFA, Phase 8, full harness, freezing, tuning, or near-neighbor rescue from it.
-- `directional_path_quality_target_v1` is `REJECTED`; do not recommend WFA, Phase 8, full harness, freezing, target tuning, or near-neighbor rescue from it.
+- Registry status is authoritative: `directional_path_quality_target_v1` is `REJECTED`; its bounded smoke report decision is `STOP_UNDERPOWERED` and is rejection evidence. Do not recommend WFA, Phase 8, full harness, freezing, target tuning, or near-neighbor rescue from it.
 - Cost-clearability and market-balanced cost-clearability Phase 9 branches are stopped/no-go unless current primary evidence proves otherwise.
 - Rejected/no-go Phase 9 evidence must not justify WFA, Phase 8, full harnesses, threshold tuning, policy tuning, feature/target freezing, or near-neighbor rescue runs.
 - Locked Tier 1 baseline run `tier1_locked_baseline_20260616` is no-go negative evidence only.
@@ -108,11 +118,12 @@ Audit rules:
 - Do not update `PIPELINE.md`.
 - Do not regenerate artifacts.
 - Do not overwrite data/reports.
-- Do not run Phase 1A/1B/1C, Phase 2/3/4 rebuilds, Phase 5 split generation, Phase 6/7 WFA, prediction combine, Phase 8, Phase 9 harnesses, tests, or experiment ledger writers.
+- Do not run Phase 1A/1B/1C, Phase 2/3/4 rebuilds, Phase 5 split generation, Phase 6/7 WFA, prediction combine, Phase 8, Phase 9 harnesses, tests, experiment ledger writers, freeze/final-holdout scripts, or hygiene scripts.
 - Do not trust existing PASS reports.
 - Treat reports/artifacts/tests as stale or wrong until independently reconciled against primary files.
 - Prefer current locked/no-go audit reports under `reports/pipeline_audit/` over older smoke/default/partial/Tier 3 reports, but still verify primary artifacts.
 - Do not use modified time alone to choose latest evidence; reconcile run name, profile, resolved profile, markets, years, folds, manifest paths, prediction paths, metrics paths, hashes, and report provenance.
+- Inspect `reports/experiments/anti_overfit*.json` and `reports/experiments/ledger.jsonl` as guard/negative evidence only unless full-run provenance reconciles.
 - Do not tune thresholds, features, targets, models, policies, or costs against failed WFA evidence or rejected Phase 9 smoke evidence.
 - Any new feature or target hypothesis must be registered as materially different `CANDIDATE` before discovery and become `FROZEN`/WFA-allowed only after pre-registered gates pass.
 
@@ -151,7 +162,11 @@ Minimum checks:
   - `reports/metrics`
   - `reports/phase8`
   - `reports/model_selection`
+  - `reports/final_holdout`
+  - `artifacts/frozen`
 - Treat staged candidate roots such as `data/raw_alignment_candidate_*` and `data/raw_enriched_candidate` as noncanonical if present.
+- Treat `data/raw_repaired` as repair overlay evidence only, not canonical Tier 1 input unless report provenance explicitly uses it.
+- Treat `artifacts/frozen` as optional generated evidence; do not create/update it or treat old freezes as current Tier 1 truth unless manifest scope and provenance match.
 - Inspect current no-go/audit evidence under:
   - `reports/pipeline_audit/tier1_failed_full_wfa_oos_audit.md`
   - `reports/pipeline_audit/tier1_consolidated_no_go_report.{md,json}`
@@ -163,6 +178,8 @@ Minimum checks:
   - `reports/phase8_failure_breakdown/`
   - `reports/model_selection/`
   - `reports/experiments/`
+  - `reports/final_holdout/`
+  - `artifacts/frozen/`
 - Inspect manifests and research state:
   - `manifests/feature_sets/baseline_current.json`
   - `manifests/feature_sets/baseline_current_features.txt`
@@ -180,6 +197,7 @@ Minimum checks:
 - Verify rejected feature and target hypotheses are not recommended for full harness, Phase 8, WFA, freezing, tuning, or rescue variants.
 - Verify any proposed new feature or target work starts as a materially different pre-registered `CANDIDATE` hypothesis.
 - Inspect Phase 1A-8 scripts, Phase 9 harnesses, validation scripts, and matching tests by reading files only.
+- Inspect experiment/ledger, final-holdout, artifact-freeze, WFA-wrapper, and git-hygiene guard scripts plus matching tests by reading files only.
 - Independently verify label math:
   - entry = `open[t+1]`
   - exit = `open[t+16]`
@@ -193,7 +211,7 @@ Minimum checks:
 - Verify Phase 6 wrappers delegate to Phase 7 implementation and Phase 7 fits scaler/imputer/model/calibration on train only.
 - Verify Phase 8 PnL uses saved OOS predictions and executable returns, not labels as tradable returns.
 - Verify costs/turnover/flips/tick values/slippage/commission units from `configs/costs.yaml`.
-- Verify promotion gates cannot pass economically useless net-negative/cost-dominated results.
+- Verify promotion and anti-overfit gates cannot pass economically useless net-negative/cost-dominated results.
 - Identify stale artifacts separately from code bugs.
 
 Output format only:

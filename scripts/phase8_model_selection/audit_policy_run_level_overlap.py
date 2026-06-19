@@ -127,6 +127,31 @@ def _metrics(frame: pd.DataFrame, scope: str, keys: Mapping[str, Any]) -> dict[s
     }
 
 
+def _execution_netting_summary(frame: pd.DataFrame) -> dict[str, Any]:
+    candidate_trades = (
+        int(frame["candidate_trade_count"].sum())
+        if "candidate_trade_count" in frame
+        else int(frame["trade_count"].sum())
+    )
+    executed_trades = int(frame["trade_count"].sum()) if "trade_count" in frame else 0
+    blocked_overlap = (
+        int(frame["blocked_by_execution_overlap"].sum())
+        if "blocked_by_execution_overlap" in frame
+        else 0
+    )
+    policy_values = (
+        sorted(str(value) for value in frame["execution_policy"].dropna().unique())
+        if "execution_policy" in frame
+        else []
+    )
+    return {
+        "policy": policy_values[0] if len(policy_values) == 1 else policy_values,
+        "candidate_trade_count": candidate_trades,
+        "executed_trade_count": executed_trades,
+        "blocked_by_execution_overlap": blocked_overlap,
+    }
+
+
 def _group_metrics(
     frame: pd.DataFrame,
     *,
@@ -433,6 +458,7 @@ def build_policy_run_level_overlap_audit(
             "fold_count": int(policy_frame["fold_id"].nunique(dropna=True)),
         },
         "row_vs_run_level": _run_level_summary(policy_frame, run_frame),
+        "execution_netting": _execution_netting_summary(policy_frame),
         "non_overlapping_target_windows": non_overlap_summary,
         "breakdowns": {
             "by_side": _group_metrics(policy_frame, scope="side", group_cols=["side"]),

@@ -27,6 +27,8 @@ DEFAULT_MODEL_SELECTION_ROOT = Path("reports/model_selection")
 DEFAULT_PHASE8_ROOT = Path("reports/phase8")
 DEFAULT_RUN = "baseline"
 NO_CALIBRATION_ID = "no_calibration"
+EXECUTION_POLICY_NAME = "max_one_contract_non_overlapping_target_window"
+EXECUTION_REALISM = "research_non_overlapping_target_window_execution_policy"
 
 POLICY_REQUIRED_TARGETS = {
     "expected_return": ("target_ret_15m", "y_pred_calibrated"),
@@ -87,11 +89,19 @@ class PolicyConfig:
 
 @dataclass(frozen=True)
 class PromotionGateConfig:
+    min_gross_return_dollars: float
     min_net_return_dollars: float
     min_net_sharpe_like: float
     max_cost_drag_to_abs_gross: float
     max_turnover_per_bar: float
     min_trade_count: int
+    min_market_count: int = 2
+    min_traded_market_count: int = 2
+    min_fold_count: int = 4
+    min_traded_fold_count: int = 4
+    min_oos_span_days: float = 30.0
+    max_single_market_trade_share: float = 0.75
+    max_single_fold_trade_share: float = 0.50
     require_positive_net_all_markets: bool = True
     require_positive_net_all_folds: bool = True
 
@@ -421,6 +431,72 @@ def _first_non_null(frame: pd.DataFrame, key_cols: list[str], value_cols: list[s
     return subset.groupby(key_cols, dropna=False, as_index=False).first()
 
 
+def _apply_non_overlapping_execution_policy(
+    frame: pd.DataFrame,
+) -> tuple[pd.DataFrame, list[str]]:
+    out = frame.copy()
+    failures: list[str] = []
+    out["target_entry_ts"] = pd.to_datetime(
+        out["target_entry_ts"] if "target_entry_ts" in out.columns else pd.NaT,
+        errors="coerce",
+        utc=True,
+    )
+    out["target_exit_ts"] = pd.to_datetime(
+        out["target_exit_ts"] if "target_exit_ts" in out.columns else pd.NaT,
+        errors="coerce",
+        utc=True,
+    )
+    out["execution_policy"] = EXECUTION_POLICY_NAME
+    out["blocked_by_execution_overlap"] = False
+    out["execution_run_id"] = None
+    out["position"] = 0
+
+    candidate_trades = out["candidate_position"].ne(0)
+    missing_windows = candidate_trades & (
+        out["target_entry_ts"].isna() | out["target_exit_ts"].isna()
+    )
+    if bool(missing_windows.any()):
+        failures.append(
+            "policy executable signals missing target_entry_ts/target_exit_ts: "
+            f"{int(missing_windows.sum())}"
+        )
+    inverted_windows = candidate_trades & out["target_exit_ts"].lt(out["target_entry_ts"])
+    if bool(inverted_windows.any()):
+        failures.append(
+            "policy executable signals with target_exit_ts before target_entry_ts: "
+            f"{int(inverted_windows.sum())}"
+        )
+    if failures:
+        return out, failures
+
+    sort_cols = [
+        column
+        for column in ("market", "fold_id", "target_entry_ts", "timestamp")
+        if column in out.columns
+    ]
+    out = out.sort_values(sort_cols).reset_index(drop=True)
+    group_cols = [column for column in ("market", "fold_id") if column in out.columns]
+    for keys, group in out.groupby(group_cols, dropna=False, sort=False):
+        last_exit: pd.Timestamp | None = None
+        run_number = 0
+        key_text = "|".join(str(item) for item in (keys if isinstance(keys, tuple) else (keys,)))
+        for index, row in group.iterrows():
+            candidate_position = int(row["candidate_position"])
+            if candidate_position == 0:
+                continue
+            entry_ts = row["target_entry_ts"]
+            exit_ts = row["target_exit_ts"]
+            if last_exit is not None and entry_ts < last_exit:
+                out.at[index, "blocked_by_execution_overlap"] = True
+                out.at[index, "policy_reason"] = "execution_overlap_block"
+                continue
+            run_number += 1
+            out.at[index, "position"] = candidate_position
+            out.at[index, "execution_run_id"] = f"{key_text}|exec_{run_number:06d}"
+            last_exit = exit_ts
+    return out, failures
+
+
 def build_policy_frame(
     predictions: pd.DataFrame,
     costs_config: Path,
@@ -519,13 +595,14 @@ def build_policy_frame(
     )
     base["blocked_by_fade_filter"] = base["base_position"].ne(0) & ~base["fade_allowed"]
     base["blocked_by_trend_danger"] = base["base_position"].ne(0) & base["trend_danger_block"]
-    base["position"] = np.where(
+    base["candidate_position"] = np.where(
         base["direction_beats_flat"].fillna(False)
         & base["fade_allowed"]
         & ~base["trend_danger_block"],
         base["base_position"],
         0,
     ).astype(int)
+    base["candidate_trade_count"] = base["candidate_position"].ne(0).astype(int)
     base["policy_reason"] = "trade"
     base.loc[base["base_position"].eq(0), "policy_reason"] = "no_direction_edge"
     base.loc[base["blocked_by_fade_filter"], "policy_reason"] = "fade_filter_block"
@@ -564,6 +641,19 @@ def build_policy_frame(
     base["tick_value"] = base["market"].map(tick_values)
     base["slippage_ticks_per_side"] = base["market"].map(slippage_ticks).fillna(0.0)
     base["price_move"] = base["execution_close"] - base["execution_open"]
+    base["candidate_gross_dollars"] = (
+        base["candidate_position"] * base["price_move"] * base["point_value"]
+    )
+    base["candidate_cost_dollars"] = np.where(
+        base["candidate_position"].ne(0),
+        base["round_turn_cost_dollars"],
+        0.0,
+    )
+    base["candidate_net_dollars"] = base["candidate_gross_dollars"] - base["candidate_cost_dollars"]
+
+    base, execution_failures = _apply_non_overlapping_execution_policy(base)
+    failures.extend(execution_failures)
+
     base["gross_dollars"] = base["position"] * base["price_move"] * base["point_value"]
     base["cost_dollars"] = np.where(base["position"].ne(0), base["round_turn_cost_dollars"], 0.0)
     base["slippage_cost_dollars"] = np.where(
@@ -588,14 +678,26 @@ def build_policy_frame(
     base["position_change_abs"] = (base["position"] - previous_position).abs()
     base["round_turns_per_bar"] = base["trade_count"].astype(float)
     warnings.append(
-        "policy economics assume one independent round-turn per nonzero prediction; "
-        "this is research cost diagnostics, not a live fill simulator"
+        "policy economics use max-one-contract non-overlapping target-window execution; "
+        "partial fills, order rejection, latency, and capacity remain outside Phase 8"
     )
     return base, failures, warnings
 
 
 def _policy_summary(frame: pd.DataFrame, scope: str, key_values: Mapping[str, Any]) -> dict[str, Any]:
     rows = int(len(frame))
+    timestamps = (
+        pd.to_datetime(frame["timestamp"], utc=True, errors="coerce").dropna()
+        if "timestamp" in frame
+        else pd.Series(dtype="datetime64[ns, UTC]")
+    )
+    first_timestamp = timestamps.min() if not timestamps.empty else None
+    last_timestamp = timestamps.max() if not timestamps.empty else None
+    oos_span_days = (
+        float((last_timestamp - first_timestamp).total_seconds() / 86400.0)
+        if first_timestamp is not None and last_timestamp is not None
+        else None
+    )
     gross = _sum_float(frame["gross_dollars"]) if "gross_dollars" in frame else 0.0
     cost = _sum_float(frame["cost_dollars"]) if "cost_dollars" in frame else 0.0
     net = _sum_float(frame["net_dollars"]) if "net_dollars" in frame else 0.0
@@ -603,15 +705,25 @@ def _policy_summary(frame: pd.DataFrame, scope: str, key_values: Mapping[str, An
         float(frame["position_change_abs"].sum()) if "position_change_abs" in frame else 0.0
     )
     trade_count = int(frame["trade_count"].sum()) if "trade_count" in frame else 0
+    candidate_trade_count = (
+        int(frame["candidate_trade_count"].sum()) if "candidate_trade_count" in frame else trade_count
+    )
     winning_trades = frame.loc[frame["trade_count"].eq(1), "net_dollars"] if trade_count else pd.Series(dtype=float)
     return {
         "scope": scope,
         **dict(key_values),
         "row_count": rows,
         "trade_count": trade_count,
+        "candidate_trade_count": candidate_trade_count,
+        "blocked_by_execution_overlap": int(frame["blocked_by_execution_overlap"].sum())
+        if "blocked_by_execution_overlap" in frame
+        else 0,
         "long_count": int(frame["long_count"].sum()) if "long_count" in frame else 0,
         "short_count": int(frame["short_count"].sum()) if "short_count" in frame else 0,
         "flat_count": int(frame["flat_count"].sum()) if "flat_count" in frame else rows,
+        "first_timestamp": first_timestamp.isoformat() if first_timestamp is not None else None,
+        "last_timestamp": last_timestamp.isoformat() if last_timestamp is not None else None,
+        "oos_span_days": oos_span_days,
         "gross_return_dollars": gross,
         "cost_dollars": cost,
         "net_return_dollars": net,
@@ -698,6 +810,13 @@ def evaluate_promotion_gate(
     summaries = policy_metrics.get("summaries", [])
     blockers: list[str] = []
 
+    gross_return = _safe_float(overall.get("gross_return_dollars"))
+    if gross_return is None or gross_return < gate_config.min_gross_return_dollars:
+        blockers.append(
+            f"gross_return_dollars {gross_return} below minimum "
+            f"{gate_config.min_gross_return_dollars}"
+        )
+
     net_return = _safe_float(overall.get("net_return_dollars"))
     if net_return is None or net_return < gate_config.min_net_return_dollars:
         blockers.append(
@@ -727,24 +846,80 @@ def evaluate_promotion_gate(
     if trade_count < gate_config.min_trade_count:
         blockers.append(f"trade_count {trade_count} below minimum {gate_config.min_trade_count}")
 
+    oos_span_days = _safe_float(overall.get("oos_span_days"))
+    if oos_span_days is None or oos_span_days < gate_config.min_oos_span_days:
+        blockers.append(
+            f"oos_span_days {oos_span_days} below minimum {gate_config.min_oos_span_days}"
+        )
+
     if isinstance(summaries, list):
+        market_summaries = [
+            item
+            for item in summaries
+            if isinstance(item, Mapping) and item.get("scope") == "market"
+        ]
+        fold_summaries = [
+            item for item in summaries if isinstance(item, Mapping) and item.get("scope") == "fold"
+        ]
+        market_count = len(market_summaries)
+        if market_count < gate_config.min_market_count:
+            blockers.append(
+                f"market_count {market_count} below minimum {gate_config.min_market_count}"
+            )
+        traded_markets = [
+            item for item in market_summaries if (_safe_int(item.get("trade_count")) or 0) > 0
+        ]
+        if len(traded_markets) < gate_config.min_traded_market_count:
+            blockers.append(
+                f"traded_market_count {len(traded_markets)} below minimum "
+                f"{gate_config.min_traded_market_count}"
+            )
+        market_trade_counts = [
+            _safe_int(item.get("trade_count")) or 0 for item in market_summaries
+        ]
+        market_trade_total = sum(market_trade_counts)
+        if market_trade_total > 0:
+            max_market_share = max(market_trade_counts) / market_trade_total
+            if max_market_share > gate_config.max_single_market_trade_share:
+                blockers.append(
+                    f"single_market_trade_share {max_market_share} above maximum "
+                    f"{gate_config.max_single_market_trade_share}"
+                )
+
+        fold_count = len(fold_summaries)
+        if fold_count < gate_config.min_fold_count:
+            blockers.append(f"fold_count {fold_count} below minimum {gate_config.min_fold_count}")
+        traded_folds = [
+            item for item in fold_summaries if (_safe_int(item.get("trade_count")) or 0) > 0
+        ]
+        if len(traded_folds) < gate_config.min_traded_fold_count:
+            blockers.append(
+                f"traded_fold_count {len(traded_folds)} below minimum "
+                f"{gate_config.min_traded_fold_count}"
+            )
+        fold_trade_counts = [_safe_int(item.get("trade_count")) or 0 for item in fold_summaries]
+        fold_trade_total = sum(fold_trade_counts)
+        if fold_trade_total > 0:
+            max_fold_share = max(fold_trade_counts) / fold_trade_total
+            if max_fold_share > gate_config.max_single_fold_trade_share:
+                blockers.append(
+                    f"single_fold_trade_share {max_fold_share} above maximum "
+                    f"{gate_config.max_single_fold_trade_share}"
+                )
+
         if gate_config.require_positive_net_all_markets:
             bad_markets = sorted(
                 str(item.get("market"))
-                for item in summaries
-                if isinstance(item, Mapping)
-                and item.get("scope") == "market"
-                and (_safe_float(item.get("net_return_dollars")) or 0.0) <= 0.0
+                for item in market_summaries
+                if (_safe_float(item.get("net_return_dollars")) or 0.0) <= 0.0
             )
             if bad_markets:
                 blockers.append(f"nonpositive net_return_dollars for markets: {bad_markets}")
         if gate_config.require_positive_net_all_folds:
             bad_folds = sorted(
                 str(item.get("fold_id"))
-                for item in summaries
-                if isinstance(item, Mapping)
-                and item.get("scope") == "fold"
-                and (_safe_float(item.get("net_return_dollars")) or 0.0) <= 0.0
+                for item in fold_summaries
+                if (_safe_float(item.get("net_return_dollars")) or 0.0) <= 0.0
             )
             if bad_folds:
                 blockers.append(f"nonpositive net_return_dollars for folds: {bad_folds}")
@@ -1020,10 +1195,12 @@ def evaluate_predictions(
         "trading_semantics_changed": False,
         "promotion_gate": promotion_gate_report,
         "live_execution_ready": False,
-        "execution_realism": "research_round_turn_cost_assumption_only",
+        "execution_realism": EXECUTION_REALISM,
+        "execution_policy": EXECUTION_POLICY_NAME,
         "live_execution_blockers": [
             "policy uses saved OOS predictions, not a live signal router",
-            "costs use fixed round-turn assumptions, not live/paper fill simulation",
+            "costs use fixed round-turn assumptions after target-window netting",
+            "partial fills, order rejection, latency, and capacity remain outside this report",
             "contract-specific execution mapping remains outside this report",
         ],
         "metrics": policy_metrics,
@@ -1066,7 +1243,8 @@ def evaluate_predictions(
         "policy_metrics_path": _relative_path(metrics_json_path),
         "calibration_report_path": _relative_path(calibration_report_path),
         "live_execution_ready": False,
-        "execution_realism": "research_round_turn_cost_assumption_only",
+        "execution_realism": EXECUTION_REALISM,
+        "execution_policy": EXECUTION_POLICY_NAME,
     }
     _write_json(model_selection_report_path, selection_report)
 
@@ -1098,7 +1276,12 @@ def evaluate_predictions(
     alpha_decision = {
         "generated_at": generated_at,
         "run": run,
+        "profile": manifest.get("profile"),
+        "resolved_profile": manifest.get("resolved_profile"),
         "promoted": bool(promotion_gate_report["model_promotion_allowed"]),
+        "research_alpha_ready": promotion_gate_report["research_alpha_ready"],
+        "model_promotion_allowed": promotion_gate_report["model_promotion_allowed"],
+        "promotion_gate": promotion_gate_report,
         "blockers": promotion_gate_report["promotion_blockers"],
         "costed_oos": policy_metrics["overall"],
         "markets": market_summaries,
@@ -1143,11 +1326,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--long-short-margin", type=float, default=0.05)
     parser.add_argument("--min-fade-success", type=float, default=0.50)
     parser.add_argument("--max-trend-danger", type=float, default=0.50)
+    parser.add_argument("--min-gross-return-dollars", type=float, default=1.0)
     parser.add_argument("--min-net-return-dollars", type=float, default=1.0)
     parser.add_argument("--min-net-sharpe-like", type=float, default=0.0)
     parser.add_argument("--max-cost-drag-to-abs-gross", type=float, default=1.0)
     parser.add_argument("--max-turnover-per-bar", type=float, default=0.10)
-    parser.add_argument("--min-trade-count", type=int, default=1)
+    parser.add_argument("--min-trade-count", type=int, default=100)
+    parser.add_argument("--min-market-count", type=int, default=2)
+    parser.add_argument("--min-traded-market-count", type=int, default=2)
+    parser.add_argument("--min-fold-count", type=int, default=4)
+    parser.add_argument("--min-traded-fold-count", type=int, default=4)
+    parser.add_argument("--min-oos-span-days", type=float, default=30.0)
+    parser.add_argument("--max-single-market-trade-share", type=float, default=0.75)
+    parser.add_argument("--max-single-fold-trade-share", type=float, default=0.50)
     parser.add_argument(
         "--allow-negative-net-market",
         action="store_true",
@@ -1185,11 +1376,19 @@ def main() -> int:
             max_trend_danger=args.max_trend_danger,
         ),
         promotion_gate=PromotionGateConfig(
+            min_gross_return_dollars=args.min_gross_return_dollars,
             min_net_return_dollars=args.min_net_return_dollars,
             min_net_sharpe_like=args.min_net_sharpe_like,
             max_cost_drag_to_abs_gross=args.max_cost_drag_to_abs_gross,
             max_turnover_per_bar=args.max_turnover_per_bar,
             min_trade_count=args.min_trade_count,
+            min_market_count=args.min_market_count,
+            min_traded_market_count=args.min_traded_market_count,
+            min_fold_count=args.min_fold_count,
+            min_traded_fold_count=args.min_traded_fold_count,
+            min_oos_span_days=args.min_oos_span_days,
+            max_single_market_trade_share=args.max_single_market_trade_share,
+            max_single_fold_trade_share=args.max_single_fold_trade_share,
             require_positive_net_all_markets=not args.allow_negative_net_market,
             require_positive_net_all_folds=not args.allow_negative_net_fold,
         ),

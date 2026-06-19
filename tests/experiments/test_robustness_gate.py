@@ -21,21 +21,23 @@ def _metrics(
     if market_breakdown:
         summaries.extend(
             [
-                {"scope": "market", "market": "ES", "net_return_dollars": 100.0},
-                {"scope": "market", "market": "CL", "net_return_dollars": 100.0},
+                {"scope": "market", "market": "ES", "net_return_dollars": 100.0, "trade_count": 100},
+                {"scope": "market", "market": "CL", "net_return_dollars": 100.0, "trade_count": 100},
             ]
         )
     if fold_breakdown:
         summaries.extend(
             [
-                {"scope": "fold", "fold_id": "f1", "net_return_dollars": 100.0},
-                {"scope": "fold", "fold_id": "f2", "net_return_dollars": 100.0},
+                {"scope": "fold", "fold_id": "f1", "net_return_dollars": 100.0, "trade_count": 100},
+                {"scope": "fold", "fold_id": "f2", "net_return_dollars": 100.0, "trade_count": 100},
             ]
         )
     overall = {
         "gross_return_dollars": gross,
         "cost_dollars": cost,
         "net_return_dollars": net,
+        "trade_count": 200,
+        "oos_span_days": 45.0,
     }
     if turnover is not None:
         overall["turnover_per_bar"] = turnover
@@ -96,6 +98,28 @@ def test_robustness_gate_fails_closed_on_missing_turnover() -> None:
 
     assert result["status"] == "FAIL"
     assert "turnover_unavailable" in result["failures"]
+
+
+def test_robustness_gate_fails_positive_sparse_one_market_or_one_fold_metrics() -> None:
+    metrics = _metrics(market_breakdown=False, fold_breakdown=False)
+    overall = metrics["metrics"]["overall"]  # type: ignore[index]
+    overall["trade_count"] = 2  # type: ignore[index]
+    overall["oos_span_days"] = 1.0  # type: ignore[index]
+    summaries = metrics["metrics"]["summaries"]  # type: ignore[index]
+    summaries.extend(  # type: ignore[union-attr]
+        [
+            {"scope": "market", "market": "ES", "net_return_dollars": 200.0, "trade_count": 2},
+            {"scope": "fold", "fold_id": "f1", "net_return_dollars": 200.0, "trade_count": 2},
+        ]
+    )
+
+    result = evaluate_robustness_gate(metrics_report=metrics)
+
+    assert result["status"] == "FAIL"
+    assert "trade_count_below_minimum" in result["failures"]
+    assert "market_breakdown_unavailable" in result["failures"]
+    assert "fold_pass_rate_unavailable" in result["failures"]
+    assert "oos_span_below_minimum" in result["failures"]
 
 
 def test_optional_breakdowns_are_marked_unavailable_without_invention() -> None:

@@ -66,6 +66,21 @@ def validate_final_holdout_guard(
             failures.append("frozen manifest failure_count is nonzero")
         if freeze_manifest.get("final_holdout_consumes_frozen_only") is not True:
             failures.append("frozen manifest does not require frozen-only final holdout")
+        if freeze_manifest.get("phase8_promoted") is not True:
+            failures.append("frozen manifest Phase 8 promoted is not true")
+        if freeze_manifest.get("phase8_model_promotion_allowed") is not True:
+            failures.append("frozen manifest Phase 8 model_promotion_allowed is not true")
+        blockers = freeze_manifest.get("phase8_blockers")
+        if not isinstance(blockers, list) or blockers:
+            failures.append("frozen manifest Phase 8 blockers are not empty")
+        if freeze_manifest.get("anti_overfit_status") != "PASS":
+            failures.append("frozen manifest anti-overfit status is not PASS")
+        anti_overfit_failures = freeze_manifest.get("anti_overfit_failures")
+        if not isinstance(anti_overfit_failures, list) or anti_overfit_failures:
+            failures.append("frozen manifest anti-overfit failures are not empty")
+        for field in ("run", "profile", "resolved_profile"):
+            if not isinstance(freeze_manifest.get(field), str) or not freeze_manifest.get(field):
+                failures.append(f"frozen manifest {field} missing")
 
     if allow_tuning:
         failures.append("final holdout tuning requested")

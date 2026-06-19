@@ -265,7 +265,7 @@ def _write_multi_data_audit_universe(
             "year": year,
             "audit_status": audit_status,
             "usable_for_wfa": audit_status == "usable",
-            "final_decision": "acceptable_with_caveat_ohlcv_empty_minutes_assumed",
+            "final_decision": "usable_no_synthetic_gaps_detected",
             "reason": "fixture",
         }
         for market in markets
@@ -455,6 +455,34 @@ def test_feature_set_rejects_non_frozen_manifest(tmp_path: Path) -> None:
     )
 
     with pytest.raises(SystemExit, match="not FROZEN"):
+        wfa.load_feature_set(feature_set)
+
+
+@pytest.mark.parametrize(
+    "forbidden_feature",
+    [
+        "future_return_15m",
+        "path_mfe_ticks_15m",
+        "cost_dollars",
+        "pnl",
+        "execution_open",
+        "entry_price",
+        "exit_price",
+        "trend_danger_up_30m",
+        "label_semantics",
+        "feature_future_return_15m",
+    ],
+)
+def test_feature_set_rejects_forbidden_leakage_columns(
+    tmp_path: Path,
+    forbidden_feature: str,
+) -> None:
+    feature_set = _write_feature_set(
+        tmp_path / "manifests" / "feature_sets" / "frozen.json",
+        features=["feature_signal", forbidden_feature],
+    )
+
+    with pytest.raises(SystemExit, match="forbidden columns"):
         wfa.load_feature_set(feature_set)
 
 

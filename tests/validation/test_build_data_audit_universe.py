@@ -55,8 +55,8 @@ def _complete_rows() -> list[dict[str, object]]:
         {
             "market": "ES",
             "year": 2022,
-            "final_decision": "acceptable_with_caveat_ohlcv_empty_minutes_assumed",
-            "reason": "accepted with caveat",
+            "final_decision": "usable_no_synthetic_gaps_detected",
+            "reason": "directly usable",
             "missing_minutes": 16,
             "largest_gap_size_minutes": 2,
             "active_session_synthetic_rows": 0,
@@ -168,6 +168,22 @@ def test_databento_ohlcv_convention_relaxes_ohlcv_only_quarantine_for_diagnostic
         report["policy"]["databento_ohlcv_no_trade_convention"]["wfa_usage"]
         == "does not make quarantined OHLCV-only rows WFA-usable"
     )
+
+
+def test_assumption_only_acceptable_decision_is_diagnostics_only(tmp_path: Path) -> None:
+    rows = _complete_rows()
+    rows[0]["final_decision"] = "acceptable_with_caveat_ohlcv_empty_minutes_assumed"
+    rows[0]["reason"] = "validated by broader OHLCV no-trade assumption"
+    _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    _write_decisions(tmp_path / "reports" / "decisions.json", rows)
+
+    report = build_universe(_args(tmp_path))
+
+    row = next(item for item in report["market_years"] if item["market"] == "ES" and item["year"] == 2022)
+    assert row["audit_status"] == "diagnostic_only"
+    assert row["usable_for_diagnostics"] is True
+    assert row["usable_for_wfa"] is False
+    assert "assumption-only OHLCV no-trade acceptance" in row["reason"]
 
 
 def test_require_all_profile_market_years_usable_fails_closed_when_any_scope_row_is_not_usable(

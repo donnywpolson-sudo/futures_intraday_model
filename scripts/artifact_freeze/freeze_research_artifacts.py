@@ -18,6 +18,7 @@ DEFAULT_FEATURE_ROOT = Path("data/feature_matrices/baseline")
 DEFAULT_WFA_ROOT = Path("reports/wfa")
 DEFAULT_PHASE4_AUDIT = Path("reports/phase4/feature_coverage_audit.json")
 DEFAULT_PHASE8_DECISION = Path("reports/phase8/alpha_promotion_decision.json")
+DEFAULT_ANTI_OVERFIT_AUDIT = Path("reports/experiments/anti_overfit_audit.json")
 DEFAULT_MODELS_CONFIG = Path("configs/models.yaml")
 DEFAULT_COSTS_CONFIG = Path("configs/costs.yaml")
 
@@ -109,6 +110,61 @@ def _validate_split_plan(split_plan: Mapping[str, Any]) -> list[str]:
     return failures
 
 
+def _validate_phase8_decision(
+    phase8_decision: Mapping[str, Any],
+    predictions_manifest: Mapping[str, Any],
+) -> list[str]:
+    failures: list[str] = []
+    if phase8_decision.get("promoted") is not True:
+        failures.append("Phase 8 decision promoted is not true")
+    if phase8_decision.get("model_promotion_allowed") is not True:
+        failures.append("Phase 8 decision model_promotion_allowed is not true")
+    blockers = phase8_decision.get("blockers")
+    if not isinstance(blockers, list):
+        failures.append("Phase 8 decision blockers are missing or invalid")
+    elif blockers:
+        failures.append("Phase 8 decision blockers are not empty")
+    if int(phase8_decision.get("failure_count") or 0) > 0:
+        failures.append("Phase 8 decision failure_count is nonzero")
+
+    for field in ("run", "profile", "resolved_profile"):
+        phase8_value = phase8_decision.get(field)
+        manifest_value = predictions_manifest.get(field)
+        if not isinstance(phase8_value, str) or not phase8_value:
+            failures.append(f"Phase 8 decision {field} missing")
+        if not isinstance(manifest_value, str) or not manifest_value:
+            failures.append(f"predictions manifest {field} missing")
+        elif isinstance(phase8_value, str) and phase8_value != manifest_value:
+            failures.append(
+                f"Phase 8 decision {field} mismatch: phase8={phase8_value!r} "
+                f"predictions_manifest={manifest_value!r}"
+            )
+    return failures
+
+
+def _validate_anti_overfit_audit(
+    anti_overfit_audit: Mapping[str, Any],
+    predictions_manifest: Mapping[str, Any],
+) -> list[str]:
+    failures: list[str] = []
+    status = anti_overfit_audit.get("robustness_status", anti_overfit_audit.get("status"))
+    if status != "PASS":
+        failures.append(f"anti-overfit audit status is not PASS: {status!r}")
+    audit_failures = anti_overfit_audit.get("failures")
+    if not isinstance(audit_failures, list):
+        failures.append("anti-overfit audit failures are missing or invalid")
+    elif audit_failures:
+        failures.append("anti-overfit audit failures are not empty")
+    audit_profile = anti_overfit_audit.get("profile")
+    manifest_profile = predictions_manifest.get("profile")
+    if audit_profile is not None and audit_profile != manifest_profile:
+        failures.append(
+            f"anti-overfit audit profile mismatch: audit={audit_profile!r} "
+            f"predictions_manifest={manifest_profile!r}"
+        )
+    return failures
+
+
 def _validate_schema(feature_root: Path, feature_manifest: Mapping[str, Any]) -> list[str]:
     failures: list[str] = []
     registries = _registry_paths(feature_root)
@@ -142,6 +198,7 @@ def validate_freeze_inputs(
     split_plan_path: Path = DEFAULT_WFA_ROOT / "split_plan.json",
     predictions_manifest_path: Path = DEFAULT_WFA_ROOT / "baseline_predictions_manifest.json",
     phase8_decision_path: Path = DEFAULT_PHASE8_DECISION,
+    anti_overfit_audit_path: Path = DEFAULT_ANTI_OVERFIT_AUDIT,
     feature_manifest_path: Path = Path("reports/phase4/baseline_feature_manifest.json"),
 ) -> list[str]:
     failures: list[str] = []
@@ -170,10 +227,17 @@ def validate_freeze_inputs(
     if not phase8_decision:
         failures.append(f"missing Phase 8 decision: {_relative_path(phase8_decision_path)}")
     else:
+        failures.extend(_validate_phase8_decision(phase8_decision, predictions_manifest))
         if phase8_decision.get("final_holdout_touched") is True:
             failures.append("final holdout was touched before freeze")
         if phase8_decision.get("trading_semantics_changed") is True:
             failures.append("trading semantics changed before freeze")
+
+    anti_overfit_audit = _read_json(anti_overfit_audit_path)
+    if not anti_overfit_audit:
+        failures.append(f"missing anti-overfit audit: {_relative_path(anti_overfit_audit_path)}")
+    else:
+        failures.extend(_validate_anti_overfit_audit(anti_overfit_audit, predictions_manifest))
 
     failures.extend(_validate_schema(feature_root, _read_json(feature_manifest_path)))
     return failures
@@ -188,6 +252,7 @@ def freeze_research_artifacts(
     split_plan_path: Path = DEFAULT_WFA_ROOT / "split_plan.json",
     predictions_manifest_path: Path = DEFAULT_WFA_ROOT / "baseline_predictions_manifest.json",
     phase8_decision_path: Path = DEFAULT_PHASE8_DECISION,
+    anti_overfit_audit_path: Path = DEFAULT_ANTI_OVERFIT_AUDIT,
     models_config: Path = DEFAULT_MODELS_CONFIG,
     costs_config: Path = DEFAULT_COSTS_CONFIG,
     feature_manifest_path: Path = Path("reports/phase4/baseline_feature_manifest.json"),
@@ -198,6 +263,7 @@ def freeze_research_artifacts(
         split_plan_path=split_plan_path,
         predictions_manifest_path=predictions_manifest_path,
         phase8_decision_path=phase8_decision_path,
+        anti_overfit_audit_path=anti_overfit_audit_path,
         feature_manifest_path=feature_manifest_path,
     )
     freeze_dir = freeze_root / freeze_id
@@ -218,6 +284,7 @@ def freeze_research_artifacts(
         split_plan_path,
         predictions_manifest_path,
         phase8_decision_path,
+        anti_overfit_audit_path,
         models_config,
         costs_config,
     ]
@@ -229,6 +296,11 @@ def freeze_research_artifacts(
         copy_map[_relative_path(source)] = _relative_path(target)
 
     phase8_decision = _read_json(phase8_decision_path)
+    predictions_manifest = _read_json(predictions_manifest_path)
+    anti_overfit_audit = _read_json(anti_overfit_audit_path)
+    anti_overfit_status = anti_overfit_audit.get(
+        "robustness_status", anti_overfit_audit.get("status")
+    )
     manifest = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "freeze_id": freeze_id,
@@ -237,6 +309,9 @@ def freeze_research_artifacts(
         "failures": [],
         "feature_root": _relative_path(feature_root),
         "frozen_root": _relative_path(freeze_dir),
+        "run": predictions_manifest.get("run"),
+        "profile": predictions_manifest.get("profile"),
+        "resolved_profile": predictions_manifest.get("resolved_profile"),
         "copied_artifacts": copy_map,
         "source_hashes": _hash_map(copy_sources),
         "git": {
@@ -244,7 +319,13 @@ def freeze_research_artifacts(
             "status_short": _git_output(["status", "--short"]),
         },
         "phase8_promoted": phase8_decision.get("promoted"),
+        "phase8_model_promotion_allowed": phase8_decision.get("model_promotion_allowed"),
         "phase8_blockers": phase8_decision.get("blockers", []),
+        "phase8_run": phase8_decision.get("run"),
+        "phase8_profile": phase8_decision.get("profile"),
+        "phase8_resolved_profile": phase8_decision.get("resolved_profile"),
+        "anti_overfit_status": anti_overfit_status,
+        "anti_overfit_failures": anti_overfit_audit.get("failures", []),
         "final_holdout_touched": False,
         "final_holdout_consumes_frozen_only": True,
         "used_final_holdout_for_tuning": False,
@@ -265,6 +346,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=(DEFAULT_WFA_ROOT / "baseline_predictions_manifest.json").as_posix(),
     )
     parser.add_argument("--phase8-decision", default=DEFAULT_PHASE8_DECISION.as_posix())
+    parser.add_argument("--anti-overfit-audit", default=DEFAULT_ANTI_OVERFIT_AUDIT.as_posix())
     parser.add_argument("--models-config", default=DEFAULT_MODELS_CONFIG.as_posix())
     parser.add_argument("--costs-config", default=DEFAULT_COSTS_CONFIG.as_posix())
     parser.add_argument("--feature-manifest", default="reports/phase4/baseline_feature_manifest.json")
@@ -281,6 +363,7 @@ def main() -> int:
         split_plan_path=Path(args.split_plan),
         predictions_manifest_path=Path(args.predictions_manifest),
         phase8_decision_path=Path(args.phase8_decision),
+        anti_overfit_audit_path=Path(args.anti_overfit_audit),
         models_config=Path(args.models_config),
         costs_config=Path(args.costs_config),
         feature_manifest_path=Path(args.feature_manifest),

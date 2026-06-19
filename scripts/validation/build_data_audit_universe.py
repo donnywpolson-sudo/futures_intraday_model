@@ -14,9 +14,12 @@ import yaml
 
 
 USABLE_DECISIONS = {
+    "usable_no_synthetic_gaps_detected",
+}
+
+ASSUMPTION_ONLY_DECISIONS = {
     "acceptable_with_caveat_ohlcv_empty_minutes_assumed",
     "accept_with_caveat_ohlcv_empty_minutes_assumed",
-    "usable_no_synthetic_gaps_detected",
 }
 
 QUARANTINE_DECISIONS = {
@@ -199,9 +202,17 @@ def _status_for_decision(
     if decision in USABLE_DECISIONS:
         return (
             "usable",
-            "decision table marks market-year acceptable under current OHLCV-only evidence",
+            "decision table marks market-year directly usable under current evidence",
             True,
             True,
+        )
+    if decision in ASSUMPTION_ONLY_DECISIONS:
+        return (
+            "diagnostic_only",
+            "assumption-only OHLCV no-trade acceptance is diagnostics-only until no-trade "
+            "semantics and label handling are explicitly WFA-approved",
+            True,
+            False,
         )
     if market in diagnostic_markets and decision in QUARANTINE_DECISIONS:
         return (
@@ -347,6 +358,7 @@ def build_universe(args: argparse.Namespace) -> dict[str, Any]:
         "scope_source": scope_source,
         "policy": {
             "usable_decisions": sorted(USABLE_DECISIONS),
+            "assumption_only_decisions": sorted(ASSUMPTION_ONLY_DECISIONS),
             "quarantine_decisions": sorted(QUARANTINE_DECISIONS),
             "diagnostic_decisions": sorted(DIAGNOSTIC_DECISIONS),
             "databento_ohlcv_no_trade_convention": {

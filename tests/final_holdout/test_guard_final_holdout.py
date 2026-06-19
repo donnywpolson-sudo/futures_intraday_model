@@ -22,6 +22,14 @@ def _write_freeze_manifest(root: Path, freeze_id: str) -> Path:
                 "frozen": True,
                 "failure_count": 0,
                 "final_holdout_consumes_frozen_only": True,
+                "run": "baseline",
+                "profile": "tier_1",
+                "resolved_profile": "tier_1_research",
+                "phase8_promoted": True,
+                "phase8_model_promotion_allowed": True,
+                "phase8_blockers": [],
+                "anti_overfit_status": "PASS",
+                "anti_overfit_failures": [],
             }
         ),
         encoding="utf-8",
@@ -67,6 +75,45 @@ def test_final_holdout_guard_refuses_tuning_and_policy_changes(tmp_path: Path) -
     assert metrics["used_final_holdout_for_tuning"] is False
     assert "final holdout tuning requested" in metrics["failures"]
     assert "final holdout policy change requested" in metrics["failures"]
+
+
+def test_final_holdout_guard_rejects_unpromoted_frozen_manifest(tmp_path: Path) -> None:
+    freeze_root = tmp_path / "artifacts" / "frozen"
+    path = _write_freeze_manifest(freeze_root, "freeze-1")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["phase8_promoted"] = False
+    payload["phase8_model_promotion_allowed"] = False
+    payload["phase8_blockers"] = ["net negative"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    metrics = validate_final_holdout_guard(
+        frozen_artifact_id="freeze-1",
+        freeze_root=freeze_root,
+        reports_root=tmp_path / "reports" / "final_holdout",
+    )
+
+    assert metrics["validity"] == "FAIL"
+    assert "frozen manifest Phase 8 promoted is not true" in metrics["failures"]
+    assert "frozen manifest Phase 8 blockers are not empty" in metrics["failures"]
+
+
+def test_final_holdout_guard_rejects_failed_anti_overfit_status(tmp_path: Path) -> None:
+    freeze_root = tmp_path / "artifacts" / "frozen"
+    path = _write_freeze_manifest(freeze_root, "freeze-1")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["anti_overfit_status"] = "FAIL"
+    payload["anti_overfit_failures"] = ["single market concentration"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    metrics = validate_final_holdout_guard(
+        frozen_artifact_id="freeze-1",
+        freeze_root=freeze_root,
+        reports_root=tmp_path / "reports" / "final_holdout",
+    )
+
+    assert metrics["validity"] == "FAIL"
+    assert "frozen manifest anti-overfit status is not PASS" in metrics["failures"]
+    assert "frozen manifest anti-overfit failures are not empty" in metrics["failures"]
 
 
 def test_final_holdout_permission_helper_requires_explicit_allow() -> None:

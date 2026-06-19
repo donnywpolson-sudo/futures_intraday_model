@@ -12,7 +12,11 @@ from typing import Any, Mapping
 
 USABLE_STATUS = "usable"
 BLOCKED_STATUSES = {"quarantined", "diagnostic_only"}
-WFA_BLOCKED_FINAL_DECISIONS = {"keep_quarantined_ohlcv_only_evidence_insufficient"}
+WFA_BLOCKED_FINAL_DECISIONS = {
+    "acceptable_with_caveat_ohlcv_empty_minutes_assumed",
+    "accept_with_caveat_ohlcv_empty_minutes_assumed",
+    "keep_quarantined_ohlcv_only_evidence_insufficient",
+}
 
 
 def relative_path(path: Path) -> str:

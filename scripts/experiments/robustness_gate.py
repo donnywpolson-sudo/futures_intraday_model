@@ -115,8 +115,16 @@ def evaluate_robustness_gate(
     split_plan: Mapping[str, Any] | None = None,
     failure_breakdowns: Iterable[Mapping[str, Any]] = (),
     max_turnover_per_bar: float = 0.10,
+    min_trade_count: int = 100,
+    min_market_count: int = 2,
+    min_traded_market_count: int = 2,
+    min_fold_count: int = 2,
+    min_traded_fold_count: int = 2,
+    min_oos_span_days: float = 30.0,
     min_fold_pass_rate: float = 1.0,
     max_single_market_profit_contribution: float = 0.50,
+    max_single_market_trade_share: float = 0.75,
+    max_single_fold_trade_share: float = 0.50,
 ) -> dict[str, Any]:
     wfa_report = wfa_report or {}
     split_plan = split_plan or {}
@@ -129,6 +137,16 @@ def evaluate_robustness_gate(
     checks["base_cost_net"] = net
     if net is None or net <= 0.0:
         failures.append("base_net_nonpositive")
+
+    trade_count = _safe_int(overall.get("trade_count"))
+    checks["trade_count"] = trade_count
+    if trade_count is None or trade_count < min_trade_count:
+        failures.append("trade_count_below_minimum")
+
+    oos_span_days = _safe_float(overall.get("oos_span_days"))
+    checks["oos_span_days"] = oos_span_days
+    if oos_span_days is None or oos_span_days < min_oos_span_days:
+        failures.append("oos_span_below_minimum")
 
     for label, multiplier in (("cost_stress_1_5x", 1.5), ("cost_stress_2x", 2.0)):
         stressed_net, reason = _cost_stress(overall, multiplier)
@@ -147,9 +165,24 @@ def evaluate_robustness_gate(
 
     market_breakdown = _summaries(metrics_report, "market")
     checks["market_count"] = len(market_breakdown)
-    if not market_breakdown:
+    if len(market_breakdown) < min_market_count:
         failures.append("market_breakdown_unavailable")
     else:
+        market_trade_counts = [_safe_int(item.get("trade_count")) for item in market_breakdown]
+        if any(value is None for value in market_trade_counts):
+            failures.append("market_trade_count_unavailable")
+        else:
+            traded_market_count = sum(1 for value in market_trade_counts if value and value > 0)
+            checks["traded_market_count"] = traded_market_count
+            if traded_market_count < min_traded_market_count:
+                failures.append("traded_market_count_below_minimum")
+            market_trade_total = sum(value or 0 for value in market_trade_counts)
+            if market_trade_total > 0:
+                market_trade_share = max(value or 0 for value in market_trade_counts) / market_trade_total
+                checks["max_single_market_trade_share"] = market_trade_share
+                if market_trade_share > max_single_market_trade_share:
+                    failures.append("single_market_trade_share_above_cap")
+
         positive = [
             value
             for value in (_safe_float(item.get("net_return_dollars")) for item in market_breakdown)
@@ -163,9 +196,24 @@ def evaluate_robustness_gate(
 
     fold_breakdown = _summaries(metrics_report, "fold")
     checks["fold_count"] = len(fold_breakdown)
-    if not fold_breakdown:
+    if len(fold_breakdown) < min_fold_count:
         failures.append("fold_pass_rate_unavailable")
     else:
+        fold_trade_counts = [_safe_int(item.get("trade_count")) for item in fold_breakdown]
+        if any(value is None for value in fold_trade_counts):
+            failures.append("fold_trade_count_unavailable")
+        else:
+            traded_fold_count = sum(1 for value in fold_trade_counts if value and value > 0)
+            checks["traded_fold_count"] = traded_fold_count
+            if traded_fold_count < min_traded_fold_count:
+                failures.append("traded_fold_count_below_minimum")
+            fold_trade_total = sum(value or 0 for value in fold_trade_counts)
+            if fold_trade_total > 0:
+                fold_trade_share = max(value or 0 for value in fold_trade_counts) / fold_trade_total
+                checks["max_single_fold_trade_share"] = fold_trade_share
+                if fold_trade_share > max_single_fold_trade_share:
+                    failures.append("single_fold_trade_share_above_cap")
+
         fold_nets = [_safe_float(item.get("net_return_dollars")) for item in fold_breakdown]
         if any(value is None for value in fold_nets):
             failures.append("fold_pass_rate_unavailable")
@@ -200,8 +248,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--split-plan-json", default=None)
     parser.add_argument("--failure-breakdown-json", action="append", default=[])
     parser.add_argument("--max-turnover-per-bar", type=float, default=0.10)
+    parser.add_argument("--min-trade-count", type=int, default=100)
+    parser.add_argument("--min-market-count", type=int, default=2)
+    parser.add_argument("--min-traded-market-count", type=int, default=2)
+    parser.add_argument("--min-fold-count", type=int, default=2)
+    parser.add_argument("--min-traded-fold-count", type=int, default=2)
+    parser.add_argument("--min-oos-span-days", type=float, default=30.0)
     parser.add_argument("--min-fold-pass-rate", type=float, default=1.0)
     parser.add_argument("--max-single-market-profit-contribution", type=float, default=0.50)
+    parser.add_argument("--max-single-market-trade-share", type=float, default=0.75)
+    parser.add_argument("--max-single-fold-trade-share", type=float, default=0.50)
     return parser
 
 
@@ -215,8 +271,16 @@ def main() -> int:
             _read_json(Path(path)) for path in args.failure_breakdown_json
         ],
         max_turnover_per_bar=args.max_turnover_per_bar,
+        min_trade_count=args.min_trade_count,
+        min_market_count=args.min_market_count,
+        min_traded_market_count=args.min_traded_market_count,
+        min_fold_count=args.min_fold_count,
+        min_traded_fold_count=args.min_traded_fold_count,
+        min_oos_span_days=args.min_oos_span_days,
         min_fold_pass_rate=args.min_fold_pass_rate,
         max_single_market_profit_contribution=args.max_single_market_profit_contribution,
+        max_single_market_trade_share=args.max_single_market_trade_share,
+        max_single_fold_trade_share=args.max_single_fold_trade_share,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result["status"] == "PASS" else 1

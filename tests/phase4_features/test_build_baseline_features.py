@@ -431,11 +431,23 @@ def test_registry_excludes_targets_audit_source_and_forbidden_columns() -> None:
     injected = validate_registry([*FEATURE_COLS, "target_ret_15m"])
     assert injected
     assert any("forbidden columns" in failure for failure in injected)
-    assert FORBIDDEN_FEATURE_PREFIXES == ("status_", "stat_", "statistics_")
+    for prefix in (
+        "future_",
+        "path_",
+        "cost_",
+        "pnl",
+        "execution_",
+        "entry_",
+        "exit_",
+        "feature_future_",
+    ):
+        assert prefix in FORBIDDEN_FEATURE_PREFIXES
     raw_enrichment_injected = validate_registry(
         [*FEATURE_COLS, "status_action_name", "stat_open_interest"]
     )
     assert any("forbidden columns" in failure for failure in raw_enrichment_injected)
+    leakage_injected = validate_registry([*FEATURE_COLS, "feature_future_return_15m"])
+    assert any("forbidden columns" in failure for failure in leakage_injected)
 
 
 def _process_fixture(
