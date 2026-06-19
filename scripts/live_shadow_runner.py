@@ -11,7 +11,6 @@ import argparse
 import importlib
 import json
 import math
-import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -22,6 +21,11 @@ from typing import Any, Callable, Mapping, Sequence, TextIO
 import numpy as np
 import pandas as pd
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.databento_auth import resolve_databento_api_key
 from scripts.phase2_causal_base.build_causal_base_data import (
     _add_roll_fields,
     _build_causal_invalid_reason,
@@ -181,8 +185,7 @@ def parse_symbols(value: str) -> str | list[str]:
 
 
 def resolve_api_key(env: Mapping[str, str] | None = None) -> str | None:
-    source = os.environ if env is None else env
-    key = source.get(API_KEY_ENV, "").strip()
+    key = resolve_databento_api_key(env=env, key_name=API_KEY_ENV)
     return key or None
 
 

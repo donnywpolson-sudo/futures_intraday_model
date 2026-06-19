@@ -5,14 +5,20 @@ from __future__ import annotations
 
 import argparse
 import importlib
-import os
 import queue
 import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, Sequence, TextIO
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.databento_auth import resolve_databento_api_key
 
 
 DEFAULT_DATASET = "GLBX.MDP3"
@@ -62,8 +68,7 @@ def parse_symbols(value: str) -> str | list[str]:
 
 
 def resolve_api_key(env: dict[str, str] | None = None) -> str | None:
-    source = os.environ if env is None else env
-    key = source.get(API_KEY_ENV, "").strip()
+    key = resolve_databento_api_key(env=env, key_name=API_KEY_ENV)
     return key or None
 
 
