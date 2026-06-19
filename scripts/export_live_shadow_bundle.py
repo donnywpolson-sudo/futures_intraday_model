@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import sys
 import warnings
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -14,6 +15,10 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import pandas as pd
 from sklearn.exceptions import ConvergenceWarning
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from scripts.live_shadow_runner import REQUIRED_TARGETS, normalize_model_bundle
 from scripts.phase7_wfa.run_wfa import (

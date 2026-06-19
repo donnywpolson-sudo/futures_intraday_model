@@ -282,6 +282,16 @@ def cleanup_chart(chart: object | None) -> None:
             return
 
 
+def update_chart_candle(chart: object, series: object, *, initialize: bool) -> None:
+    if initialize:
+        set_data = getattr(chart, "set", None)
+        to_frame = getattr(series, "to_frame", None)
+        if callable(set_data) and callable(to_frame):
+            set_data(to_frame().T)
+            return
+    chart.update(series)
+
+
 def stop_live_client(live: object | None) -> None:
     if live is None:
         return
@@ -336,7 +346,11 @@ def drain_chart_queue(
         except queue.Empty:
             continue
 
-        chart.update(series_factory(candle))
+        update_chart_candle(
+            chart,
+            series_factory(candle),
+            initialize=records_updated == 0,
+        )
         records_updated += 1
 
     return ChartRunResult(

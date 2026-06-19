@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -12,6 +13,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts import export_live_shadow_bundle as exporter
 from scripts.live_shadow_runner import REQUIRED_TARGETS, normalize_model_bundle
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_cli_help_runs_when_invoked_by_script_path() -> None:
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "export_live_shadow_bundle.py"), "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    assert "--approval-note" in result.stdout
 
 
 def _write_models_config(path: Path) -> Path:

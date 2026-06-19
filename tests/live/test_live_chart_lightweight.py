@@ -118,6 +118,28 @@ class FakeChartNoAlive(FakeChart):
         del self.is_alive
 
 
+class FakeFrame:
+    @property
+    def T(self) -> "FakeFrame":
+        return self
+
+
+class FakeSeries(dict[str, int | float]):
+    def to_frame(self) -> FakeFrame:
+        return FakeFrame()
+
+
+class FakeChartWithSet:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def set(self, _data: object) -> None:
+        self.calls.append("set")
+
+    def update(self, _series: object) -> None:
+        self.calls.append("update")
+
+
 def _args(*values: str):
     return live_chart.build_arg_parser().parse_args(list(values))
 
@@ -278,6 +300,18 @@ def test_callback_reports_error_records() -> None:
 
     assert candle_queue.empty()
     assert "Skipping ErrorMsg" in stderr.getvalue()
+
+
+def test_first_chart_candle_uses_set_when_supported() -> None:
+    chart = FakeChartWithSet()
+    series = FakeSeries(
+        {"time": 1, "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5}
+    )
+
+    live_chart.update_chart_candle(chart, series, initialize=True)
+    live_chart.update_chart_candle(chart, series, initialize=False)
+
+    assert chart.calls == ["set", "update"]
 
 
 def test_live_chart_subscribes_and_updates_from_queue() -> None:
