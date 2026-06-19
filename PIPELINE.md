@@ -304,7 +304,7 @@ Streamlining policy:
 
 ### 2. Build Causal Base
 
-Purpose: validate raw bars, normalize sessions, identify roll windows, mark
+Purpose: re-check raw bar invariants, normalize sessions, identify roll windows, mark
 synthetic rows, and causally gate data.
 
 Command:
