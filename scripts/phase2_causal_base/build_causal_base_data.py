@@ -29,6 +29,7 @@ DEFAULT_PROFILE = "all_raw"
 DISCOVERY_PROFILES = {"all_raw", "all_raw_data"}
 DEFAULT_PROFILE_CONFIG = Path("configs/alpha_tiered.yaml")
 DEFAULT_SESSION_CONFIG = Path("configs/market_sessions.yaml")
+DEFAULT_RAW_ALIGNMENT_REPORT = Path("reports/raw_ingest/raw_dbn_alignment.json")
 LOCAL_TRADE_GAP_AUDIT_START = "2025-06-18"
 LOCAL_TRADE_GAP_AUDIT_END = "2026-06-13"
 LOCAL_TRADE_GAP_AUDIT_PROFILES = ("tier_3_holdout", "tier_3_forward")
@@ -213,6 +214,7 @@ class SessionCalendar:
     timezone: str = EXCHANGE_TZ
     regular_open: str = "17:00"
     regular_close: str = "16:00"
+    intraday_breaks: tuple[tuple[str, str], ...] = tuple()
     holidays: frozenset[str] = frozenset()
     closed_dates: frozenset[str] = frozenset()
     early_closes: dict[str, str] = field(default_factory=dict)
@@ -222,7 +224,10 @@ class SessionCalendar:
     @property
     def status(self) -> str:
         if self.config_available and (
-            bool(self.holidays) or bool(self.closed_dates) or bool(self.early_closes)
+            bool(self.holidays)
+            or bool(self.closed_dates)
+            or bool(self.early_closes)
+            or bool(self.intraday_breaks)
         ):
             return "config_backed"
         if self.config_available:
@@ -241,7 +246,11 @@ class SessionCalendar:
     def calendar_coverage_status(self) -> str:
         if not self.config_available:
             return "hardcoded_regular_session"
-        if self.holiday_calendar_available or self.early_close_calendar_available:
+        if (
+            self.holiday_calendar_available
+            or self.early_close_calendar_available
+            or bool(self.intraday_breaks)
+        ):
             return "config_backed"
         return "regular_session_only"
 
@@ -591,6 +600,13 @@ def _read_yaml(path: Path) -> dict[str, object]:
     return payload
 
 
+def _read_json(path: Path) -> dict[str, object]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"JSON report must be a mapping: {path}")
+    return payload
+
+
 def _as_mapping(value: object) -> dict[str, object]:
     if isinstance(value, dict):
         return {str(k): v for k, v in value.items()}
@@ -762,12 +778,33 @@ def load_session_calendar(
         timezone=str(template.get("timezone", EXCHANGE_TZ)),
         regular_open=str(template.get("regular_open", "17:00")),
         regular_close=str(template.get("regular_close", "16:00")),
+        intraday_breaks=_parse_intraday_breaks(
+            market_cfg.get("intraday_breaks", template.get("intraday_breaks", []))
+        ),
         holidays=frozenset(str(item) for item in holidays),
         closed_dates=frozenset(str(item) for item in closed_dates),
         early_closes={str(k): str(v) for k, v in early_closes.items()},
         source=relative_source_path(config_path),
         config_available=True,
     )
+
+
+def _parse_intraday_breaks(raw_breaks: object) -> tuple[tuple[str, str], ...]:
+    breaks: list[tuple[str, str]] = []
+    if not isinstance(raw_breaks, list):
+        return tuple()
+    for item in raw_breaks:
+        if isinstance(item, dict):
+            start = item.get("start")
+            end = item.get("end")
+        elif isinstance(item, (list, tuple)) and len(item) == 2:
+            start, end = item
+        else:
+            continue
+        if start is None or end is None:
+            continue
+        breaks.append((str(start), str(end)))
+    return tuple(breaks)
 
 
 def discover_raw_inputs(raw_root: Path) -> list[tuple[str, int, Path]]:
@@ -808,6 +845,72 @@ def resolve_profile_inputs(
         for year in profile_years[resolved_profile]:
             inputs.append((market, year, raw_root / market / f"{year}.parquet"))
     return inputs
+
+
+def raw_alignment_guard_failures(
+    *,
+    report_path: Path,
+    raw_root: Path,
+    profile: str,
+    profile_config_path: Path = DEFAULT_PROFILE_CONFIG,
+) -> list[str]:
+    if not report_path.exists():
+        return [f"raw alignment report missing: {relative_source_path(report_path)}"]
+
+    try:
+        report = _read_json(report_path)
+    except Exception as exc:
+        return [f"raw alignment report unreadable: {exc}"]
+
+    profile_markets, profile_years, aliases, discovery_profiles = load_profile_map(
+        profile_config_path
+    )
+    del profile_markets, profile_years, discovery_profiles
+    resolved_profile = resolve_profile_name(profile, aliases)
+    failures: list[str] = []
+
+    if report.get("stage") != "raw_dbn_alignment_audit":
+        failures.append("raw alignment report stage is not raw_dbn_alignment_audit")
+    if report.get("status") != "PASS":
+        failures.append(f"raw alignment report status is {report.get('status')!r}, not PASS")
+    if report.get("audit_completeness") != "full":
+        failures.append("raw alignment report audit_completeness is not full")
+    if report.get("definition_join_status") != "checked":
+        failures.append("raw alignment report definition_join_status is not checked")
+
+    report_raw_root = report.get("raw_root")
+    if not isinstance(report_raw_root, str) or not report_raw_root:
+        failures.append("raw alignment report raw_root missing")
+    else:
+        if (Path.cwd() / report_raw_root).resolve() != raw_root.resolve():
+            failures.append(
+                "raw alignment report raw_root does not match Phase 2 raw_root: "
+                f"{report_raw_root} != {relative_source_path(raw_root)}"
+            )
+
+    report_profile = str(report.get("profile", ""))
+    report_resolved_profile = str(report.get("resolved_profile", ""))
+    if report_profile != profile and report_resolved_profile != resolved_profile:
+        failures.append(
+            "raw alignment report profile does not match Phase 2 profile: "
+            f"{report_profile}/{report_resolved_profile} != {profile}/{resolved_profile}"
+        )
+
+    zero_count_fields = [
+        "missing_raw_count",
+        "needs_phase1b_conversion_count",
+        "missing_ohlcv_dbn_count",
+        "missing_definition_dbn_count",
+        "invalid_manifest_count",
+        "raw_schema_failure_count",
+        "source_hash_mismatch_count",
+        "definition_join_mismatch_count",
+    ]
+    for field_name in zero_count_fields:
+        value = report.get(field_name)
+        if value != 0:
+            failures.append(f"raw alignment report {field_name} is {value}, not 0")
+    return failures
 
 
 def infer_market_year(path: Path) -> tuple[str, int]:
@@ -855,6 +958,19 @@ def _session_metadata(ts: pd.Series, calendar: SessionCalendar | None = None) ->
     trade_date_open = session_date.dt.dayofweek.isin([0, 1, 2, 3, 4])
     closed = session_date_str.isin(calendar.holidays | calendar.closed_dates)
     inside = (local >= open_local) & (local < close_local) & trade_date_open & ~closed
+    if calendar.intraday_breaks:
+        in_break = pd.Series(False, index=ts.index)
+        for break_start, break_end in calendar.intraday_breaks:
+            break_start_hour, break_start_minute = _parse_hhmm(break_start)
+            break_end_hour, break_end_minute = _parse_hhmm(break_end)
+            break_start_minutes = break_start_hour * 60 + break_start_minute
+            break_end_minutes = break_end_hour * 60 + break_end_minute
+            if break_start_minutes <= break_end_minutes:
+                break_mask = (minutes >= break_start_minutes) & (minutes < break_end_minutes)
+            else:
+                break_mask = (minutes >= break_start_minutes) | (minutes < break_end_minutes)
+            in_break = in_break | break_mask
+        inside = inside & ~in_break
 
     since_open = (local - open_local).dt.total_seconds() / 60.0
     until_close = (close_local - local).dt.total_seconds() / 60.0
@@ -1083,9 +1199,18 @@ def _build_synthetic_rows(
             prev_close = getattr(prev, "close")
             if pd.isna(prev_close):
                 continue
+            missing_ts = pd.Series(
+                [
+                    getattr(prev, "ts") + pd.Timedelta(minutes=offset)
+                    for offset in range(1, int(gap))
+                ]
+            )
+            missing_meta = _session_metadata(missing_ts, calendar)
+            in_session_missing_ts = missing_ts.loc[missing_meta["inside_session"]]
+            if in_session_missing_ts.empty:
+                continue
             gap_id += 1
-            for offset in range(1, int(gap)):
-                ts = getattr(prev, "ts") + pd.Timedelta(minutes=offset)
+            for ts in in_session_missing_ts:
                 synthetic.append(
                     {
                         "ts": ts,
@@ -1852,6 +1977,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reports-root", default="reports/causal_base")
     parser.add_argument("--profile-config", default=str(DEFAULT_PROFILE_CONFIG))
     parser.add_argument("--session-config", default=str(DEFAULT_SESSION_CONFIG))
+    parser.add_argument("--raw-alignment-report", default=str(DEFAULT_RAW_ALIGNMENT_REPORT))
     parser.add_argument("--allow-hardcoded-calendar", action="store_true")
     parser.add_argument("--roll-window-bars", type=int, default=DEFAULT_ROLL_WINDOW_BARS)
     parser.add_argument(
@@ -1870,6 +1996,17 @@ def main() -> int:
     reports_root = Path(args.reports_root)
     profile_config_path = Path(args.profile_config)
     session_config_path = Path(args.session_config)
+    raw_alignment_report = Path(args.raw_alignment_report)
+    raw_alignment_failures = raw_alignment_guard_failures(
+        report_path=raw_alignment_report,
+        raw_root=raw_root,
+        profile=args.profile,
+        profile_config_path=profile_config_path,
+    )
+    if raw_alignment_failures:
+        for failure in raw_alignment_failures:
+            print(f"FAIL raw_alignment_guard: {failure}")
+        return 1
     config = load_causal_base_config(profile_config_path, args.profile)
     inputs = resolve_profile_inputs(args.profile, raw_root, profile_config_path)
 

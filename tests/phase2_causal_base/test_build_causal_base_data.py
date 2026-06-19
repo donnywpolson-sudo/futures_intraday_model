@@ -16,6 +16,7 @@ from scripts.phase2_causal_base.build_causal_base_data import (
     load_causal_base_config,
     phase2_exit_code,
     process_file,
+    raw_alignment_guard_failures,
     resolve_profile_inputs,
     write_reports,
 )
@@ -112,12 +113,17 @@ def _write_session_config(
     *,
     early_closes: dict[str, str] | None = None,
     closed_dates: list[str] | None = None,
+    intraday_breaks: list[tuple[str, str]] | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     early_closes = early_closes or {}
     closed_dates = closed_dates or []
+    intraday_breaks = intraday_breaks or []
     early_lines = [f'      {day}: "{time}"' for day, time in early_closes.items()]
     closed_text = ", ".join(closed_dates)
+    break_lines = [
+        f'      - start: "{start}"\n        end: "{end}"' for start, end in intraday_breaks
+    ]
     path.write_text(
         "\n".join(
             [
@@ -130,6 +136,8 @@ def _write_session_config(
                 f"    closed_dates: [{closed_text}]",
                 "    early_closes:",
                 *(early_lines or []),
+                "    intraday_breaks:",
+                *(break_lines or []),
                 "markets:",
                 "  default:",
                 "    session_template: cme_globex_17_16_ct",
@@ -181,6 +189,97 @@ def _local_trade_gate(
         },
         "failures": [] if status == "PASS" else ["local trades gate failed"],
     }
+
+
+def _write_raw_alignment_report(
+    path: Path,
+    *,
+    status: str = "PASS",
+    raw_root: Path | str = "data/raw",
+    profile: str = "tier_3",
+    resolved_profile: str = "tier_3_research",
+    overrides: dict[str, object] | None = None,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, object] = {
+        "stage": "raw_dbn_alignment_audit",
+        "status": status,
+        "audit_completeness": "full",
+        "definition_join_status": "checked",
+        "profile": profile,
+        "resolved_profile": resolved_profile,
+        "raw_root": str(raw_root),
+        "missing_raw_count": 0,
+        "needs_phase1b_conversion_count": 0,
+        "missing_ohlcv_dbn_count": 0,
+        "missing_definition_dbn_count": 0,
+        "invalid_manifest_count": 0,
+        "raw_schema_failure_count": 0,
+        "source_hash_mismatch_count": 0,
+        "definition_join_mismatch_count": 0,
+    }
+    if overrides:
+        payload.update(overrides)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_phase2_raw_alignment_guard_requires_report(tmp_path: Path) -> None:
+    failures = raw_alignment_guard_failures(
+        report_path=tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json",
+        raw_root=tmp_path / "data" / "raw",
+        profile="tier_3",
+        profile_config_path=tmp_path / "configs" / "alpha_tiered.yaml",
+    )
+
+    assert failures == [
+        "raw alignment report missing: "
+        + (tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json").as_posix()
+    ]
+
+
+def test_phase2_raw_alignment_guard_accepts_passed_matching_phase1c_report(
+    tmp_path: Path,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_defaults_config(profile_config)
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    raw_root = tmp_path / "data" / "raw"
+    _write_raw_alignment_report(report_path, raw_root=raw_root)
+
+    failures = raw_alignment_guard_failures(
+        report_path=report_path,
+        raw_root=raw_root,
+        profile="tier_3",
+        profile_config_path=profile_config,
+    )
+
+    assert failures == []
+
+
+def test_phase2_raw_alignment_guard_rejects_failed_or_stale_phase1c_report(
+    tmp_path: Path,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_defaults_config(profile_config)
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    raw_root = tmp_path / "data" / "raw"
+    _write_raw_alignment_report(
+        report_path,
+        status="FAIL",
+        raw_root=tmp_path / "other_raw",
+        overrides={"needs_phase1b_conversion_count": 1},
+    )
+
+    failures = raw_alignment_guard_failures(
+        report_path=report_path,
+        raw_root=raw_root,
+        profile="tier_3",
+        profile_config_path=profile_config,
+    )
+
+    assert "raw alignment report status is 'FAIL', not PASS" in failures
+    assert any("raw_root does not match" in failure for failure in failures)
+    assert "raw alignment report needs_phase1b_conversion_count is 1, not 0" in failures
 
 
 def test_causal_base_config_uses_smoke_profile_thresholds(tmp_path: Path) -> None:
@@ -1293,6 +1392,56 @@ def test_no_synthetic_fill_across_session_boundary(tmp_path: Path) -> None:
     output = pd.read_parquet(out_path)
     assert output["session_id"].nunique() == 2
     assert not output["is_synthetic"].any()
+
+
+def test_intraday_break_prevents_synthetic_fill_across_equity_index_pause(
+    tmp_path: Path,
+) -> None:
+    raw_path = tmp_path / "data" / "raw" / "ES" / "2024.parquet"
+    out_path = tmp_path / "data" / "causally_gated_normalized" / "ES" / "2024.parquet"
+    session_config = tmp_path / "configs" / "market_sessions.yaml"
+    _write_session_config(session_config, intraday_breaks=[("15:15", "15:30")])
+    common = {
+        "rtype": 33,
+        "publisher_id": 1,
+        "instrument_id": 100,
+        "symbol": "ESH4",
+        "open": 100.0,
+        "high": 101.0,
+        "low": 99.0,
+        "close": 100.5,
+        "volume": 10,
+        "data_quality_status": "available",
+        "data_quality_degraded": False,
+    }
+    _write_raw(
+        raw_path,
+        [
+            {**common, "ts_event": "2024-01-02T21:14:00Z"},
+            {**common, "ts_event": "2024-01-02T21:20:00Z"},
+            {**common, "ts_event": "2024-01-02T21:30:00Z"},
+        ],
+    )
+
+    result = process_file(
+        raw_path,
+        out_path,
+        profile="tier_1",
+        session_config_path=session_config,
+    )
+
+    output = pd.read_parquet(out_path)
+    assert result.synthetic_rows == 0
+    assert not output["is_synthetic"].any()
+    break_row = output.loc[
+        output["ts"].eq(pd.Timestamp("2024-01-02T21:20:00Z")),
+        "inside_session",
+    ]
+    assert break_row.iloc[0] == False
+    assert output.loc[output["inside_session"], "ts"].tolist() == [
+        pd.Timestamp("2024-01-02T21:14:00Z"),
+        pd.Timestamp("2024-01-02T21:30:00Z"),
+    ]
 
 
 def test_metadata_with_timestamp_index_file_passes(tmp_path: Path) -> None:

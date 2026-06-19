@@ -216,10 +216,14 @@ markets:
   NG: *cme_globex_market
   RB: *cme_globex_market
   HO: *cme_globex_market
-  ES: *cme_globex_market
-  NQ: *cme_globex_market
-  RTY: *cme_globex_market
-  YM: *cme_globex_market
+  ES: &cme_equity_index_market
+    session_template: cme_globex_17_16_ct
+    intraday_breaks:
+      - start: "15:15"
+        end: "15:30"
+  NQ: *cme_equity_index_market
+  RTY: *cme_equity_index_market
+  YM: *cme_equity_index_market
   GC: *cme_globex_market
   SI: *cme_globex_market
   HG: *cme_globex_market
