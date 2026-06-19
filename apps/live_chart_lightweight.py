@@ -18,7 +18,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.databento_auth import resolve_databento_api_key
+from scripts.databento_auth import (
+    load_databento_api_key_from_file,
+    resolve_databento_api_key,
+)
 
 
 DEFAULT_DATASET = "GLBX.MDP3"
@@ -30,6 +33,7 @@ DEFAULT_MAX_RECORDS = 0
 DEFAULT_TIMEOUT_SECONDS: float | None = None
 DEFAULT_NO_DATA_WARNING_SECONDS = 60.0
 API_KEY_ENV = "DATABENTO_API_KEY"
+ROOT_API_KEY_FILE = ROOT / "databento.env"
 FIXED_PRICE_SCALE = 1_000_000_000
 UNDEF_PRICE = 9_223_372_036_854_775_807
 OHLCV_FIELDS = ("ts_event", "open", "high", "low", "close", "volume")
@@ -149,6 +153,10 @@ def parse_symbols(value: str) -> str | list[str]:
 
 
 def resolve_api_key(env: dict[str, str] | None = None) -> str | None:
+    if env is None:
+        key = load_databento_api_key_from_file(ROOT_API_KEY_FILE, key_name=API_KEY_ENV)
+        if key:
+            return key
     key = resolve_databento_api_key(env=env, key_name=API_KEY_ENV)
     return key or None
 

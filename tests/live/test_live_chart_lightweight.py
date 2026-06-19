@@ -252,6 +252,18 @@ def test_missing_key_exits_before_runtime_imports(monkeypatch: pytest.MonkeyPatc
     assert "Missing DATABENTO_API_KEY" in stderr.getvalue()
 
 
+def test_resolve_api_key_prefers_root_env_file_over_process_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key_file = tmp_path / "databento.env"
+    key_file.write_text("DATABENTO_API_KEY=db-file-key\n", encoding="utf-8")
+    monkeypatch.setattr(live_chart, "ROOT_API_KEY_FILE", key_file)
+    monkeypatch.setenv("DATABENTO_API_KEY", "db-process-key")
+
+    assert live_chart.resolve_api_key() == "db-file-key"
+
+
 def test_default_args_resolve_six_hour_lookback() -> None:
     args = _args()
     now = datetime(2024, 6, 18, 20, tzinfo=timezone.utc)
