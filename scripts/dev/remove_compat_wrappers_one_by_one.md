@@ -144,7 +144,6 @@ Do not automatically delete these root `scripts/*.py` files:
 
 Known likely wrapper candidates must still go through the one-pass proof gate:
 
-- `scripts/build_wfa_splits.py` -> `scripts.phase5_wfa.build_wfa_splits`
 - `scripts/run_wfa.py` -> `scripts.phase6_wfa.run_wfa`
 
 ## Report Format
