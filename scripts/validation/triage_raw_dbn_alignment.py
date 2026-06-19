@@ -424,6 +424,227 @@ def build_definition_drilldown(
     }
 
 
+def _metadata_equal(column: str, left: pd.Series, right: pd.Series) -> pd.Series:
+    return _series_equal(left, right) if column == "raw_symbol" else _numeric_equal(left, right)
+
+
+def _value_at(df: pd.DataFrame, idx: int, column: str) -> str | None:
+    if column not in df.columns:
+        return None
+    value = df.at[idx, column]
+    return None if pd.isna(value) else str(value)
+
+
+def _metadata_mismatch_counts(actual: pd.DataFrame, expected: pd.DataFrame, *, row_count: int | None = None) -> dict[str, int]:
+    n = min(len(actual), len(expected)) if row_count is None else min(row_count, len(actual), len(expected))
+    actual_view = actual.iloc[:n].reset_index(drop=True)
+    expected_view = expected.iloc[:n].reset_index(drop=True)
+    counts: dict[str, int] = {}
+    for column in DEFINITION_COMPARE_COLUMNS:
+        if column not in actual_view.columns or column not in expected_view.columns:
+            continue
+        equal = _metadata_equal(column, actual_view[column], expected_view[column])
+        count = int((~equal.fillna(False)).sum())
+        if count:
+            counts[column] = count
+    return counts
+
+
+def _metadata_diff_counts_between_frames(left: pd.DataFrame, right: pd.DataFrame) -> dict[str, int]:
+    n = min(len(left), len(right))
+    left_view = left.iloc[:n].reset_index(drop=True)
+    right_view = right.iloc[:n].reset_index(drop=True)
+    counts: dict[str, int] = {}
+    for column in DEFINITION_COMPARE_COLUMNS:
+        if column not in left_view.columns or column not in right_view.columns:
+            continue
+        equal = _metadata_equal(column, left_view[column], right_view[column])
+        count = int((~equal.fillna(False)).sum())
+        if count:
+            counts[column] = count
+    return counts
+
+
+def _root_cause_sample_rows(
+    canonical: pd.DataFrame,
+    candidate: pd.DataFrame,
+    expected: pd.DataFrame,
+    *,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    n = min(len(canonical), len(candidate), len(expected))
+    canonical_view = canonical.iloc[:n].reset_index(drop=True)
+    candidate_view = candidate.iloc[:n].reset_index(drop=True)
+    expected_view = expected.iloc[:n].reset_index(drop=True)
+    samples: list[dict[str, Any]] = []
+    for column in DEFINITION_COMPARE_COLUMNS:
+        if column not in canonical_view.columns or column not in candidate_view.columns or column not in expected_view.columns:
+            continue
+        canonical_equal = _metadata_equal(column, canonical_view[column], expected_view[column])
+        candidate_equal = _metadata_equal(column, candidate_view[column], expected_view[column])
+        canonical_candidate_equal = _metadata_equal(column, canonical_view[column], candidate_view[column])
+        sample_mask = ~(canonical_equal & candidate_equal & canonical_candidate_equal).fillna(False)
+        for idx in list(canonical_view.index[sample_mask]):
+            samples.append(
+                {
+                    "field": column,
+                    "ts_event": _value_at(canonical_view, int(idx), "ts_event"),
+                    "instrument_id": _value_at(canonical_view, int(idx), "instrument_id"),
+                    "canonical_value": _value_at(canonical_view, int(idx), column),
+                    "candidate_value": _value_at(candidate_view, int(idx), column),
+                    "definition_value": _value_at(expected_view, int(idx), column),
+                }
+            )
+            if len(samples) >= limit:
+                return samples
+    return samples
+
+
+def _classify_definition_root_cause(
+    *,
+    candidate_change_type: str | None,
+    canonical_mismatches: dict[str, int],
+    candidate_mismatches: dict[str, int],
+    candidate_overlap_mismatches: dict[str, int],
+    canonical_candidate_overlap_diff_counts: dict[str, int],
+) -> str:
+    if not canonical_mismatches and not candidate_mismatches and not candidate_overlap_mismatches:
+        return "audit_rule_index_alignment_false_positive"
+    if canonical_mismatches and not candidate_mismatches:
+        return "candidate_fixes_stale_raw_metadata"
+    if (
+        candidate_change_type == "tail_addition"
+        and not canonical_candidate_overlap_diff_counts
+        and candidate_overlap_mismatches
+    ):
+        return "tail_addition_no_metadata_fix"
+    if not canonical_candidate_overlap_diff_counts and candidate_overlap_mismatches:
+        return "candidate_unchanged_definition_mismatch"
+    return "candidate_changes_but_still_mismatches"
+
+
+def _preferred_root_cause_sample(
+    rows: list[dict[str, Any]],
+    *,
+    classification: str,
+    preferred_key: tuple[str, int],
+) -> dict[str, Any] | None:
+    matching = [row for row in rows if row.get("classification") == classification]
+    for row in matching:
+        if (row.get("market"), row.get("year")) == preferred_key:
+            return row
+    return matching[0] if matching else None
+
+
+def build_definition_root_cause(
+    *,
+    alignment_report: dict[str, Any],
+    candidate_compare_report: dict[str, Any],
+    dbn_root: Path,
+    raw_root: Path,
+    candidate_root: Path,
+) -> dict[str, Any]:
+    compare_rows = {market_year_key(row): row for row in candidate_compare_report.get("rows", [])}
+    rows: list[dict[str, Any]] = []
+    field_mismatch_counts = {"canonical": {}, "candidate": {}, "candidate_overlap": {}}
+    read_columns = ["ts_event", "instrument_id", *DEFINITION_COMPARE_COLUMNS]
+    for key in definition_mismatch_keys(alignment_report):
+        market, year = key
+        raw_path = raw_root / market / f"{year}.parquet"
+        candidate_path = candidate_root / market / f"{year}.parquet"
+        compare_row = compare_rows.get(key, {})
+        base_row: dict[str, Any] = {
+            "market": market,
+            "year": year,
+            "raw_path": raw_path.as_posix(),
+            "candidate_path": candidate_path.as_posix(),
+            "candidate_change_type": compare_row.get("change_type"),
+        }
+        try:
+            canonical = _read_raw_audit_frame(raw_path, read_columns)
+            candidate = _read_raw_audit_frame(candidate_path, read_columns)
+            definitions, _ = definition_frame_for_group(dbn_root, market, year)
+            expected_canonical = enrich_with_definition_metadata(
+                canonical[["ts_event", "instrument_id"]].copy(),
+                definitions,
+            )
+            expected_candidate = enrich_with_definition_metadata(
+                candidate[["ts_event", "instrument_id"]].copy(),
+                definitions,
+            )
+        except Exception as exc:
+            rows.append({**base_row, "classification": "definition_join_rebuild_failed", "failure": str(exc)})
+            continue
+
+        canonical_mismatches = _metadata_mismatch_counts(canonical, expected_canonical)
+        candidate_mismatches = _metadata_mismatch_counts(candidate, expected_candidate)
+        candidate_overlap_mismatches = _metadata_mismatch_counts(
+            candidate,
+            expected_candidate,
+            row_count=len(canonical),
+        )
+        canonical_candidate_overlap_diff_counts = _metadata_diff_counts_between_frames(canonical, candidate)
+        classification = _classify_definition_root_cause(
+            candidate_change_type=compare_row.get("change_type"),
+            canonical_mismatches=canonical_mismatches,
+            candidate_mismatches=candidate_mismatches,
+            candidate_overlap_mismatches=candidate_overlap_mismatches,
+            canonical_candidate_overlap_diff_counts=canonical_candidate_overlap_diff_counts,
+        )
+        for bucket, counts in [
+            ("canonical", canonical_mismatches),
+            ("candidate", candidate_mismatches),
+            ("candidate_overlap", candidate_overlap_mismatches),
+        ]:
+            for field, count in counts.items():
+                field_mismatch_counts[bucket][field] = field_mismatch_counts[bucket].get(field, 0) + int(count)
+        rows.append(
+            {
+                **base_row,
+                "classification": classification,
+                "canonical_rows": int(len(canonical)),
+                "candidate_rows": int(len(candidate)),
+                "canonical_mismatch_counts": canonical_mismatches,
+                "candidate_mismatch_counts": candidate_mismatches,
+                "candidate_overlap_mismatch_counts": candidate_overlap_mismatches,
+                "canonical_candidate_overlap_diff_counts": canonical_candidate_overlap_diff_counts,
+                "sample_rows": _root_cause_sample_rows(canonical, candidate, expected_canonical),
+            }
+        )
+
+    classifications: dict[str, int] = {}
+    for row in rows:
+        classification = str(row["classification"])
+        classifications[classification] = classifications.get(classification, 0) + 1
+    unchanged_sample = _preferred_root_cause_sample(
+        rows,
+        classification="candidate_unchanged_definition_mismatch",
+        preferred_key=("6M", 2012),
+    )
+    tail_sample = _preferred_root_cause_sample(
+        rows,
+        classification="tail_addition_no_metadata_fix",
+        preferred_key=("HO", 2026),
+    )
+    return {
+        "stage": "raw_definition_root_cause",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "dbn_root": dbn_root.as_posix(),
+        "raw_root": raw_root.as_posix(),
+        "candidate_root": candidate_root.as_posix(),
+        "market_year_count": len(rows),
+        "classifications": dict(sorted(classifications.items())),
+        "field_mismatch_counts": {
+            key: dict(sorted(value.items())) for key, value in field_mismatch_counts.items()
+        },
+        "representative_samples": {
+            "unchanged": unchanged_sample,
+            "tail_addition": tail_sample,
+        },
+        "rows": rows,
+    }
+
+
 def build_missing_raw_path_report(
     *,
     alignment_report: dict[str, Any],
@@ -556,6 +777,16 @@ def write_markdown(path: Path, report: dict[str, Any]) -> None:
             lines.append(f"- {key}: {report[key]}")
     if "classifications" in report:
         lines.append(f"- classifications: {report['classifications']}")
+    if "field_mismatch_counts" in report:
+        lines.append(f"- field_mismatch_counts: {report['field_mismatch_counts']}")
+    if "representative_samples" in report:
+        samples = report["representative_samples"]
+        for name, sample in samples.items():
+            if sample:
+                lines.append(
+                    f"- representative_{name}: {sample.get('market')} {sample.get('year')} "
+                    f"{sample.get('classification')}"
+                )
     if report.get("rows"):
         lines.extend(["", "## Rows", ""])
         for row in report["rows"][:100]:
@@ -598,6 +829,18 @@ def parse_args() -> argparse.Namespace:
     definition.add_argument("--raw-root", default="data/raw")
     definition.add_argument("--json-out", required=True)
     definition.add_argument("--md-out")
+
+    root_cause = subparsers.add_parser("definition-root-cause")
+    root_cause.add_argument("--alignment-json", default="reports/raw_ingest/raw_dbn_alignment.json")
+    root_cause.add_argument(
+        "--candidate-compare-json",
+        default="reports/raw_ingest/raw_alignment_definition_candidate_compare_refresh.json",
+    )
+    root_cause.add_argument("--dbn-root", default="data/dbn")
+    root_cause.add_argument("--raw-root", default="data/raw")
+    root_cause.add_argument("--candidate-root", default="data/raw_alignment_candidate_definition_fix")
+    root_cause.add_argument("--json-out", required=True)
+    root_cause.add_argument("--md-out")
 
     missing = subparsers.add_parser("missing-paths")
     missing.add_argument("--alignment-json", default="reports/raw_ingest/raw_dbn_alignment.json")
@@ -650,6 +893,14 @@ def main() -> int:
             alignment_report=alignment_report,
             dbn_root=Path(args.dbn_root),
             raw_root=Path(args.raw_root),
+        )
+    elif args.command == "definition-root-cause":
+        report = build_definition_root_cause(
+            alignment_report=alignment_report,
+            candidate_compare_report=load_report(Path(args.candidate_compare_json)),
+            dbn_root=Path(args.dbn_root),
+            raw_root=Path(args.raw_root),
+            candidate_root=Path(args.candidate_root),
         )
     elif args.command == "missing-paths":
         report = build_missing_raw_path_report(

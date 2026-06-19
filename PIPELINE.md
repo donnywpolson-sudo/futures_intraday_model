@@ -94,6 +94,7 @@ data/dbn/definition/{market}/{year}/{chunk_start}_{chunk_end}.dbn.zst
 data/dbn/status/{market}/{year}/{chunk_start}_{chunk_end}.dbn.zst       (optional staged enrichment)
 data/dbn/statistics/{market}/{year}/{chunk_start}_{chunk_end}.dbn.zst   (optional staged enrichment)
 -> data/raw/{market}/{year}.parquet
+-> reports/raw_ingest/raw_dbn_alignment*.{json,md}
 -> data/causally_gated_normalized/{market}/{year}.parquet
 -> data/labeled/{market}/{year}.parquet
 -> data/feature_matrices/baseline/{market}/{year}.parquet
@@ -109,6 +110,7 @@ Implemented phase numbering:
 |---:|---|---|---|
 | 1A | DBN archive download | `scripts.phase1A_download.download_databento_raw` | `data/dbn/.../*.dbn.zst` |
 | 1B | Raw parquet stitch | `scripts.phase1B_convert.convert_databento_raw` | `data/raw/{market}/{year}.parquet` |
+| 1C | Raw readiness gate | `scripts.validation.audit_raw_dbn_alignment` | `reports/raw_ingest/raw_dbn_alignment*.{json,md}` |
 | 2 | Causal base | `scripts.phase2_causal_base.build_causal_base_data` | `data/causally_gated_normalized/{market}/{year}.parquet` |
 | 3 | Labels/targets | `scripts.phase3_labels.build_labels` | `data/labeled/{market}/{year}.parquet` |
 | 4 | Baseline features | `scripts.phase4_features.build_baseline_features` | `data/feature_matrices/baseline/{market}/{year}.parquet` |
@@ -125,6 +127,23 @@ Resolved drift:
   exist in the current repo.
 - Current runnable docs must use the implemented Phase 5 split builder, Phase 6
   WFA wrapper, legacy Phase 7 implementation package, and Phase 8 evaluator.
+
+Generated staging roots:
+
+- `data/raw_alignment_candidate_2026`: temporary replacement candidates for
+  raw parquet files whose canonical `data/raw` source hashes are stale versus
+  current 2026 OHLCV DBNs.
+- `data/raw_alignment_candidate_definition_fix`: temporary candidates used to
+  diagnose definition metadata mismatches.
+- `data/raw_alignment_candidate_missing_fill`: temporary candidates for missing
+  canonical raw market-years that have local OHLCV and definition DBNs.
+- `data/raw_enriched_candidate`: temporary status/statistics enrichment
+  candidate output. It remains OHLCV 1-minute grained and is not a canonical
+  Phase 1B output.
+
+These staging roots are ignored generated artifacts. They are not normal
+downstream inputs, and promotion into `data/raw` requires separate explicit
+approval.
 
 ## Pipeline Runbook
 
@@ -224,6 +243,44 @@ Stop conditions:
 - Missing definition DBN for a market-year.
 - Any null or nonpositive tick-size metadata.
 - Missing manifest, hash mismatch, or raw schema mismatch.
+
+### 1C. Raw Readiness Gate
+
+Purpose: verify that canonical `data/raw` is complete, schema-valid,
+DBN-derived, definition-enriched, and aligned to the current local DBN archive
+before Phase 2 consumes it.
+
+Command:
+
+```powershell
+python -m scripts.validation.audit_raw_dbn_alignment --config configs/alpha_tiered.yaml --profile tier_3 --dbn-root data\dbn --raw-root data\raw --json-out reports\raw_ingest\raw_dbn_alignment.json --md-out reports\raw_ingest\raw_dbn_alignment.md
+```
+
+Candidate comparison commands:
+
+```powershell
+python -m scripts.validation.triage_raw_dbn_alignment compare-candidate --alignment-json reports\raw_ingest\raw_dbn_alignment.json --base-root data\raw --candidate-root data\raw_alignment_candidate_2026 --dbn-root data\dbn --key-source source_hash --json-out reports\raw_ingest\raw_alignment_2026_candidate_compare.json --md-out reports\raw_ingest\raw_alignment_2026_candidate_compare.md
+python -m scripts.validation.triage_raw_dbn_alignment compare-candidate --alignment-json reports\raw_ingest\raw_dbn_alignment.json --base-root data\raw --candidate-root data\raw_alignment_candidate_definition_fix --dbn-root data\dbn --key-source definition --json-out reports\raw_ingest\raw_alignment_definition_candidate_compare.json --md-out reports\raw_ingest\raw_alignment_definition_candidate_compare.md
+python -m scripts.validation.triage_raw_dbn_alignment promotion-manifest --alignment-json reports\raw_ingest\raw_dbn_alignment.json --raw-root data\raw --candidate-2026-root data\raw_alignment_candidate_2026 --definition-candidate-root data\raw_alignment_candidate_definition_fix --missing-candidate-root data\raw_alignment_candidate_missing_fill --json-out reports\raw_ingest\raw_alignment_promotion_manifest.json --md-out reports\raw_ingest\raw_alignment_promotion_manifest.md
+```
+
+Acceptance checks:
+
+- Raw parquet schema/value checks pass.
+- OHLCV and definition DBN sidecar manifests pass.
+- No raw parquet exists without matching local DBN provenance.
+- Missing canonical raw market-years are reported as Phase 1B conversion
+  candidates, not silently ignored.
+- Staged candidates are compared against canonical `data/raw` before any
+  promotion decision.
+
+Streamlining policy:
+
+- Keep Phase 1A and Phase 1B separate so immutable DBN provenance remains
+  auditable.
+- Do not run Phase 2 before Phase 1B and the raw readiness gate.
+- Use Phase 1C as the single user-facing raw-data readiness check instead of
+  folding causal/session validation into Phase 1B.
 
 ### 2. Build Causal Base
 

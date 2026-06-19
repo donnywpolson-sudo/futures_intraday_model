@@ -20,6 +20,7 @@ from scripts.validation.audit_raw_dbn_alignment import build_report
 from scripts.validation.triage_raw_dbn_alignment import (
     build_definition_path_report,
     build_definition_drilldown,
+    build_definition_root_cause,
     build_missing_raw_path_report,
     build_promotion_manifest,
     build_source_path_report,
@@ -216,6 +217,30 @@ def test_raw_dbn_alignment_reports_source_hash_mismatch(tmp_path: Path, monkeypa
 
     assert report["status"] == "FAIL"
     assert report["source_hash_mismatch_count"] == 1
+
+
+def test_raw_dbn_alignment_skip_definition_join_still_reports_hash_failure(tmp_path: Path) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2024])
+    dbn_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m")
+    _write_dbn_with_manifest(dbn_root, "definition")
+    _write_raw(raw_root, ohlcv, source_sha256="bad-hash")
+
+    report = build_report(
+        config_path=config,
+        profile="tier_3",
+        dbn_root=dbn_root,
+        raw_root=raw_root,
+        skip_definition_join=True,
+    )
+
+    assert report["audit_completeness"] == "partial"
+    assert report["definition_join_skipped"] is True
+    assert report["definition_join_status"] == "skipped"
+    assert report["definition_join_checked_market_year_count"] == 0
+    assert report["source_hash_mismatch_count"] == 1
+    assert report["definition_join_mismatch_count"] == 0
 
 
 def test_raw_dbn_alignment_reports_raw_only_extra_market(tmp_path: Path, monkeypatch) -> None:
@@ -434,3 +459,107 @@ def test_raw_alignment_promotion_manifest_dedupes_candidate_groups(tmp_path: Pat
     assert es_row["groups"] == ["definition_mismatch", "source_hash_2026"]
     ke_row = next(row for row in manifest["rows"] if row["market"] == "KE")
     assert ke_row["action"] == "add_missing_raw"
+
+
+def test_definition_root_cause_classifies_candidate_fix_and_samples_values(tmp_path: Path, monkeypatch) -> None:
+    dbn_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    candidate_root = tmp_path / "data" / "candidate"
+    ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m")
+    definition = _write_dbn_with_manifest(dbn_root, "definition")
+    _write_raw(raw_root, ohlcv, tick_size=0.50)
+    _write_raw(candidate_root, ohlcv, tick_size=0.25)
+    _install_fake_databento(monkeypatch, {definition: _definition_frame(tick_size=0.25)})
+
+    report = build_definition_root_cause(
+        alignment_report={"definition_join_mismatches": [{"market": "ES", "year": 2024}]},
+        candidate_compare_report={"rows": [{"market": "ES", "year": 2024, "change_type": "metadata_only"}]},
+        dbn_root=dbn_root,
+        raw_root=raw_root,
+        candidate_root=candidate_root,
+    )
+
+    assert report["classifications"] == {"candidate_fixes_stale_raw_metadata": 1}
+    row = report["rows"][0]
+    assert row["canonical_mismatch_counts"] == {"tick_size": 1}
+    assert row["candidate_mismatch_counts"] == {}
+    sample = row["sample_rows"][0]
+    assert sample["field"] == "tick_size"
+    assert sample["canonical_value"] == "0.5"
+    assert sample["candidate_value"] == "0.25"
+    assert sample["definition_value"] == "0.25"
+
+
+def test_definition_root_cause_classifies_audit_rule_false_positive(tmp_path: Path, monkeypatch) -> None:
+    dbn_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    candidate_root = tmp_path / "data" / "candidate"
+    ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m")
+    definition = _write_dbn_with_manifest(dbn_root, "definition")
+    _write_raw(raw_root, ohlcv, tick_size=0.25)
+    _write_raw(candidate_root, ohlcv, tick_size=0.25)
+    _install_fake_databento(monkeypatch, {definition: _definition_frame(tick_size=0.25)})
+
+    report = build_definition_root_cause(
+        alignment_report={"definition_join_mismatches": [{"market": "ES", "year": 2024}]},
+        candidate_compare_report={"rows": [{"market": "ES", "year": 2024, "change_type": "unchanged"}]},
+        dbn_root=dbn_root,
+        raw_root=raw_root,
+        candidate_root=candidate_root,
+    )
+
+    assert report["classifications"] == {"audit_rule_index_alignment_false_positive": 1}
+    assert report["rows"][0]["canonical_mismatch_counts"] == {}
+    assert report["rows"][0]["candidate_mismatch_counts"] == {}
+
+
+def test_definition_root_cause_classifies_unchanged_mismatch(tmp_path: Path, monkeypatch) -> None:
+    dbn_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    candidate_root = tmp_path / "data" / "candidate"
+    ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m")
+    definition = _write_dbn_with_manifest(dbn_root, "definition")
+    _write_raw(raw_root, ohlcv, tick_size=0.50)
+    _write_raw(candidate_root, ohlcv, tick_size=0.50)
+    _install_fake_databento(monkeypatch, {definition: _definition_frame(tick_size=0.25)})
+
+    report = build_definition_root_cause(
+        alignment_report={"definition_join_mismatches": [{"market": "ES", "year": 2024}]},
+        candidate_compare_report={"rows": [{"market": "ES", "year": 2024, "change_type": "unchanged"}]},
+        dbn_root=dbn_root,
+        raw_root=raw_root,
+        candidate_root=candidate_root,
+    )
+
+    assert report["classifications"] == {"candidate_unchanged_definition_mismatch": 1}
+    assert report["representative_samples"]["unchanged"]["market"] == "ES"
+
+
+def test_definition_root_cause_classifies_tail_addition_without_metadata_fix(tmp_path: Path, monkeypatch) -> None:
+    dbn_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    candidate_root = tmp_path / "data" / "candidate"
+    ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m")
+    definition = _write_dbn_with_manifest(dbn_root, "definition")
+    _write_raw(raw_root, ohlcv, tick_size=0.50)
+    candidate_path = _write_raw(candidate_root, ohlcv, tick_size=0.50)
+    candidate = pd.read_parquet(candidate_path)
+    extra = candidate.iloc[0].copy()
+    extra["ts_event"] = pd.Timestamp("2024-01-02T15:01:00Z")
+    pd.concat([candidate, pd.DataFrame([extra])], ignore_index=True).to_parquet(candidate_path, index=False)
+    _install_fake_databento(monkeypatch, {definition: _definition_frame(tick_size=0.25)})
+
+    report = build_definition_root_cause(
+        alignment_report={"definition_join_mismatches": [{"market": "ES", "year": 2024}]},
+        candidate_compare_report={"rows": [{"market": "ES", "year": 2024, "change_type": "tail_addition"}]},
+        dbn_root=dbn_root,
+        raw_root=raw_root,
+        candidate_root=candidate_root,
+    )
+
+    assert report["classifications"] == {"tail_addition_no_metadata_fix": 1}
+    row = report["rows"][0]
+    assert row["canonical_rows"] == 1
+    assert row["candidate_rows"] == 2
+    assert row["candidate_overlap_mismatch_counts"] == {"tick_size": 1}
+    assert report["representative_samples"]["tail_addition"]["market"] == "ES"

@@ -306,14 +306,14 @@ def _validate_source_hashes(
 
 
 def _series_equal(left: pd.Series, right: pd.Series) -> pd.Series:
-    left_text = left.astype("string").fillna("")
-    right_text = right.astype("string").fillna("")
+    left_text = left.reset_index(drop=True).astype("string").fillna("")
+    right_text = right.reset_index(drop=True).astype("string").fillna("")
     return left_text.eq(right_text)
 
 
 def _numeric_equal(left: pd.Series, right: pd.Series) -> pd.Series:
-    left_num = pd.to_numeric(left, errors="coerce")
-    right_num = pd.to_numeric(right, errors="coerce")
+    left_num = pd.to_numeric(left.reset_index(drop=True), errors="coerce")
+    right_num = pd.to_numeric(right.reset_index(drop=True), errors="coerce")
     both_null = left_num.isna() & right_num.isna()
     return both_null | (left_num.sub(right_num).abs() <= 1e-12)
 
@@ -373,6 +373,7 @@ def build_report(
     profile: str,
     dbn_root: Path,
     raw_root: Path,
+    skip_definition_join: bool = False,
 ) -> dict[str, Any]:
     resolved_profile, markets, years = _profile_markets_and_years(config_path, profile)
     expected, pre_availability_exemptions = _expected_market_years(
@@ -402,6 +403,7 @@ def build_report(
     source_hash_mismatches: list[dict[str, Any]] = []
     definition_join_mismatches: list[dict[str, Any]] = []
     raw_file_metrics: list[dict[str, Any]] = []
+    definition_join_checked_count = 0
     raw_columns = RAW_REQUIRED_COLUMNS + RAW_OPTIONAL_AUDIT_COLUMNS
     for key, path in sorted(raw_index.items()):
         df = _read_raw_audit_frame(path, raw_columns)
@@ -415,7 +417,8 @@ def build_report(
                 source_hash_mismatches.append(mismatch)
         else:
             source_hash_mismatches.append({**_row(key), "failure": "raw has no local OHLCV DBN"})
-        if key in definition_index and not failures:
+        if key in definition_index and not failures and not skip_definition_join:
+            definition_join_checked_count += 1
             mismatch = _validate_definition_join(key=key, dbn_root=dbn_root, raw_df=df)
             if mismatch:
                 definition_join_mismatches.append(mismatch)
@@ -442,6 +445,10 @@ def build_report(
         "stage": "raw_dbn_alignment_audit",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "status": "FAIL" if failures else "PASS",
+        "audit_completeness": "partial" if skip_definition_join else "full",
+        "definition_join_skipped": bool(skip_definition_join),
+        "definition_join_status": "skipped" if skip_definition_join else "checked",
+        "definition_join_checked_market_year_count": definition_join_checked_count,
         "failures": failures,
         "dataset": CME_DATASET,
         "profile": profile,
@@ -491,6 +498,7 @@ def write_markdown(path: Path, report: dict[str, Any]) -> None:
         "# Raw DBN Alignment Audit",
         "",
         f"- Status: {report['status']}",
+        f"- Audit completeness: {report['audit_completeness']}",
         f"- Profile: {report['profile']} -> {report['resolved_profile']}",
         f"- Expected market-years: {report['expected_market_year_count']}",
         f"- Raw market-years: {report['raw_market_year_count']}",
@@ -501,6 +509,8 @@ def write_markdown(path: Path, report: dict[str, Any]) -> None:
         f"- Invalid manifests: {report['invalid_manifest_count']}",
         f"- Raw schema/value failures: {report['raw_schema_failure_count']}",
         f"- Source hash mismatches: {report['source_hash_mismatch_count']}",
+        f"- Definition join status: {report['definition_join_status']}",
+        f"- Definition join checked market-years: {report['definition_join_checked_market_year_count']}",
         f"- Definition join mismatches: {report['definition_join_mismatch_count']}",
         "",
         "## Failures",
@@ -521,6 +531,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--profile", default="tier_3")
     parser.add_argument("--dbn-root", default="data/dbn")
     parser.add_argument("--raw-root", default="data/raw")
+    parser.add_argument(
+        "--skip-definition-join",
+        action="store_true",
+        help="Skip expensive point-in-time definition rebuild checks; report is partial.",
+    )
     parser.add_argument("--json-out", default="reports/raw_ingest/raw_dbn_alignment.json")
     parser.add_argument("--md-out", default="reports/raw_ingest/raw_dbn_alignment.md")
     return parser.parse_args()
@@ -533,6 +548,7 @@ def main() -> int:
         profile=str(args.profile),
         dbn_root=Path(args.dbn_root),
         raw_root=Path(args.raw_root),
+        skip_definition_join=bool(args.skip_definition_join),
     )
     write_json(Path(args.json_out), report)
     write_markdown(Path(args.md_out), report)
@@ -540,6 +556,7 @@ def main() -> int:
         "status={status} expected={expected_market_year_count} raw={raw_market_year_count} "
         "needs_phase1b={needs_phase1b_conversion_count} raw_only={raw_only_count} "
         "invalid_manifests={invalid_manifest_count} source_hash_mismatches={source_hash_mismatch_count} "
+        "definition_join_status={definition_join_status} "
         "definition_join_mismatches={definition_join_mismatch_count}".format(**report)
     )
     return 0 if report["status"] == "PASS" else 1
