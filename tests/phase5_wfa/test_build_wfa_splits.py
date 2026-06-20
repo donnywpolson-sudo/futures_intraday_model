@@ -9,6 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from scripts.pipeline_gates import file_sha256
 from scripts.phase5_wfa.build_wfa_splits import build_split_plan
 
 
@@ -97,6 +98,42 @@ def _write_matrix(root: Path, *, year: int, start: str, market: str = "ES") -> P
     return path
 
 
+def _write_feature_manifest(
+    path: Path,
+    *,
+    profile: str,
+    resolved_profile: str,
+    output_root: Path,
+    output_path: Path,
+    status: str = "PASS",
+    warning_count: int = 0,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "status": status,
+        "profile": profile,
+        "resolved_profile": resolved_profile,
+        "output_root": output_root.as_posix(),
+        "warning_count": warning_count,
+        "failure_count": 0,
+        "failures": [],
+        "summary": {"fail_count": 0, "warn_count": warning_count},
+        "output_file_hashes": {output_path.as_posix(): file_sha256(output_path)},
+        "outputs": [
+            {
+                "market": "ES",
+                "year": 2024,
+                "status": status,
+                "warning_count": warning_count,
+                "failure_count": 0,
+                "failures": [],
+            }
+        ],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
 def _feature_root(tmp_path: Path) -> Path:
     return tmp_path / "data" / "feature_matrices" / "baseline"
 
@@ -155,6 +192,93 @@ def _write_mixed_data_audit_universe(path: Path) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def test_build_split_plan_rejects_warn_feature_manifest(tmp_path: Path) -> None:
+    profile_config = _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    feature_root = _feature_root(tmp_path)
+    matrix = _write_matrix(feature_root, year=2024, start="2024-01-01T00:00:00Z")
+    manifest = _write_feature_manifest(
+        tmp_path / "reports" / "features" / "baseline_feature_manifest.json",
+        profile="research",
+        resolved_profile="research",
+        output_root=feature_root,
+        output_path=matrix,
+        status="WARN",
+        warning_count=1,
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        build_split_plan(
+            profile="research",
+            input_root=feature_root,
+            reports_root=tmp_path / "reports" / "wfa",
+            profile_config=profile_config,
+            models_config=models_config,
+            feature_manifest=manifest,
+        )
+
+    assert "feature_manifest_gate failed" in str(exc.value)
+
+
+def test_build_split_plan_accepts_passed_feature_manifest(tmp_path: Path) -> None:
+    profile_config = _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    feature_root = _feature_root(tmp_path)
+    matrix = _write_matrix(feature_root, year=2024, start="2024-01-01T00:00:00Z")
+    manifest_path = _write_feature_manifest(
+        tmp_path / "reports" / "features" / "baseline_feature_manifest.json",
+        profile="research",
+        resolved_profile="research",
+        output_root=feature_root,
+        output_path=matrix,
+    )
+
+    manifest = build_split_plan(
+        profile="research",
+        input_root=feature_root,
+        reports_root=tmp_path / "reports" / "wfa",
+        profile_config=profile_config,
+        models_config=models_config,
+        feature_manifest=manifest_path,
+    )
+
+    assert manifest["feature_manifest_gate"]["status"] == "PASS"
+    assert manifest["failure_count"] == 0
+
+
+def test_build_split_plan_auto_uses_phase4_default_features_baseline_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    profile_config = _write_profile_config(Path("configs") / "alpha_tiered.yaml")
+    models_config = _write_models_config(Path("configs") / "models.yaml")
+    feature_root = Path("data") / "feature_matrices" / "baseline"
+    matrix = _write_matrix(feature_root, year=2024, start="2024-01-01T00:00:00Z")
+    _write_feature_manifest(
+        Path("reports") / "features_baseline" / "baseline_feature_manifest.json",
+        profile="research",
+        resolved_profile="research",
+        output_root=feature_root,
+        output_path=matrix,
+    )
+
+    manifest = build_split_plan(
+        profile="research",
+        input_root=feature_root,
+        reports_root=Path("reports") / "wfa",
+        profile_config=profile_config,
+        models_config=models_config,
+        feature_manifest="auto",
+    )
+
+    assert manifest["feature_manifest_gate"]["status"] == "PASS"
+    assert (
+        manifest["feature_manifest_gate"]["manifest_path"]
+        == "reports/features_baseline/baseline_feature_manifest.json"
+    )
 
 
 def test_build_split_plan_enforces_purge_and_writes_manifest(tmp_path: Path) -> None:

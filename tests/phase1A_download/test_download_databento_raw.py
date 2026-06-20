@@ -56,10 +56,12 @@ from scripts.phase1A_download.download_databento_raw import (
     load_databento_api_key_from_file,
     normalize_api_key,
     output_role_for_run,
+    phase1b_dbn_gate_failures,
     pipeline_raw_ready_for_run,
     parse_symbols,
     preflight_auth,
     PRODUCT_AVAILABLE_START,
+    raw_file_manifest_path,
     resolve_requested_schemas,
     resolve_databento_api_key,
     symbol_for_product,
@@ -405,6 +407,85 @@ def test_phase1b_entry_defaults_to_convert_parquet(monkeypatch: pytest.MonkeyPat
 
     assert convert_databento_raw.phase1b_main() == 0
     assert captured["argv"][1:3] == ["--mode", "convert-parquet"]
+
+
+def _write_dbn_with_manifest(task: DownloadTask) -> Path:
+    path = Path(task.output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"dbn-fixture")
+    write_json(
+        raw_file_manifest_path(path),
+        build_raw_file_manifest(task, path, job_id="fixture", request_status="ok"),
+    )
+    return path
+
+
+def _phase1b_gate_failures(dbn_root: Path) -> list[str]:
+    return phase1b_dbn_gate_failures(
+        dbn_root=dbn_root,
+        products=["ES"],
+        start="2024-01-01",
+        end="2025-01-01",
+        chunk="year",
+        dataset=None,
+        stype_in=STYPE_IN,
+        stype_out=STYPE_OUT,
+    )
+
+
+def test_phase1b_dbn_gate_blocks_missing_expected_dbn(tmp_path: Path) -> None:
+    failures = _phase1b_gate_failures(tmp_path / "data" / "dbn" / "ohlcv_1m")
+
+    assert any("missing ohlcv-1m DBN" in failure for failure in failures)
+    assert any("missing definition DBN" in failure for failure in failures)
+
+
+def test_phase1b_dbn_gate_blocks_bad_sidecar_manifest(tmp_path: Path) -> None:
+    dbn_root = tmp_path / "data" / "dbn" / "ohlcv_1m"
+    tasks = build_tasks_for_schemas(
+        ["ES"],
+        schemas=["ohlcv-1m", "definition"],
+        start="2024-01-01",
+        end="2025-01-01",
+        output_root=dbn_root,
+        chunk="year",
+        mode="download-dbn",
+        raw_format="dbn-zstd",
+        dataset=None,
+        stype_in=STYPE_IN,
+        stype_out=STYPE_OUT,
+    )
+    for task in tasks:
+        path = _write_dbn_with_manifest(task)
+        if task.schema == "ohlcv-1m":
+            payload = json.loads(raw_file_manifest_path(path).read_text(encoding="utf-8"))
+            payload["file_sha256"] = "0" * 64
+            raw_file_manifest_path(path).write_text(json.dumps(payload), encoding="utf-8")
+
+    failures = _phase1b_gate_failures(dbn_root)
+
+    assert any("manifest failed" in failure and "checksum mismatch" in failure for failure in failures)
+
+
+def test_phase1b_dbn_gate_accepts_complete_ohlcv_and_definition_dbns(tmp_path: Path) -> None:
+    dbn_root = tmp_path / "data" / "dbn" / "ohlcv_1m"
+    tasks = build_tasks_for_schemas(
+        ["ES"],
+        schemas=["ohlcv-1m", "definition"],
+        start="2024-01-01",
+        end="2025-01-01",
+        output_root=dbn_root,
+        chunk="year",
+        mode="download-dbn",
+        raw_format="dbn-zstd",
+        dataset=None,
+        stype_in=STYPE_IN,
+        stype_out=STYPE_OUT,
+    )
+    for task in tasks:
+        _write_dbn_with_manifest(task)
+
+    assert _phase1b_gate_failures(dbn_root) == []
 
 
 def test_new_speedup_args_parse_without_breaking_existing_defaults() -> None:

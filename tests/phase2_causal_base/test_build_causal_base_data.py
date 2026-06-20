@@ -12,11 +12,15 @@ from scripts.phase2_causal_base.build_causal_base_data import (
     LOCAL_TRADE_GAP_FAILED_STATUS,
     LOCAL_TRADE_GAP_VALIDATED_STATUS,
     OUTPUT_COLUMNS,
+    build_phase2_readiness_report,
     discover_raw_inputs,
+    filter_inputs_by_raw_alignment,
     load_causal_base_config,
+    main as phase2_main,
     phase2_exit_code,
     process_file,
     raw_alignment_guard_failures,
+    raw_alignment_expected_market_years,
     resolve_profile_inputs,
     write_reports,
 )
@@ -223,6 +227,45 @@ def _write_raw_alignment_report(
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _readiness_raw_row(ts_event: str, *, close: float = 100.5) -> dict[str, object]:
+    return {
+        "rtype": 33,
+        "publisher_id": 1,
+        "instrument_id": 100,
+        "symbol": "ESH4",
+        "ts_event": ts_event,
+        "open": close - 0.5,
+        "high": close + 0.5,
+        "low": close - 1.0,
+        "close": close,
+        "volume": 10,
+        "data_quality_status": "available",
+        "data_quality_degraded": False,
+        "status_is_trading": True,
+        "status_is_quoting": True,
+        "status_missing": False,
+        "status_stale": False,
+        "statistics_missing": False,
+        "statistics_stale": False,
+    }
+
+
+def _write_tier0_alignment(path: Path, raw_root: Path, *, status: str = "PASS") -> None:
+    _write_raw_alignment_report(
+        path,
+        status=status,
+        raw_root=raw_root,
+        profile="tier_0",
+        resolved_profile="tier_0",
+        overrides={
+            "markets": ["ES"],
+            "years": [2024],
+            "pre_availability_exemptions": [],
+            "expected_market_year_count": 1,
+        },
+    )
+
+
 def test_phase2_raw_alignment_guard_requires_report(tmp_path: Path) -> None:
     failures = raw_alignment_guard_failures(
         report_path=tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json",
@@ -280,6 +323,163 @@ def test_phase2_raw_alignment_guard_rejects_failed_or_stale_phase1c_report(
     assert "raw alignment report status is 'FAIL', not PASS" in failures
     assert any("raw_root does not match" in failure for failure in failures)
     assert "raw alignment report needs_phase1b_conversion_count is 1, not 0" in failures
+
+
+def test_phase2_readiness_fails_missing_raw_alignment_report(tmp_path: Path) -> None:
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=tmp_path / "data" / "raw",
+        raw_alignment_report=tmp_path / "reports" / "raw_ingest" / "missing.json",
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["failure_count"] == 1
+    assert "raw alignment report missing" in report["failures"][0]
+    assert report["checked_market_year_count"] == 0
+
+
+def test_phase2_readiness_fails_warn_raw_alignment_report(tmp_path: Path) -> None:
+    raw_root = tmp_path / "data" / "raw"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root, status="WARN")
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+    )
+
+    assert report["status"] == "FAIL"
+    assert "raw alignment report status is 'WARN', not PASS" in report["failures"]
+    assert report["checked_market_year_count"] == 0
+
+
+def test_phase2_readiness_blocks_warn_synthetic_gap_before_writing(
+    tmp_path: Path,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(profile_config)
+    raw_root = tmp_path / "data" / "raw"
+    raw_path = raw_root / "ES" / "2024.parquet"
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(
+        raw_path,
+        [
+            _readiness_raw_row("2024-01-02T15:00:00Z", close=100.5),
+            _readiness_raw_row("2024-01-02T15:10:00Z", close=101.0),
+        ],
+    )
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        output_root=output_root,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["blocker_count"] == 1
+    blocker = report["blockers"][0]
+    assert blocker["market"] == "ES"
+    assert blocker["year"] == 2024
+    assert blocker["status"] == "WARN"
+    assert "synthetic threshold breached" in blocker["top_blocker_reason"]
+    assert blocker["status_enrichment_available"] is True
+    assert blocker["statistics_enrichment_available"] is True
+    assert not (output_root / "ES" / "2024.parquet").exists()
+
+
+def test_phase2_main_exits_before_writing_when_readiness_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(profile_config)
+    raw_root = tmp_path / "data" / "raw"
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    reports_root = tmp_path / "reports" / "causal_base"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(
+        raw_root / "ES" / "2024.parquet",
+        [
+            _readiness_raw_row("2024-01-02T15:00:00Z", close=100.5),
+            _readiness_raw_row("2024-01-02T15:10:00Z", close=101.0),
+        ],
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_causal_base_data.py",
+            "--profile",
+            "tier_0",
+            "--raw-root",
+            str(raw_root),
+            "--output-root",
+            str(output_root),
+            "--reports-root",
+            str(reports_root),
+            "--profile-config",
+            str(profile_config),
+            "--raw-alignment-report",
+            str(report_path),
+        ],
+    )
+
+    assert phase2_main() == 1
+    assert not (output_root / "ES" / "2024.parquet").exists()
+    assert not (reports_root / "causal_base_manifest.json").exists()
+
+
+def test_phase2_readiness_passes_clean_fixture(tmp_path: Path) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(profile_config)
+    raw_root = tmp_path / "data" / "raw"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(
+        raw_root / "ES" / "2024.parquet",
+        [
+            _readiness_raw_row("2024-01-02T15:00:00Z", close=100.5),
+            _readiness_raw_row("2024-01-02T15:01:00Z", close=100.75),
+            _readiness_raw_row("2024-01-02T15:02:00Z", close=101.0),
+        ],
+    )
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "PASS"
+    assert report["blocker_count"] == 0
+    assert report["checked_market_year_count"] == 1
+
+
+def test_phase2_readiness_uses_raw_alignment_pre_availability_exemptions() -> None:
+    raw_alignment = {
+        "markets": ["ES", "RTY"],
+        "years": [2024],
+        "pre_availability_exemptions": [{"market": "RTY", "year": 2024}],
+    }
+    assert raw_alignment_expected_market_years(raw_alignment) == {("ES", 2024)}
+
+    selected, missing = filter_inputs_by_raw_alignment(
+        [
+            ("ES", 2024, Path("data/raw/ES/2024.parquet")),
+            ("RTY", 2024, Path("data/raw/RTY/2024.parquet")),
+        ],
+        raw_alignment,
+    )
+
+    assert [(market, year) for market, year, _ in selected] == [("ES", 2024)]
+    assert missing == []
 
 
 def test_causal_base_config_uses_smoke_profile_thresholds(tmp_path: Path) -> None:
@@ -1068,6 +1268,33 @@ def test_boundary_session_flag_remains_true_when_adjacent_data_missing(tmp_path:
     output = pd.read_parquet(out_path)
     assert output.loc[0, "boundary_session_flag"] == True
     assert output.loc[0, "causal_valid"] == False
+
+
+def test_context_clipping_retains_adjacent_year_tail_and_head_rows(tmp_path: Path) -> None:
+    raw_root = tmp_path / "data" / "raw" / "ES"
+    out_path = tmp_path / "data" / "causally_gated_normalized" / "ES" / "2024.parquet"
+    base_row = {
+        "rtype": 33,
+        "publisher_id": 1,
+        "instrument_id": 100,
+        "symbol": "ESH4",
+        "open": 100.0,
+        "high": 101.0,
+        "low": 99.0,
+        "close": 100.5,
+        "volume": 10,
+        "data_quality_status": "available",
+        "data_quality_degraded": False,
+    }
+    _write_raw(raw_root / "2023.parquet", [{**base_row, "ts_event": "2023-12-15T15:00:00Z"}])
+    _write_raw(raw_root / "2024.parquet", [{**base_row, "ts_event": "2024-01-02T15:00:00Z"}])
+    _write_raw(raw_root / "2025.parquet", [{**base_row, "ts_event": "2025-01-15T15:00:00Z"}])
+
+    process_file(raw_root / "2024.parquet", out_path, profile="tier_1")
+
+    output = pd.read_parquet(out_path)
+    assert len(output) == 1
+    assert output.loc[0, "boundary_session_flag"] == False
 
 
 def test_causal_valid_formula_includes_boundary_session_flag(tmp_path: Path) -> None:

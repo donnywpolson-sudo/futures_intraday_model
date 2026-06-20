@@ -5,9 +5,12 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from scripts.pipeline_gates import file_sha256
+from scripts.phase3_labels import build_labels as labels_mod
 from scripts.phase3_labels.build_labels import (
     LABEL_COLUMNS,
     LABEL_SEMANTICS_ID,
@@ -17,6 +20,57 @@ from scripts.phase3_labels.build_labels import (
     resolve_profile_inputs,
     write_reports,
 )
+
+
+def _write_profile_config(path: Path, *, profile: str = "research") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"""
+profiles:
+  {profile}:
+    markets: ["ES"]
+    years: [2024]
+""".strip(),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _write_upstream_manifest(
+    path: Path,
+    *,
+    stage: str,
+    profile: str,
+    output_root: Path,
+    output_path: Path,
+    status: str = "PASS",
+    warning_count: int = 0,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "stage": stage,
+        "status": status,
+        "profile": profile,
+        "resolved_profile": profile,
+        "output_root": output_root.as_posix(),
+        "warning_count": warning_count,
+        "failure_count": 0,
+        "failures": [],
+        "summary": {"fail_count": 0, "warn_count": warning_count},
+        "output_file_hashes": {output_path.as_posix(): file_sha256(output_path)},
+        "outputs": [
+            {
+                "market": "ES",
+                "year": 2024,
+                "status": status,
+                "warning_count": warning_count,
+                "failure_count": 0,
+                "failures": [],
+            }
+        ],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
 
 
 def _base_rows(count: int = 40, market: str = "ES") -> list[dict[str, object]]:
@@ -85,6 +139,116 @@ def _write_es_costs(path: Path) -> None:
             ]
         ),
     )
+
+
+def test_phase3_main_rejects_warn_causal_base_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_root = tmp_path / "data" / "causally_gated_normalized"
+    input_path = input_root / "ES" / "2024.parquet"
+    input_path.parent.mkdir(parents=True, exist_ok=True)
+    input_path.write_bytes(b"causal")
+    profile_config = _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    manifest = _write_upstream_manifest(
+        tmp_path / "reports" / "causal_base" / "causal_base_manifest.json",
+        stage="causal_base",
+        profile="research",
+        output_root=input_root,
+        output_path=input_path,
+        status="WARN",
+        warning_count=1,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_labels.py",
+            "--profile",
+            "research",
+            "--input-root",
+            input_root.as_posix(),
+            "--output-root",
+            (tmp_path / "data" / "labeled").as_posix(),
+            "--reports-root",
+            (tmp_path / "reports" / "labels").as_posix(),
+            "--profile-config",
+            profile_config.as_posix(),
+            "--costs-config",
+            (tmp_path / "configs" / "costs.yaml").as_posix(),
+            "--causal-base-manifest",
+            manifest.as_posix(),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        labels_mod.main()
+
+    assert "causal_base_manifest_gate failed" in str(exc.value)
+
+
+def test_phase3_main_accepts_passed_causal_base_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_root = tmp_path / "data" / "causally_gated_normalized"
+    input_path = input_root / "ES" / "2024.parquet"
+    input_path.parent.mkdir(parents=True, exist_ok=True)
+    input_path.write_bytes(b"causal")
+    profile_config = _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    manifest = _write_upstream_manifest(
+        tmp_path / "reports" / "causal_base" / "causal_base_manifest.json",
+        stage="causal_base",
+        profile="research",
+        output_root=input_root,
+        output_path=input_path,
+    )
+    captured: dict[str, object] = {}
+
+    def fake_process(
+        input_path: Path,
+        output_path: Path,
+        *,
+        profile: str,
+        costs_config: Path,
+    ) -> labels_mod.LabelResult:
+        return labels_mod.LabelResult(
+            profile=profile,
+            market=input_path.parent.name,
+            year=int(input_path.stem),
+            input_path=input_path.as_posix(),
+            output_path=output_path.as_posix(),
+        )
+
+    def fake_write_reports(*args: object, **kwargs: object) -> None:
+        captured["gate"] = kwargs["causal_base_gate"]
+
+    monkeypatch.setattr(labels_mod, "process_file", fake_process)
+    monkeypatch.setattr(labels_mod, "write_reports", fake_write_reports)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_labels.py",
+            "--profile",
+            "research",
+            "--input-root",
+            input_root.as_posix(),
+            "--output-root",
+            (tmp_path / "data" / "labeled").as_posix(),
+            "--reports-root",
+            (tmp_path / "reports" / "labels").as_posix(),
+            "--profile-config",
+            profile_config.as_posix(),
+            "--costs-config",
+            (tmp_path / "configs" / "costs.yaml").as_posix(),
+            "--causal-base-manifest",
+            manifest.as_posix(),
+        ],
+    )
+
+    assert labels_mod.main() == 0
+    assert captured["gate"]["status"] == "PASS"  # type: ignore[index]
 
 
 def _rows_with_gross_ticks(gross_ticks: float) -> list[dict[str, object]]:

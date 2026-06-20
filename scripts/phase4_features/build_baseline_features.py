@@ -18,7 +18,8 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from scripts.profile_scope import scope_authority_metadata
+from scripts.pipeline_gates import resolve_upstream_manifest_gate
+from scripts.profile_scope import load_profile_scope, scope_authority_metadata
 from scripts.validation.feature_leakage_guard import (
     FORBIDDEN_FEATURE_COLUMNS,
     FORBIDDEN_FEATURE_PREFIXES,
@@ -35,6 +36,7 @@ DEFAULT_INPUT_ROOT = Path("data/labeled")
 DEFAULT_OUTPUT_ROOT = Path("data/feature_matrices/baseline")
 DEFAULT_REPORTS_ROOT = Path("reports/features_baseline")
 DEFAULT_COSTS_CONFIG = Path("configs/costs.yaml")
+DEFAULT_LABEL_MANIFEST = Path("reports/labels/label_manifest.json")
 DISCOVERY_PROFILES = {"all_labeled", "all_labeled_data", "all_raw", "all_raw_data"}
 CORE_PROFILE_MARKETS = ["ES", "CL", "ZN", "6E"]
 BALANCED_PROFILE_MARKETS = ["ES", "NQ", "CL", "NG", "GC", "HG", "SR3", "ZN", "ZB", "6E", "6J", "6B", "ZC", "ZS", "LE"]
@@ -1430,6 +1432,7 @@ def write_reports(
     profile_config: Path = DEFAULT_PROFILE_CONFIG,
     costs_config: Path = DEFAULT_COSTS_CONFIG,
     input_selection: Mapping[str, object] | None = None,
+    label_gate: Mapping[str, object] | None = None,
 ) -> None:
     reports_root.mkdir(parents=True, exist_ok=True)
     output_root.mkdir(parents=True, exist_ok=True)
@@ -1460,6 +1463,8 @@ def write_reports(
         if input_selection
         else len(results),
     )
+    scope = load_profile_scope(profile, profile_config, strict=False)
+    resolved_profile = scope.resolved_profile if scope is not None else profile
     manifest = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "git_commit": git_commit(),
@@ -1469,6 +1474,7 @@ def write_reports(
         "input_file_hashes": input_hashes,
         "output_file_hashes": output_hashes,
         "profile": profile,
+        "resolved_profile": resolved_profile,
         "status": status,
         "input_root": relative_path(input_root),
         "output_root": relative_path(output_root),
@@ -1483,6 +1489,7 @@ def write_reports(
         "warning_count": len(warnings),
         "failure_count": len(failures),
         "failures": failures,
+        "label_manifest_gate": dict(label_gate or {}),
         "outputs": [result.to_dict() for result in results],
         "registry": registry,
     }
@@ -1495,6 +1502,7 @@ def write_reports(
         "input_file_hashes": input_hashes,
         "output_file_hashes": output_hashes,
         "profile": profile,
+        "resolved_profile": resolved_profile,
         "input_root": relative_path(input_root),
         "output_root": relative_path(output_root),
         "reports_root": relative_path(reports_root),
@@ -1518,6 +1526,7 @@ def write_reports(
         "warning_count": len(warnings),
         "failure_count": len(failures),
         "failures": failures,
+        "label_manifest_gate": dict(label_gate or {}),
     }
     write_json(reports_root / "baseline_feature_manifest.json", manifest)
     write_json(reports_root / "baseline_feature_report.json", report)
@@ -1531,6 +1540,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reports-root", default=DEFAULT_REPORTS_ROOT.as_posix())
     parser.add_argument("--profile-config", default=DEFAULT_PROFILE_CONFIG.as_posix())
     parser.add_argument("--costs-config", default=DEFAULT_COSTS_CONFIG.as_posix())
+    parser.add_argument(
+        "--label-manifest",
+        default="auto",
+        help="Path to Phase 3 label_manifest.json, or 'auto' to find a matching PASS manifest under reports/.",
+    )
     parser.add_argument(
         "--markets",
         default=None,
@@ -1569,6 +1583,20 @@ def main() -> int:
         shard_count=args.shard_count,
         shard_index=args.shard_index,
     )
+    profile_config = Path(args.profile_config)
+    scope = load_profile_scope(args.profile, profile_config, strict=False)
+    resolved_profile = scope.resolved_profile if scope is not None else None
+    label_gate = resolve_upstream_manifest_gate(
+        manifest_arg=args.label_manifest,
+        default_manifest_path=DEFAULT_LABEL_MANIFEST,
+        search_name="label_manifest.json",
+        expected_stage="labels",
+        expected_profile=args.profile,
+        expected_resolved_profile=resolved_profile,
+        expected_output_root=input_root,
+        expected_market_years=((market, year) for market, year, _ in inputs),
+        gate_name="label_manifest_gate",
+    )
     results: list[FeatureResult] = []
     for market, year, input_path in inputs:
         output_path = output_root / market / f"{year}.parquet"
@@ -1592,9 +1620,10 @@ def main() -> int:
         input_root=input_root,
         output_root=output_root,
         reports_root=reports_root,
-        profile_config=Path(args.profile_config),
+        profile_config=profile_config,
         costs_config=Path(args.costs_config),
         input_selection=input_selection,
+        label_gate=label_gate.evidence,
     )
     return 1 if any(result.status == "FAIL" for result in results) else 0
 

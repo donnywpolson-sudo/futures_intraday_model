@@ -17,12 +17,14 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from scripts.profile_scope import scope_authority_metadata
+from scripts.pipeline_gates import resolve_upstream_manifest_gate
+from scripts.profile_scope import load_profile_scope, scope_authority_metadata
 
 
 DEFAULT_PROFILE = "all_causal"
 DISCOVERY_PROFILES = {"all_causal", "all_causal_data", "all_raw", "all_raw_data"}
 DEFAULT_PROFILE_CONFIG = Path("configs/alpha_tiered.yaml")
+DEFAULT_CAUSAL_BASE_MANIFEST = Path("reports/causal_base/causal_base_manifest.json")
 CORE_PROFILE_MARKETS = ["ES", "CL", "ZN", "6E"]
 BALANCED_PROFILE_MARKETS = ["ES", "NQ", "CL", "NG", "GC", "HG", "SR3", "ZN", "ZB", "6E", "6J", "6B", "ZC", "ZS", "LE"]
 FULL_PROFILE_MARKETS = ["ES", "NQ", "RTY", "YM", "CL", "NG", "RB", "HO", "GC", "SI", "HG", "SR3", "SR1", "TN", "ZT", "ZF", "ZN", "ZB", "UB", "6A", "6B", "6C", "6E", "6J", "6M", "ZC", "ZS", "ZL", "ZM", "ZW", "KE", "LE", "HE"]
@@ -923,6 +925,7 @@ def write_reports(
     costs_config_path: Path = Path("configs/costs.yaml"),
     input_root: Path | None = None,
     output_root: Path | None = None,
+    causal_base_gate: Mapping[str, object] | None = None,
 ) -> None:
     reports_root.mkdir(parents=True, exist_ok=True)
     rows = [result.to_dict() for result in results]
@@ -955,6 +958,8 @@ def write_reports(
         failure_count=failure_count,
         selected_input_count=len(rows),
     )
+    scope = load_profile_scope(profile, profile_config_path, strict=False)
+    resolved_profile = scope.resolved_profile if scope is not None else profile
     provenance = {
         "generated_at": utc_timestamp(),
         "git_commit": current_git_commit(),
@@ -973,11 +978,13 @@ def write_reports(
             for row in rows
         },
         "profile": profile,
+        "resolved_profile": resolved_profile,
         "markets": sorted({str(row["market"]) for row in rows}),
         "years": sorted({int(row["year"]) for row in rows}),
         "warning_count": warning_count,
         "failure_count": failure_count,
         "failures": run_failures,
+        "causal_base_manifest_gate": dict(causal_base_gate or {}),
         **authority,
     }
     summary = {
@@ -1062,6 +1069,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reports-root", default="reports/labels")
     parser.add_argument("--costs-config", default="configs/costs.yaml")
     parser.add_argument("--profile-config", default=str(DEFAULT_PROFILE_CONFIG))
+    parser.add_argument(
+        "--causal-base-manifest",
+        default="auto",
+        help="Path to Phase 2 causal_base_manifest.json, or 'auto' to find a matching PASS manifest under reports/.",
+    )
     return parser
 
 
@@ -1073,6 +1085,19 @@ def main() -> int:
     costs_config = Path(args.costs_config)
     profile_config = Path(args.profile_config)
     inputs = resolve_profile_inputs(args.profile, input_root, profile_config)
+    scope = load_profile_scope(args.profile, profile_config, strict=False)
+    resolved_profile = scope.resolved_profile if scope is not None else None
+    causal_base_gate = resolve_upstream_manifest_gate(
+        manifest_arg=args.causal_base_manifest,
+        default_manifest_path=DEFAULT_CAUSAL_BASE_MANIFEST,
+        search_name="causal_base_manifest.json",
+        expected_stage="causal_base",
+        expected_profile=args.profile,
+        expected_resolved_profile=resolved_profile,
+        expected_output_root=input_root,
+        expected_market_years=((market, year) for market, year, _ in inputs),
+        gate_name="causal_base_manifest_gate",
+    )
 
     results: list[LabelResult] = []
     for market, year, input_path in inputs:
@@ -1098,6 +1123,7 @@ def main() -> int:
         costs_config_path=costs_config,
         input_root=input_root,
         output_root=output_root,
+        causal_base_gate=causal_base_gate.evidence,
     )
     return 1 if any(result.failures for result in results) else 0
 

@@ -15,6 +15,7 @@ from typing import Any, Iterable, Mapping
 import pandas as pd
 import yaml
 
+from scripts.pipeline_gates import resolve_upstream_manifest_gate
 from scripts.final_holdout.guard_final_holdout import (
     final_holdout_permission_failure,
     is_final_holdout_year_set,
@@ -29,6 +30,7 @@ DEFAULT_INPUT_ROOT = Path("data/feature_matrices/baseline")
 DEFAULT_REPORTS_ROOT = Path("reports/wfa")
 DEFAULT_PROFILE_CONFIG = Path("configs/alpha_tiered.yaml")
 DEFAULT_MODELS_CONFIG = Path("configs/models.yaml")
+DEFAULT_FEATURE_MANIFEST = Path("reports/features_baseline/baseline_feature_manifest.json")
 
 
 @dataclass(frozen=True)
@@ -365,6 +367,7 @@ def build_split_plan(
     models_config: Path,
     allow_final_holdout: bool = False,
     data_audit_universe_json: Path | None = None,
+    feature_manifest: str | Path | None = None,
 ) -> dict[str, Any]:
     plan = load_profile_plan(profile, profile_config)
     permission_failure = final_holdout_permission_failure(
@@ -386,6 +389,19 @@ def build_split_plan(
         else None
     )
     inputs = resolve_input_paths(plan, input_root)
+    feature_manifest_gate = None
+    if feature_manifest is not None:
+        feature_manifest_gate = resolve_upstream_manifest_gate(
+            manifest_arg=feature_manifest,
+            default_manifest_path=DEFAULT_FEATURE_MANIFEST,
+            search_name="baseline_feature_manifest.json",
+            expected_stage=None,
+            expected_profile=plan.requested_profile,
+            expected_resolved_profile=plan.resolved_profile,
+            expected_output_root=input_root,
+            expected_market_years=((market, year) for market, year, _ in inputs),
+            gate_name="feature_manifest_gate",
+        )
     frames_by_market: dict[str, list[pd.DataFrame]] = {market: [] for market in plan.markets}
     failures: list[str] = []
     skipped_inputs: list[dict[str, Any]] = []
@@ -493,6 +509,9 @@ def build_split_plan(
         "warning_count": 0,
         "failure_count": len(failures),
         "failures": failures,
+        "feature_manifest_gate": (
+            feature_manifest_gate.evidence if feature_manifest_gate is not None else None
+        ),
         "folds": folds,
     }
     (reports_root / "split_plan.json").write_text(
@@ -509,6 +528,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reports-root", default=DEFAULT_REPORTS_ROOT.as_posix())
     parser.add_argument("--profile-config", default=DEFAULT_PROFILE_CONFIG.as_posix())
     parser.add_argument("--models-config", default=DEFAULT_MODELS_CONFIG.as_posix())
+    parser.add_argument(
+        "--feature-manifest",
+        default="auto",
+        help="Path to Phase 4 baseline_feature_manifest.json, or 'auto' to find a matching PASS manifest under reports/.",
+    )
     parser.add_argument("--allow-final-holdout", action="store_true")
     parser.add_argument("--data-audit-universe-json", default=None)
     return parser
@@ -526,6 +550,7 @@ def main() -> int:
         data_audit_universe_json=(
             Path(args.data_audit_universe_json) if args.data_audit_universe_json else None
         ),
+        feature_manifest=args.feature_manifest,
     )
     status = "FAIL" if manifest["failure_count"] else "PASS"
     print(

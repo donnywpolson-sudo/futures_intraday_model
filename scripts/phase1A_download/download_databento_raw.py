@@ -1451,6 +1451,49 @@ def discovery_dbn_files(dbn_root: Path, raw_root: Path) -> list[Path]:
     return sorted(set(paths))
 
 
+def phase1b_dbn_gate_failures(
+    *,
+    dbn_root: Path,
+    products: Iterable[str],
+    start: str,
+    end: str,
+    chunk: str,
+    dataset: str | None,
+    stype_in: str,
+    stype_out: str,
+) -> list[str]:
+    tasks = build_tasks_for_schemas(
+        products,
+        schemas=[SCHEMA, "definition"],
+        start=start,
+        end=end,
+        output_root=dbn_root,
+        chunk=chunk,
+        mode="download-dbn",
+        raw_format="dbn-zstd",
+        dataset=dataset,
+        stype_in=stype_in,
+        stype_out=stype_out,
+    )
+    failures: list[str] = []
+    for task in tasks:
+        path = Path(task.output_path)
+        if not path.exists() or path_size_bytes(path) <= 0:
+            failures.append(
+                f"missing {task.schema} DBN for {task.product} {task.year}: {path.as_posix()}"
+            )
+            continue
+        manifest_failures = validate_raw_file_manifest(
+            path,
+            expected_schema=task.schema,
+            expected_market=task.product,
+            expected_year=task.year,
+        )
+        for failure in manifest_failures:
+            failures.append(f"{task.schema} DBN manifest failed for {task.product} {task.year}: {failure}")
+    return failures
+
+
 def definition_frame_for_group(
     dbn_root: Path,
     product: str,
@@ -3484,19 +3527,35 @@ def main() -> int:
         return 1 if failed else 0
 
     if args.mode == "convert-parquet":
-        products = None
         try:
             optional_schemas = parse_optional_schemas(args.include_optional_schemas)
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
-        if args.symbols:
-            try:
-                products = set(parse_symbols(args.symbols, "custom"))
-                validate_allowed_products(products)
-            except ValueError as exc:
-                raise SystemExit(str(exc)) from exc
+        try:
+            product_list = parse_symbols(args.symbols, args.universe)
+            validate_allowed_products(product_list)
+            if args.dataset:
+                validate_allowed_dataset(args.dataset)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        start, end = effective_date_range(args)
+        products = set(product_list)
         dbn_root = effective_output_root(args)
         raw_root = effective_raw_root(args)
+        gate_failures = phase1b_dbn_gate_failures(
+            dbn_root=dbn_root,
+            products=product_list,
+            start=start,
+            end=end,
+            chunk=args.chunk,
+            dataset=args.dataset,
+            stype_in=args.stype_in,
+            stype_out=args.stype_out,
+        )
+        if gate_failures:
+            for failure in gate_failures:
+                print(f"FAIL phase1b_dbn_gate: {failure}")
+            return 1
         source_paths = discovery_dbn_files(dbn_root, raw_root)
         entries = archive_entries_for_paths(source_paths, dbn_root, products=products)
         condition_by_group = (

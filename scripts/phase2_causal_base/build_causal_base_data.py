@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from scripts.profile_scope import scope_authority_metadata
+from scripts.profile_scope import load_profile_scope, scope_authority_metadata
 from scripts.validation.audit_local_trade_ohlcv_gaps import (
     build_report as build_local_trade_gap_report,
     write_json_report as write_local_trade_gap_json_report,
@@ -40,6 +40,7 @@ LOCAL_TRADE_GAP_VALIDATED_STATUS = "validated_by_local_trades_window_convention"
 LOCAL_TRADE_GAP_FAILED_STATUS = "failed_local_trades_window_gate"
 LOCAL_TRADE_GAP_NOT_RUN_STATUS = "local_trades_window_gate_not_run"
 LOCAL_TRADE_GAP_NOT_IN_SCOPE_STATUS = "not_in_local_trades_window_gate_scope"
+CONTEXT_PADDING_DAYS = 14
 
 # Discovery profiles process every top-level data/raw/{market}/{year}.parquet file.
 # Static profiles mirror configs/alpha_tiered.yaml when that file is unavailable.
@@ -913,6 +914,38 @@ def raw_alignment_guard_failures(
     return failures
 
 
+def raw_alignment_expected_market_years(report: dict[str, Any]) -> set[tuple[str, int]]:
+    markets = [str(market) for market in report.get("markets", [])]
+    years = [int(year) for year in report.get("years", [])]
+    exemptions: set[tuple[str, int]] = set()
+    for item in report.get("pre_availability_exemptions", []):
+        try:
+            if isinstance(item, dict):
+                exemptions.add((str(item["market"]), int(item["year"])))
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                exemptions.add((str(item[0]), int(item[1])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return {(market, year) for market in markets for year in years} - exemptions
+
+
+def filter_inputs_by_raw_alignment(
+    inputs: Iterable[tuple[str, int, Path]],
+    raw_alignment: dict[str, Any],
+) -> tuple[list[tuple[str, int, Path]], list[tuple[str, int]]]:
+    expected_pairs = raw_alignment_expected_market_years(raw_alignment)
+    inputs_list = list(inputs)
+    if not expected_pairs:
+        return inputs_list, []
+    input_pairs = {(market, year) for market, year, _ in inputs_list}
+    selected = [
+        (market, year, path)
+        for market, year, path in inputs_list
+        if (market, year) in expected_pairs
+    ]
+    return selected, sorted(expected_pairs - input_pairs)
+
+
 def infer_market_year(path: Path) -> tuple[str, int]:
     try:
         return path.parent.name, int(path.stem)
@@ -1167,94 +1200,124 @@ def _build_synthetic_rows(
     max_gap_minutes: int,
     calendar: SessionCalendar,
 ) -> pd.DataFrame:
-    synthetic: list[dict[str, object]] = []
     inside = df[df["inside_session"]].sort_values("ts")
-    gap_id = 0
-
-    for _, group in inside.groupby("session_id", sort=False):
-        group = group.sort_values("ts")
-        if len(group) < 2:
-            continue
-        prev_rows = group.iloc[:-1]
-        next_rows = group.iloc[1:]
-        gaps = (next_rows["ts"].to_numpy() - prev_rows["ts"].to_numpy()).astype(
-            "timedelta64[m]"
-        ).astype(int)
-
-        for prev, next_row, gap in zip(
-            prev_rows.itertuples(index=False),
-            next_rows.itertuples(index=False),
-            gaps,
-        ):
-            if gap <= 1 or gap > max_gap_minutes:
-                continue
-            prev_instrument = getattr(prev, "instrument_id")
-            next_instrument = getattr(next_row, "instrument_id")
-            if (
-                pd.notna(prev_instrument)
-                and pd.notna(next_instrument)
-                and prev_instrument != next_instrument
-            ):
-                continue
-            prev_close = getattr(prev, "close")
-            if pd.isna(prev_close):
-                continue
-            missing_ts = pd.Series(
-                [
-                    getattr(prev, "ts") + pd.Timedelta(minutes=offset)
-                    for offset in range(1, int(gap))
-                ]
-            )
-            missing_meta = _session_metadata(missing_ts, calendar)
-            in_session_missing_ts = missing_ts.loc[missing_meta["inside_session"]]
-            if in_session_missing_ts.empty:
-                continue
-            gap_id += 1
-            for ts in in_session_missing_ts:
-                synthetic.append(
-                    {
-                        "ts": ts,
-                        "market": getattr(prev, "market"),
-                        "year": int(ts.year),
-                        "symbol": getattr(prev, "symbol"),
-                        "instrument_id": getattr(prev, "instrument_id"),
-                        "publisher_id": getattr(prev, "publisher_id"),
-                        "rtype": getattr(prev, "rtype"),
-                        "open": prev_close,
-                        "high": prev_close,
-                        "low": prev_close,
-                        "close": prev_close,
-                        "volume": 0,
-                        "raw_row_present": False,
-                        "is_synthetic": True,
-                        "synthetic_gap_id": gap_id,
-                        "synthetic_gap_size_minutes": int(gap),
-                        "synthetic_gap_reason": "missing_in_session_minute",
-                        "valid_ohlcv": True,
-                        "data_quality_status": getattr(prev, "data_quality_status"),
-                        "data_quality_degraded": getattr(prev, "data_quality_degraded"),
-                        "source_path": getattr(prev, "source_path"),
-                        "source_file_hash": getattr(prev, "source_file_hash"),
-                        "source_row_number": pd.NA,
-                        "raw_schema_variant": getattr(prev, "raw_schema_variant"),
-                        "timestamp_source": getattr(prev, "timestamp_source"),
-                        "metadata_available": getattr(prev, "metadata_available"),
-                        "roll_detection_available": getattr(prev, "roll_detection_available"),
-                        "roll_detection_source": getattr(prev, "roll_detection_source"),
-                        "roll_policy_status": getattr(prev, "roll_policy_status"),
-                        "session_calendar_status": getattr(prev, "session_calendar_status"),
-                        "holiday_calendar_available": getattr(prev, "holiday_calendar_available"),
-                        "early_close_calendar_available": getattr(prev, "early_close_calendar_available"),
-                        "calendar_coverage_status": getattr(prev, "calendar_coverage_status"),
-                    }
-                )
-
-    if not synthetic:
+    if len(inside) < 2:
         return pd.DataFrame(columns=df.columns)
 
-    synth_df = pd.DataFrame(synthetic)
+    prev_rows = inside.iloc[:-1]
+    next_rows = inside.iloc[1:]
+    gaps = (next_rows["ts"].to_numpy() - prev_rows["ts"].to_numpy()).astype(
+        "timedelta64[m]"
+    ).astype(int)
+    same_session = (
+        prev_rows["session_id"].to_numpy(dtype=object)
+        == next_rows["session_id"].to_numpy(dtype=object)
+    )
+    candidate_mask = same_session & (gaps > 1) & (gaps <= max_gap_minutes)
+    if not candidate_mask.any():
+        return pd.DataFrame(columns=df.columns)
+
+    prev_instruments = prev_rows["instrument_id"].to_numpy(dtype=object)
+    next_instruments = next_rows["instrument_id"].to_numpy(dtype=object)
+    both_instruments_known = pd.notna(prev_instruments) & pd.notna(next_instruments)
+    instrument_changed = both_instruments_known & (prev_instruments != next_instruments)
+    candidate_mask &= ~instrument_changed & prev_rows["close"].notna().to_numpy()
+    if not candidate_mask.any():
+        return pd.DataFrame(columns=df.columns)
+
+    candidate_positions = np.flatnonzero(candidate_mask)
+    candidates = prev_rows.iloc[candidate_positions].reset_index(drop=True)
+    candidate_gaps = gaps[candidate_mask]
+    repeat_counts = candidate_gaps - 1
+    repeated_positions = np.repeat(np.arange(len(candidates)), repeat_counts)
+    if len(repeated_positions) == 0:
+        return pd.DataFrame(columns=df.columns)
+
+    offset_minutes = np.concatenate(
+        [np.arange(1, int(gap), dtype=np.int64) for gap in candidate_gaps]
+    )
+    base_ts = candidates["ts"].iloc[repeated_positions].reset_index(drop=True)
+    synthetic_ts = base_ts + pd.to_timedelta(offset_minutes, unit="m")
+
+    def repeated_values(column: str) -> np.ndarray:
+        return candidates[column].to_numpy()[repeated_positions]
+
+    close_values = repeated_values("close")
+    synth_df = pd.DataFrame(
+        {
+            "ts": synthetic_ts,
+            "_candidate_gap_id": np.repeat(
+                np.arange(1, len(candidates) + 1, dtype=np.int64), repeat_counts
+            ),
+            "market": repeated_values("market"),
+            "year": synthetic_ts.dt.year.to_numpy(dtype=np.int64),
+            "symbol": repeated_values("symbol"),
+            "instrument_id": repeated_values("instrument_id"),
+            "publisher_id": repeated_values("publisher_id"),
+            "rtype": repeated_values("rtype"),
+            "open": close_values,
+            "high": close_values,
+            "low": close_values,
+            "close": close_values,
+            "volume": np.zeros(len(repeated_positions), dtype=np.int64),
+            "raw_row_present": False,
+            "is_synthetic": True,
+            "synthetic_gap_id": pd.NA,
+            "synthetic_gap_size_minutes": np.repeat(candidate_gaps, repeat_counts),
+            "synthetic_gap_reason": "missing_in_session_minute",
+            "valid_ohlcv": True,
+            "data_quality_status": repeated_values("data_quality_status"),
+            "data_quality_degraded": repeated_values("data_quality_degraded"),
+            "source_path": repeated_values("source_path"),
+            "source_file_hash": repeated_values("source_file_hash"),
+            "source_row_number": pd.NA,
+            "raw_schema_variant": repeated_values("raw_schema_variant"),
+            "timestamp_source": repeated_values("timestamp_source"),
+            "metadata_available": repeated_values("metadata_available"),
+            "roll_detection_available": repeated_values("roll_detection_available"),
+            "roll_detection_source": repeated_values("roll_detection_source"),
+            "roll_policy_status": repeated_values("roll_policy_status"),
+            "session_calendar_status": repeated_values("session_calendar_status"),
+            "holiday_calendar_available": repeated_values("holiday_calendar_available"),
+            "early_close_calendar_available": repeated_values("early_close_calendar_available"),
+            "calendar_coverage_status": repeated_values("calendar_coverage_status"),
+        }
+    )
     synth_meta = _session_metadata(synth_df["ts"], calendar)
+    inside_missing = synth_meta["inside_session"].fillna(False).astype(bool)
+    if not inside_missing.any():
+        return pd.DataFrame(columns=df.columns)
+    synth_df = synth_df.loc[inside_missing].reset_index(drop=True)
+    synth_meta = synth_meta.loc[inside_missing].reset_index(drop=True)
+    gap_ids = pd.unique(synth_df["_candidate_gap_id"])
+    remapped_gap_ids = {gap_id: idx for idx, gap_id in enumerate(gap_ids, start=1)}
+    synth_df["synthetic_gap_id"] = (
+        synth_df["_candidate_gap_id"].map(remapped_gap_ids).astype("Int64")
+    )
+    synth_df = synth_df.drop(columns=["_candidate_gap_id"])
     return pd.concat([synth_df, synth_meta], axis=1)
+
+
+def _clip_previous_context(
+    raw: pd.DataFrame,
+    *,
+    year_start: pd.Timestamp,
+    context_rows: int,
+) -> pd.DataFrame:
+    lower_bound = year_start - pd.Timedelta(days=CONTEXT_PADDING_DAYS)
+    selected = raw.index[raw["ts"].ge(lower_bound)].union(raw.tail(context_rows).index)
+    return raw.loc[selected].sort_values("ts", kind="mergesort").reset_index(drop=True)
+
+
+def _clip_next_context(
+    raw: pd.DataFrame,
+    *,
+    year_end: pd.Timestamp,
+    context_rows: int,
+) -> pd.DataFrame:
+    upper_bound = year_end + pd.Timedelta(days=CONTEXT_PADDING_DAYS)
+    selected = raw.index[raw["ts"].lt(upper_bound)].union(raw.head(context_rows).index)
+    return raw.loc[selected].sort_values("ts", kind="mergesort").reset_index(drop=True)
 
 
 def _add_roll_fields(df: pd.DataFrame, roll_window_bars: int) -> pd.DataFrame:
@@ -1464,6 +1527,7 @@ def process_file(
     profile_config_path: Path = DEFAULT_PROFILE_CONFIG,
     session_config_path: Path = DEFAULT_SESSION_CONFIG,
     allow_hardcoded_calendar: bool = False,
+    write_output: bool = True,
 ) -> ValidationResult:
     market, year = infer_market_year(input_path)
     config = load_causal_base_config(profile_config_path, profile)
@@ -1549,6 +1613,9 @@ def process_file(
             return result
         result.warnings.append("roll detection unavailable: missing populated instrument_id")
 
+    year_start = pd.Timestamp(f"{year}-01-01", tz="UTC")
+    year_end = pd.Timestamp(f"{year + 1}-01-01", tz="UTC")
+    context_rows = max(roll_window_bars + 2, effective_max_synthetic_gap_minutes + 2)
     frames = []
     prev_raw = _prepare_raw_frame(
         input_path.parent / f"{year - 1}.parquet",
@@ -1559,7 +1626,13 @@ def process_file(
         raw_schema_policy="relaxed",
     )
     if prev_raw is not None:
-        frames.append(prev_raw)
+        prev_context = _clip_previous_context(
+            prev_raw,
+            year_start=year_start,
+            context_rows=context_rows,
+        )
+        if not prev_context.empty:
+            frames.append(prev_context)
     frames.append(current_raw)
     next_raw = _prepare_raw_frame(
         input_path.parent / f"{year + 1}.parquet",
@@ -1570,7 +1643,13 @@ def process_file(
         raw_schema_policy="relaxed",
     )
     if next_raw is not None:
-        frames.append(next_raw)
+        next_context = _clip_next_context(
+            next_raw,
+            year_end=year_end,
+            context_rows=context_rows,
+        )
+        if not next_context.empty:
+            frames.append(next_context)
 
     raw_all = pd.concat(frames, ignore_index=True).sort_values("ts", kind="mergesort").reset_index(drop=True)
     raw_meta = _session_metadata(raw_all["ts"], calendar)
@@ -1644,8 +1723,6 @@ def process_file(
 
     df = _add_roll_fields(df, roll_window_bars)
     df = _add_session_edge_flags(df)
-    year_start = pd.Timestamp(f"{year}-01-01", tz="UTC")
-    year_end = pd.Timestamp(f"{year + 1}-01-01", tz="UTC")
     has_previous_context = bool(
         (df["ts"].lt(year_start) & df["inside_session"]).any()
     )
@@ -1743,12 +1820,13 @@ def process_file(
             f"sessions={result.degraded_session_rows}"
         )
 
-    output = _coerce_output_types(
-        df.sort_values("ts", kind="mergesort").reset_index(drop=True),
-        extra_columns=enrichment_columns,
-    )
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output.to_parquet(output_path, index=False)
+    if write_output:
+        output = _coerce_output_types(
+            df.sort_values("ts", kind="mergesort").reset_index(drop=True),
+            extra_columns=enrichment_columns,
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output.to_parquet(output_path, index=False)
     return result
 
 
@@ -1812,6 +1890,8 @@ def write_reports(
         failure_count=failure_count,
         selected_input_count=len(rows),
     )
+    scope = load_profile_scope(profile, profile_config_path, strict=False)
+    resolved_profile = scope.resolved_profile if scope is not None else profile
     provenance = {
         "generated_at": utc_timestamp(),
         "git_commit": current_git_commit(),
@@ -1826,6 +1906,7 @@ def write_reports(
         },
         "output_file_hashes": output_file_hashes,
         "profile": profile,
+        "resolved_profile": resolved_profile,
         "markets": sorted({str(row["market"]) for row in rows}),
         "years": sorted({int(row["year"]) for row in rows}),
         "warning_count": warning_count,
@@ -1962,6 +2043,142 @@ def write_reports(
     pd.DataFrame(csv_rows).to_csv(reports_root / "causal_base_validation.csv", index=False)
 
 
+def _phase2_readiness_blocker(result: ValidationResult) -> dict[str, Any]:
+    status_columns = [
+        col for col in result.raw_enrichment_columns if col.startswith("status_")
+    ]
+    statistics_columns = [
+        col
+        for col in result.raw_enrichment_columns
+        if col.startswith("stat_") or col.startswith("statistics_")
+    ]
+    top_blocker_reason = None
+    if result.failures:
+        top_blocker_reason = result.failures[0]
+    elif result.warnings:
+        top_blocker_reason = result.warnings[0]
+    return {
+        "market": result.market,
+        "year": result.year,
+        "status": result.status,
+        "top_blocker_reason": top_blocker_reason,
+        "synthetic_rows_pct": result.synthetic_rows_pct,
+        "max_synthetic_gap_minutes": result.max_synthetic_gap_minutes,
+        "synthetic_rows": result.synthetic_rows,
+        "output_rows": result.output_rows,
+        "status_enrichment_available": bool(status_columns),
+        "status_enrichment_column_count": len(status_columns),
+        "statistics_enrichment_available": bool(statistics_columns),
+        "statistics_enrichment_column_count": len(statistics_columns),
+        "status_enrichment_missing_rows": result.status_enrichment_missing_rows,
+        "status_enrichment_stale_rows": result.status_enrichment_stale_rows,
+        "statistics_enrichment_missing_rows": result.statistics_enrichment_missing_rows,
+        "statistics_enrichment_stale_rows": result.statistics_enrichment_stale_rows,
+        "warnings": result.warnings,
+        "failures": result.failures,
+    }
+
+
+def build_phase2_readiness_report(
+    *,
+    profile: str,
+    raw_root: Path,
+    raw_alignment_report: Path,
+    output_root: Path = Path("data/causally_gated_normalized"),
+    profile_config_path: Path = DEFAULT_PROFILE_CONFIG,
+    session_config_path: Path = DEFAULT_SESSION_CONFIG,
+    roll_window_bars: int = DEFAULT_ROLL_WINDOW_BARS,
+    max_synthetic_gap_minutes: int = DEFAULT_MAX_SYNTHETIC_GAP_MINUTES,
+    allow_hardcoded_calendar: bool = False,
+    fail_fast: bool = False,
+) -> dict[str, Any]:
+    _, _, aliases, _ = load_profile_map(profile_config_path)
+    resolved_profile = resolve_profile_name(profile, aliases)
+    failures = raw_alignment_guard_failures(
+        report_path=raw_alignment_report,
+        raw_root=raw_root,
+        profile=profile,
+        profile_config_path=profile_config_path,
+    )
+    report: dict[str, Any] = {
+        "stage": "phase2_readiness_preflight",
+        "status": "FAIL" if failures else "PASS",
+        "profile": profile,
+        "resolved_profile": resolved_profile,
+        "raw_root": relative_source_path(raw_root),
+        "raw_alignment_report": relative_source_path(raw_alignment_report),
+        "selected_market_year_count": 0,
+        "expected_market_year_count": 0,
+        "checked_market_year_count": 0,
+        "blocker_count": 0,
+        "failure_count": len(failures),
+        "failures": failures,
+        "blockers": [],
+    }
+    if failures:
+        return report
+
+    raw_alignment = _read_json(raw_alignment_report)
+    expected_pairs = raw_alignment_expected_market_years(raw_alignment)
+    inputs, missing_expected_pairs = filter_inputs_by_raw_alignment(
+        resolve_profile_inputs(profile, raw_root, profile_config_path),
+        raw_alignment,
+    )
+    if missing_expected_pairs:
+        failures.append(
+            "raw alignment eligible market-years missing from profile config: "
+            f"{len(missing_expected_pairs)}"
+        )
+        report["status"] = "FAIL"
+        report["failure_count"] = len(failures)
+        report["failures"] = failures
+        report["missing_expected_market_years"] = [
+            {"market": market, "year": year}
+            for market, year in missing_expected_pairs
+        ]
+        return report
+
+    config = load_causal_base_config(profile_config_path, profile)
+    effective_max_gap = (
+        config.max_synthetic_gap_minutes
+        if max_synthetic_gap_minutes == DEFAULT_MAX_SYNTHETIC_GAP_MINUTES
+        else max_synthetic_gap_minutes
+    )
+    blockers: list[dict[str, Any]] = []
+    checked_count = 0
+    for market, year, input_path in inputs:
+        result = process_file(
+            input_path,
+            output_root / market / f"{year}.parquet",
+            profile=profile,
+            roll_window_bars=roll_window_bars,
+            max_synthetic_gap_minutes=effective_max_gap,
+            profile_config_path=profile_config_path,
+            session_config_path=session_config_path,
+            allow_hardcoded_calendar=allow_hardcoded_calendar,
+            write_output=False,
+        )
+        checked_count += 1
+        if result.status != "PASS":
+            blockers.append(_phase2_readiness_blocker(result))
+            if fail_fast:
+                break
+
+    report.update(
+        {
+            "status": "FAIL" if blockers else "PASS",
+            "selected_market_year_count": len(inputs),
+            "expected_market_year_count": len(expected_pairs) if expected_pairs else len(inputs),
+            "checked_market_year_count": checked_count,
+            "blocker_count": len(blockers),
+            "failure_count": 0,
+            "failures": [],
+            "blockers": blockers,
+        }
+    )
+    return report
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -2008,7 +2225,27 @@ def main() -> int:
             print(f"FAIL raw_alignment_guard: {failure}")
         return 1
     config = load_causal_base_config(profile_config_path, args.profile)
-    inputs = resolve_profile_inputs(args.profile, raw_root, profile_config_path)
+    readiness = build_phase2_readiness_report(
+        profile=args.profile,
+        raw_root=raw_root,
+        raw_alignment_report=raw_alignment_report,
+        output_root=output_root,
+        profile_config_path=profile_config_path,
+        session_config_path=session_config_path,
+        roll_window_bars=args.roll_window_bars,
+        max_synthetic_gap_minutes=config.max_synthetic_gap_minutes,
+        allow_hardcoded_calendar=args.allow_hardcoded_calendar,
+        fail_fast=True,
+    )
+    if readiness.get("status") != "PASS":
+        print("FAIL phase2_readiness_preflight")
+        print(json.dumps(readiness, indent=2))
+        return 1
+    raw_alignment = _read_json(raw_alignment_report)
+    inputs, _ = filter_inputs_by_raw_alignment(
+        resolve_profile_inputs(args.profile, raw_root, profile_config_path),
+        raw_alignment,
+    )
 
     results: list[ValidationResult] = []
     for market, year, input_path in inputs:

@@ -10,6 +10,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from scripts.pipeline_gates import file_sha256
+from scripts.phase4_features import build_baseline_features as features_mod
 from scripts.phase4_features.build_baseline_features import (
     FEATURE_COLS,
     FeatureResult,
@@ -35,6 +37,165 @@ from scripts.phase4_features.audit_feature_coverage import (
 
 ROOT = Path(__file__).resolve().parents[2]
 pytestmark = pytest.mark.filterwarnings("ignore:DataFrame is highly fragmented:Warning")
+
+
+def _write_phase4_profile_config(path: Path, *, profile: str = "research") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"""
+profiles:
+  {profile}:
+    markets: ["ES"]
+    years: [2024]
+""".strip(),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _write_label_manifest(
+    path: Path,
+    *,
+    profile: str,
+    output_root: Path,
+    output_path: Path,
+    status: str = "PASS",
+    warning_count: int = 0,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "stage": "labels",
+        "status": status,
+        "profile": profile,
+        "resolved_profile": profile,
+        "output_root": output_root.as_posix(),
+        "warning_count": warning_count,
+        "failure_count": 0,
+        "failures": [],
+        "summary": {"fail_count": 0, "warn_count": warning_count},
+        "output_file_hashes": {output_path.as_posix(): file_sha256(output_path)},
+        "outputs": [
+            {
+                "market": "ES",
+                "year": 2024,
+                "status": status,
+                "warning_count": warning_count,
+                "failure_count": 0,
+                "failures": [],
+            }
+        ],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_phase4_main_rejects_warn_label_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_root = tmp_path / "data" / "labeled"
+    input_path = input_root / "ES" / "2024.parquet"
+    input_path.parent.mkdir(parents=True, exist_ok=True)
+    input_path.write_bytes(b"labels")
+    profile_config = _write_phase4_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    manifest = _write_label_manifest(
+        tmp_path / "reports" / "labels" / "label_manifest.json",
+        profile="research",
+        output_root=input_root,
+        output_path=input_path,
+        status="WARN",
+        warning_count=1,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_baseline_features.py",
+            "--profile",
+            "research",
+            "--input-root",
+            input_root.as_posix(),
+            "--output-root",
+            (tmp_path / "data" / "feature_matrices" / "baseline").as_posix(),
+            "--reports-root",
+            (tmp_path / "reports" / "features").as_posix(),
+            "--profile-config",
+            profile_config.as_posix(),
+            "--costs-config",
+            (tmp_path / "configs" / "costs.yaml").as_posix(),
+            "--label-manifest",
+            manifest.as_posix(),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        features_mod.main()
+
+    assert "label_manifest_gate failed" in str(exc.value)
+
+
+def test_phase4_main_accepts_passed_label_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_root = tmp_path / "data" / "labeled"
+    input_path = input_root / "ES" / "2024.parquet"
+    input_path.parent.mkdir(parents=True, exist_ok=True)
+    input_path.write_bytes(b"labels")
+    profile_config = _write_phase4_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    manifest = _write_label_manifest(
+        tmp_path / "reports" / "labels" / "label_manifest.json",
+        profile="research",
+        output_root=input_root,
+        output_path=input_path,
+    )
+    captured: dict[str, object] = {}
+
+    def fake_process_file(
+        input_path: Path,
+        output_path: Path,
+        *,
+        profile: str,
+        costs_config: Path,
+        input_root: Path,
+    ) -> features_mod.FeatureResult:
+        return features_mod.FeatureResult(
+            profile=profile,
+            market=input_path.parent.name,
+            year=int(input_path.stem),
+            input_path=input_path.as_posix(),
+            output_path=output_path.as_posix(),
+        )
+
+    def fake_write_reports(*args: object, **kwargs: object) -> None:
+        captured["gate"] = kwargs["label_gate"]
+
+    monkeypatch.setattr(features_mod, "process_file", fake_process_file)
+    monkeypatch.setattr(features_mod, "write_reports", fake_write_reports)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_baseline_features.py",
+            "--profile",
+            "research",
+            "--input-root",
+            input_root.as_posix(),
+            "--output-root",
+            (tmp_path / "data" / "feature_matrices" / "baseline").as_posix(),
+            "--reports-root",
+            (tmp_path / "reports" / "features").as_posix(),
+            "--profile-config",
+            profile_config.as_posix(),
+            "--costs-config",
+            (tmp_path / "configs" / "costs.yaml").as_posix(),
+            "--label-manifest",
+            manifest.as_posix(),
+        ],
+    )
+
+    assert features_mod.main() == 0
+    assert captured["gate"]["status"] == "PASS"  # type: ignore[index]
 
 
 def _frame(
