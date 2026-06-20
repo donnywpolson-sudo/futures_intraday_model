@@ -17,6 +17,7 @@ from scripts.phase2_causal_base.build_causal_base_data import (
     filter_inputs_by_raw_alignment,
     load_causal_base_config,
     main as phase2_main,
+    output_root_guard_failures,
     phase2_exit_code,
     process_file,
     raw_alignment_guard_failures,
@@ -323,6 +324,47 @@ def test_phase2_raw_alignment_guard_rejects_failed_or_stale_phase1c_report(
     assert "raw alignment report status is 'FAIL', not PASS" in failures
     assert any("raw_root does not match" in failure for failure in failures)
     assert "raw alignment report needs_phase1b_conversion_count is 1, not 0" in failures
+
+
+def test_output_root_guard_rejects_partial_root_without_manifest(tmp_path: Path) -> None:
+    output_root = tmp_path / "data" / "causally_gated_normalized_candidate"
+    reports_root = tmp_path / "reports" / "causal_base_candidate"
+    _write_raw(
+        output_root / "ES" / "2024.parquet",
+        [_readiness_raw_row("2024-01-02T15:00:00Z")],
+    )
+
+    failures = output_root_guard_failures(
+        output_root=output_root,
+        reports_root=reports_root,
+    )
+
+    assert len(failures) == 1
+    assert "already contains parquet files" in failures[0]
+    assert "causal_base_manifest.json" in failures[0]
+
+
+def test_output_root_guard_allows_nonempty_root_with_manifest(tmp_path: Path) -> None:
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    reports_root = tmp_path / "reports" / "causal_base"
+    _write_raw(
+        output_root / "ES" / "2024.parquet",
+        [_readiness_raw_row("2024-01-02T15:00:00Z")],
+    )
+    reports_root.mkdir(parents=True)
+    (reports_root / "causal_base_manifest.json").write_text("{}", encoding="utf-8")
+
+    assert output_root_guard_failures(
+        output_root=output_root,
+        reports_root=reports_root,
+    ) == []
+
+
+def test_output_root_guard_allows_empty_new_candidate_root(tmp_path: Path) -> None:
+    assert output_root_guard_failures(
+        output_root=tmp_path / "data" / "new_candidate",
+        reports_root=tmp_path / "reports" / "new_candidate",
+    ) == []
 
 
 def test_phase2_readiness_fails_missing_raw_alignment_report(tmp_path: Path) -> None:

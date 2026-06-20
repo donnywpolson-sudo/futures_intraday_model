@@ -8,9 +8,12 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 from typing import Any, Iterable
 
 import numpy as np
@@ -2043,7 +2046,11 @@ def write_reports(
     pd.DataFrame(csv_rows).to_csv(reports_root / "causal_base_validation.csv", index=False)
 
 
-def _phase2_readiness_blocker(result: ValidationResult) -> dict[str, Any]:
+def phase2_readiness_result_row(
+    result: ValidationResult,
+    *,
+    resolved_profile: str | None = None,
+) -> dict[str, Any]:
     status_columns = [
         col for col in result.raw_enrichment_columns if col.startswith("status_")
     ]
@@ -2058,6 +2065,9 @@ def _phase2_readiness_blocker(result: ValidationResult) -> dict[str, Any]:
     elif result.warnings:
         top_blocker_reason = result.warnings[0]
     return {
+        "stage": "phase2_readiness_market_year",
+        "profile": result.profile,
+        "resolved_profile": resolved_profile,
         "market": result.market,
         "year": result.year,
         "status": result.status,
@@ -2066,6 +2076,11 @@ def _phase2_readiness_blocker(result: ValidationResult) -> dict[str, Any]:
         "max_synthetic_gap_minutes": result.max_synthetic_gap_minutes,
         "synthetic_rows": result.synthetic_rows,
         "output_rows": result.output_rows,
+        "degraded_rows_pct": result.degraded_rows_pct,
+        "degraded_bar_rows": result.degraded_bar_rows,
+        "degraded_session_rows": result.degraded_session_rows,
+        "roll_window_rows_pct": result.roll_window_rows_pct,
+        "roll_window_rows": result.roll_window_rows,
         "status_enrichment_available": bool(status_columns),
         "status_enrichment_column_count": len(status_columns),
         "statistics_enrichment_available": bool(statistics_columns),
@@ -2077,6 +2092,28 @@ def _phase2_readiness_blocker(result: ValidationResult) -> dict[str, Any]:
         "warnings": result.warnings,
         "failures": result.failures,
     }
+
+
+def _phase2_readiness_blocker(
+    result: ValidationResult,
+    *,
+    resolved_profile: str | None = None,
+) -> dict[str, Any]:
+    return phase2_readiness_result_row(result, resolved_profile=resolved_profile)
+
+
+def _run_phase2_readiness_task(task: dict[str, Any]) -> ValidationResult:
+    return process_file(
+        Path(str(task["input_path"])),
+        Path(str(task["output_path"])),
+        profile=str(task["profile"]),
+        roll_window_bars=int(task["roll_window_bars"]),
+        max_synthetic_gap_minutes=int(task["max_synthetic_gap_minutes"]),
+        profile_config_path=Path(str(task["profile_config_path"])),
+        session_config_path=Path(str(task["session_config_path"])),
+        allow_hardcoded_calendar=bool(task["allow_hardcoded_calendar"]),
+        write_output=False,
+    )
 
 
 def build_phase2_readiness_report(
@@ -2091,9 +2128,28 @@ def build_phase2_readiness_report(
     max_synthetic_gap_minutes: int = DEFAULT_MAX_SYNTHETIC_GAP_MINUTES,
     allow_hardcoded_calendar: bool = False,
     fail_fast: bool = False,
+    jobs: int = 1,
+    progress: bool = False,
+    markets: Iterable[str] | None = None,
+    years: Iterable[int] | None = None,
+    skip_market_years: Iterable[tuple[str, int]] | None = None,
+    checkpoint_row_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     _, _, aliases, _ = load_profile_map(profile_config_path)
     resolved_profile = resolve_profile_name(profile, aliases)
+    market_filter = {str(market) for market in markets} if markets else None
+    year_filter = {int(year) for year in years} if years else None
+    skipped_pairs = {
+        (str(market), int(year)) for market, year in (skip_market_years or [])
+    }
+
+    def market_year_selected(market: str, year: int) -> bool:
+        if market_filter is not None and market not in market_filter:
+            return False
+        if year_filter is not None and year not in year_filter:
+            return False
+        return True
+
     failures = raw_alignment_guard_failures(
         report_path=raw_alignment_report,
         raw_root=raw_root,
@@ -2107,9 +2163,13 @@ def build_phase2_readiness_report(
         "resolved_profile": resolved_profile,
         "raw_root": relative_source_path(raw_root),
         "raw_alignment_report": relative_source_path(raw_alignment_report),
+        "market_filter": sorted(market_filter) if market_filter else None,
+        "year_filter": sorted(year_filter) if year_filter else None,
         "selected_market_year_count": 0,
         "expected_market_year_count": 0,
         "checked_market_year_count": 0,
+        "resumed_market_year_count": 0,
+        "pending_market_year_count": 0,
         "blocker_count": 0,
         "failure_count": len(failures),
         "failures": failures,
@@ -2120,10 +2180,27 @@ def build_phase2_readiness_report(
 
     raw_alignment = _read_json(raw_alignment_report)
     expected_pairs = raw_alignment_expected_market_years(raw_alignment)
+    selected_expected_pairs = {
+        pair for pair in expected_pairs if market_year_selected(pair[0], pair[1])
+    }
     inputs, missing_expected_pairs = filter_inputs_by_raw_alignment(
         resolve_profile_inputs(profile, raw_root, profile_config_path),
         raw_alignment,
     )
+    inputs = [
+        (market, year, input_path)
+        for market, year, input_path in inputs
+        if market_year_selected(market, year)
+    ]
+    missing_expected_pairs = {
+        pair for pair in missing_expected_pairs if market_year_selected(pair[0], pair[1])
+    }
+    if (market_filter or year_filter) and not inputs:
+        failures.append("market/year filters selected no eligible Phase 2 inputs")
+        report["status"] = "FAIL"
+        report["failure_count"] = len(failures)
+        report["failures"] = failures
+        return report
     if missing_expected_pairs:
         failures.append(
             "raw alignment eligible market-years missing from profile config: "
@@ -2146,30 +2223,80 @@ def build_phase2_readiness_report(
     )
     blockers: list[dict[str, Any]] = []
     checked_count = 0
-    for market, year, input_path in inputs:
-        result = process_file(
-            input_path,
-            output_root / market / f"{year}.parquet",
-            profile=profile,
-            roll_window_bars=roll_window_bars,
-            max_synthetic_gap_minutes=effective_max_gap,
-            profile_config_path=profile_config_path,
-            session_config_path=session_config_path,
-            allow_hardcoded_calendar=allow_hardcoded_calendar,
-            write_output=False,
-        )
-        checked_count += 1
+    resumed_count = len(
+        {
+            (market, year)
+            for market, year, _input_path in inputs
+            if (market, year) in skipped_pairs
+        }
+    )
+    effective_jobs = max(1, int(jobs))
+    if fail_fast:
+        effective_jobs = 1
+    tasks = [
+        {
+            "input_path": input_path.as_posix(),
+            "output_path": (output_root / market / f"{year}.parquet").as_posix(),
+            "profile": profile,
+            "roll_window_bars": roll_window_bars,
+            "max_synthetic_gap_minutes": effective_max_gap,
+            "profile_config_path": profile_config_path.as_posix(),
+            "session_config_path": session_config_path.as_posix(),
+            "allow_hardcoded_calendar": allow_hardcoded_calendar,
+        }
+        for market, year, input_path in inputs
+        if (market, year) not in skipped_pairs
+    ]
+
+    def record_result(result: ValidationResult) -> dict[str, Any]:
+        row = phase2_readiness_result_row(result, resolved_profile=resolved_profile)
         if result.status != "PASS":
-            blockers.append(_phase2_readiness_blocker(result))
-            if fail_fast:
-                break
+            blockers.append(row)
+        if checkpoint_row_callback is not None:
+            checkpoint_row_callback(row)
+        return row
+
+    def emit_progress(result: ValidationResult) -> None:
+        if progress:
+            print(
+                "phase2_readiness "
+                f"checked={checked_count + resumed_count}/{len(inputs)} "
+                f"blockers={len(blockers)} "
+                f"latest={result.market} {result.year} status={result.status}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    if effective_jobs == 1:
+        for task in tasks:
+            result = _run_phase2_readiness_task(task)
+            checked_count += 1
+            record_result(result)
+            emit_progress(result)
+            if result.status != "PASS":
+                if fail_fast:
+                    break
+    else:
+        with ThreadPoolExecutor(max_workers=effective_jobs) as executor:
+            futures = [executor.submit(_run_phase2_readiness_task, task) for task in tasks]
+            for future in as_completed(futures):
+                result = future.result()
+                checked_count += 1
+                record_result(result)
+                emit_progress(result)
+    blockers = sorted(blockers, key=lambda row: (str(row["market"]), int(row["year"])))
 
     report.update(
         {
             "status": "FAIL" if blockers else "PASS",
+            "jobs": effective_jobs,
             "selected_market_year_count": len(inputs),
-            "expected_market_year_count": len(expected_pairs) if expected_pairs else len(inputs),
-            "checked_market_year_count": checked_count,
+            "expected_market_year_count": (
+                len(selected_expected_pairs) if selected_expected_pairs else len(inputs)
+            ),
+            "checked_market_year_count": checked_count + resumed_count,
+            "resumed_market_year_count": resumed_count,
+            "pending_market_year_count": max(0, len(inputs) - checked_count - resumed_count),
             "blocker_count": len(blockers),
             "failure_count": 0,
             "failures": [],
@@ -2177,6 +2304,25 @@ def build_phase2_readiness_report(
         }
     )
     return report
+
+
+def output_root_guard_failures(*, output_root: Path, reports_root: Path) -> list[str]:
+    manifest_path = reports_root / "causal_base_manifest.json"
+    if manifest_path.exists():
+        return []
+    if not output_root.exists():
+        return []
+    try:
+        has_parquet = next(output_root.rglob("*.parquet"), None) is not None
+    except OSError as exc:
+        return [f"output_root unreadable: {relative_source_path(output_root)} ({exc})"]
+    if not has_parquet:
+        return []
+    return [
+        "output_root already contains parquet files but paired Phase 2 manifest is missing: "
+        f"output_root={relative_source_path(output_root)} "
+        f"manifest={relative_source_path(manifest_path)}"
+    ]
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -2214,6 +2360,14 @@ def main() -> int:
     profile_config_path = Path(args.profile_config)
     session_config_path = Path(args.session_config)
     raw_alignment_report = Path(args.raw_alignment_report)
+    output_root_failures = output_root_guard_failures(
+        output_root=output_root,
+        reports_root=reports_root,
+    )
+    if output_root_failures:
+        for failure in output_root_failures:
+            print(f"FAIL output_root_guard: {failure}")
+        return 1
     raw_alignment_failures = raw_alignment_guard_failures(
         report_path=raw_alignment_report,
         raw_root=raw_root,
