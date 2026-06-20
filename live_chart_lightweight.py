@@ -17,14 +17,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Callable, Mapping, Sequence, TextIO
+from typing import Any, Callable, Mapping, Sequence, TextIO, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.databento_auth import (
+from scripts.databento_auth import (  # noqa: E402
     load_databento_api_key_from_file,
     resolve_databento_api_key,
 )
@@ -76,6 +76,14 @@ CHART_INSTALL_MESSAGE = (
 )
 CandleValue = datetime | int | float
 SubscriptionStart = datetime | str | int | None
+
+
+def candle_float(value: CandleValue) -> float:
+    return float(cast(Any, value))
+
+
+def candle_int(value: CandleValue) -> int:
+    return int(cast(Any, value))
 
 
 @dataclass
@@ -482,19 +490,27 @@ def aggregate_candles(
         if bucket not in aggregated:
             aggregated[bucket] = {
                 "time": bucket,
-                "open": float(candle["open"]),
-                "high": float(candle["high"]),
-                "low": float(candle["low"]),
-                "close": float(candle["close"]),
-                "volume": int(candle["volume"]),
+                "open": candle_float(candle["open"]),
+                "high": candle_float(candle["high"]),
+                "low": candle_float(candle["low"]),
+                "close": candle_float(candle["close"]),
+                "volume": candle_int(candle["volume"]),
             }
             continue
 
         current = aggregated[bucket]
-        current["high"] = max(float(current["high"]), float(candle["high"]))
-        current["low"] = min(float(current["low"]), float(candle["low"]))
-        current["close"] = float(candle["close"])
-        current["volume"] = int(current["volume"]) + int(candle["volume"])
+        current["high"] = max(
+            candle_float(current["high"]),
+            candle_float(candle["high"]),
+        )
+        current["low"] = min(
+            candle_float(current["low"]),
+            candle_float(candle["low"]),
+        )
+        current["close"] = candle_float(candle["close"])
+        current["volume"] = candle_int(current["volume"]) + candle_int(
+            candle["volume"]
+        )
     return list(aggregated.values())
 
 
@@ -635,7 +651,7 @@ def ohlcv_record_to_candle(record: object) -> dict[str, CandleValue]:
         "high": fixed_price_to_float(record_value(record, "high")),
         "low": fixed_price_to_float(record_value(record, "low")),
         "close": fixed_price_to_float(record_value(record, "close")),
-        "volume": int(record_value(record, "volume")),
+        "volume": int(cast(Any, record_value(record, "volume"))),
     }
 
 
@@ -646,7 +662,7 @@ def dataframe_row_to_candle(row: object) -> dict[str, CandleValue]:
         "high": fixed_price_to_float(record_value(row, "high")),
         "low": fixed_price_to_float(record_value(row, "low")),
         "close": fixed_price_to_float(record_value(row, "close")),
-        "volume": int(record_value(row, "volume")),
+        "volume": int(cast(Any, record_value(row, "volume"))),
     }
 
 
@@ -899,9 +915,9 @@ def update_chart_candle(chart: object, series: object, *, initialize: bool) -> N
         set_data = getattr(chart, "set", None)
         to_frame = getattr(series, "to_frame", None)
         if callable(set_data) and callable(to_frame):
-            set_data(to_frame().T)
+            set_data(cast(Any, to_frame()).T)
         return
-    chart.update(series)
+    cast(Any, chart).update(series)
 
 
 def replace_chart_candles(
@@ -926,7 +942,7 @@ def replace_chart_candles(
 
 def apply_candle_status(status: ChartStatus, candle: dict[str, CandleValue]) -> None:
     candle_time = normalize_ts_event(candle["time"])
-    close = float(candle["close"])
+    close = candle_float(candle["close"])
     if status.first_time is None:
         status.first_time = candle_time
     status.latest_time = candle_time
@@ -1094,7 +1110,7 @@ def build_timeframe_callback(
 ) -> Callable[[object], None]:
     def handle_timeframe_change(chart: object) -> None:
         try:
-            selected = chart.topbar["timeframe"].value
+            selected = cast(Any, chart).topbar["timeframe"].value
         except Exception:
             return
         timeframe_queue.put(str(selected))
