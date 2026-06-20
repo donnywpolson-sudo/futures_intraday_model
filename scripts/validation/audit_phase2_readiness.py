@@ -17,6 +17,12 @@ from scripts.phase2_causal_base.build_causal_base_data import (
     DEFAULT_ROLL_WINDOW_BARS,
     DEFAULT_SESSION_CONFIG,
     build_phase2_readiness_report,
+    filter_inputs_by_raw_alignment,
+    load_profile_map,
+    raw_alignment_expected_market_years,
+    raw_alignment_guard_failures,
+    resolve_profile_inputs,
+    resolve_profile_name,
 )
 
 
@@ -43,6 +49,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json-out")
     parser.add_argument("--checkpoint-jsonl")
     parser.add_argument("--resume-from")
+    parser.add_argument("--checkpoint-summary-only", action="store_true")
+    parser.add_argument("--max-market-years", type=int)
+    parser.add_argument("--stop-after-blockers", type=int)
     parser.add_argument("--markets", nargs="+")
     parser.add_argument("--years", nargs="+", type=int)
     return parser
@@ -268,6 +277,88 @@ def report_with_checkpoint_rows(
     return merged
 
 
+def checkpoint_summary_base_report(
+    *,
+    profile: str,
+    raw_root: Path,
+    raw_alignment_report: Path,
+    profile_config_path: Path,
+    markets: list[str] | None = None,
+    years: list[int] | None = None,
+) -> dict[str, Any]:
+    _, _, aliases, _ = load_profile_map(profile_config_path)
+    resolved_profile = resolve_profile_name(profile, aliases)
+    market_filter = {str(market) for market in markets} if markets else None
+    year_filter = {int(year) for year in years} if years else None
+
+    def market_year_selected(market: str, year: int) -> bool:
+        if market_filter is not None and market not in market_filter:
+            return False
+        if year_filter is not None and year not in year_filter:
+            return False
+        return True
+
+    failures = raw_alignment_guard_failures(
+        report_path=raw_alignment_report,
+        raw_root=raw_root,
+        profile=profile,
+        profile_config_path=profile_config_path,
+    )
+    report: dict[str, Any] = {
+        "stage": "phase2_readiness_checkpoint_summary",
+        "status": "FAIL" if failures else "PASS",
+        "profile": profile,
+        "resolved_profile": resolved_profile,
+        "market_filter": sorted(market_filter) if market_filter else None,
+        "year_filter": sorted(year_filter) if year_filter else None,
+        "selected_market_year_count": 0,
+        "expected_market_year_count": 0,
+        "checked_market_year_count": 0,
+        "resumed_market_year_count": 0,
+        "pending_market_year_count": 0,
+        "blocker_count": 0,
+        "failure_count": len(failures),
+        "failures": failures,
+        "blockers": [],
+    }
+    if failures:
+        return report
+
+    raw_alignment = json.loads(raw_alignment_report.read_text(encoding="utf-8"))
+    expected_pairs = {
+        pair
+        for pair in raw_alignment_expected_market_years(raw_alignment)
+        if market_year_selected(pair[0], pair[1])
+    }
+    inputs, missing_expected_pairs = filter_inputs_by_raw_alignment(
+        resolve_profile_inputs(profile, raw_root, profile_config_path),
+        raw_alignment,
+    )
+    inputs = [
+        (market, year, path)
+        for market, year, path in inputs
+        if market_year_selected(market, year)
+    ]
+    missing_expected_pairs = {
+        pair for pair in missing_expected_pairs if market_year_selected(pair[0], pair[1])
+    }
+    if missing_expected_pairs:
+        failures.append(
+            "raw alignment eligible market-years missing from profile config: "
+            f"{len(missing_expected_pairs)}"
+        )
+    report.update(
+        {
+            "status": "FAIL" if failures else "PASS",
+            "selected_market_year_count": len(inputs),
+            "expected_market_year_count": len(expected_pairs) if expected_pairs else len(inputs),
+            "failure_count": len(failures),
+            "failures": failures,
+        }
+    )
+    return report
+
+
 def summarize_readiness_report(
     report: dict[str, Any],
     *,
@@ -378,6 +469,36 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(output, indent=2))
         return 1
 
+    if args.checkpoint_summary_only:
+        if not resume_rows:
+            output = {
+                "stage": "phase2_readiness_checkpoint_summary",
+                "status": "FAIL",
+                "failure_count": 1,
+                "failures": ["--checkpoint-summary-only requires --resume-from"],
+            }
+            print(json.dumps(output, indent=2))
+            return 1
+        base_report = checkpoint_summary_base_report(
+            profile=args.profile,
+            raw_root=Path(args.raw_root),
+            raw_alignment_report=Path(args.raw_alignment_report),
+            profile_config_path=Path(args.profile_config),
+            markets=args.markets,
+            years=args.years,
+        )
+        output = summarize_checkpoint_rows(
+            resume_rows,
+            base_report=base_report,
+            top_blockers=args.top_blockers,
+        )
+        if args.json_out:
+            json_out = Path(args.json_out)
+            json_out.parent.mkdir(parents=True, exist_ok=True)
+            json_out.write_text(json.dumps(output, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps(output, indent=2))
+        return 0 if output.get("status") == "PASS" else 1
+
     checkpoint_path = Path(args.checkpoint_jsonl) if args.checkpoint_jsonl else None
     new_rows: list[dict[str, Any]] = []
 
@@ -407,6 +528,8 @@ def main(argv: list[str] | None = None) -> int:
             if checkpoint_path is not None or resume_rows or args.summary_only
             else None
         ),
+        max_market_years=args.max_market_years,
+        stop_after_blockers=args.stop_after_blockers,
     )
     checkpoint_rows = dedupe_checkpoint_rows([*resume_rows, *new_rows])
     output = (

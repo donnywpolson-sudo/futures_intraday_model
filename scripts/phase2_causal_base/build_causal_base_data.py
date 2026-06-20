@@ -2134,6 +2134,8 @@ def build_phase2_readiness_report(
     years: Iterable[int] | None = None,
     skip_market_years: Iterable[tuple[str, int]] | None = None,
     checkpoint_row_callback: Callable[[dict[str, Any]], None] | None = None,
+    max_market_years: int | None = None,
+    stop_after_blockers: int | None = None,
 ) -> dict[str, Any]:
     _, _, aliases, _ = load_profile_map(profile_config_path)
     resolved_profile = resolve_profile_name(profile, aliases)
@@ -2247,6 +2249,10 @@ def build_phase2_readiness_report(
         for market, year, input_path in inputs
         if (market, year) not in skipped_pairs
     ]
+    total_unskipped_count = len(tasks)
+    if max_market_years is not None:
+        tasks = tasks[: max(0, int(max_market_years))]
+    blocker_limit = int(stop_after_blockers) if stop_after_blockers is not None else None
 
     def record_result(result: ValidationResult) -> dict[str, Any]:
         row = phase2_readiness_result_row(result, resolved_profile=resolved_profile)
@@ -2273,9 +2279,10 @@ def build_phase2_readiness_report(
             checked_count += 1
             record_result(result)
             emit_progress(result)
-            if result.status != "PASS":
-                if fail_fast:
-                    break
+            if result.status != "PASS" and fail_fast:
+                break
+            if blocker_limit is not None and len(blockers) >= blocker_limit:
+                break
     else:
         with ThreadPoolExecutor(max_workers=effective_jobs) as executor:
             futures = [executor.submit(_run_phase2_readiness_task, task) for task in tasks]
@@ -2284,19 +2291,26 @@ def build_phase2_readiness_report(
                 checked_count += 1
                 record_result(result)
                 emit_progress(result)
+                if blocker_limit is not None and len(blockers) >= blocker_limit:
+                    for pending in futures:
+                        pending.cancel()
+                    break
     blockers = sorted(blockers, key=lambda row: (str(row["market"]), int(row["year"])))
+    pending_count = max(0, len(inputs) - checked_count - resumed_count)
 
     report.update(
         {
-            "status": "FAIL" if blockers else "PASS",
+            "status": "FAIL" if blockers or pending_count else "PASS",
             "jobs": effective_jobs,
             "selected_market_year_count": len(inputs),
+            "scheduled_market_year_count": len(tasks),
+            "total_unskipped_market_year_count": total_unskipped_count,
             "expected_market_year_count": (
                 len(selected_expected_pairs) if selected_expected_pairs else len(inputs)
             ),
             "checked_market_year_count": checked_count + resumed_count,
             "resumed_market_year_count": resumed_count,
-            "pending_market_year_count": max(0, len(inputs) - checked_count - resumed_count),
+            "pending_market_year_count": pending_count,
             "blocker_count": len(blockers),
             "failure_count": 0,
             "failures": [],

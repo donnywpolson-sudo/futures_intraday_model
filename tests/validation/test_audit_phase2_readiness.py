@@ -331,3 +331,213 @@ def test_cli_passes_market_year_filters(monkeypatch, capsys) -> None:
     assert result == 0
     assert captured["markets"] == ["ES", "NQ"]
     assert captured["years"] == [2023, 2024]
+
+
+def test_checkpoint_summary_only_reads_checkpoint_without_scan(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    checkpoint_path = tmp_path / "reports" / "phase2_readiness" / "checkpoint.jsonl"
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "stage": "phase2_readiness_market_year",
+                "profile": "tier_3",
+                "resolved_profile": "tier_3_research",
+                "market": "ES",
+                "year": 2024,
+                "status": "WARN",
+                "synthetic_rows_pct": 3.0,
+                "max_synthetic_gap_minutes": 12,
+                "warnings": ["synthetic threshold breached: rows_pct=3.0"],
+                "failures": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def fail_if_scan_runs(**_kwargs):
+        raise AssertionError("raw readiness scan should not run")
+
+    monkeypatch.setattr(
+        audit_phase2_readiness,
+        "build_phase2_readiness_report",
+        fail_if_scan_runs,
+    )
+    monkeypatch.setattr(
+        audit_phase2_readiness,
+        "checkpoint_summary_base_report",
+        lambda **_: {
+            "stage": "phase2_readiness_checkpoint_summary",
+            "status": "PASS",
+            "profile": "tier_3",
+            "resolved_profile": "tier_3_research",
+            "selected_market_year_count": 461,
+            "expected_market_year_count": 461,
+            "failure_count": 0,
+            "failures": [],
+        },
+    )
+
+    result = audit_phase2_readiness.main(
+        [
+            "--resume-from",
+            str(checkpoint_path),
+            "--checkpoint-summary-only",
+            "--summary-only",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert result == 1
+    assert payload["checked_market_year_count"] == 1
+    assert payload["pending_market_year_count"] == 460
+    assert payload["blocker_count"] == 1
+
+
+def test_cli_max_market_years_preserves_resume_rows_and_reports_pending(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    checkpoint_path = tmp_path / "reports" / "phase2_readiness" / "checkpoint.jsonl"
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "stage": "phase2_readiness_market_year",
+                "profile": "tier_3",
+                "resolved_profile": "tier_3_research",
+                "market": "ES",
+                "year": 2023,
+                "status": "PASS",
+                "warnings": [],
+                "failures": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_build_phase2_readiness_report(**kwargs):
+        captured["max_market_years"] = kwargs["max_market_years"]
+        kwargs["checkpoint_row_callback"](
+            {
+                "stage": "phase2_readiness_market_year",
+                "profile": "tier_3",
+                "resolved_profile": "tier_3_research",
+                "market": "ES",
+                "year": 2024,
+                "status": "PASS",
+                "warnings": [],
+                "failures": [],
+            }
+        )
+        return {
+            "stage": "phase2_readiness_preflight",
+            "status": "PASS",
+            "profile": "tier_3",
+            "resolved_profile": "tier_3_research",
+            "selected_market_year_count": 3,
+            "expected_market_year_count": 3,
+            "checked_market_year_count": 2,
+            "resumed_market_year_count": 1,
+            "pending_market_year_count": 1,
+            "blocker_count": 0,
+            "failure_count": 0,
+            "failures": [],
+            "blockers": [],
+        }
+
+    monkeypatch.setattr(
+        audit_phase2_readiness,
+        "build_phase2_readiness_report",
+        fake_build_phase2_readiness_report,
+    )
+
+    result = audit_phase2_readiness.main(
+        [
+            "--resume-from",
+            str(checkpoint_path),
+            "--checkpoint-jsonl",
+            str(checkpoint_path),
+            "--summary-only",
+            "--max-market-years",
+            "1",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert result == 1
+    assert captured["max_market_years"] == 1
+    assert payload["checked_market_year_count"] == 2
+    assert payload["pending_market_year_count"] == 1
+    assert payload["pass_count"] == 2
+
+
+def test_cli_stop_after_blockers_returns_fail_with_partial_evidence(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    checkpoint_path = tmp_path / "reports" / "phase2_readiness" / "checkpoint.jsonl"
+    captured: dict[str, object] = {}
+
+    def fake_build_phase2_readiness_report(**kwargs):
+        captured["stop_after_blockers"] = kwargs["stop_after_blockers"]
+        kwargs["checkpoint_row_callback"](
+            {
+                "stage": "phase2_readiness_market_year",
+                "profile": "tier_3",
+                "resolved_profile": "tier_3_research",
+                "market": "RTY",
+                "year": 2024,
+                "status": "WARN",
+                "synthetic_rows_pct": 4.0,
+                "max_synthetic_gap_minutes": 23,
+                "warnings": ["synthetic threshold breached: rows_pct=4.0"],
+                "failures": [],
+            }
+        )
+        return {
+            "stage": "phase2_readiness_preflight",
+            "status": "FAIL",
+            "profile": "tier_3",
+            "resolved_profile": "tier_3_research",
+            "selected_market_year_count": 3,
+            "expected_market_year_count": 3,
+            "checked_market_year_count": 1,
+            "resumed_market_year_count": 0,
+            "pending_market_year_count": 2,
+            "blocker_count": 1,
+            "failure_count": 0,
+            "failures": [],
+            "blockers": [],
+        }
+
+    monkeypatch.setattr(
+        audit_phase2_readiness,
+        "build_phase2_readiness_report",
+        fake_build_phase2_readiness_report,
+    )
+
+    result = audit_phase2_readiness.main(
+        [
+            "--checkpoint-jsonl",
+            str(checkpoint_path),
+            "--summary-only",
+            "--stop-after-blockers",
+            "1",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert result == 1
+    assert captured["stop_after_blockers"] == 1
+    assert payload["status"] == "FAIL"
+    assert payload["blocker_count"] == 1
+    assert payload["pending_market_year_count"] == 2
