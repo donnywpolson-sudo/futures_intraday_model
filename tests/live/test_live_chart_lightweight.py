@@ -13,7 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from . import live_chart_lightweight as live_chart
+import live_chart_lightweight as live_chart
 
 
 @dataclass
@@ -649,6 +649,54 @@ def test_historical_backfill_seeds_chart_before_live_subscription() -> None:
     assert chart.updates[-1]["close"] == 5500.5
     assert "historical+live" in chart.calls[-1][1]["text"]
     assert "records_updated=2" in stdout.getvalue()
+
+
+def test_historical_backfill_retries_at_available_end() -> None:
+    FakeLive.instances.clear()
+    FakeLive.records = [FakeOHLCVRecord()]
+    available_end = datetime(2026, 6, 21, 5, 30, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 21, 5, 33, 58, 891928, tzinfo=timezone.utc)
+    instances = []
+
+    class RetryTimeseries:
+        def __init__(self) -> None:
+            self.get_range_calls: list[dict[str, object]] = []
+
+        def get_range(self, **kwargs: object) -> FakeHistoricalStore:
+            self.get_range_calls.append(kwargs)
+            if len(self.get_range_calls) == 1:
+                raise RuntimeError(
+                    "422 data_end_after_available_end\n"
+                    "The dataset GLBX.MDP3 has data available up to "
+                    "'2026-06-21 05:30:00+00:00'."
+                )
+            return FakeHistoricalStore(_historical_frame())
+
+    class RetryHistorical:
+        def __init__(self, key: str) -> None:
+            self.key = key
+            self.timeseries = RetryTimeseries()
+            instances.append(self)
+
+    class RetryDB(ModuleType):
+        Live = FakeLive
+        Historical = RetryHistorical
+
+    result = live_chart.run_live_chart(
+        _args("--historical-backfill", "--lookback-hours", "1", "--max-records", "2"),
+        db_module=RetryDB("databento"),
+        chart_factory=FakeChart,
+        series_factory=_series_factory,
+        env={"DATABENTO_API_KEY": "db-test"},
+        now=now,
+    )
+
+    historical = instances[-1]
+    calls = historical.timeseries.get_range_calls
+    assert result == 0
+    assert calls[0]["end"] == now
+    assert calls[1]["end"] == available_end
+    assert FakeLive.instances[-1].subscribe_calls[-1]["start"] == available_end
 
 
 def test_historical_backfill_rejects_unbounded_start_zero() -> None:

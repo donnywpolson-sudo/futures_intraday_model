@@ -42,6 +42,7 @@ DEFAULT_CHART_TIMEFRAME = "1m"
 DEFAULT_CHART_TIMEFRAMES = "1m,5m,15m,30m,1h,4h,1d"
 DEFAULT_DISPLAY_TZ = "local"
 VSCODE_RUN_BUTTON_ARGS = (
+    "--historical-backfill",
     "--lookback-hours",
     "168",
     "--timeout-seconds",
@@ -60,6 +61,10 @@ OHLCV_PAYLOAD_FIELDS = ("open", "high", "low", "close", "volume")
 ALWAYS_REPORTED_RECORD_TYPE_MARKERS = ("Error",)
 TIMEFRAME_PATTERN = re.compile(r"^(\d+)([smhd])$")
 START_CLAMP_PATTERN = re.compile(r"Must be\s+([^,\s]+)\s+or later", re.IGNORECASE)
+AVAILABLE_END_PATTERN = re.compile(
+    r"data available up to\s+['\"]([^'\"]+)['\"]",
+    re.IGNORECASE,
+)
 CHART_RENDER_BATCH_RECORDS = 2_000
 CHART_RENDER_BATCH_WAIT_SECONDS = 0.01
 CHART_RENDER_THROTTLE_SECONDS = 0.25
@@ -619,6 +624,16 @@ def record_error_text(record: object) -> str:
 
 def parse_allowed_start_from_text(value: str) -> datetime | None:
     match = START_CLAMP_PATTERN.search(value)
+    if match is None:
+        return None
+    try:
+        return normalize_ts_event(match.group(1))
+    except Exception:
+        return None
+
+
+def parse_available_end_from_text(value: str) -> datetime | None:
+    match = AVAILABLE_END_PATTERN.search(value)
     if match is None:
         return None
     try:
@@ -1553,14 +1568,23 @@ def run_live_chart(
             if historical_cls is None:
                 raise RuntimeError("Databento Historical client is unavailable.")
             historical = historical_cls(key=api_key)
-            store = historical.timeseries.get_range(
-                dataset=args.dataset,
-                schema=args.schema,
-                symbols=symbols,
-                stype_in=args.stype_in,
-                start=live_start,
-                end=historical_end,
-            )
+            historical_request = {
+                "dataset": args.dataset,
+                "schema": args.schema,
+                "symbols": symbols,
+                "stype_in": args.stype_in,
+                "start": live_start,
+                "end": historical_end,
+            }
+            try:
+                store = historical.timeseries.get_range(**historical_request)
+            except Exception as exc:
+                retry_end = parse_available_end_from_text(str(exc))
+                if retry_end is None:
+                    raise
+                historical_end = retry_end
+                historical_request["end"] = historical_end
+                store = historical.timeseries.get_range(**historical_request)
             for candle in historical_store_to_candles(store):
                 display.raw_candles.append(candle)
                 apply_candle_status(status, candle)
