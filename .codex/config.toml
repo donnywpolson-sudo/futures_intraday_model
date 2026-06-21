@@ -1,0 +1,4 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+
+# Futures is highest priority, so keep it on GPT-5.5.
+model = "gpt-5.5"
