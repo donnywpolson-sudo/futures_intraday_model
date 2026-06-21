@@ -88,3 +88,17 @@
 
 ## Live chart wrapper removal next recommended step
 - Review the staged wrapper deletion plus unstaged launch/docs/test edits, then commit them together when ready.
+
+## Live chart NQ 5m visual verification
+- Result: PASS; remaining visual blocker resolved.
+- Exact command run from interactive desktop session:
+  `python live_chart_feed.py --market NQ --timeframe 5m --historical-backfill --lookback-hours 4 --timeout-seconds 120`
+- Visual evidence:
+  - User-provided screenshot `C:\Users\donny\AppData\Local\Temp\codex-clipboard-49569f91-26f0-4c44-a71b-9b59340d5e43.png` showed an open chart window titled `NQU6 5m`, 5m selected, rendered candles and volume, and live status around 770 bars.
+  - Process-scoped `PrintWindow` screenshot `C:\Users\donny\AppData\Local\Temp\live_chart_feed_printwindow_20260621_163419_9307316.png` showed the same `NQU6 5m` chart, 5m selected, rendered candles and volume, and live status around 700 bars.
+- Terminal evidence:
+  - `C:\Users\donny\AppData\Local\Temp\live_chart_feed_20260621_163059.out.log`: ran from 2026-06-21 16:30:59 to 16:33:11 local, stderr was empty, no traceback observed.
+  - `C:\Users\donny\AppData\Local\Temp\live_chart_feed_20260621_163419.out.log`: showed changing `last_close` and records through `records=784`, `latest=2026-06-21T23:35:00Z`, `last_close=30402.75`.
+  - `C:\Users\donny\AppData\Local\Temp\live_chart_feed_20260621_163419.err.log`: only WebView cleanup warning `Failed to unregister class Chrome_WidgetWin_0. Error = 1411`; no Python traceback.
+- Historical candles rendered from the available Globex session start visible around 15:00 local through 16:30-16:35 local; the requested 4-hour window was bounded by available session history.
+- No source, data, report, or canonical layout changes were made beyond this handoff update.
