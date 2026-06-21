@@ -107,6 +107,7 @@ class ChartDisplayState:
     timeframe_seconds: int
     display_tz: tzinfo
     display_tz_name: str
+    rendered_candle_count: int = 0
     loading: bool = True
     session_marker_objects: list[Any] = field(default_factory=list)
 
@@ -935,15 +936,19 @@ def update_chart_candle(chart: object, series: object, *, initialize: bool) -> N
     cast(Any, chart).update(series)
 
 
+def chart_can_replace_candles(chart: object) -> bool:
+    return callable(getattr(chart, "set", None))
+
+
 def replace_chart_candles(
     chart: object,
     candles: Sequence[dict[str, CandleValue]],
     *,
     series_factory: Callable[[dict[str, CandleValue]], Any],
-) -> None:
+) -> bool:
     set_data = getattr(chart, "set", None)
     if not callable(set_data):
-        return
+        return False
 
     pandas_module = importlib.import_module("pandas")
     frame = pandas_module.DataFrame(candles)
@@ -953,6 +958,7 @@ def replace_chart_candles(
             frame["time"] = frame["time"].dt.tz_localize(None)
         frame["time"] = frame["time"].astype("datetime64[ns]")
     set_data(frame)
+    return True
 
 
 def apply_candle_status(status: ChartStatus, candle: dict[str, CandleValue]) -> None:
@@ -1016,7 +1022,18 @@ def render_chart_display(
         candle_for_display(candle, display_tz=display.display_tz)
         for candle in aggregated
     ]
-    replace_chart_candles(chart, display_candles, series_factory=series_factory)
+    if replace_chart_candles(chart, display_candles, series_factory=series_factory):
+        display.rendered_candle_count = len(display_candles)
+    else:
+        if not display_candles:
+            display.rendered_candle_count = 0
+        for candle in display_candles[display.rendered_candle_count :]:
+            update_chart_candle(
+                chart,
+                series_factory(candle),
+                initialize=display.rendered_candle_count == 0,
+            )
+            display.rendered_candle_count += 1
     refresh_session_markers(chart, display, status)
     update_chart_title(
         chart,
@@ -1150,6 +1167,7 @@ def drain_timeframe_queue(
             continue
         display.timeframe = selected
         display.timeframe_seconds = timeframe_seconds(selected)
+        display.rendered_candle_count = 0
         changed = True
 
 
@@ -1351,12 +1369,16 @@ def drain_chart_queue(
                 provider_message=item.message,
             )
 
+        batch_max_records = max_records
+        update_only_unbounded = max_records == 0 and not chart_can_replace_candles(chart)
+        if update_only_unbounded:
+            batch_max_records = status.records_updated + 1
         queue_drained = append_display_candle_batch(
             candle_queue,
             first_candle=item,
             display=display,
             status=status,
-            max_records=max_records,
+            max_records=batch_max_records,
         )
         pending_render = True
         update_chart_status_text(
@@ -1365,9 +1387,13 @@ def drain_chart_queue(
         )
         now_after_batch = clock()
         max_records_reached = max_records != 0 and status.records_updated >= max_records
+        batch_max_records_reached = (
+            update_only_unbounded and status.records_updated >= batch_max_records
+        )
         if (
             queue_drained
             or max_records_reached
+            or batch_max_records_reached
             or now_after_batch - last_render_at >= CHART_RENDER_THROTTLE_SECONDS
         ):
             if queue_drained and status.records_updated > 0:

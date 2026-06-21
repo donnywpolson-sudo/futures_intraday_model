@@ -1,26 +1,11 @@
 # futures_intraday_model instructions
 
-Respond token-efficiently. Correctness and reproducibility > concision.
-
-Primary rule: do exactly the requested task with the smallest safe change.
-
 Scope and worktree hygiene:
 
 * Work only in the active Git repo unless explicitly asked.
 * Before editing, inspect repo path and `git status --short`.
 * Do not stage, commit, delete, move, or rename files unless explicitly asked.
 * Do not add dependencies, perform broad refactors, or create generated artifacts unless explicitly asked.
-
-Communication/token policy:
-
-* Do not narrate progress.
-* Do not restate the task.
-* Keep intermediate messages under 20 words unless reporting a blocker.
-* Prefer targeted searches/snippets over full-file reads.
-* Do not dump long logs, full files, or full diffs unless required.
-* Report only: blockers, added/removed/modified summary, validation result, metric/schema/row-count changes, unexpected tracked/generated artifacts, unresolved risks, and Codex goal usage/completion when available.
-* For ordered multi-task prompts, finish only the current task and stop after reporting unless explicitly told to continue.
-* If a broad read/search would consume lots of context, narrow it first or ask.
 
 Hard safety rules:
 
@@ -58,7 +43,7 @@ Audited-answer policy:
 * Treat a claim as material when it could affect research conclusions, data/model validity, validation results, trading or execution behavior, risk controls, cost/resource spend, external actions, or public/provider/vendor choices.
 * Treat purely mechanical edits, local formatting, typo fixes, narrow status reports, and command-output summaries as non-material unless they make or depend on a material claim.
 * Do not apply the full audited-answer structure to routine mechanical repo edits unless the answer makes or relies on material claims in those areas.
-* Keep audited answers concise. Use the five-part structure only when it materially improves correctness, reproducibility, or decision safety.
+* Use the five-part structure only when it materially improves correctness, reproducibility, or decision safety.
 * Separate: verified facts with primary-source citations, inferences from those facts, assumptions, what could be wrong or stale, and what should be verified independently before acting.
 * Primary sources include exchange/regulator/vendor documentation, repo files, raw data, command/test output, local artifacts, and reproducible validation results.
 * Do not treat AI consensus as truth. Cross-model review with GPT, Gemini, Copilot, Claude, or other systems is useful only as adversarial review; final acceptance requires primary evidence or reproducible local checks.
@@ -110,7 +95,6 @@ Validation:
 Remaining risks:
 - ...
 
-Goal marked complete. Usage: ... tokens, about ... seconds.
 ```
 
 * Include unexpected tracked/generated artifacts only when present. Do not include a full git status summary unless needed to report that risk.
