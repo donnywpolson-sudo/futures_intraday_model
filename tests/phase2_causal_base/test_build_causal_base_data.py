@@ -39,8 +39,31 @@ def _write_raw_with_datetime_index(path: Path, rows: list[dict[str, object]]) ->
     df.to_parquet(path, index=True)
 
 
-def _write_profile_config(path: Path, *, synthetic_pct: float = 2.0, degraded_pct: float = 1.0, roll_pct: float = 1.0) -> None:
+def _write_profile_config(
+    path: Path,
+    *,
+    synthetic_pct: float = 2.0,
+    degraded_pct: float = 1.0,
+    roll_pct: float = 1.0,
+    tier0_markets: list[str] | None = None,
+    sparse_markets: list[str] | None = None,
+    sparse_roll_window_minutes: int | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    tier0_markets = tier0_markets or ["ES"]
+    sparse_markets = sparse_markets or []
+    sparse_lines = []
+    if sparse_markets:
+        sparse_lines = [
+            "causal_base:",
+            "  sparse_trade_derived_ohlcv_markets: ["
+            + ", ".join(sparse_markets)
+            + "]",
+        ]
+        if sparse_roll_window_minutes is not None:
+            sparse_lines.append(
+                f"  sparse_trade_derived_roll_window_minutes: {sparse_roll_window_minutes}"
+            )
     path.write_text(
         "\n".join(
             [
@@ -51,9 +74,10 @@ def _write_profile_config(path: Path, *, synthetic_pct: float = 2.0, degraded_pc
                 f"  max_degraded_rows_pct: {degraded_pct}",
                 f"  max_roll_window_rows_pct: {roll_pct}",
                 "  require_roll_metadata_for_profiles: [tier_1, tier_2, tier_3]",
+                *sparse_lines,
                 "profiles:",
                 "  tier_0:",
-                "    markets: [ES]",
+                "    markets: [" + ", ".join(tier0_markets) + "]",
                 "    years: [2024]",
                 "  metadata_optional_test:",
                 "    markets: [ES]",
@@ -228,12 +252,18 @@ def _write_raw_alignment_report(
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _readiness_raw_row(ts_event: str, *, close: float = 100.5) -> dict[str, object]:
+def _readiness_raw_row(
+    ts_event: str | pd.Timestamp,
+    *,
+    close: float = 100.5,
+    instrument_id: int = 100,
+    symbol: str = "ESH4",
+) -> dict[str, object]:
     return {
         "rtype": 33,
         "publisher_id": 1,
-        "instrument_id": 100,
-        "symbol": "ESH4",
+        "instrument_id": instrument_id,
+        "symbol": symbol,
         "ts_event": ts_event,
         "open": close - 0.5,
         "high": close + 0.5,
@@ -434,6 +464,206 @@ def test_phase2_readiness_blocks_warn_synthetic_gap_before_writing(
     assert not (output_root / "ES" / "2024.parquet").exists()
 
 
+def test_sparse_trade_derived_ohlcv_policy_does_not_fabricate_synthetic_rows(
+    tmp_path: Path,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(
+        profile_config,
+        tier0_markets=["SR3"],
+        sparse_markets=["SR3"],
+    )
+    raw_path = tmp_path / "data" / "raw" / "SR3" / "2024.parquet"
+    out_path = tmp_path / "data" / "causally_gated_normalized" / "SR3" / "2024.parquet"
+    _write_raw(
+        raw_path,
+        [
+            _readiness_raw_row("2024-01-02T15:00:00Z", close=100.5),
+            _readiness_raw_row("2024-01-02T15:10:00Z", close=101.0),
+        ],
+    )
+
+    result = process_file(
+        raw_path,
+        out_path,
+        profile="tier_0",
+        profile_config_path=profile_config,
+    )
+    output = pd.read_parquet(out_path)
+
+    assert result.status == "PASS"
+    assert result.synthetic_rows == 0
+    assert result.synthetic_gap_threshold_breached is False
+    assert result.sparse_ohlcv_policy == "trade_derived_no_trade_gaps_not_filled"
+    assert result.sparse_ohlcv_assumption_status == "ASSUMPTION_BACKED"
+    assert result.sparse_ohlcv_suppressed_synthetic_rows == 9
+    assert result.sparse_ohlcv_suppressed_gap_count == 1
+    assert result.sparse_ohlcv_suppressed_max_gap_minutes == 10
+    assert not output["is_synthetic"].any()
+    assert len(output) == 2
+    assert not any("synthetic threshold breached" in item for item in result.warnings)
+
+
+def test_sparse_trade_derived_roll_window_uses_elapsed_minutes_not_trade_bars(
+    tmp_path: Path,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(
+        profile_config,
+        roll_pct=100.0,
+        tier0_markets=["SR3"],
+        sparse_markets=["SR3"],
+        sparse_roll_window_minutes=15,
+    )
+    raw_path = tmp_path / "data" / "raw" / "SR3" / "2024.parquet"
+    out_path = tmp_path / "data" / "causally_gated_normalized" / "SR3" / "2024.parquet"
+    rows = []
+    for i, (minute, instrument_id, symbol) in enumerate(
+        [
+            (0, 100, "SR3H4"),
+            (10, 100, "SR3H4"),
+            (60, 101, "SR3M4"),
+            (100, 101, "SR3M4"),
+            (140, 101, "SR3M4"),
+        ]
+    ):
+        rows.append(
+            _readiness_raw_row(
+                pd.Timestamp("2024-01-02T15:00:00Z") + pd.Timedelta(minutes=minute),
+                close=95.0 + i,
+                instrument_id=instrument_id,
+                symbol=symbol,
+            )
+        )
+    _write_raw(raw_path, rows)
+
+    result = process_file(
+        raw_path,
+        out_path,
+        profile="tier_0",
+        profile_config_path=profile_config,
+        roll_window_bars=15,
+    )
+
+    output = pd.read_parquet(out_path)
+    assert result.status == "PASS"
+    assert result.roll_window_policy == "elapsed_minutes_sparse_ohlcv"
+    assert result.roll_window_minutes == 15
+    assert result.roll_policy_status == "active_elapsed_time_sparse_ohlcv"
+    assert output["roll_boundary_flag"].sum() == 1
+    assert output["roll_window_flag"].sum() == 1
+    boundary_idx = int(output.index[output["roll_boundary_flag"]][0])
+    assert output.loc[boundary_idx, "roll_window_flag"] == True
+    assert output.loc[boundary_idx - 1, "bars_until_roll"] == 1
+    assert output.loc[boundary_idx - 1, "roll_window_flag"] == False
+    assert output.loc[boundary_idx + 1, "bars_since_roll"] == 1
+    assert output.loc[boundary_idx + 1, "roll_window_flag"] == False
+
+
+def test_non_monotonic_roll_maturity_sequence_warns(tmp_path: Path) -> None:
+    raw_path = tmp_path / "data" / "raw" / "ES" / "2024.parquet"
+    out_path = tmp_path / "data" / "causally_gated_normalized" / "ES" / "2024.parquet"
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(profile_config, roll_pct=100.0)
+    rows = [
+        {
+            **_readiness_raw_row(
+                "2024-01-02T15:00:00Z",
+                close=100.5,
+                instrument_id=100,
+                symbol="ES.v.0",
+            ),
+            "raw_symbol": "ESH4",
+            "maturity_year": 2024,
+            "maturity_month": 3,
+        },
+        {
+            **_readiness_raw_row(
+                "2024-01-02T15:01:00Z",
+                close=101.0,
+                instrument_id=101,
+                symbol="ES.v.0",
+            ),
+            "raw_symbol": "ESM4",
+            "maturity_year": 2024,
+            "maturity_month": 6,
+        },
+        {
+            **_readiness_raw_row(
+                "2024-01-02T15:02:00Z",
+                close=100.75,
+                instrument_id=100,
+                symbol="ES.v.0",
+            ),
+            "raw_symbol": "ESH4",
+            "maturity_year": 2024,
+            "maturity_month": 3,
+        },
+    ]
+    _write_raw(raw_path, rows)
+
+    result = process_file(
+        raw_path,
+        out_path,
+        profile="tier_0",
+        profile_config_path=profile_config,
+        roll_window_bars=1,
+    )
+
+    assert result.status == "WARN"
+    assert result.roll_maturity_sequence_available is True
+    assert result.roll_maturity_backstep_count == 1
+    assert len(result.roll_maturity_backstep_examples) == 1
+    assert any("roll maturity sequence not monotonic" in item for item in result.warnings)
+
+
+def test_phase2_readiness_allows_configured_sparse_trade_derived_ohlcv_gap(
+    tmp_path: Path,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(
+        profile_config,
+        tier0_markets=["SR3"],
+        sparse_markets=["SR3"],
+    )
+    raw_root = tmp_path / "data" / "raw"
+    raw_path = raw_root / "SR3" / "2024.parquet"
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_raw_alignment_report(
+        report_path,
+        raw_root=raw_root,
+        profile="tier_0",
+        resolved_profile="tier_0",
+        overrides={
+            "markets": ["SR3"],
+            "years": [2024],
+            "pre_availability_exemptions": [],
+            "expected_market_year_count": 1,
+        },
+    )
+    _write_raw(
+        raw_path,
+        [
+            _readiness_raw_row("2024-01-02T15:00:00Z", close=100.5),
+            _readiness_raw_row("2024-01-02T15:10:00Z", close=101.0),
+        ],
+    )
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        output_root=output_root,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "PASS"
+    assert report["checked_market_year_count"] == 1
+    assert report["blocker_count"] == 0
+    assert not (output_root / "SR3" / "2024.parquet").exists()
+
+
 def test_phase2_main_exits_before_writing_when_readiness_fails(
     tmp_path: Path,
     monkeypatch,
@@ -524,6 +754,24 @@ def test_phase2_readiness_uses_raw_alignment_pre_availability_exemptions() -> No
     assert missing == []
 
 
+def test_phase2_readiness_prefers_explicit_raw_alignment_market_years() -> None:
+    raw_alignment = {
+        "markets": ["SR1", "SR3"],
+        "years": [2018, 2019],
+        "market_years": [
+            {"market": "SR1", "year": 2018},
+            {"market": "SR1", "year": 2019},
+            {"market": "SR3", "year": 2019},
+        ],
+    }
+
+    assert raw_alignment_expected_market_years(raw_alignment) == {
+        ("SR1", 2018),
+        ("SR1", 2019),
+        ("SR3", 2019),
+    }
+
+
 def test_causal_base_config_uses_smoke_profile_thresholds(tmp_path: Path) -> None:
     profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
     _write_profile_defaults_config(profile_config)
@@ -534,6 +782,7 @@ def test_causal_base_config_uses_smoke_profile_thresholds(tmp_path: Path) -> Non
     assert config.max_degraded_rows_pct == 5.0
     assert config.max_roll_window_rows_pct == 2.0
     assert config.max_synthetic_gap_minutes == 77
+    assert config.sparse_trade_derived_roll_window_minutes == 15
 
 
 def test_causal_base_config_resolves_alias_before_threshold_lookup(tmp_path: Path) -> None:

@@ -90,6 +90,19 @@ def test_build_triage_report_counts_blocker_classes_and_markets() -> None:
     assert market_counts["RTY"]["synthetic_blockers"] == 1
 
 
+def test_roll_maturity_sequence_warning_classifies_as_roll() -> None:
+    classes, other = triage.classify_blocker(
+        {
+            "status": "WARN",
+            "warnings": ["roll maturity sequence not monotonic: backsteps=12"],
+            "failures": [],
+        }
+    )
+
+    assert classes == {"roll"}
+    assert other == []
+
+
 def test_triage_report_marks_candidate_exclusions_diagnostic_only() -> None:
     report = triage.build_triage_report(_sample_rows(), top_n=1)
 

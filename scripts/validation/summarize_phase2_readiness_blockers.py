@@ -48,7 +48,9 @@ def classify_blocker(row: dict[str, Any]) -> tuple[set[str], list[str]]:
             classes.add("synthetic")
         elif reason_text.startswith("degraded threshold breached"):
             classes.add("degraded")
-        elif reason_text.startswith("roll exclusion threshold breached"):
+        elif reason_text.startswith("roll exclusion threshold breached") or reason_text.startswith(
+            "roll maturity sequence not monotonic"
+        ):
             classes.add("roll")
         else:
             other_reasons.append(reason_text)

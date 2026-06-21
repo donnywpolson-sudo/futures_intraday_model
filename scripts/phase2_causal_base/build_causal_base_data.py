@@ -207,6 +207,8 @@ class CausalBaseConfig:
     max_synthetic_gap_minutes: int = DEFAULT_MAX_SYNTHETIC_GAP_MINUTES
     max_degraded_rows_pct: float = DEFAULT_MAX_DEGRADED_ROWS_PCT
     max_roll_window_rows_pct: float = DEFAULT_MAX_ROLL_WINDOW_ROWS_PCT
+    sparse_trade_derived_ohlcv_markets: tuple[str, ...] = tuple()
+    sparse_trade_derived_roll_window_minutes: int = DEFAULT_ROLL_WINDOW_BARS
     require_roll_metadata_for_profiles: tuple[str, ...] = tuple(
         sorted(DEFAULT_REQUIRE_ROLL_METADATA_PROFILES)
     )
@@ -279,6 +281,11 @@ class ValidationResult:
     roll_window_rows: int = 0
     roll_window_rows_pct: float = 0.0
     roll_window_threshold_breached: bool = False
+    roll_window_policy: str = "bar_count"
+    roll_window_minutes: int | None = None
+    roll_maturity_sequence_available: bool = False
+    roll_maturity_backstep_count: int = 0
+    roll_maturity_backstep_examples: list[dict[str, object]] = field(default_factory=list)
     boundary_session_rows: int = 0
     causal_valid_rows: int = 0
     causal_invalid_rows: int = 0
@@ -314,6 +321,11 @@ class ValidationResult:
     degraded_session_rows: int = 0
     degraded_rows_pct: float = 0.0
     degraded_threshold_breached: bool = False
+    sparse_ohlcv_policy: str = "standard_synthetic_gap_fill"
+    sparse_ohlcv_assumption_status: str = "not_applicable"
+    sparse_ohlcv_suppressed_synthetic_rows: int = 0
+    sparse_ohlcv_suppressed_gap_count: int = 0
+    sparse_ohlcv_suppressed_max_gap_minutes: int = 0
     max_synthetic_rows_pct_threshold: float = DEFAULT_MAX_SYNTHETIC_ROWS_PCT
     max_synthetic_gap_minutes_threshold: int = DEFAULT_MAX_SYNTHETIC_GAP_MINUTES
     max_degraded_rows_pct_threshold: float = DEFAULT_MAX_DEGRADED_ROWS_PCT
@@ -667,6 +679,29 @@ def load_causal_base_config(
         max_roll_window_rows_pct=get_float(
             "max_roll_window_rows_pct", DEFAULT_MAX_ROLL_WINDOW_ROWS_PCT
         ),
+        sparse_trade_derived_ohlcv_markets=tuple(
+            sorted(
+                {
+                    str(item)
+                    for item in (
+                        causal_base.get(
+                            "sparse_trade_derived_ohlcv_markets",
+                            defaults.get("sparse_trade_derived_ohlcv_markets", []),
+                        )
+                        or []
+                    )
+                }
+            )
+        ),
+        sparse_trade_derived_roll_window_minutes=int(
+            causal_base.get(
+                "sparse_trade_derived_roll_window_minutes",
+                defaults.get(
+                    "sparse_trade_derived_roll_window_minutes",
+                    DEFAULT_ROLL_WINDOW_BARS,
+                ),
+            )
+        ),
         require_roll_metadata_for_profiles=tuple(str(item) for item in required),
     )
 
@@ -918,6 +953,15 @@ def raw_alignment_guard_failures(
 
 
 def raw_alignment_expected_market_years(report: dict[str, Any]) -> set[tuple[str, int]]:
+    explicit_pairs: set[tuple[str, int]] = set()
+    for item in report.get("market_years", []):
+        try:
+            if isinstance(item, dict):
+                explicit_pairs.add((str(item["market"]), int(item["year"])))
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                explicit_pairs.add((str(item[0]), int(item[1])))
+        except (KeyError, TypeError, ValueError):
+            continue
     markets = [str(market) for market in report.get("markets", [])]
     years = [int(year) for year in report.get("years", [])]
     exemptions: set[tuple[str, int]] = set()
@@ -929,7 +973,10 @@ def raw_alignment_expected_market_years(report: dict[str, Any]) -> set[tuple[str
                 exemptions.add((str(item[0]), int(item[1])))
         except (KeyError, TypeError, ValueError):
             continue
-    return {(market, year) for market in markets for year in years} - exemptions
+    expected = explicit_pairs if explicit_pairs else {
+        (market, year) for market in markets for year in years
+    }
+    return expected - exemptions
 
 
 def filter_inputs_by_raw_alignment(
@@ -1323,7 +1370,64 @@ def _clip_next_context(
     return raw.loc[selected].sort_values("ts", kind="mergesort").reset_index(drop=True)
 
 
-def _add_roll_fields(df: pd.DataFrame, roll_window_bars: int) -> pd.DataFrame:
+def _roll_maturity_backsteps(raw: pd.DataFrame) -> tuple[bool, int, list[dict[str, object]]]:
+    required = {"ts", "instrument_id", "raw_symbol", "maturity_year", "maturity_month"}
+    if not required.issubset(raw.columns):
+        return False, 0, []
+
+    frame = raw.sort_values("ts", kind="mergesort").reset_index(drop=True).copy()
+    maturity_year = pd.to_numeric(frame["maturity_year"], errors="coerce")
+    maturity_month = pd.to_numeric(frame["maturity_month"], errors="coerce")
+    maturity_ordinal = maturity_year * 12 + maturity_month
+    valid = maturity_ordinal.notna() & frame["instrument_id"].notna()
+    if not bool(valid.any()):
+        return False, 0, []
+
+    instrument_changed = frame["instrument_id"].ne(frame["instrument_id"].shift(1))
+    backstep = valid & valid.shift(1, fill_value=False) & instrument_changed & (
+        maturity_ordinal < maturity_ordinal.shift(1)
+    )
+    examples: list[dict[str, object]] = []
+    for idx in frame.index[backstep][:5]:
+        previous = frame.loc[idx - 1]
+        current = frame.loc[idx]
+        examples.append(
+            {
+                "ts": current["ts"].isoformat() if hasattr(current["ts"], "isoformat") else str(current["ts"]),
+                "previous_raw_symbol": str(previous.get("raw_symbol")),
+                "current_raw_symbol": str(current.get("raw_symbol")),
+                "previous_instrument_id": (
+                    int(previous["instrument_id"])
+                    if pd.notna(previous["instrument_id"])
+                    else None
+                ),
+                "current_instrument_id": (
+                    int(current["instrument_id"])
+                    if pd.notna(current["instrument_id"])
+                    else None
+                ),
+                "previous_maturity": (
+                    int(maturity_ordinal.loc[idx - 1])
+                    if pd.notna(maturity_ordinal.loc[idx - 1])
+                    else None
+                ),
+                "current_maturity": (
+                    int(maturity_ordinal.loc[idx])
+                    if pd.notna(maturity_ordinal.loc[idx])
+                    else None
+                ),
+            }
+        )
+    return True, int(backstep.sum()), examples
+
+
+def _add_roll_fields(
+    df: pd.DataFrame,
+    roll_window_bars: int,
+    *,
+    roll_window_policy: str = "bar_count",
+    roll_window_minutes: int | None = None,
+) -> pd.DataFrame:
     df = df.sort_values("ts", kind="mergesort").reset_index(drop=True)
 
     prev_symbol = df["symbol"].shift(1)
@@ -1363,10 +1467,44 @@ def _add_roll_fields(df: pd.DataFrame, roll_window_bars: int) -> pd.DataFrame:
 
         df["bars_since_roll"] = pd.Series(since).round().astype("Int64")
         df["bars_until_roll"] = pd.Series(until).round().astype("Int64")
-        df["roll_window_flag"] = (
-            df["bars_since_roll"].le(roll_window_bars).fillna(False)
-            | df["bars_until_roll"].le(roll_window_bars).fillna(False)
-        ).astype(bool)
+        if roll_window_policy == "elapsed_minutes":
+            window_minutes = roll_window_minutes or roll_window_bars
+            ts = pd.to_datetime(df["ts"], utc=True, errors="coerce")
+            roll_ts = ts.iloc[roll_positions].reset_index(drop=True)
+
+            since_minutes = pd.Series(np.nan, index=df.index, dtype="float64")
+            if has_last.any():
+                since_minutes.loc[has_last] = (
+                    (
+                        ts.loc[has_last].reset_index(drop=True)
+                        - roll_ts.iloc[last_roll_idx[has_last]].reset_index(drop=True)
+                    )
+                    .dt.total_seconds()
+                    .to_numpy()
+                    / 60.0
+                )
+
+            until_minutes = pd.Series(np.nan, index=df.index, dtype="float64")
+            if has_next.any():
+                until_minutes.loc[has_next] = (
+                    (
+                        roll_ts.iloc[next_roll_idx[has_next]].reset_index(drop=True)
+                        - ts.loc[has_next].reset_index(drop=True)
+                    )
+                    .dt.total_seconds()
+                    .to_numpy()
+                    / 60.0
+                )
+
+            df["roll_window_flag"] = (
+                since_minutes.le(window_minutes).fillna(False)
+                | until_minutes.le(window_minutes).fillna(False)
+            ).astype(bool)
+        else:
+            df["roll_window_flag"] = (
+                df["bars_since_roll"].le(roll_window_bars).fillna(False)
+                | df["bars_until_roll"].le(roll_window_bars).fillna(False)
+            ).astype(bool)
 
     segment_number = df.groupby("session_id", dropna=False)["roll_boundary_flag"].cumsum()
     df["session_segment_id"] = np.where(
@@ -1602,12 +1740,34 @@ def process_file(
         result.statistics_enrichment_stale_rows = int(
             current_raw["statistics_stale"].fillna(True).astype(bool).sum()
         )
+    (
+        result.roll_maturity_sequence_available,
+        result.roll_maturity_backstep_count,
+        result.roll_maturity_backstep_examples,
+    ) = _roll_maturity_backsteps(current_raw)
+    if result.roll_maturity_backstep_count > 0:
+        result.warnings.append(
+            "roll maturity sequence not monotonic: "
+            f"backsteps={result.roll_maturity_backstep_count}"
+        )
 
     result.metadata_available = result.instrument_id_nonnull_count > 0
     result.roll_detection_available = result.metadata_available
+    sparse_ohlcv_policy_enabled = market in config.sparse_trade_derived_ohlcv_markets
+    if sparse_ohlcv_policy_enabled:
+        result.roll_window_policy = "elapsed_minutes_sparse_ohlcv"
+        result.roll_window_minutes = config.sparse_trade_derived_roll_window_minutes
+    else:
+        result.roll_window_policy = "bar_count"
+        result.roll_window_minutes = None
+
     if result.roll_detection_available:
         result.roll_detection_source = "instrument_id"
-        result.roll_policy_status = "active"
+        result.roll_policy_status = (
+            "active_elapsed_time_sparse_ohlcv"
+            if sparse_ohlcv_policy_enabled
+            else "active"
+        )
     else:
         result.roll_detection_source = "unavailable"
         result.roll_policy_status = "unavailable_metadata"
@@ -1718,13 +1878,35 @@ def process_file(
         effective_max_synthetic_gap_minutes,
         calendar,
     )
-    if not synthetic.empty:
+    if sparse_ohlcv_policy_enabled:
+        result.sparse_ohlcv_policy = "trade_derived_no_trade_gaps_not_filled"
+        result.sparse_ohlcv_assumption_status = "ASSUMPTION_BACKED"
+        result.sparse_ohlcv_suppressed_synthetic_rows = int(len(synthetic))
+        result.sparse_ohlcv_suppressed_gap_count = int(
+            synthetic["synthetic_gap_id"].dropna().nunique()
+        ) if not synthetic.empty else 0
+        suppressed_gap_sizes = pd.to_numeric(
+            synthetic["synthetic_gap_size_minutes"], errors="coerce"
+        ) if not synthetic.empty else pd.Series(dtype="float64")
+        result.sparse_ohlcv_suppressed_max_gap_minutes = (
+            int(suppressed_gap_sizes.max()) if suppressed_gap_sizes.notna().any() else 0
+        )
+    elif not synthetic.empty:
         for col in enrichment_columns:
             if col not in synthetic.columns:
                 synthetic[col] = pd.NA
         df = pd.concat([df, synthetic[base_cols]], ignore_index=True)
 
-    df = _add_roll_fields(df, roll_window_bars)
+    df = _add_roll_fields(
+        df,
+        roll_window_bars,
+        roll_window_policy=(
+            "elapsed_minutes"
+            if result.roll_window_policy == "elapsed_minutes_sparse_ohlcv"
+            else "bar_count"
+        ),
+        roll_window_minutes=result.roll_window_minutes,
+    )
     df = _add_session_edge_flags(df)
     has_previous_context = bool(
         (df["ts"].lt(year_start) & df["inside_session"]).any()
@@ -1998,6 +2180,15 @@ def write_reports(
                 "roll_window_count": row["roll_window_count"],
                 "roll_window_rows_pct": row["roll_window_rows_pct"],
                 "roll_window_threshold_breached": row["roll_window_threshold_breached"],
+                "roll_window_policy": row["roll_window_policy"],
+                "roll_window_minutes": row["roll_window_minutes"],
+                "roll_maturity_sequence_available": row[
+                    "roll_maturity_sequence_available"
+                ],
+                "roll_maturity_backstep_count": row["roll_maturity_backstep_count"],
+                "roll_maturity_backstep_examples": row[
+                    "roll_maturity_backstep_examples"
+                ],
                 "boundary_session_rows": row["boundary_session_rows"],
                 "causal_valid_rows": row["causal_valid_rows"],
                 "causal_invalid_rows": row["causal_invalid_rows"],
@@ -2005,6 +2196,19 @@ def write_reports(
                 "degraded_session_rows": row["degraded_session_rows"],
                 "degraded_rows_pct": row["degraded_rows_pct"],
                 "degraded_threshold_breached": row["degraded_threshold_breached"],
+                "sparse_ohlcv_policy": row["sparse_ohlcv_policy"],
+                "sparse_ohlcv_assumption_status": row[
+                    "sparse_ohlcv_assumption_status"
+                ],
+                "sparse_ohlcv_suppressed_synthetic_rows": row[
+                    "sparse_ohlcv_suppressed_synthetic_rows"
+                ],
+                "sparse_ohlcv_suppressed_gap_count": row[
+                    "sparse_ohlcv_suppressed_gap_count"
+                ],
+                "sparse_ohlcv_suppressed_max_gap_minutes": row[
+                    "sparse_ohlcv_suppressed_max_gap_minutes"
+                ],
                 "max_synthetic_rows_pct_threshold": row["max_synthetic_rows_pct_threshold"],
                 "max_synthetic_gap_minutes_threshold": row[
                     "max_synthetic_gap_minutes_threshold"
@@ -2081,6 +2285,11 @@ def phase2_readiness_result_row(
         "degraded_session_rows": result.degraded_session_rows,
         "roll_window_rows_pct": result.roll_window_rows_pct,
         "roll_window_rows": result.roll_window_rows,
+        "roll_window_policy": result.roll_window_policy,
+        "roll_window_minutes": result.roll_window_minutes,
+        "roll_maturity_sequence_available": result.roll_maturity_sequence_available,
+        "roll_maturity_backstep_count": result.roll_maturity_backstep_count,
+        "roll_maturity_backstep_examples": result.roll_maturity_backstep_examples,
         "status_enrichment_available": bool(status_columns),
         "status_enrichment_column_count": len(status_columns),
         "statistics_enrichment_available": bool(statistics_columns),
@@ -2089,6 +2298,15 @@ def phase2_readiness_result_row(
         "status_enrichment_stale_rows": result.status_enrichment_stale_rows,
         "statistics_enrichment_missing_rows": result.statistics_enrichment_missing_rows,
         "statistics_enrichment_stale_rows": result.statistics_enrichment_stale_rows,
+        "sparse_ohlcv_policy": result.sparse_ohlcv_policy,
+        "sparse_ohlcv_assumption_status": result.sparse_ohlcv_assumption_status,
+        "sparse_ohlcv_suppressed_synthetic_rows": (
+            result.sparse_ohlcv_suppressed_synthetic_rows
+        ),
+        "sparse_ohlcv_suppressed_gap_count": result.sparse_ohlcv_suppressed_gap_count,
+        "sparse_ohlcv_suppressed_max_gap_minutes": (
+            result.sparse_ohlcv_suppressed_max_gap_minutes
+        ),
         "warnings": result.warnings,
         "failures": result.failures,
     }

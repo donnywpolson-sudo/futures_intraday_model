@@ -116,6 +116,15 @@ defaults:
     - tier_3_holdout
     - tier_3_forward
 
+causal_base:
+  # Databento OHLCV bars are trade-derived and no bar is printed for a no-trade
+  # interval. For sparse short-rate products, Phase 2 preserves this convention
+  # instead of fabricating flat synthetic price bars. Their roll exclusion window
+  # is elapsed minutes, not observed trade bars, because sparse bars can span
+  # much longer than one minute between adjacent rows.
+  sparse_trade_derived_ohlcv_markets: ["SR1", "SR3"]
+  sparse_trade_derived_roll_window_minutes: 15
+
 profile_defaults:
   smoke:
     train_days: 90
