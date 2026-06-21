@@ -43,8 +43,8 @@ Audited-answer policy:
 * Treat a claim as material when it could affect research conclusions, data/model validity, validation results, trading or execution behavior, risk controls, cost/resource spend, external actions, or public/provider/vendor choices.
 * Treat purely mechanical edits, local formatting, typo fixes, narrow status reports, and command-output summaries as non-material unless they make or depend on a material claim.
 * Do not apply the full audited-answer structure to routine mechanical repo edits unless the answer makes or relies on material claims in those areas.
-* Use the five-part structure only when it materially improves correctness, reproducibility, or decision safety.
-* Separate: verified facts with primary-source citations, inferences from those facts, assumptions, what could be wrong or stale, and what should be verified independently before acting.
+* Use the audited-answer structure only when it materially improves correctness, reproducibility, or decision safety.
+* Separate verified facts, inferences, assumptions, what could be wrong or stale, and what should be verified independently before acting.
 * Primary sources include exchange/regulator/vendor documentation, repo files, raw data, command/test output, local artifacts, and reproducible validation results.
 * Do not treat AI consensus as truth. Cross-model review with GPT, Gemini, Copilot, Claude, or other systems is useful only as adversarial review; final acceptance requires primary evidence or reproducible local checks.
 * Do not recommend a product, trade, service, broker, platform, vendor, data provider, or model unless the reasoning survives without affiliate, advertising, ecosystem, or provider incentive.
@@ -71,38 +71,41 @@ Refactor policy:
 * Prefer boring, explicit, readable code over clever, shorter code.
 * If unsure whether a change is behavior-preserving, skip it.
 
-Validation:
+Validation/check policy:
 
-* Run the narrowest relevant test/check after edits.
-* For data/model/WFA changes, report exact commands, files changed, metrics changed, row-count changes, and warnings.
-* After validation, run `git status --short` and confirm generated artifacts are not tracked.
-* Final reports after edits must use this compact shape:
+* Run checks only when warranted by the change, safety risk, protected core logic, or explicit request.
+* For data/model/WFA changes, prefer lightweight validation of affected artifacts, row counts, warnings, generated-file hygiene, and model/backtest metric deltas when practical.
+* After validation, run `git status --short` when practical and confirm generated artifacts are not tracked.
+* If a check fails before Python starts due to sandbox/spawn/permission handling, retry once with scoped approval if available.
+* Do not treat pre-launch sandbox/spawn failures as project failures.
+* Only treat validation as failed if Python launches and returns a traceback, failed assertion, failed test, or nonzero exit code.
+* Do not include a Tests, Validation, Manual Check, Added, Removed, or Modified section in the final output unless explicitly requested.
+* Mention only important failed checks, blockers, generated-artifact risks, row-count/model-metric changes, or caveats under `## Notes/blockers`.
 
-```text
-Added:
-- ...
+## Final output
 
-Removed:
-- ...
+This section overrides any earlier Output Format, Tests, Validation, Manual Check, Added/Removed/Modified, audited-answer structure, or reporting sections in this file.
 
-Modified:
-- ...
+Final output only, using exactly these sections in this order:
 
-Validation:
-- Command:
-- Result:
+## Changed
 
-Remaining risks:
-- ...
+* Files changed and concise purpose, or "None."
 
-```
+## Notes/blockers
 
-* Include unexpected tracked/generated artifacts only when present. Do not include a full git status summary unless needed to report that risk.
+* Remaining risks, blockers, preserved user work, failed checks if important, generated-artifact risks, row-count/model-metric changes, or important caveats.
+* Write "None." if there are no meaningful notes/blockers.
 
-## Codex command sandbox handling
+## Next
 
-If a command fails before Python starts due to sandbox/spawn/permission handling, retry once with scoped approval.
+* The single most useful next action, or "None."
 
-Do not treat pre-launch sandbox/spawn failures as project failures.
+## Metrics
 
-Only report validation failure if Python actually launches and returns a traceback, failed assertion, failed test, or nonzero exit code.
+* Elapsed time: report if available from the runtime or command wrapper; otherwise write "not available to agent".
+* Token usage: report final token usage if available from Codex runtime/tool output; otherwise write "not available to agent".
+
+Do not estimate or fabricate elapsed time or token usage.
+Always include the Metrics section. If metrics are unavailable, write "not available to agent" rather than omitting the section.
+Do not include Tests, Validation, Manual Check, Why, Added, Removed, or Modified sections unless explicitly requested.

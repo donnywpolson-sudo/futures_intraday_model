@@ -932,7 +932,7 @@ def update_chart_candle(chart: object, series: object, *, initialize: bool) -> N
         to_frame = getattr(series, "to_frame", None)
         if callable(set_data) and callable(to_frame):
             set_data(cast(Any, to_frame()).T)
-        return
+            return
     cast(Any, chart).update(series)
 
 
@@ -1027,13 +1027,18 @@ def render_chart_display(
     else:
         if not display_candles:
             display.rendered_candle_count = 0
-        for candle in display_candles[display.rendered_candle_count :]:
+            start_index = 0
+        elif len(display_candles) <= display.rendered_candle_count:
+            start_index = len(display_candles) - 1
+        else:
+            start_index = display.rendered_candle_count
+        for candle in display_candles[start_index:]:
             update_chart_candle(
                 chart,
                 series_factory(candle),
                 initialize=display.rendered_candle_count == 0,
             )
-            display.rendered_candle_count += 1
+        display.rendered_candle_count = len(display_candles)
     refresh_session_markers(chart, display, status)
     update_chart_title(
         chart,
@@ -1695,6 +1700,7 @@ def run_live_chart(
             clear_queue_values(candle_queue)
             clear_session_markers(display)
             display.raw_candles.clear()
+            display.rendered_candle_count = 0
             display.loading = True
             reset_status(status)
             replace_chart_candles(chart, [], series_factory=series_factory)
