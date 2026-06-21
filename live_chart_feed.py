@@ -13,11 +13,12 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Callable, Iterable, Mapping, Sequence, TextIO, cast
+from typing import Any, Callable, Sequence, TextIO, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 ROOT = Path(__file__).resolve().parent
@@ -335,25 +336,31 @@ def normalized_profile_name(value: object) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value).lower())
 
 
-def load_yaml_mapping(path: Path) -> Mapping[str, Any]:
+def require_str_mapping(value: object, name: str) -> MappingABC[str, Any]:
+    if not isinstance(value, MappingABC):
+        raise TypeError(f"{name} must be a mapping, got {type(value).__name__}")
+    return cast(MappingABC[str, Any], value)
+
+
+def load_yaml_mapping(path: Path) -> MappingABC[str, Any]:
     yaml_module = importlib.import_module("yaml")
     with path.open("r", encoding="utf-8-sig") as handle:
         data = yaml_module.safe_load(handle)
-    if not isinstance(data, Mapping):
+    if not isinstance(data, MappingABC):
         raise ValueError(f"YAML root is not a mapping: {path}")
-    return data
+    return cast(MappingABC[str, Any], data)
 
 
-def tier3_research_profile(config: Mapping[str, Any]) -> Mapping[str, Any]:
+def tier3_research_profile(config: MappingABC[str, Any]) -> MappingABC[str, Any]:
     profiles = config.get("profiles")
-    if not isinstance(profiles, Mapping):
+    if not isinstance(profiles, MappingABC):
         raise ValueError("configs/alpha_tiered.yaml has no profiles mapping")
     candidates = {normalized_profile_name(name) for name in TIER3_RESEARCH_PROFILE_CANDIDATES}
     for name, profile in profiles.items():
         if normalized_profile_name(name) in candidates:
-            if not isinstance(profile, Mapping):
+            if not isinstance(profile, MappingABC):
                 raise ValueError(f"Tier 3 Research profile is not a mapping: {name}")
-            return profile
+            return cast(MappingABC[str, Any], profile)
     raise ValueError("Tier 3 Research profile not found in configs/alpha_tiered.yaml")
 
 
@@ -366,7 +373,7 @@ def discover_available_markets(root: Path = ROOT) -> dict[str, MarketInfo]:
     if not isinstance(symbols, list):
         raise ValueError("Tier 3 Research profile has no markets list")
     families = profile.get("market_families")
-    if not isinstance(families, Mapping):
+    if not isinstance(families, MappingABC):
         families = {}
     description = profile.get("description")
     source = f"config:{path.relative_to(root).as_posix()}#profiles.tier_3_research"
@@ -383,7 +390,7 @@ def discover_available_markets(root: Path = ROOT) -> dict[str, MarketInfo]:
     return dict(sorted(markets.items()))
 
 
-def matching_markets(markets: Mapping[str, MarketInfo], query: str | None) -> list[MarketInfo]:
+def matching_markets(markets: MappingABC[str, MarketInfo], query: str | None) -> list[MarketInfo]:
     if query is None or not query.strip():
         return list(markets.values())
     needle = query.strip().lower()
@@ -434,7 +441,7 @@ def parse_start(value: str | None) -> str | int | None:
     return value
 
 
-def is_vscode_environment(env: Mapping[str, str] | None = None) -> bool:
+def is_vscode_environment(env: MappingABC[str, str] | None = None) -> bool:
     source = os.environ if env is None else env
     if source.get("TERM_PROGRAM", "").lower() == "vscode":
         return True
@@ -444,7 +451,7 @@ def is_vscode_environment(env: Mapping[str, str] | None = None) -> bool:
 def resolve_main_argv(
     argv: Sequence[str] | None = None,
     *,
-    env: Mapping[str, str] | None = None,
+    env: MappingABC[str, str] | None = None,
 ) -> list[str]:
     values = list(sys.argv[1:] if argv is None else argv)
     if values:
@@ -455,7 +462,7 @@ def resolve_main_argv(
 def should_launch_vscode_run_child(
     raw_args: Sequence[str],
     *,
-    env: Mapping[str, str] | None = None,
+    env: MappingABC[str, str] | None = None,
 ) -> bool:
     source = os.environ if env is None else env
     return (
@@ -844,16 +851,16 @@ def provider_start_clamp_from_record(record: object) -> ProviderStartClamp | Non
     return ProviderStartClamp(allowed_start=allowed_start, message=text)
 
 
-def symbology_candidates(mapping: Mapping[str, Any]) -> tuple[SymbologyCandidate, ...]:
+def symbology_candidates(mapping: MappingABC[str, Any]) -> tuple[SymbologyCandidate, ...]:
     result = mapping.get("result")
-    if not isinstance(result, Mapping):
+    if not isinstance(result, MappingABC):
         return ()
     candidates: list[SymbologyCandidate] = []
     for entries in result.values():
         if not isinstance(entries, list):
             continue
         for entry in entries:
-            if not isinstance(entry, Mapping):
+            if not isinstance(entry, MappingABC):
                 continue
             symbol = entry.get("s")
             if symbol in {None, ""}:
@@ -914,13 +921,16 @@ def resolve_raw_symbol(
     if not callable(resolve):
         return None
     try:
-        mapping = resolve(
-            dataset=dataset,
-            symbols=instrument_id,
-            stype_in="instrument_id",
-            stype_out="raw_symbol",
-            start_date=start_date,
-            end_date=end_date,
+        mapping = require_str_mapping(
+            resolve(
+                dataset=dataset,
+                symbols=instrument_id,
+                stype_in="instrument_id",
+                stype_out="raw_symbol",
+                start_date=start_date,
+                end_date=end_date,
+            ),
+            "instrument symbology response",
         )
     except Exception:
         return None
@@ -943,13 +953,16 @@ def resolve_single_instrument(
     resolve = getattr(symbology, "resolve", None)
     if not callable(resolve):
         raise RuntimeError("Databento Historical symbology client is unavailable.")
-    mapping = resolve(
-        dataset=dataset,
-        symbols=query_symbol,
-        stype_in=DEFAULT_MARKET_STYPE_IN,
-        stype_out="instrument_id",
-        start_date=start_date,
-        end_date=end_date,
+    mapping = require_str_mapping(
+        resolve(
+            dataset=dataset,
+            symbols=query_symbol,
+            stype_in=DEFAULT_MARKET_STYPE_IN,
+            stype_out="instrument_id",
+            start_date=start_date,
+            end_date=end_date,
+        ),
+        "market symbology response",
     )
     candidates = symbology_candidates(mapping)
     candidate_symbols = unique_candidate_symbols(candidates)
