@@ -31,9 +31,9 @@ from scripts.phase1A_download.download_databento_raw import (
 from scripts.validation.audit_sr_roll_repair_sources import build_report as build_source_audit
 
 
-DEFAULT_CANDIDATE_DBN_ROOT = Path("data/dbn_sr_parent_candidate")
+DEFAULT_CANDIDATE_DBN_ROOT = Path("data/dbn/candidates/sr_parent")
 DEFAULT_SIDECAR_DBN_ROOT = Path("data/dbn")
-DEFAULT_OUTPUT_ROOT = Path("data/raw_sr_front_contract_candidate")
+DEFAULT_OUTPUT_ROOT = Path("data/raw/candidates/sr_front_contract")
 DEFAULT_REPORTS_ROOT = Path("reports/sr_roll_parent_candidate")
 DEFAULT_MARKETS = ("SR1", "SR3")
 DEFAULT_YEARS = tuple(range(2018, 2027))

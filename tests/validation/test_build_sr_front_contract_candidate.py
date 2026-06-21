@@ -351,7 +351,7 @@ def test_parse_excluded_market_years() -> None:
 
 
 def test_candidate_raw_alignment_manifest_passes_phase2_guard(tmp_path: Path) -> None:
-    output_root = tmp_path / "data" / "raw_sr_front_contract_candidate"
+    output_root = tmp_path / "data" / "raw" / "candidates" / "sr_front_contract"
     output_path = output_root / "SR1" / "2024.parquet"
     output_path.parent.mkdir(parents=True)
     pd.DataFrame([_ohlcv_row("2024-01-02T15:00:00Z", 1, "SR1H4", 95.0)]).to_parquet(
@@ -377,7 +377,7 @@ def test_candidate_raw_alignment_manifest_passes_phase2_guard(tmp_path: Path) ->
         report_path,
         profile="tier_3",
         resolved_profile="tier_3",
-        candidate_dbn_root=tmp_path / "data" / "dbn_sr_parent_candidate",
+        candidate_dbn_root=tmp_path / "data" / "dbn" / "candidates" / "sr_parent",
         sidecar_dbn_root=tmp_path / "data" / "dbn",
         output_root=output_root,
         rows=[
@@ -438,9 +438,9 @@ def _write_dbn_manifest(
 
 
 def test_candidate_build_source_audit_failure_writes_no_raw_outputs(tmp_path: Path) -> None:
-    candidate_root = tmp_path / "data" / "dbn_sr_parent_candidate"
+    candidate_root = tmp_path / "data" / "dbn" / "candidates" / "sr_parent"
     sidecar_root = tmp_path / "data" / "dbn"
-    output_root = tmp_path / "data" / "raw_sr_front_contract_candidate"
+    output_root = tmp_path / "data" / "raw" / "candidates" / "sr_front_contract"
     reports_root = tmp_path / "reports"
     _write_dbn_manifest(
         candidate_root,
@@ -489,11 +489,11 @@ def test_candidate_build_fails_alignment_when_sidecar_coverage_is_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    candidate_root = tmp_path / "data" / "dbn_sr_parent_candidate"
+    candidate_root = tmp_path / "data" / "dbn" / "candidates" / "sr_parent"
     definition_root = tmp_path / "data" / "dbn"
-    status_root = tmp_path / "data" / "dbn_sr_parent_candidate"
-    statistics_root = tmp_path / "data" / "dbn_sr_parent_candidate"
-    output_root = tmp_path / "data" / "raw_sr_front_contract_candidate"
+    status_root = tmp_path / "data" / "dbn" / "candidates" / "sr_parent"
+    statistics_root = tmp_path / "data" / "dbn" / "candidates" / "sr_parent"
+    output_root = tmp_path / "data" / "raw" / "candidates" / "sr_front_contract"
     reports_root = tmp_path / "reports"
     source_path = candidate_root / "ohlcv_1m" / "SR1" / "2024" / "chunk.dbn.zst"
     source_path.parent.mkdir(parents=True)

@@ -124,6 +124,13 @@ causal_base:
   # much longer than one minute between adjacent rows.
   sparse_trade_derived_ohlcv_markets: ["SR1", "SR3"]
   sparse_trade_derived_roll_window_minutes: 15
+  # For configured markets, synthetic rows created from missing in-session
+  # Databento OHLCV-1m minutes are treated as vendor-trusted no-trade intervals
+  # after DBN coverage, raw/DBN alignment, timestamp ordering, OHLC, volume,
+  # tick-grid, and session/calendar checks pass. Synthetic row pct and max gap
+  # are diagnostic in causal readiness; the local L0/OHLCV gate still fails
+  # closed for overlapping local-trades windows with contradictory trade rows.
+  vendor_trusted_ohlcv_no_trade_markets: ["ZN"]
 
 profile_defaults:
   smoke:

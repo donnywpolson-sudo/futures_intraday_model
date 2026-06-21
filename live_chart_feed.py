@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Optional Databento live OHLCV chart for research observation only."""
+"""Optional Databento live trades chart for research observation only."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Callable, Mapping, Sequence, TextIO, cast
+from typing import Any, Callable, Iterable, Mapping, Sequence, TextIO, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 ROOT = Path(__file__).resolve().parent
@@ -31,18 +31,24 @@ from scripts.databento_auth import (  # noqa: E402
 
 
 DEFAULT_DATASET = "GLBX.MDP3"
-DEFAULT_SCHEMA = "ohlcv-1m"
-DEFAULT_SYMBOLS = "ES.c.0"
-DEFAULT_STYPE_IN = "continuous"
+DEFAULT_SCHEMA = "trades"
+DEFAULT_HISTORICAL_SCHEMA = "ohlcv-1m"
+DEFAULT_SYMBOLS: str | None = None
+DEFAULT_STYPE_IN = "instrument_id"
+DEFAULT_MARKET_STYPE_IN = "continuous"
+DEFAULT_CONTINUOUS_SUFFIX = ".v.0"
 DEFAULT_LOOKBACK_HOURS = 168.0
 DEFAULT_MAX_RECORDS = 0
 DEFAULT_TIMEOUT_SECONDS: float | None = None
 DEFAULT_NO_DATA_WARNING_SECONDS = 60.0
 DEFAULT_CHART_TIMEFRAME = "1m"
-DEFAULT_CHART_TIMEFRAMES = "1m,5m,15m,30m,1h,4h,1d"
+SUPPORTED_CHART_TIMEFRAMES = ("1m", "5m", "15m", "30m", "1h")
+DEFAULT_CHART_TIMEFRAMES = ",".join(SUPPORTED_CHART_TIMEFRAMES)
 DEFAULT_DISPLAY_TZ = "local"
 VSCODE_RUN_BUTTON_ARGS = (
     "--historical-backfill",
+    "--market",
+    "ES",
     "--lookback-hours",
     "168",
     "--timeout-seconds",
@@ -50,7 +56,7 @@ VSCODE_RUN_BUTTON_ARGS = (
     "--no-data-warning-seconds",
     "15",
 )
-VSCODE_RUN_CHILD_ENV = "LIVE_CHART_LIGHTWEIGHT_RUN_CHILD"
+VSCODE_RUN_CHILD_ENV = "LIVE_CHART_FEED_RUN_CHILD"
 VSCODE_ENV_KEYS = ("VSCODE_PID", "VSCODE_CWD", "VSCODE_IPC_HOOK_CLI")
 API_KEY_ENV = "DATABENTO_API_KEY"
 ROOT_API_KEY_FILE = ROOT / "databento.env"
@@ -58,8 +64,21 @@ FIXED_PRICE_SCALE = 1_000_000_000
 UNDEF_PRICE = 9_223_372_036_854_775_807
 OHLCV_FIELDS = ("ts_event", "open", "high", "low", "close", "volume")
 OHLCV_PAYLOAD_FIELDS = ("open", "high", "low", "close", "volume")
+TRADE_PAYLOAD_FIELDS = ("price", "size")
 ALWAYS_REPORTED_RECORD_TYPE_MARKERS = ("Error",)
 TIMEFRAME_PATTERN = re.compile(r"^(\d+)([smhd])$")
+MARKET_SYMBOL_PATTERN = re.compile(r"^[A-Z0-9]{1,4}$")
+TIER3_RESEARCH_PROFILE_CANDIDATES = (
+    "tier_3_research",
+    "tier3_research",
+    "tier3research",
+    "tier_3",
+    "tier3",
+)
+MARKET_SEARCH_ALIASES = {
+    "CL": ("crude", "crude oil", "oil", "wti"),
+    "NQ": ("nasdaq", "nasdaq 100", "nasdaq-100"),
+}
 START_CLAMP_PATTERN = re.compile(r"Must be\s+([^,\s]+)\s+or later", re.IGNORECASE)
 AVAILABLE_END_PATTERN = re.compile(
     r"data available up to\s+['\"]([^'\"]+)['\"]",
@@ -67,9 +86,9 @@ AVAILABLE_END_PATTERN = re.compile(
 )
 CHART_RENDER_BATCH_RECORDS = 2_000
 CHART_RENDER_BATCH_WAIT_SECONDS = 0.01
-CHART_RENDER_THROTTLE_SECONDS = 0.25
+CHART_RENDER_THROTTLE_SECONDS = 0.50
 TOPBAR_STATUS_NAME = "status"
-LOADING_STATUS_TEXT = "Loading replay candles..."
+LOADING_STATUS_TEXT = "Loading candles..."
 EXCHANGE_TZ_NAME = "America/Chicago"
 RTH_OPEN_HOUR = 8
 RTH_OPEN_MINUTE = 30
@@ -118,6 +137,40 @@ class ProviderStartClamp:
     message: str
 
 
+@dataclass(frozen=True)
+class MarketInfo:
+    symbol: str
+    family: str | None = None
+    aliases: tuple[str, ...] = ()
+    description: str | None = None
+    sources: tuple[str, ...] = ()
+
+    def search_values(self) -> tuple[str, ...]:
+        values = [self.symbol, *self.aliases]
+        if self.family:
+            values.append(self.family)
+            values.append(self.family.replace("_", " "))
+        if self.description:
+            values.append(self.description)
+        return tuple(values)
+
+
+@dataclass(frozen=True)
+class SymbologyCandidate:
+    symbol: str
+    start_date: str
+    end_date: str
+
+
+@dataclass(frozen=True)
+class ResolvedInstrument:
+    market: str
+    query_symbol: str
+    instrument_id: int
+    raw_symbol: str | None
+    candidates: tuple[SymbologyCandidate, ...]
+
+
 ChartQueueItem = dict[str, CandleValue] | ProviderStartClamp
 
 
@@ -146,11 +199,14 @@ def normalize_timeframe(value: str) -> str:
     text = value.strip().lower()
     match = TIMEFRAME_PATTERN.fullmatch(text)
     if match is None:
-        raise argparse.ArgumentTypeError("timeframe must look like 1m, 5m, 15m, 1h, 4h, or 1d")
+        raise argparse.ArgumentTypeError("timeframe must be one of: " + ", ".join(SUPPORTED_CHART_TIMEFRAMES))
     amount = int(match.group(1))
     if amount <= 0:
         raise argparse.ArgumentTypeError("timeframe amount must be > 0")
-    return f"{amount}{match.group(2)}"
+    normalized = f"{amount}{match.group(2)}"
+    if normalized not in SUPPORTED_CHART_TIMEFRAMES:
+        raise argparse.ArgumentTypeError("timeframe must be one of: " + ", ".join(SUPPORTED_CHART_TIMEFRAMES))
+    return normalized
 
 
 def timeframe_seconds(value: str) -> int:
@@ -197,11 +253,16 @@ def validate_chart_timeframe(
     chart_timeframes: tuple[str, ...],
     schema: str,
 ) -> str | None:
+    if chart_timeframe not in SUPPORTED_CHART_TIMEFRAMES:
+        return f"unsupported timeframe {chart_timeframe!r}; choose one of {', '.join(SUPPORTED_CHART_TIMEFRAMES)}."
     if chart_timeframe not in chart_timeframes:
         return (
-            f"--chart-timeframe {chart_timeframe!r} must be included in "
+            f"--timeframe {chart_timeframe!r} must be included in "
             f"--chart-timeframes {','.join(chart_timeframes)!r}."
         )
+    unsupported = [option for option in chart_timeframes if option not in SUPPORTED_CHART_TIMEFRAMES]
+    if unsupported:
+        return f"unsupported timeframe option(s): {', '.join(unsupported)}."
     source_seconds = parse_ohlcv_schema_seconds(schema)
     if source_seconds is None:
         return None
@@ -226,6 +287,143 @@ def resolve_display_tz(value: str) -> tuple[tzinfo, str]:
         return ZoneInfo(text), text
     except ZoneInfoNotFoundError as exc:
         raise argparse.ArgumentTypeError(f"unknown timezone: {value}") from exc
+
+
+def normalize_market(value: str) -> str:
+    text = value.strip().upper()
+    if not MARKET_SYMBOL_PATTERN.fullmatch(text):
+        raise argparse.ArgumentTypeError(f"invalid market symbol: {value!r}")
+    return text
+
+
+def is_market_symbol(value: object) -> bool:
+    return isinstance(value, str) and MARKET_SYMBOL_PATTERN.fullmatch(value.strip().upper()) is not None
+
+
+def add_market(
+    markets: dict[str, MarketInfo],
+    symbol: object,
+    source: str,
+    *,
+    family: str | None = None,
+    aliases: Sequence[str] = (),
+    description: str | None = None,
+) -> None:
+    if not is_market_symbol(symbol):
+        return
+    normalized = str(symbol).strip().upper()
+    current = markets.get(normalized)
+    if current is None:
+        markets[normalized] = MarketInfo(
+            symbol=normalized,
+            family=family,
+            aliases=tuple(aliases),
+            description=description,
+            sources=(source,),
+        )
+    elif source not in current.sources:
+        markets[normalized] = MarketInfo(
+            symbol=normalized,
+            family=current.family or family,
+            aliases=tuple(dict.fromkeys((*current.aliases, *aliases))),
+            description=current.description or description,
+            sources=tuple((*current.sources, source)),
+        )
+
+
+def normalized_profile_name(value: object) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value).lower())
+
+
+def load_yaml_mapping(path: Path) -> Mapping[str, Any]:
+    yaml_module = importlib.import_module("yaml")
+    with path.open("r", encoding="utf-8-sig") as handle:
+        data = yaml_module.safe_load(handle)
+    if not isinstance(data, Mapping):
+        raise ValueError(f"YAML root is not a mapping: {path}")
+    return data
+
+
+def tier3_research_profile(config: Mapping[str, Any]) -> Mapping[str, Any]:
+    profiles = config.get("profiles")
+    if not isinstance(profiles, Mapping):
+        raise ValueError("configs/alpha_tiered.yaml has no profiles mapping")
+    candidates = {normalized_profile_name(name) for name in TIER3_RESEARCH_PROFILE_CANDIDATES}
+    for name, profile in profiles.items():
+        if normalized_profile_name(name) in candidates:
+            if not isinstance(profile, Mapping):
+                raise ValueError(f"Tier 3 Research profile is not a mapping: {name}")
+            return profile
+    raise ValueError("Tier 3 Research profile not found in configs/alpha_tiered.yaml")
+
+
+def discover_available_markets(root: Path = ROOT) -> dict[str, MarketInfo]:
+    markets: dict[str, MarketInfo] = {}
+    path = root / "configs" / "alpha_tiered.yaml"
+    config = load_yaml_mapping(path)
+    profile = tier3_research_profile(config)
+    symbols = profile.get("markets")
+    if not isinstance(symbols, list):
+        raise ValueError("Tier 3 Research profile has no markets list")
+    families = profile.get("market_families")
+    if not isinstance(families, Mapping):
+        families = {}
+    description = profile.get("description")
+    source = f"config:{path.relative_to(root).as_posix()}#profiles.tier_3_research"
+    for symbol in symbols:
+        normalized = str(symbol).strip().upper()
+        add_market(
+            markets,
+            normalized,
+            source,
+            family=str(families.get(normalized)) if normalized in families else None,
+            aliases=MARKET_SEARCH_ALIASES.get(normalized, ()),
+            description=str(description) if description is not None else None,
+        )
+    return dict(sorted(markets.items()))
+
+
+def matching_markets(markets: Mapping[str, MarketInfo], query: str | None) -> list[MarketInfo]:
+    if query is None or not query.strip():
+        return list(markets.values())
+    needle = query.strip().lower()
+    return [
+        info
+        for info in markets.values()
+        if any(needle in value.lower() for value in info.search_values())
+    ]
+
+
+def format_available_markets(markets: Sequence[MarketInfo]) -> str:
+    if not markets:
+        return "No markets discovered."
+    symbols = [info.symbol for info in markets]
+    lines = [f"Available Tier 3 Research markets ({len(symbols)}):"]
+    for idx in range(0, len(symbols), 16):
+        lines.append("  " + " ".join(symbols[idx : idx + 16]))
+    return "\n".join(lines)
+
+
+def format_market_candidates(markets: Sequence[MarketInfo]) -> str:
+    if not markets:
+        return "No matching markets."
+    lines = [f"Matching markets ({len(markets)}):"]
+    for info in markets:
+        detail = f" [{info.family}]" if info.family else ""
+        aliases = f" aliases={','.join(info.aliases)}" if info.aliases else ""
+        lines.append(f"  {info.symbol}{detail}{aliases}")
+    return "\n".join(lines)
+
+
+def market_query_symbol(market: str, symbols: str | None) -> str:
+    if symbols is not None and symbols.strip():
+        parsed = parse_symbols(symbols)
+        if not isinstance(parsed, str):
+            raise argparse.ArgumentTypeError(
+                "--symbols must resolve to exactly one instrument for the live feed chart"
+            )
+        return parsed
+    return f"{market}{DEFAULT_CONTINUOUS_SUFFIX}"
 
 
 def parse_start(value: str | None) -> str | int | None:
@@ -358,14 +556,7 @@ def format_chart_title(
     display_tz_name: str,
     status: ChartStatus | None = None,
 ) -> str:
-    if status is None or status.latest_time is None:
-        return f"{symbols} {chart_timeframe} from {schema} | {display_tz_name} display | connecting"
-    return (
-        f"{symbols} {chart_timeframe} from {schema} | {mode} | "
-        f"{display_time_label(status.first_time, display_tz)} to "
-        f"{display_time_label(status.latest_time, display_tz)} | "
-        f"UTC last={format_utc_time(status.latest_time)}"
-    )
+    return f"{symbols} \u00b7 {chart_timeframe}"
 
 
 def format_topbar_status(
@@ -653,6 +844,143 @@ def provider_start_clamp_from_record(record: object) -> ProviderStartClamp | Non
     return ProviderStartClamp(allowed_start=allowed_start, message=text)
 
 
+def symbology_candidates(mapping: Mapping[str, Any]) -> tuple[SymbologyCandidate, ...]:
+    result = mapping.get("result")
+    if not isinstance(result, Mapping):
+        return ()
+    candidates: list[SymbologyCandidate] = []
+    for entries in result.values():
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                continue
+            symbol = entry.get("s")
+            if symbol in {None, ""}:
+                continue
+            candidates.append(
+                SymbologyCandidate(
+                    symbol=str(symbol),
+                    start_date=str(entry.get("d0", "")),
+                    end_date=str(entry.get("d1", "")),
+                )
+            )
+    return tuple(candidates)
+
+
+def unique_candidate_symbols(candidates: Sequence[SymbologyCandidate]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(candidate.symbol for candidate in candidates))
+
+
+def format_candidates(candidates: Sequence[SymbologyCandidate]) -> str:
+    if not candidates:
+        return "none"
+    return ", ".join(
+        f"{candidate.symbol}[{candidate.start_date},{candidate.end_date})"
+        for candidate in candidates
+    )
+
+
+def symbology_date_window(
+    *,
+    live_start: SubscriptionStart,
+    end: datetime,
+    fallback_start: datetime,
+) -> tuple[str, str]:
+    if isinstance(live_start, datetime):
+        start_dt = normalize_ts_event(live_start)
+    elif isinstance(live_start, str):
+        start_dt = normalize_ts_event(live_start)
+    else:
+        start_dt = fallback_start
+    end_dt = normalize_ts_event(end)
+    start_date = start_dt.date()
+    end_date = (end_dt + timedelta(days=1)).date()
+    if end_date <= start_date:
+        end_date = start_date + timedelta(days=1)
+    return start_date.isoformat(), end_date.isoformat()
+
+
+def resolve_raw_symbol(
+    historical: object,
+    *,
+    dataset: str,
+    instrument_id: int,
+    start_date: str,
+    end_date: str,
+) -> str | None:
+    symbology = getattr(historical, "symbology", None)
+    resolve = getattr(symbology, "resolve", None)
+    if not callable(resolve):
+        return None
+    try:
+        mapping = resolve(
+            dataset=dataset,
+            symbols=instrument_id,
+            stype_in="instrument_id",
+            stype_out="raw_symbol",
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except Exception:
+        return None
+    raw_symbols = unique_candidate_symbols(symbology_candidates(mapping))
+    if len(raw_symbols) == 1:
+        return raw_symbols[0]
+    return None
+
+
+def resolve_single_instrument(
+    historical: object,
+    *,
+    dataset: str,
+    market: str,
+    query_symbol: str,
+    start_date: str,
+    end_date: str,
+) -> ResolvedInstrument:
+    symbology = getattr(historical, "symbology", None)
+    resolve = getattr(symbology, "resolve", None)
+    if not callable(resolve):
+        raise RuntimeError("Databento Historical symbology client is unavailable.")
+    mapping = resolve(
+        dataset=dataset,
+        symbols=query_symbol,
+        stype_in=DEFAULT_MARKET_STYPE_IN,
+        stype_out="instrument_id",
+        start_date=start_date,
+        end_date=end_date,
+    )
+    candidates = symbology_candidates(mapping)
+    candidate_symbols = unique_candidate_symbols(candidates)
+    if len(candidate_symbols) != 1:
+        raise ValueError(
+            "market resolution did not produce exactly one live instrument for "
+            f"{market} using {query_symbol!r} over [{start_date}, {end_date}). "
+            f"Candidates: {format_candidates(candidates)}"
+        )
+    try:
+        instrument_id = int(candidate_symbols[0])
+    except ValueError as exc:
+        raise ValueError(
+            f"resolved instrument id is not numeric for {market}: {candidate_symbols[0]!r}"
+        ) from exc
+    raw_symbol = resolve_raw_symbol(
+        historical,
+        dataset=dataset,
+        instrument_id=instrument_id,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    return ResolvedInstrument(
+        market=market,
+        query_symbol=query_symbol,
+        instrument_id=instrument_id,
+        raw_symbol=raw_symbol,
+        candidates=candidates,
+    )
+
+
 def ohlcv_record_to_candle(record: object) -> dict[str, CandleValue]:
     missing = missing_ohlcv_fields(record)
     if missing:
@@ -680,6 +1008,64 @@ def dataframe_row_to_candle(row: object) -> dict[str, CandleValue]:
         "close": fixed_price_to_float(record_value(row, "close")),
         "volume": int(cast(Any, record_value(row, "volume"))),
     }
+
+
+def trade_record_to_values(record: object) -> tuple[datetime, float, int]:
+    missing = [field for field in TRADE_PAYLOAD_FIELDS if not hasattr(record, field)]
+    if missing:
+        raise ValueError(
+            f"{type(record).__name__} is not a trade record; missing fields: "
+            + ", ".join(missing)
+        )
+    timestamp_field = "ts_event" if hasattr(record, "ts_event") else "ts_recv"
+    if not hasattr(record, timestamp_field):
+        raise ValueError(f"{type(record).__name__} has no trade timestamp")
+    size = int(cast(Any, record_value(record, "size")))
+    if size < 0:
+        raise ValueError("trade size must be >= 0")
+    return (
+        normalize_ts_event(record_value(record, timestamp_field)),
+        fixed_price_to_float(record_value(record, "price")),
+        size,
+    )
+
+
+@dataclass
+class TradeCandleAggregator:
+    timeframe_seconds: int = 60
+    current_bucket: datetime | None = None
+    current_candle: dict[str, CandleValue] | None = None
+    last_trade_ts: datetime | None = None
+    ignored_out_of_order: int = 0
+
+    def apply_trade(self, record: object) -> dict[str, CandleValue] | None:
+        ts_event, price, size = trade_record_to_values(record)
+        if self.last_trade_ts is not None and ts_event < self.last_trade_ts:
+            self.ignored_out_of_order += 1
+            return None
+        bucket = floor_timeframe(ts_event, self.timeframe_seconds)
+        if self.current_bucket is not None and bucket < self.current_bucket:
+            self.ignored_out_of_order += 1
+            return None
+
+        self.last_trade_ts = ts_event
+        if self.current_bucket != bucket or self.current_candle is None:
+            self.current_bucket = bucket
+            self.current_candle = {
+                "time": bucket,
+                "open": price,
+                "high": price,
+                "low": price,
+                "close": price,
+                "volume": size,
+            }
+            return dict(self.current_candle)
+
+        self.current_candle["high"] = max(candle_float(self.current_candle["high"]), price)
+        self.current_candle["low"] = min(candle_float(self.current_candle["low"]), price)
+        self.current_candle["close"] = price
+        self.current_candle["volume"] = candle_int(self.current_candle["volume"]) + size
+        return dict(self.current_candle)
 
 
 def historical_store_to_candles(store: object) -> list[dict[str, CandleValue]]:
@@ -728,6 +1114,10 @@ def missing_ohlcv_fields(record: object) -> list[str]:
     return [field for field in OHLCV_FIELDS if not hasattr(record, field)]
 
 
+def missing_trade_fields(record: object) -> list[str]:
+    return [field for field in TRADE_PAYLOAD_FIELDS if not hasattr(record, field)]
+
+
 def should_ignore_record(record: object, exc: Exception) -> bool:
     record_type = type(record).__name__
     if any(marker in record_type for marker in ALWAYS_REPORTED_RECORD_TYPE_MARKERS):
@@ -735,6 +1125,15 @@ def should_ignore_record(record: object, exc: Exception) -> bool:
     if "missing fields" not in str(exc):
         return False
     return not any(hasattr(record, field) for field in OHLCV_PAYLOAD_FIELDS)
+
+
+def should_ignore_trade_record(record: object, exc: Exception) -> bool:
+    record_type = type(record).__name__
+    if any(marker in record_type for marker in ALWAYS_REPORTED_RECORD_TYPE_MARKERS):
+        return False
+    if "missing fields" not in str(exc):
+        return False
+    return not any(hasattr(record, field) for field in TRADE_PAYLOAD_FIELDS)
 
 
 def import_databento() -> ModuleType:
@@ -764,8 +1163,29 @@ def build_record_callback(
     *,
     stderr: TextIO,
     allow_start_clamp: bool = True,
+    trade_aggregator: TradeCandleAggregator | None = None,
 ) -> Callable[[object], None]:
     def handle_record(record: object) -> None:
+        if trade_aggregator is not None:
+            try:
+                candle = trade_aggregator.apply_trade(record)
+            except Exception as exc:
+                start_clamp = (
+                    provider_start_clamp_from_record(record)
+                    if allow_start_clamp
+                    else None
+                )
+                if start_clamp is not None:
+                    candle_queue.put(start_clamp)
+                    return
+                if should_ignore_trade_record(record, exc):
+                    return
+                print(describe_record_skip(record, exc), file=stderr)
+                return
+            if candle is not None:
+                candle_queue.put(candle)
+            return
+
         try:
             candle = ohlcv_record_to_candle(record)
         except Exception as exc:
@@ -975,9 +1395,33 @@ def append_display_candle(
     display: ChartDisplayState,
     status: ChartStatus,
     candle: dict[str, CandleValue],
-) -> None:
-    display.raw_candles.append(candle)
+) -> bool:
+    candle_time = normalize_ts_event(candle["time"])
+    if display.raw_candles:
+        last_time = normalize_ts_event(display.raw_candles[-1]["time"])
+        if candle_time < last_time:
+            return False
+        if candle_time == last_time:
+            display.raw_candles[-1] = candle
+        else:
+            display.raw_candles.append(candle)
+    else:
+        display.raw_candles.append(candle)
     apply_candle_status(status, candle)
+    return True
+
+
+def seed_candle_for_live(
+    display: ChartDisplayState,
+    live_start: SubscriptionStart,
+) -> dict[str, CandleValue] | None:
+    if not display.raw_candles or live_start is None or live_start == 0:
+        return None
+    live_bucket = floor_timeframe(normalize_ts_event(live_start), display.timeframe_seconds)
+    last_candle = display.raw_candles[-1]
+    if normalize_ts_event(last_candle["time"]) == live_bucket:
+        return dict(last_candle)
+    return None
 
 
 def append_display_candle_batch(
@@ -1357,7 +1801,7 @@ def drain_chart_queue(
                 and clock() >= warning_deadline
             ):
                 print(
-                    "No OHLCV records received after "
+                    "No trade records received after "
                     f"{no_data_warning_seconds:g}s for {symbols} {schema}.",
                     file=stderr,
                 )
@@ -1427,25 +1871,45 @@ def drain_chart_queue(
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Optional local Databento live OHLCV candlestick chart for "
+            "Optional local Databento live trades candlestick chart for "
             "research/paper observation only. No orders, broker integration, "
             "account integration, or live inference."
         )
     )
     parser.add_argument("--dataset", default=DEFAULT_DATASET)
-    parser.add_argument("--schema", default=DEFAULT_SCHEMA)
-    parser.add_argument("--symbols", default=DEFAULT_SYMBOLS)
-    parser.add_argument("--stype-in", default=DEFAULT_STYPE_IN)
+    parser.add_argument("--schema", default=DEFAULT_SCHEMA, help="Live schema; must be trades.")
     parser.add_argument(
+        "--historical-schema",
+        default=DEFAULT_HISTORICAL_SCHEMA,
+        help="Historical backfill schema; must be ohlcv-1m.",
+    )
+    parser.add_argument("--market", type=normalize_market, default=None)
+    parser.add_argument(
+        "--symbols",
+        default=DEFAULT_SYMBOLS,
+        help="Advanced Databento continuous symbol to resolve; defaults to MARKET.v.0.",
+    )
+    parser.add_argument("--stype-in", default=DEFAULT_STYPE_IN, help="Live stype_in; must be instrument_id.")
+    parser.add_argument("--list-markets", action="store_true", help="List Tier 3 Research markets and exit.")
+    parser.add_argument(
+        "--search-market",
+        "--market-search",
+        dest="search_market",
+        default=None,
+        help="Search Tier 3 Research markets by symbol, family, or known alias.",
+    )
+    parser.add_argument(
+        "--timeframe",
         "--chart-timeframe",
+        dest="chart_timeframe",
         type=normalize_timeframe,
         default=DEFAULT_CHART_TIMEFRAME,
-        help="Initial displayed chart timeframe; must be in --chart-timeframes.",
+        help="Displayed chart timeframe.",
     )
     parser.add_argument(
         "--chart-timeframes",
         default=DEFAULT_CHART_TIMEFRAMES,
-        help="Comma-separated topbar chart timeframes built from the source OHLCV feed.",
+        help="Comma-separated topbar chart timeframes.",
     )
     parser.add_argument(
         "--display-tz",
@@ -1474,7 +1938,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--max-records",
         type=nonnegative_int,
         default=DEFAULT_MAX_RECORDS,
-        help="Maximum OHLCV records to plot before stopping. Use 0 for unlimited.",
+        help="Maximum candle updates to plot before stopping. Use 0 for unlimited.",
     )
     parser.add_argument(
         "--timeout-seconds",
@@ -1486,7 +1950,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--no-data-warning-seconds",
         type=nonnegative_float,
         default=DEFAULT_NO_DATA_WARNING_SECONDS,
-        help="Warn if no OHLCV candles arrive by this many seconds; 0 disables.",
+        help="Warn if no trades arrive by this many seconds; 0 disables.",
     )
     parser.add_argument(
         "--historical-backfill",
@@ -1508,6 +1972,49 @@ def run_live_chart(
     now: datetime | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> int:
+    try:
+        markets = discover_available_markets()
+    except Exception as exc:
+        print(f"Failed to load Tier 3 Research markets: {exc}", file=stderr)
+        return 2
+
+    if args.list_markets:
+        matches = matching_markets(markets, args.search_market)
+        print(format_available_markets(matches), file=stdout)
+        return 0 if matches else 2
+
+    market = args.market
+    if market is None and args.search_market is not None:
+        matches = matching_markets(markets, args.search_market)
+        if len(matches) == 1:
+            market = matches[0].symbol
+        elif len(matches) > 1:
+            print(format_market_candidates(matches), file=stdout)
+            return 0
+        else:
+            print(f"No market matched search: {args.search_market!r}", file=stderr)
+            print(format_available_markets(list(markets.values())), file=stdout)
+            return 2
+
+    if market is None:
+        print("Select a market explicitly. Examples:", file=stderr)
+        print("  python live_chart_feed.py --market ES --timeframe 1m", file=stderr)
+        print("  python live_chart_feed.py --search-market nasdaq --timeframe 5m", file=stderr)
+        print(format_available_markets(list(markets.values())), file=stdout)
+        return 0
+
+    if market not in markets:
+        matches = matching_markets(markets, market)
+        print(f"Unknown market {market!r}.", file=stderr)
+        print(format_market_candidates(matches) if matches else format_available_markets(list(markets.values())), file=stdout)
+        return 2
+
+    try:
+        query_symbol = market_query_symbol(market, args.symbols)
+    except argparse.ArgumentTypeError as exc:
+        print(str(exc), file=stderr)
+        return 2
+
     api_key = resolve_api_key(env)
     if api_key is None:
         print(f"Missing {API_KEY_ENV}; set it before running live chart.", file=stderr)
@@ -1515,7 +2022,7 @@ def run_live_chart(
 
     current_time = now or utc_now()
     live_start = resolve_window_start(args, now=current_time)
-    historical_end = current_time
+    historical_end = floor_timeframe(current_time, 60)
     if args.historical_backfill and live_start in {None, 0}:
         print(
             "Historical backfill requires a bounded --lookback-hours, "
@@ -1532,14 +2039,29 @@ def run_live_chart(
         print(str(exc), file=stderr)
         return 2
 
+    if args.schema != DEFAULT_SCHEMA:
+        print("live feed chart must subscribe with Databento schema 'trades'.", file=stderr)
+        return 2
+    if args.historical_schema != DEFAULT_HISTORICAL_SCHEMA:
+        print("historical backfill must use Databento schema 'ohlcv-1m'.", file=stderr)
+        return 2
+    if args.stype_in != DEFAULT_STYPE_IN:
+        print("live feed chart must subscribe with stype_in 'instrument_id'.", file=stderr)
+        return 2
+
     timeframe_error = validate_chart_timeframe(
         chart_timeframe=chart_timeframe,
         chart_timeframes=chart_timeframes,
-        schema=args.schema,
+        schema=args.historical_schema,
     )
     if timeframe_error is not None:
         print(timeframe_error, file=stderr)
         return 2
+    chart_timeframes = tuple(
+        option
+        for option in chart_timeframes
+        if timeframe_seconds(option) >= timeframe_seconds(chart_timeframe)
+    )
 
     if db_module is None:
         try:
@@ -1561,6 +2083,34 @@ def run_live_chart(
         chart_factory = chart_factory or chart_cls
         series_factory = series_factory or runtime_series_factory
 
+    historical_cls = getattr(db_module, "Historical", None)
+    if historical_cls is None:
+        print("Databento Historical client is unavailable.", file=stderr)
+        return 2
+    historical = historical_cls(key=api_key)
+    start_date, end_date = symbology_date_window(
+        live_start=live_start,
+        end=historical_end,
+        fallback_start=current_time,
+    )
+    try:
+        resolved = resolve_single_instrument(
+            historical,
+            dataset=args.dataset,
+            market=market,
+            query_symbol=query_symbol,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except ValueError as exc:
+        print(str(exc), file=stderr)
+        return 2
+    except Exception as exc:
+        print(f"Databento instrument resolution failed: {exc}", file=stderr)
+        return 1
+
+    display_symbol = resolved.raw_symbol or resolved.market
+
     timeframe_queue: queue.Queue[str] = queue.Queue()
     live = None
     chart = None
@@ -1579,8 +2129,8 @@ def run_live_chart(
         configure_chart(
             chart,
             title=format_chart_title(
-                symbols=args.symbols,
-                schema=args.schema,
+                symbols=display_symbol,
+                schema=args.historical_schema,
                 mode=mode,
                 chart_timeframe=display.timeframe,
                 display_tz=display.display_tz,
@@ -1592,18 +2142,14 @@ def run_live_chart(
             status_text=LOADING_STATUS_TEXT,
         )
         show_chart(chart)
-        symbols = parse_symbols(args.symbols)
+        live_symbol = resolved.instrument_id
 
         if args.historical_backfill:
-            historical_cls = getattr(db_module, "Historical", None)
-            if historical_cls is None:
-                raise RuntimeError("Databento Historical client is unavailable.")
-            historical = historical_cls(key=api_key)
             historical_request = {
                 "dataset": args.dataset,
-                "schema": args.schema,
-                "symbols": symbols,
-                "stype_in": args.stype_in,
+                "schema": args.historical_schema,
+                "symbols": live_symbol,
+                "stype_in": DEFAULT_STYPE_IN,
                 "start": live_start,
                 "end": historical_end,
             }
@@ -1616,17 +2162,20 @@ def run_live_chart(
                 historical_end = retry_end
                 historical_request["end"] = historical_end
                 store = historical.timeseries.get_range(**historical_request)
-            for candle in historical_store_to_candles(store):
-                display.raw_candles.append(candle)
-                apply_candle_status(status, candle)
+            historical_candles = aggregate_candles(
+                historical_store_to_candles(store),
+                seconds=display.timeframe_seconds,
+            )
+            for candle in historical_candles:
+                append_display_candle(display, status, candle)
             if display.raw_candles:
                 render_chart_display(
                     display,
                     chart=chart,
                     series_factory=series_factory,
                     status=status,
-                    symbols=args.symbols,
-                    schema=args.schema,
+                    symbols=display_symbol,
+                    schema=args.historical_schema,
                     mode=mode,
                     stdout=stdout,
                 )
@@ -1640,7 +2189,7 @@ def run_live_chart(
                 live.subscribe(
                     dataset=args.dataset,
                     schema=args.schema,
-                    symbols=symbols,
+                    symbols=live_symbol,
                     stype_in=args.stype_in,
                     start=live_start,
                 )
@@ -1659,11 +2208,17 @@ def run_live_chart(
                 )
                 continue
 
+            seed = seed_candle_for_live(display, live_start)
             live.add_callback(
                 build_record_callback(
                     candle_queue,
                     stderr=stderr,
                     allow_start_clamp=not retried_clamped_start,
+                    trade_aggregator=TradeCandleAggregator(
+                        timeframe_seconds=display.timeframe_seconds,
+                        current_bucket=normalize_ts_event(seed["time"]) if seed is not None else None,
+                        current_candle=seed,
+                    ),
                 )
             )
             live.start()
@@ -1679,7 +2234,7 @@ def run_live_chart(
                 timeout_seconds=args.timeout_seconds,
                 no_data_warning_seconds=args.no_data_warning_seconds,
                 status=status,
-                symbols=args.symbols,
+                symbols=display_symbol,
                 schema=args.schema,
                 mode=mode,
                 stdout=stdout,

@@ -12,6 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+import scripts.phase1A_download.download_databento_raw as downloader  # noqa: E402
 from scripts.phase1A_download.download_databento_raw import (
     CME_DATASET,
     CURRENT_20,
@@ -44,6 +45,7 @@ from scripts.phase1A_download.download_databento_raw import (
     execute_batch_downloads,
     estimate_cost,
     fetch_conditions_for_archive_entries,
+    filter_archive_entries_by_date_range,
     finalize_plan_provenance,
     first_pending_download,
     iter_range_tasks,
@@ -55,6 +57,7 @@ from scripts.phase1A_download.download_databento_raw import (
     main,
     load_databento_api_key_from_file,
     normalize_api_key,
+    offline_available_conditions_for_archive_entries,
     output_role_for_run,
     phase1b_dbn_gate_failures,
     pipeline_raw_ready_for_run,
@@ -388,6 +391,13 @@ def test_public_raw_ingest_modes_parse() -> None:
     parser = build_arg_parser()
     assert parser.parse_args(["--mode", "download-dbn"]).mode == "download-dbn"
     assert parser.parse_args(["--mode", "convert-parquet"]).mode == "convert-parquet"
+    assert parser.parse_args(["--mode", "convert-parquet"]).offline_local_conditions is False
+    assert (
+        parser.parse_args(
+            ["--mode", "convert-parquet", "--offline-local-conditions"]
+        ).offline_local_conditions
+        is True
+    )
     args = parser.parse_args(["--mode", "all"])
     assert effective_raw_format(args) == "dbn-zstd"
     assert pipeline_raw_ready_for_run(args.mode, effective_raw_format(args), effective_output_root(args)) is True
@@ -486,6 +496,75 @@ def test_phase1b_dbn_gate_accepts_complete_ohlcv_and_definition_dbns(tmp_path: P
         _write_dbn_with_manifest(task)
 
     assert _phase1b_gate_failures(dbn_root) == []
+
+
+def test_phase1b_offline_local_conditions_skips_metadata_client(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    dbn_root = tmp_path / "data" / "dbn" / "ohlcv_1m"
+    raw_root = tmp_path / "data" / "raw"
+    reports_root = tmp_path / "reports"
+    entry_path = dbn_root / "ES" / "2024" / "2024-01-01_2025-01-01.dbn.zst"
+    entry = DbnArchiveEntry(path=entry_path, product="ES", year=2024)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "download_databento_raw.py",
+            "--mode",
+            "convert-parquet",
+            "--markets",
+            "ES",
+            "--start",
+            "2024-01-01",
+            "--end",
+            "2025-01-01",
+            "--dbn-root",
+            dbn_root.as_posix(),
+            "--raw-root",
+            raw_root.as_posix(),
+            "--reports-root",
+            reports_root.as_posix(),
+            "--offline-local-conditions",
+        ],
+    )
+    monkeypatch.setattr(downloader, "phase1b_dbn_gate_failures", lambda **_: [])
+    monkeypatch.setattr(downloader, "discovery_dbn_files", lambda *_: [entry_path])
+    monkeypatch.setattr(downloader, "archive_entries_for_paths", lambda *_, **__: [entry])
+    monkeypatch.setattr(
+        downloader,
+        "get_client",
+        lambda: (_ for _ in ()).throw(AssertionError("network should not be used")),
+    )
+
+    def fake_convert_dbn_archive_to_raw(*_: object, **kwargs: object) -> list[dict[str, object]]:
+        captured.update(kwargs)
+        return [
+            {
+                "status": "ok",
+                "market": "ES",
+                "year": 2024,
+                "output_path": (raw_root / "ES" / "2024.parquet").as_posix(),
+                "data_quality_source": str(kwargs["condition_source"]),
+                "vendor_quality_available": True,
+            }
+        ]
+
+    monkeypatch.setattr(
+        downloader,
+        "convert_dbn_archive_to_raw",
+        fake_convert_dbn_archive_to_raw,
+    )
+
+    assert downloader.main() == 0
+    conditions = captured["condition_by_group"]
+    assert isinstance(conditions, dict)
+    assert conditions[("ES", 2024)]["2024-01-01"] == "available"
+    assert conditions[("ES", 2024)]["2024-12-31"] == "available"
+    assert captured["condition_source"] == "offline_local_all_available"
 
 
 def test_new_speedup_args_parse_without_breaking_existing_defaults() -> None:
@@ -1689,6 +1768,46 @@ def test_fetch_conditions_for_archive_entries_caches_matching_date_ranges(tmp_pa
         ("ES", 2024): {"2024-01-03": "degraded"},
         ("NQ", 2024): {"2024-01-03": "degraded"},
     }
+
+
+def test_offline_available_conditions_for_archive_entries_uses_archive_dates(
+    tmp_path: Path,
+) -> None:
+    dbn_path = tmp_path / "raw" / "ES" / "2024.dbn.zst"
+    dbn_path.parent.mkdir(parents=True)
+    dbn_path.write_bytes(b"dbn-zstd-placeholder")
+    _write_raw_manifest(dbn_path, schema="ohlcv-1m")
+    manifest_path = raw_file_manifest_path(dbn_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["start"] = "2024-02-01"
+    manifest["end"] = "2024-02-04"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    conditions = offline_available_conditions_for_archive_entries(
+        [DbnArchiveEntry(path=dbn_path, product="ES", year=2024)]
+    )
+
+    assert conditions == {
+        ("ES", 2024): {
+            "2024-02-01": "available",
+            "2024-02-02": "available",
+            "2024-02-03": "available",
+        }
+    }
+
+
+def test_filter_archive_entries_by_date_range_uses_manifest_dates(tmp_path: Path) -> None:
+    entries = []
+    for year in [2023, 2024, 2025]:
+        dbn_path = tmp_path / "raw" / "ES" / f"{year}.dbn.zst"
+        dbn_path.parent.mkdir(parents=True, exist_ok=True)
+        dbn_path.write_bytes(b"dbn-zstd-placeholder")
+        _write_raw_manifest(dbn_path, schema="ohlcv-1m", year=year)
+        entries.append(DbnArchiveEntry(path=dbn_path, product="ES", year=year))
+
+    selected = filter_archive_entries_by_date_range(entries, "2024-01-01", "2025-01-01")
+
+    assert [(entry.product, entry.year) for entry in selected] == [("ES", 2024)]
 
 
 def test_convert_dbn_archive_fails_when_definition_file_missing(tmp_path: Path) -> None:

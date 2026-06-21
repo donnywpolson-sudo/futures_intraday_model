@@ -110,6 +110,7 @@ def _write_raw(
     year: int = 2024,
     raw_symbol: str = "ESH4",
     tick_size: float = 0.25,
+    source_file: str | None = None,
     source_sha256: str | None = None,
     drop_columns: list[str] | None = None,
 ) -> Path:
@@ -133,7 +134,7 @@ def _write_raw(
         "raw_symbol": raw_symbol,
         "tick_size": tick_size,
         "contract_multiplier_or_point_value": 50.0,
-        "source_file": ohlcv_path.as_posix(),
+        "source_file": source_file or ohlcv_path.as_posix(),
         "source_sha256": source_sha256 or file_sha256(ohlcv_path),
     }
     for column in drop_columns or []:
@@ -217,6 +218,96 @@ def test_raw_dbn_alignment_reports_source_hash_mismatch(tmp_path: Path, monkeypa
 
     assert report["status"] == "FAIL"
     assert report["source_hash_mismatch_count"] == 1
+
+
+def test_raw_dbn_alignment_accepts_repair_manifest_source_hash(tmp_path: Path, monkeypatch) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2024])
+    dbn_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m")
+    definition = _write_dbn_with_manifest(dbn_root, "definition")
+    repair_source = "reports/repair/evidence.json"
+    _write_raw(raw_root, ohlcv, source_file=repair_source, source_sha256="repair-hash")
+    repair_manifest = tmp_path / "repair_manifest.json"
+    repair_manifest.write_text(
+        json.dumps(
+            {
+                "status": "PASS",
+                "raw_root": raw_root.as_posix(),
+                "repairs": [
+                    {
+                        "market": "ES",
+                        "year": 2024,
+                        "source_sha256": "repair-hash",
+                        "source_file": repair_source,
+                        "row_count": 1,
+                        "reason": "unit-test repair evidence",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _install_fake_databento(monkeypatch, {definition: _definition_frame()})
+
+    report = build_report(
+        config_path=config,
+        profile="tier_3",
+        dbn_root=dbn_root,
+        raw_root=raw_root,
+        repair_manifest_path=repair_manifest,
+    )
+
+    assert report["status"] == "PASS"
+    assert report["source_hash_mismatch_count"] == 0
+    assert report["repair_manifest_status"] == "PASS"
+    assert report["accepted_repair_source_count"] == 1
+    assert report["accepted_repair_sources"][0]["source_sha256"] == "repair-hash"
+
+
+def test_raw_dbn_alignment_rejects_bad_repair_manifest_row_count(tmp_path: Path, monkeypatch) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2024])
+    dbn_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m")
+    definition = _write_dbn_with_manifest(dbn_root, "definition")
+    repair_source = "reports/repair/evidence.json"
+    _write_raw(raw_root, ohlcv, source_file=repair_source, source_sha256="repair-hash")
+    repair_manifest = tmp_path / "repair_manifest.json"
+    repair_manifest.write_text(
+        json.dumps(
+            {
+                "status": "PASS",
+                "raw_root": raw_root.as_posix(),
+                "repairs": [
+                    {
+                        "market": "ES",
+                        "year": 2024,
+                        "source_sha256": "repair-hash",
+                        "source_file": repair_source,
+                        "row_count": 2,
+                        "reason": "unit-test repair evidence",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _install_fake_databento(monkeypatch, {definition: _definition_frame()})
+
+    report = build_report(
+        config_path=config,
+        profile="tier_3",
+        dbn_root=dbn_root,
+        raw_root=raw_root,
+        repair_manifest_path=repair_manifest,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["source_hash_mismatch_count"] == 1
+    assert report["source_hash_mismatches"][0]["repair_manifest_failures"] == [
+        "repair-hash: row_count 1 != manifest 2"
+    ]
 
 
 def test_raw_dbn_alignment_skip_definition_join_still_reports_hash_failure(tmp_path: Path) -> None:

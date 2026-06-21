@@ -96,7 +96,7 @@ python -m pip install "lightweight-charts>=2.1,<3"
 Run a bounded chart smoke only when `DATABENTO_API_KEY` is already set:
 
 ```powershell
-python apps\live_chart_lightweight.py --symbols ES.c.0 --start 0 --max-records 50 --timeout-seconds 120
+python live_chart_feed.py --market ES --historical-backfill --lookback-hours 2 --timeout-seconds 30
 ```
 
 V1 stops by `--max-records`, `--timeout-seconds`, Ctrl+C, or SDK error; chart

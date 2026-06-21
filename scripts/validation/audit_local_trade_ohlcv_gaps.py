@@ -31,6 +31,7 @@ LOCAL_TRADES_SCHEMA_ACCESS_START = "2025-06-18"
 LOCAL_TRADES_SCHEMA_ACCESS_END = "2026-06-13"
 VERIFIED_NO_TRADE = "verified_no_trade_rows_inside_ohlcv_gap"
 TRADE_ACTIVITY = "trade_activity_inside_ohlcv_gap"
+TIMESTAMP_BASIS_MISMATCH = "timestamp_basis_mismatch_with_ohlcv_source_bar"
 UNVERIFIED_MISSING_COVERAGE = "unverified_missing_trade_coverage"
 UNVERIFIED_CONTRACT = "unverified_unresolved_contract_context"
 NO_MISSING = "no_missing_ohlcv_minutes"
@@ -494,8 +495,9 @@ def _synthetic_work_frame(causal: pd.DataFrame, causal_ts: pd.Series, raw_ts: pd
     work = synthetic.loc[:, columns].reset_index(drop=True).copy()
     work["_ts"] = causal_ts.loc[synthetic.index].reset_index(drop=True)
     work = work.dropna(subset=["_ts"]).sort_values("_ts", kind="mergesort").reset_index(drop=True)
-    raw_values = set(raw_ts.dropna().astype("int64").tolist())
-    return work.loc[~work["_ts"].astype("int64").isin(raw_values)].reset_index(drop=True)
+    raw_values = set(int(pd.Timestamp(value).value) for value in raw_ts.dropna().dt.floor("min").tolist())
+    work_values = work["_ts"].map(lambda value: int(pd.Timestamp(value).floor("min").value))
+    return work.loc[~work_values.isin(raw_values)].reset_index(drop=True)
 
 
 def _group_synthetic_minutes(work: pd.DataFrame) -> list[tuple[str, pd.DataFrame]]:
@@ -529,7 +531,7 @@ def _gap_window(
     coverage_failures: list[str],
 ) -> dict[str, Any]:
     ts = pd.to_datetime(group["_ts"], utc=True, errors="coerce").dropna().sort_values()
-    minutes = sorted(set(ts.dt.floor("min").astype("int64").tolist()))
+    minutes = sorted(set(int(pd.Timestamp(value).value) for value in ts.dt.floor("min").tolist()))
     classification = PENDING
     failures: list[str] = []
     if coverage_failures:
@@ -551,7 +553,16 @@ def _gap_window(
         "contract_context": context,
         "classification": classification,
         "trade_rows_inside_ohlcv_gap": 0,
+        "ts_event_trade_rows_inside_ohlcv_gap": 0,
+        "ts_recv_trade_rows_inside_ohlcv_gap": 0,
+        "timestamp_basis_mismatch_rows": 0,
         "matched_trade_minutes": [],
+        "matched_ts_event_minutes": [],
+        "matched_ts_recv_minutes": [],
+        "ts_recv_ohlcv_source_match_minutes": [],
+        "timestamp_basis_evaluations": [],
+        "timestamp_basis_match": None,
+        "missing_ohlcv_trade_gap": None,
         "failures": failures,
     }
 
@@ -575,11 +586,46 @@ def _trade_timestamp_series(frame: pd.DataFrame, path: Path) -> pd.Series:
     return _timestamp_column(frame, path)
 
 
-def _trade_minute_series(frame: pd.DataFrame, path: Path) -> pd.Series:
+def _floor_ns_minute(values: pd.Series) -> pd.Series:
+    return (pd.to_numeric(values, errors="coerce") // 60_000_000_000 * 60_000_000_000).astype("Int64")
+
+
+def _datetime_minute_ns(values: pd.Series) -> pd.Series:
+    timestamps = pd.to_datetime(values, utc=True, errors="coerce").dt.floor("min")
+    return timestamps.map(lambda value: pd.NA if pd.isna(value) else int(pd.Timestamp(value).value)).astype("Int64")
+
+
+def _trade_event_minute_series(frame: pd.DataFrame, path: Path) -> pd.Series:
     if "ts_event" in frame.columns and pd.api.types.is_numeric_dtype(frame["ts_event"]):
-        values = pd.to_numeric(frame["ts_event"], errors="coerce")
-        return (values // 60_000_000_000 * 60_000_000_000).astype("Int64")
-    return _trade_timestamp_series(frame, path).dt.floor("min").astype("int64")
+        return _floor_ns_minute(frame["ts_event"])
+    return _datetime_minute_ns(_trade_timestamp_series(frame, path))
+
+
+def _trade_recv_minute_series(frame: pd.DataFrame) -> pd.Series:
+    if "ts_recv" in frame.columns and pd.api.types.is_numeric_dtype(frame["ts_recv"]):
+        return _floor_ns_minute(frame["ts_recv"])
+    if "ts_recv" in frame.columns:
+        return _datetime_minute_ns(frame["ts_recv"])
+    if frame.index.name == "ts_recv" and pd.api.types.is_numeric_dtype(frame.index):
+        return _floor_ns_minute(pd.Series(frame.index, index=frame.index))
+    if isinstance(frame.index, pd.DatetimeIndex):
+        return _datetime_minute_ns(pd.Series(pd.to_datetime(frame.index, utc=True, errors="coerce"), index=frame.index))
+    return pd.Series(pd.NA, index=frame.index, dtype="Int64")
+
+
+def _context_ohlcv_minutes(context: dict[str, Any]) -> set[int]:
+    minutes: set[int] = set()
+    for key in ("before_ts", "after_ts"):
+        value = context.get(key)
+        if value:
+            minutes.add(int(_utc_ts(str(value)).floor("min").value))
+    return minutes
+
+
+def _minute_iso_from_ns(value: int | None) -> str | None:
+    if value is None:
+        return None
+    return _utc_iso(pd.Timestamp(int(value), unit="ns", tz="UTC"))
 
 
 def _scan_trade_archives(
@@ -596,15 +642,20 @@ def _scan_trade_archives(
         for idx in pending_indexes
         if gaps[idx].get("instrument_id") is not None
     }
+    missing_minute_key_set = set(minute_to_gap_indexes)
     for idx in pending_indexes:
         for minute in gaps[idx]["missing_minute_keys"]:
             minute_to_gap_indexes[int(minute)].append(idx)
+            missing_minute_key_set.add(int(minute))
 
     scanned_rows = 0
     considered_rows = 0
     archives_read: list[str] = []
     failures: list[str] = []
     matched_minutes_by_gap: dict[int, set[str]] = defaultdict(set)
+    matched_event_minutes_by_gap: dict[int, set[str]] = defaultdict(set)
+    matched_recv_minutes_by_gap: dict[int, set[str]] = defaultdict(set)
+    source_match_recv_minutes_by_gap: dict[int, set[str]] = defaultdict(set)
     for path in archive_paths:
         try:
             for frame in trade_frame_reader(path, chunk_size):
@@ -614,29 +665,86 @@ def _scan_trade_archives(
                 if required_ids and "instrument_id" not in frame.columns:
                     failures.append(f"trade frame missing instrument_id: {_relative_path(path)}")
                     continue
-                work = pd.DataFrame({"minute": _trade_minute_series(frame, path)})
-                work = work.dropna(subset=["minute"])
-                work["minute"] = work["minute"].astype("int64")
+                work = pd.DataFrame(
+                    {
+                        "ts_event_minute": _trade_event_minute_series(frame, path),
+                        "ts_recv_minute": _trade_recv_minute_series(frame),
+                    }
+                )
                 if "instrument_id" in frame.columns:
                     work["instrument_id"] = pd.to_numeric(frame["instrument_id"], errors="coerce")
                 else:
                     work["instrument_id"] = pd.NA
-                work = work[work["minute"].isin(minute_to_gap_indexes)]
                 if required_ids:
                     work = work.dropna(subset=["instrument_id"])
                     work["instrument_id"] = work["instrument_id"].astype("int64")
                     work = work[work["instrument_id"].isin(required_ids)]
+                work = work.dropna(subset=["ts_event_minute"], how="all")
+                if work.empty:
+                    continue
+                work["ts_event_minute"] = work["ts_event_minute"].astype("Int64")
+                work["ts_recv_minute"] = work["ts_recv_minute"].astype("Int64")
+                event_matches = work["ts_event_minute"].isin(missing_minute_key_set)
+                recv_matches = work["ts_recv_minute"].isin(missing_minute_key_set)
+                work = work.loc[event_matches | recv_matches].copy()
                 considered_rows += int(len(work))
                 if work.empty:
                     continue
-                grouped = work.groupby(["minute", "instrument_id"], dropna=False).size()
-                for (minute, instrument_id), count in grouped.items():
-                    for gap_idx in minute_to_gap_indexes[int(minute)]:
+                for row in work.itertuples(index=False):
+                    instrument_id = getattr(row, "instrument_id")
+                    event_minute = (
+                        int(getattr(row, "ts_event_minute"))
+                        if pd.notna(getattr(row, "ts_event_minute"))
+                        else None
+                    )
+                    recv_minute = (
+                        int(getattr(row, "ts_recv_minute")) if pd.notna(getattr(row, "ts_recv_minute")) else None
+                    )
+                    candidate_gap_indexes = set()
+                    if event_minute is not None:
+                        candidate_gap_indexes.update(minute_to_gap_indexes.get(event_minute, []))
+                    if recv_minute is not None:
+                        candidate_gap_indexes.update(minute_to_gap_indexes.get(recv_minute, []))
+                    for gap_idx in candidate_gap_indexes:
                         gap_id = gaps[gap_idx].get("instrument_id")
                         if pd.notna(instrument_id) and gap_id is not None and int(instrument_id) != int(gap_id):
                             continue
-                        gaps[gap_idx]["trade_rows_inside_ohlcv_gap"] += int(count)
-                        matched_minutes_by_gap[gap_idx].add(_utc_iso(pd.Timestamp(int(minute), unit="ns", tz="UTC")))
+                        missing_minutes = set(int(minute) for minute in gaps[gap_idx]["missing_minute_keys"])
+                        event_in_gap = event_minute in missing_minutes if event_minute is not None else False
+                        recv_in_gap = recv_minute in missing_minutes if recv_minute is not None else False
+                        source_match = (
+                            recv_minute in _context_ohlcv_minutes(gaps[gap_idx]["contract_context"])
+                            if recv_minute is not None
+                            else False
+                        )
+                        if event_in_gap and event_minute is not None:
+                            gaps[gap_idx]["ts_event_trade_rows_inside_ohlcv_gap"] += 1
+                            matched_event_minutes_by_gap[gap_idx].add(_minute_iso_from_ns(event_minute) or "")
+                        if recv_in_gap and recv_minute is not None:
+                            gaps[gap_idx]["ts_recv_trade_rows_inside_ohlcv_gap"] += 1
+                            gaps[gap_idx]["trade_rows_inside_ohlcv_gap"] += 1
+                            matched_recv_minutes_by_gap[gap_idx].add(_minute_iso_from_ns(recv_minute) or "")
+                            matched_minutes_by_gap[gap_idx].add(_minute_iso_from_ns(recv_minute) or "")
+                        elif event_in_gap and recv_minute is None:
+                            gaps[gap_idx]["trade_rows_inside_ohlcv_gap"] += 1
+                            matched_minutes_by_gap[gap_idx].add(_minute_iso_from_ns(event_minute) or "")
+                        elif event_in_gap and source_match:
+                            gaps[gap_idx]["timestamp_basis_mismatch_rows"] += 1
+                            if recv_minute is not None:
+                                source_match_recv_minutes_by_gap[gap_idx].add(_minute_iso_from_ns(recv_minute) or "")
+                        elif event_in_gap:
+                            gaps[gap_idx]["trade_rows_inside_ohlcv_gap"] += 1
+                            matched_minutes_by_gap[gap_idx].add(_minute_iso_from_ns(event_minute) or "")
+                        if event_in_gap or recv_in_gap:
+                            gaps[gap_idx]["timestamp_basis_evaluations"].append(
+                                {
+                                    "ts_event_minute": _minute_iso_from_ns(event_minute),
+                                    "ts_recv_minute": _minute_iso_from_ns(recv_minute),
+                                    "ts_event_in_missing_gap": event_in_gap,
+                                    "ts_recv_in_missing_gap": recv_in_gap,
+                                    "ts_recv_matches_adjacent_ohlcv_source_bar": source_match,
+                                }
+                            )
             archives_read.append(_relative_path(path))
         except Exception as exc:
             failures.append(f"unreadable trades archive {_relative_path(path)}: {exc}")
@@ -648,11 +756,22 @@ def _scan_trade_archives(
     else:
         for idx in pending_indexes:
             gaps[idx]["matched_trade_minutes"] = sorted(matched_minutes_by_gap[idx])
+            gaps[idx]["matched_ts_event_minutes"] = sorted(matched_event_minutes_by_gap[idx])
+            gaps[idx]["matched_ts_recv_minutes"] = sorted(matched_recv_minutes_by_gap[idx])
+            gaps[idx]["ts_recv_ohlcv_source_match_minutes"] = sorted(source_match_recv_minutes_by_gap[idx])
             if int(gaps[idx]["trade_rows_inside_ohlcv_gap"]) > 0:
                 gaps[idx]["classification"] = TRADE_ACTIVITY
+                gaps[idx]["timestamp_basis_match"] = "missing_gap"
+                gaps[idx]["missing_ohlcv_trade_gap"] = True
                 gaps[idx]["failures"].append("trade rows found inside missing OHLCV minute")
+            elif int(gaps[idx]["timestamp_basis_mismatch_rows"]) > 0:
+                gaps[idx]["classification"] = TIMESTAMP_BASIS_MISMATCH
+                gaps[idx]["timestamp_basis_match"] = "ts_recv"
+                gaps[idx]["missing_ohlcv_trade_gap"] = False
             else:
                 gaps[idx]["classification"] = VERIFIED_NO_TRADE
+                gaps[idx]["timestamp_basis_match"] = "no_trade"
+                gaps[idx]["missing_ohlcv_trade_gap"] = False
     return {
         "trade_rows_scanned": scanned_rows,
         "trade_rows_considered": considered_rows,
@@ -813,6 +932,9 @@ def audit_market_year(
     verified_empty_minutes = sum(
         int(gap["missing_minute_count"]) for gap in gap_windows if gap["classification"] == VERIFIED_NO_TRADE
     )
+    timestamp_basis_mismatch_minutes = sum(
+        int(gap["missing_minute_count"]) for gap in gap_windows if gap["classification"] == TIMESTAMP_BASIS_MISMATCH
+    )
     status = "PASS"
     if failures or failed_minutes or unverified_minutes:
         status = "FAIL"
@@ -833,6 +955,7 @@ def audit_market_year(
             "synthetic_gap_count": len(gap_windows),
             "missing_minute_count": missing_minutes,
             "verified_empty_minutes": verified_empty_minutes,
+            "timestamp_basis_mismatch_minutes": timestamp_basis_mismatch_minutes,
             "failed_minutes": failed_minutes,
             "unverified_minutes": unverified_minutes,
             "trade_rows_scanned": trade_scan["trade_rows_scanned"],
@@ -917,6 +1040,9 @@ def build_report(
         "synthetic_gap_count": sum(int(entry["summary"]["synthetic_gap_count"]) for entry in entries),
         "missing_minute_count": sum(int(entry["summary"]["missing_minute_count"]) for entry in entries),
         "verified_empty_minutes": sum(int(entry["summary"]["verified_empty_minutes"]) for entry in entries),
+        "timestamp_basis_mismatch_minutes": sum(
+            int(entry["summary"].get("timestamp_basis_mismatch_minutes", 0)) for entry in entries
+        ),
         "failed_minutes": sum(int(entry["summary"]["failed_minutes"]) for entry in entries),
         "unverified_minutes": sum(int(entry["summary"]["unverified_minutes"]) for entry in entries),
         "trade_rows_scanned": sum(int(entry["summary"]["trade_rows_scanned"]) for entry in entries),

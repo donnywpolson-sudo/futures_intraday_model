@@ -52,7 +52,12 @@ RAW_REQUIRED_COLUMNS = [
     "source_file",
     "source_sha256",
 ]
-RAW_OPTIONAL_AUDIT_COLUMNS = ["market", "year", "contract_multiplier_or_point_value"]
+RAW_OPTIONAL_AUDIT_COLUMNS = [
+    "market",
+    "year",
+    "contract_multiplier_or_point_value",
+    "source_schema",
+]
 DEFINITION_COMPARE_COLUMNS = ["raw_symbol", "tick_size", "contract_multiplier_or_point_value"]
 MAX_HASH_WORKERS = 4
 
@@ -181,6 +186,72 @@ def _split_semicolon_values(series: pd.Series) -> set[str]:
             if part:
                 values.add(part)
     return values
+
+
+def _contains_semicolon_value(series: pd.Series, value: str) -> pd.Series:
+    target = str(value)
+    return series.fillna("").astype(str).map(
+        lambda item: target in {part.strip() for part in item.split(";") if part.strip()}
+    )
+
+
+def _load_repair_manifest(
+    repair_manifest_path: Path | None,
+    *,
+    raw_root: Path,
+) -> tuple[dict[str, Any] | None, dict[tuple[str, int, str], dict[str, Any]], list[str]]:
+    if repair_manifest_path is None:
+        return None, {}, []
+    if not repair_manifest_path.exists():
+        return None, {}, [f"missing repair manifest: {repair_manifest_path.as_posix()}"]
+    try:
+        payload = json.loads(repair_manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return None, {}, [f"unreadable repair manifest {repair_manifest_path.as_posix()}: {exc}"]
+    if not isinstance(payload, dict):
+        return None, {}, [f"repair manifest is not an object: {repair_manifest_path.as_posix()}"]
+
+    failures: list[str] = []
+    if payload.get("status") != "PASS":
+        failures.append(f"repair manifest status is {payload.get('status')!r}, not PASS")
+    manifest_raw_root = payload.get("raw_root")
+    if isinstance(manifest_raw_root, str) and manifest_raw_root:
+        if (Path.cwd() / manifest_raw_root).resolve() != raw_root.resolve():
+            failures.append(
+                "repair manifest raw_root does not match audit raw_root: "
+                f"{manifest_raw_root} != {raw_root.as_posix()}"
+            )
+
+    rows = payload.get("repairs", payload.get("rows", []))
+    if not isinstance(rows, list) or not rows:
+        failures.append("repair manifest has no repairs")
+        rows = []
+
+    lookup: dict[tuple[str, int, str], dict[str, Any]] = {}
+    for idx, row in enumerate(rows):
+        if not isinstance(row, dict):
+            failures.append(f"repair manifest row {idx} is not an object")
+            continue
+        try:
+            market = str(row["market"])
+            year = int(row["year"])
+            source_sha256 = str(row["source_sha256"])
+            source_file = str(row["source_file"])
+            row_count = int(row["row_count"])
+        except (KeyError, TypeError, ValueError) as exc:
+            failures.append(f"repair manifest row {idx} missing required fields: {exc}")
+            continue
+        if not source_sha256:
+            failures.append(f"repair manifest row {idx} has blank source_sha256")
+        if not source_file:
+            failures.append(f"repair manifest row {idx} has blank source_file")
+        if row_count <= 0:
+            failures.append(f"repair manifest row {idx} row_count must be positive")
+        key = (market, year, source_sha256)
+        if key in lookup:
+            failures.append(f"duplicate repair manifest key: {market} {year} {source_sha256}")
+        lookup[key] = row
+    return payload, lookup, failures
 
 
 def _validate_manifest_paths(
@@ -327,21 +398,59 @@ def _validate_source_hashes(
     df: pd.DataFrame,
     ohlcv_paths: list[Path],
     file_hashes: dict[Path, str] | None = None,
-) -> dict[str, Any] | None:
+    repair_lookup: dict[tuple[str, int, str], dict[str, Any]] | None = None,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     market, year = key
     if "source_sha256" not in df.columns:
-        return {"market": market, "year": year, "failure": "missing source_sha256"}
+        return {"market": market, "year": year, "failure": "missing source_sha256"}, []
     raw_hashes = _split_semicolon_values(df["source_sha256"])
     local_hashes = {_cached_file_sha256(path, file_hashes) for path in ohlcv_paths}
     missing = sorted(raw_hashes - local_hashes)
-    if missing:
+    if not missing:
+        return None, []
+
+    lookup = repair_lookup or {}
+    unapproved: list[str] = []
+    repair_failures: list[str] = []
+    accepted_repairs: list[dict[str, Any]] = []
+    for source_hash in missing:
+        repair = lookup.get((market, year, source_hash))
+        if repair is None:
+            unapproved.append(source_hash)
+            continue
+        row_mask = _contains_semicolon_value(df["source_sha256"], source_hash)
+        actual_row_count = int(row_mask.sum())
+        expected_row_count = int(repair["row_count"])
+        if actual_row_count != expected_row_count:
+            repair_failures.append(
+                f"{source_hash}: row_count {actual_row_count} != manifest {expected_row_count}"
+            )
+        source_file = str(repair["source_file"])
+        if "source_file" not in df.columns:
+            repair_failures.append(f"{source_hash}: missing source_file column")
+        else:
+            row_source_files = _split_semicolon_values(df.loc[row_mask, "source_file"])
+            if source_file not in row_source_files:
+                repair_failures.append(f"{source_hash}: source_file not present in repaired rows")
+        accepted_repairs.append(
+            {
+                "market": market,
+                "year": year,
+                "source_sha256": source_hash,
+                "source_file": source_file,
+                "row_count": actual_row_count,
+                "reason": repair.get("reason"),
+            }
+        )
+    if unapproved or repair_failures:
         return {
             "market": market,
             "year": year,
-            "raw_hashes_not_found_in_local_ohlcv_dbn": missing,
+            "raw_hashes_not_found_in_local_ohlcv_dbn": unapproved,
+            "repair_manifest_failures": repair_failures,
             "local_ohlcv_dbn_count": len(ohlcv_paths),
-        }
-    return None
+        }, []
+    return None, accepted_repairs
 
 
 def _series_equal(left: pd.Series, right: pd.Series) -> pd.Series:
@@ -413,6 +522,7 @@ def build_report(
     dbn_root: Path,
     raw_root: Path,
     skip_definition_join: bool = False,
+    repair_manifest_path: Path | None = None,
 ) -> dict[str, Any]:
     resolved_profile, markets, years = _profile_markets_and_years(config_path, profile)
     expected, pre_availability_exemptions = _expected_market_years(
@@ -424,6 +534,10 @@ def build_report(
     definition_index = _index_schema_dbns(dbn_root, "definition")
     raw_index = _index_raw_files(raw_root)
     file_hashes = _build_file_hash_cache(ohlcv_index, definition_index)
+    repair_manifest, repair_lookup, repair_manifest_failures = _load_repair_manifest(
+        repair_manifest_path,
+        raw_root=raw_root,
+    )
 
     missing_ohlcv = sorted(expected - set(ohlcv_index))
     missing_definition = sorted(expected - set(definition_index))
@@ -443,6 +557,7 @@ def build_report(
 
     raw_schema_failures: list[dict[str, Any]] = []
     source_hash_mismatches: list[dict[str, Any]] = []
+    accepted_repair_sources: list[dict[str, Any]] = []
     definition_join_mismatches: list[dict[str, Any]] = []
     raw_file_metrics: list[dict[str, Any]] = []
     definition_join_checked_count = 0
@@ -454,14 +569,16 @@ def build_report(
         if failures:
             raw_schema_failures.append({**_row(key, path=path.as_posix()), "failures": failures})
         if key in ohlcv_index:
-            mismatch = _validate_source_hashes(
+            mismatch, repairs = _validate_source_hashes(
                 key=key,
                 df=df,
                 ohlcv_paths=ohlcv_index[key],
                 file_hashes=file_hashes,
+                repair_lookup=repair_lookup,
             )
             if mismatch:
                 source_hash_mismatches.append(mismatch)
+            accepted_repair_sources.extend(repairs)
         else:
             source_hash_mismatches.append({**_row(key), "failure": "raw has no local OHLCV DBN"})
         if key in definition_index and not failures and not skip_definition_join:
@@ -479,6 +596,8 @@ def build_report(
         failures.append(f"missing raw parquet market-years: {len(missing_raw)}")
     if invalid_manifests:
         failures.append(f"invalid DBN manifests: {len(invalid_manifests)}")
+    if repair_manifest_failures:
+        failures.append(f"repair manifest failures: {len(repair_manifest_failures)}")
     if raw_only:
         failures.append(f"raw-only market-years: {len(raw_only)}")
     if raw_schema_failures:
@@ -516,6 +635,13 @@ def build_report(
         "dbn_only_inventory_count": len(dbn_only_inventory),
         "raw_only_count": len(raw_only),
         "invalid_manifest_count": len(invalid_manifests),
+        "repair_manifest_path": repair_manifest_path.as_posix() if repair_manifest_path else None,
+        "repair_manifest_hash": file_sha256(repair_manifest_path) if repair_manifest_path else None,
+        "repair_manifest_status": repair_manifest.get("status") if repair_manifest else "NOT_PROVIDED",
+        "repair_manifest_failure_count": len(repair_manifest_failures),
+        "repair_manifest_failures": repair_manifest_failures,
+        "accepted_repair_source_count": len(accepted_repair_sources),
+        "accepted_repair_sources": accepted_repair_sources,
         "raw_schema_failure_count": len(raw_schema_failures),
         "source_hash_mismatch_count": len(source_hash_mismatches),
         "definition_join_mismatch_count": len(definition_join_mismatches),
@@ -554,6 +680,9 @@ def write_markdown(path: Path, report: dict[str, Any]) -> None:
         f"- Needs Phase 1B conversion: {report['needs_phase1b_conversion_count']}",
         f"- Raw-only market-years: {report['raw_only_count']}",
         f"- Invalid manifests: {report['invalid_manifest_count']}",
+        f"- Repair manifest status: {report['repair_manifest_status']}",
+        f"- Repair manifest failures: {report['repair_manifest_failure_count']}",
+        f"- Accepted repair sources: {report['accepted_repair_source_count']}",
         f"- Raw schema/value failures: {report['raw_schema_failure_count']}",
         f"- Source hash mismatches: {report['source_hash_mismatch_count']}",
         f"- Definition join status: {report['definition_join_status']}",
@@ -569,6 +698,13 @@ def write_markdown(path: Path, report: dict[str, Any]) -> None:
         lines.extend(["", "## Phase 1B Conversion Candidates", ""])
         for row in report["needs_phase1b_conversion"][:100]:
             lines.append(f"- {row['market']} {row['year']}")
+    if report.get("accepted_repair_sources"):
+        lines.extend(["", "## Accepted Repair Sources", ""])
+        for row in report["accepted_repair_sources"][:100]:
+            lines.append(
+                f"- {row['market']} {row['year']} rows={row['row_count']} "
+                f"source_file={row['source_file']}"
+            )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -583,6 +719,10 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip expensive point-in-time definition rebuild checks; report is partial.",
     )
+    parser.add_argument(
+        "--repair-manifest",
+        help="Optional fail-closed manifest that authorizes non-DBN repaired raw row sources.",
+    )
     parser.add_argument("--json-out", default="reports/raw_ingest/raw_dbn_alignment.json")
     parser.add_argument("--md-out", default="reports/raw_ingest/raw_dbn_alignment.md")
     return parser.parse_args()
@@ -596,6 +736,7 @@ def main() -> int:
         dbn_root=Path(args.dbn_root),
         raw_root=Path(args.raw_root),
         skip_definition_join=bool(args.skip_definition_join),
+        repair_manifest_path=Path(args.repair_manifest) if args.repair_manifest else None,
     )
     write_json(Path(args.json_out), report)
     write_markdown(Path(args.md_out), report)

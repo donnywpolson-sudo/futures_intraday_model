@@ -2038,6 +2038,42 @@ def fetch_conditions_for_archive_entries(
     return conditions_by_group
 
 
+def filter_archive_entries_by_date_range(
+    entries: Iterable[DbnArchiveEntry],
+    start: str,
+    end: str,
+) -> list[DbnArchiveEntry]:
+    start_date = date.fromisoformat(start)
+    end_date = date.fromisoformat(end)
+    selected: list[DbnArchiveEntry] = []
+    for entry in entries:
+        task = condition_task_for_archive_entry(entry)
+        entry_start = date.fromisoformat(task.start)
+        entry_end = date.fromisoformat(task.end)
+        if entry_start < end_date and entry_end > start_date:
+            selected.append(entry)
+    return selected
+
+
+def offline_available_conditions_for_archive_entries(
+    entries: Iterable[DbnArchiveEntry],
+) -> dict[tuple[str, int], dict[str, str]]:
+    conditions_by_group: dict[tuple[str, int], dict[str, str]] = {}
+    for entry in entries:
+        task = condition_task_for_archive_entry(entry)
+        start = date.fromisoformat(task.start)
+        end = date.fromisoformat(task.end)
+        if end <= start:
+            conditions_by_group.setdefault((entry.product, entry.year), {})
+            continue
+        day = start
+        conditions = conditions_by_group.setdefault((entry.product, entry.year), {})
+        while day < end:
+            conditions[day.isoformat()] = "available"
+            day += timedelta(days=1)
+    return conditions_by_group
+
+
 def raw_parquet_summary(path: Path) -> dict[str, object]:
     df = pd.read_parquet(
         path,
@@ -2071,6 +2107,7 @@ def convert_dbn_archive_to_raw(
     paths: Iterable[Path] | None = None,
     products: set[str] | None = None,
     condition_by_group: dict[tuple[str, int], dict[str, str]] | None = None,
+    condition_source: str | None = None,
     default_quality_status: str = "metadata_unavailable",
     optional_schemas: Iterable[str] = (),
     optional_dbn_root: Path | None = None,
@@ -2102,7 +2139,7 @@ def convert_dbn_archive_to_raw(
         conditions = (condition_by_group or {}).get((product, year))
         vendor_quality_available = conditions is not None
         data_quality_source = (
-            "databento_metadata.get_dataset_condition"
+            condition_source or "databento_metadata.get_dataset_condition"
             if vendor_quality_available
             else "metadata_unavailable"
         )
@@ -3483,6 +3520,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="warn",
         help="warn emits null optional fields when optional DBNs are absent/invalid; require fails conversion.",
     )
+    parser.add_argument(
+        "--offline-local-conditions",
+        action="store_true",
+        help=(
+            "For --mode convert-parquet only, avoid Databento metadata calls and "
+            "treat local archive dates as available. Intended for offline smoke validation."
+        ),
+    )
     parser.add_argument("--out", help="Legacy output root override; prefer --dbn-root or --raw-root.")
     parser.add_argument("--plan-out", help="Override download plan path; defaults under --reports-root.")
     parser.add_argument("--chunk", choices=["none", "day", "month", "year"], default="year")
@@ -3557,12 +3602,21 @@ def main() -> int:
                 print(f"FAIL phase1b_dbn_gate: {failure}")
             return 1
         source_paths = discovery_dbn_files(dbn_root, raw_root)
-        entries = archive_entries_for_paths(source_paths, dbn_root, products=products)
-        condition_by_group = (
-            fetch_conditions_for_archive_entries(get_client(), entries)
-            if entries
-            else {}
+        entries = filter_archive_entries_by_date_range(
+            archive_entries_for_paths(source_paths, dbn_root, products=products),
+            start,
+            end,
         )
+        if args.offline_local_conditions:
+            condition_by_group = offline_available_conditions_for_archive_entries(entries)
+            condition_source = "offline_local_all_available"
+        else:
+            condition_by_group = (
+                fetch_conditions_for_archive_entries(get_client(), entries)
+                if entries
+                else {}
+            )
+            condition_source = None
         results = convert_dbn_archive_to_raw(
             dbn_root,
             raw_root,
@@ -3570,6 +3624,7 @@ def main() -> int:
             paths=[entry.path for entry in entries],
             products=products,
             condition_by_group=condition_by_group,
+            condition_source=condition_source,
             optional_schemas=optional_schemas,
             optional_dbn_root=Path(args.optional_dbn_root),
             optional_schema_policy=args.optional_schema_policy,

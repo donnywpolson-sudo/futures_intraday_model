@@ -17,6 +17,7 @@ from scripts.phase1A_download.download_databento_raw import (
 )
 from scripts.phase1_raw_contract import SCHEMA_PATHS
 from scripts.validation.audit_local_trade_ohlcv_gaps import (
+    TIMESTAMP_BASIS_MISMATCH,
     TRADE_ACTIVITY,
     UNVERIFIED_CONTRACT,
     VERIFIED_NO_TRADE,
@@ -252,6 +253,31 @@ def test_synthetic_gap_with_trade_row_fails_gap(tmp_path: Path) -> None:
     assert report["status"] == "FAIL"
     assert gap["classification"] == TRADE_ACTIVITY
     assert gap["trade_rows_inside_ohlcv_gap"] == 1
+
+
+def test_boundary_trade_reclassified_when_recv_minute_matches_ohlcv_source(tmp_path: Path) -> None:
+    _write_config(tmp_path / "configs" / "alpha_tiered.yaml", ["ES"])
+    _write_all_archives(tmp_path / "data" / "dbn")
+    _write_raw_causal(tmp_path)
+    frame = _trade_frame(["2025-06-18T00:01:59.999596433Z"])
+    frame.index = pd.DatetimeIndex([pd.Timestamp("2025-06-18T00:02:00.000054863Z")], name="ts_recv")
+    reader = FakeTradeReader([frame])
+
+    report = build_report(_args(tmp_path), trade_frame_reader=reader)
+    gap = report["market_years"][0]["gap_windows"][0]
+
+    assert report["status"] == "PASS"
+    assert report["summary"]["failed_minutes"] == 0
+    assert report["summary"]["timestamp_basis_mismatch_minutes"] == 1
+    assert gap["classification"] == TIMESTAMP_BASIS_MISMATCH
+    assert gap["missing_ohlcv_trade_gap"] is False
+    assert gap["timestamp_basis_match"] == "ts_recv"
+    assert gap["trade_rows_inside_ohlcv_gap"] == 0
+    assert gap["ts_event_trade_rows_inside_ohlcv_gap"] == 1
+    assert gap["ts_recv_trade_rows_inside_ohlcv_gap"] == 0
+    assert gap["timestamp_basis_mismatch_rows"] == 1
+    assert gap["matched_ts_event_minutes"] == ["2025-06-18T00:01:00Z"]
+    assert gap["ts_recv_ohlcv_source_match_minutes"] == ["2025-06-18T00:02:00Z"]
 
 
 def test_raw_overlay_path_suppresses_repaired_gap(tmp_path: Path) -> None:

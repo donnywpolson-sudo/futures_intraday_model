@@ -1,0 +1,22 @@
+{
+  "vendor": "databento",
+  "dataset": "GLBX.MDP3",
+  "schema": "ohlcv-1m",
+  "market": "SR1",
+  "symbols_requested": [
+    "SR1.FUT"
+  ],
+  "start": "2022-01-01",
+  "end": "2023-01-01",
+  "stype_in": "parent",
+  "stype_out": "instrument_id",
+  "encoding": "dbn",
+  "compression": "zstd",
+  "downloaded_at": "2026-06-20T18:07:55.091697+00:00",
+  "path": "data/dbn_sr_parent_candidate/SR1/2022/2022-01-01_2023-01-01.dbn.zst",
+  "file_size_bytes": 4810138,
+  "file_sha256": "62d5117e5ca0a060ee556136d6d3661d63d4f60c6d607715b145510641cafb3c",
+  "job_id": "GLBX-20260620-YL3HVYH4J3",
+  "api_client_version": "0.78.0",
+  "request_status": "ok"
+}

@@ -1,4 +1,4 @@
-# futures_intraday_model instructions
+﻿# futures_intraday_model instructions
 
 Scope and worktree hygiene:
 
@@ -89,23 +89,20 @@ This section overrides any earlier Output Format, Tests, Validation, Manual Chec
 Final output only, using exactly these sections in this order:
 
 ## Changed
-
 * Files changed and concise purpose, or "None."
 
 ## Notes/blockers
-
 * Remaining risks, blockers, preserved user work, failed checks if important, generated-artifact risks, row-count/model-metric changes, or important caveats.
 * Write "None." if there are no meaningful notes/blockers.
 
 ## Next
-
 * The single most useful next action, or "None."
 
 ## Metrics
-
 * Elapsed time: report if available from the runtime or command wrapper; otherwise write "not available to agent".
 * Token usage: report final token usage if available from Codex runtime/tool output; otherwise write "not available to agent".
 
 Do not estimate or fabricate elapsed time or token usage.
 Always include the Metrics section. If metrics are unavailable, write "not available to agent" rather than omitting the section.
 Do not include Tests, Validation, Manual Check, Why, Added, Removed, or Modified sections unless explicitly requested.
+

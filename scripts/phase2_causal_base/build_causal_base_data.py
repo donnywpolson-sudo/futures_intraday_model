@@ -185,6 +185,8 @@ DEFAULT_MAX_SYNTHETIC_GAP_MINUTES = 120
 DEFAULT_MAX_SYNTHETIC_ROWS_PCT = 2.0
 DEFAULT_MAX_DEGRADED_ROWS_PCT = 1.0
 DEFAULT_MAX_ROLL_WINDOW_ROWS_PCT = 1.0
+DEFAULT_SYNTHETIC_GAP_THRESHOLD_ACTION = "warn"
+SYNTHETIC_GAP_THRESHOLD_ACTIONS = {"warn", "diagnostic"}
 DEFAULT_REQUIRE_ROLL_METADATA_PROFILES = {
     "tier_1",
     "tier_1_research",
@@ -205,10 +207,12 @@ DEFAULT_REQUIRE_ROLL_METADATA_PROFILES = {
 class CausalBaseConfig:
     max_synthetic_rows_pct: float = DEFAULT_MAX_SYNTHETIC_ROWS_PCT
     max_synthetic_gap_minutes: int = DEFAULT_MAX_SYNTHETIC_GAP_MINUTES
+    synthetic_gap_threshold_action: str = DEFAULT_SYNTHETIC_GAP_THRESHOLD_ACTION
     max_degraded_rows_pct: float = DEFAULT_MAX_DEGRADED_ROWS_PCT
     max_roll_window_rows_pct: float = DEFAULT_MAX_ROLL_WINDOW_ROWS_PCT
     sparse_trade_derived_ohlcv_markets: tuple[str, ...] = tuple()
     sparse_trade_derived_roll_window_minutes: int = DEFAULT_ROLL_WINDOW_BARS
+    vendor_trusted_ohlcv_no_trade_markets: tuple[str, ...] = tuple()
     require_roll_metadata_for_profiles: tuple[str, ...] = tuple(
         sorted(DEFAULT_REQUIRE_ROLL_METADATA_PROFILES)
     )
@@ -276,6 +280,7 @@ class ValidationResult:
     max_synthetic_gap_minutes: int = 0
     synthetic_rows_pct: float = 0.0
     synthetic_gap_threshold_breached: bool = False
+    synthetic_gap_threshold_action: str = DEFAULT_SYNTHETIC_GAP_THRESHOLD_ACTION
     outside_session_rows: int = 0
     roll_boundary_rows: int = 0
     roll_window_rows: int = 0
@@ -326,6 +331,8 @@ class ValidationResult:
     sparse_ohlcv_suppressed_synthetic_rows: int = 0
     sparse_ohlcv_suppressed_gap_count: int = 0
     sparse_ohlcv_suppressed_max_gap_minutes: int = 0
+    vendor_trusted_ohlcv_no_trade_policy: str = "not_applicable"
+    vendor_trusted_ohlcv_no_trade_status: str = "not_applicable"
     max_synthetic_rows_pct_threshold: float = DEFAULT_MAX_SYNTHETIC_ROWS_PCT
     max_synthetic_gap_minutes_threshold: int = DEFAULT_MAX_SYNTHETIC_GAP_MINUTES
     max_degraded_rows_pct_threshold: float = DEFAULT_MAX_DEGRADED_ROWS_PCT
@@ -586,6 +593,15 @@ def phase2_exit_code(
     return 0
 
 
+def profile_requires_local_trade_gap_gate(
+    profile: str,
+    profile_config_path: Path = DEFAULT_PROFILE_CONFIG,
+) -> bool:
+    _, _, aliases, _ = load_profile_map(profile_config_path)
+    resolved_profile = resolve_profile_name(profile, aliases)
+    return resolved_profile in LOCAL_TRADE_GAP_AUDIT_PROFILES
+
+
 def current_git_commit() -> str:
     try:
         result = subprocess.run(
@@ -659,12 +675,24 @@ def load_causal_base_config(
     def get_int(name: str, default: int) -> int:
         return int(get_value(name, default))
 
+    def get_str(name: str, default: str) -> str:
+        return str(get_value(name, default))
+
     required = causal_base.get(
         "require_roll_metadata_for_profiles",
         defaults.get("require_roll_metadata_for_profiles", sorted(DEFAULT_REQUIRE_ROLL_METADATA_PROFILES)),
     )
     if not isinstance(required, list):
         required = sorted(DEFAULT_REQUIRE_ROLL_METADATA_PROFILES)
+    synthetic_gap_threshold_action = get_str(
+        "synthetic_gap_threshold_action",
+        DEFAULT_SYNTHETIC_GAP_THRESHOLD_ACTION,
+    )
+    if synthetic_gap_threshold_action not in SYNTHETIC_GAP_THRESHOLD_ACTIONS:
+        raise ValueError(
+            "synthetic_gap_threshold_action must be one of "
+            f"{sorted(SYNTHETIC_GAP_THRESHOLD_ACTIONS)}"
+        )
 
     return CausalBaseConfig(
         max_synthetic_rows_pct=get_float(
@@ -673,6 +701,7 @@ def load_causal_base_config(
         max_synthetic_gap_minutes=get_int(
             "max_synthetic_gap_minutes", DEFAULT_MAX_SYNTHETIC_GAP_MINUTES
         ),
+        synthetic_gap_threshold_action=synthetic_gap_threshold_action,
         max_degraded_rows_pct=get_float(
             "max_degraded_rows_pct", DEFAULT_MAX_DEGRADED_ROWS_PCT
         ),
@@ -700,6 +729,20 @@ def load_causal_base_config(
                     "sparse_trade_derived_roll_window_minutes",
                     DEFAULT_ROLL_WINDOW_BARS,
                 ),
+            )
+        ),
+        vendor_trusted_ohlcv_no_trade_markets=tuple(
+            sorted(
+                {
+                    str(item)
+                    for item in (
+                        causal_base.get(
+                            "vendor_trusted_ohlcv_no_trade_markets",
+                            defaults.get("vendor_trusted_ohlcv_no_trade_markets", []),
+                        )
+                        or []
+                    )
+                }
             )
         ),
         require_roll_metadata_for_profiles=tuple(str(item) for item in required),
@@ -1681,6 +1724,14 @@ def process_file(
         if max_synthetic_gap_minutes == DEFAULT_MAX_SYNTHETIC_GAP_MINUTES
         else max_synthetic_gap_minutes
     )
+    vendor_trusted_ohlcv_no_trade_policy_enabled = (
+        market in config.vendor_trusted_ohlcv_no_trade_markets
+    )
+    synthetic_gap_threshold_action = (
+        "diagnostic"
+        if vendor_trusted_ohlcv_no_trade_policy_enabled
+        else config.synthetic_gap_threshold_action
+    )
     calendar = load_session_calendar(
         market,
         session_config_path,
@@ -1700,8 +1751,19 @@ def process_file(
         calendar_coverage_status=calendar.calendar_coverage_status,
         max_synthetic_rows_pct_threshold=config.max_synthetic_rows_pct,
         max_synthetic_gap_minutes_threshold=effective_max_synthetic_gap_minutes,
+        synthetic_gap_threshold_action=synthetic_gap_threshold_action,
         max_degraded_rows_pct_threshold=config.max_degraded_rows_pct,
         max_roll_window_rows_pct_threshold=config.max_roll_window_rows_pct,
+        vendor_trusted_ohlcv_no_trade_policy=(
+            "databento_ohlcv_1m_trade_derived_no_bar_no_trade"
+            if vendor_trusted_ohlcv_no_trade_policy_enabled
+            else "not_applicable"
+        ),
+        vendor_trusted_ohlcv_no_trade_status=(
+            "synthetic_thresholds_diagnostic_l0_gate_still_fail_closed"
+            if vendor_trusted_ohlcv_no_trade_policy_enabled
+            else "not_applicable"
+        ),
     )
 
     if not calendar.config_available:
@@ -1987,7 +2049,10 @@ def process_file(
         result.degraded_rows_pct > config.max_degraded_rows_pct
     )
 
-    if result.synthetic_gap_threshold_breached:
+    if (
+        result.synthetic_gap_threshold_breached
+        and result.synthetic_gap_threshold_action == "warn"
+    ):
         result.warnings.append(
             "synthetic threshold breached: "
             f"rows_pct={result.synthetic_rows_pct} "
@@ -2209,6 +2274,12 @@ def write_reports(
                 "sparse_ohlcv_suppressed_max_gap_minutes": row[
                     "sparse_ohlcv_suppressed_max_gap_minutes"
                 ],
+                "vendor_trusted_ohlcv_no_trade_policy": row[
+                    "vendor_trusted_ohlcv_no_trade_policy"
+                ],
+                "vendor_trusted_ohlcv_no_trade_status": row[
+                    "vendor_trusted_ohlcv_no_trade_status"
+                ],
                 "max_synthetic_rows_pct_threshold": row["max_synthetic_rows_pct_threshold"],
                 "max_synthetic_gap_minutes_threshold": row[
                     "max_synthetic_gap_minutes_threshold"
@@ -2279,6 +2350,8 @@ def phase2_readiness_result_row(
         "synthetic_rows_pct": result.synthetic_rows_pct,
         "max_synthetic_gap_minutes": result.max_synthetic_gap_minutes,
         "synthetic_rows": result.synthetic_rows,
+        "synthetic_gap_threshold_breached": result.synthetic_gap_threshold_breached,
+        "synthetic_gap_threshold_action": result.synthetic_gap_threshold_action,
         "output_rows": result.output_rows,
         "degraded_rows_pct": result.degraded_rows_pct,
         "degraded_bar_rows": result.degraded_bar_rows,
@@ -2306,6 +2379,12 @@ def phase2_readiness_result_row(
         "sparse_ohlcv_suppressed_gap_count": result.sparse_ohlcv_suppressed_gap_count,
         "sparse_ohlcv_suppressed_max_gap_minutes": (
             result.sparse_ohlcv_suppressed_max_gap_minutes
+        ),
+        "vendor_trusted_ohlcv_no_trade_policy": (
+            result.vendor_trusted_ohlcv_no_trade_policy
+        ),
+        "vendor_trusted_ohlcv_no_trade_status": (
+            result.vendor_trusted_ohlcv_no_trade_status
         ),
         "warnings": result.warnings,
         "failures": result.failures,
@@ -2653,18 +2732,22 @@ def main() -> int:
             f"warnings={len(result.warnings)} failures={len(result.failures)}"
         )
 
-    local_trade_gap_gate = build_local_trade_ohlcv_gap_gate(
-        markets=sorted({result.market for result in results}),
-        raw_root=raw_root,
-        causal_root=output_root,
-        reports_root=reports_root,
-        profile_config_path=profile_config_path,
-    )
-    print(
-        "local_trade_ohlcv_gap_gate "
-        f"status={local_trade_gap_gate['status']} "
-        f"markets={len(local_trade_gap_gate['selected_markets'])}"
-    )
+    local_trade_gap_gate = None
+    if profile_requires_local_trade_gap_gate(args.profile, profile_config_path):
+        local_trade_gap_gate = build_local_trade_ohlcv_gap_gate(
+            markets=sorted({result.market for result in results}),
+            raw_root=raw_root,
+            causal_root=output_root,
+            reports_root=reports_root,
+            profile_config_path=profile_config_path,
+        )
+        print(
+            "local_trade_ohlcv_gap_gate "
+            f"status={local_trade_gap_gate['status']} "
+            f"markets={len(local_trade_gap_gate['selected_markets'])}"
+        )
+    else:
+        print("local_trade_ohlcv_gap_gate status=SKIPPED")
 
     write_reports(
         results,

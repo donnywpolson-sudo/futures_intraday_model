@@ -133,7 +133,7 @@ def test_parent_ohlcv_with_continuous_sidecars_blocks_repair_source(tmp_path: Pa
 
 
 def test_parent_ohlcv_candidate_root_can_use_canonical_sidecar_root(tmp_path: Path) -> None:
-    ohlcv_root = tmp_path / "data" / "dbn_sr_parent_candidate"
+    ohlcv_root = tmp_path / "data" / "dbn" / "candidates" / "sr_parent"
     sidecar_root = tmp_path / "data" / "dbn"
     _write_dbn_with_manifest(
         ohlcv_root,
@@ -161,7 +161,7 @@ def test_parent_ohlcv_candidate_root_can_use_canonical_sidecar_root(tmp_path: Pa
 
 
 def test_parent_ohlcv_schema_root_layout_passes(tmp_path: Path) -> None:
-    ohlcv_root = tmp_path / "data" / "dbn_sr_parent_candidate"
+    ohlcv_root = tmp_path / "data" / "dbn" / "candidates" / "sr_parent"
     sidecar_root = tmp_path / "data" / "dbn"
     _write_dbn_with_manifest(
         ohlcv_root,

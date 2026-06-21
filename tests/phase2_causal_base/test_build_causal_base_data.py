@@ -8,6 +8,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+import scripts.phase2_causal_base.build_causal_base_data as causal_base
 from scripts.phase2_causal_base.build_causal_base_data import (
     LOCAL_TRADE_GAP_FAILED_STATUS,
     LOCAL_TRADE_GAP_VALIDATED_STATUS,
@@ -19,6 +20,7 @@ from scripts.phase2_causal_base.build_causal_base_data import (
     main as phase2_main,
     output_root_guard_failures,
     phase2_exit_code,
+    profile_requires_local_trade_gap_gate,
     process_file,
     raw_alignment_guard_failures,
     raw_alignment_expected_market_years,
@@ -45,25 +47,35 @@ def _write_profile_config(
     synthetic_pct: float = 2.0,
     degraded_pct: float = 1.0,
     roll_pct: float = 1.0,
+    synthetic_action: str = "warn",
     tier0_markets: list[str] | None = None,
     sparse_markets: list[str] | None = None,
     sparse_roll_window_minutes: int | None = None,
+    vendor_trusted_markets: list[str] | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tier0_markets = tier0_markets or ["ES"]
     sparse_markets = sparse_markets or []
-    sparse_lines = []
+    vendor_trusted_markets = vendor_trusted_markets or []
+    causal_base_lines = []
+    if sparse_markets or vendor_trusted_markets:
+        causal_base_lines = ["causal_base:"]
     if sparse_markets:
-        sparse_lines = [
-            "causal_base:",
+        causal_base_lines.append(
             "  sparse_trade_derived_ohlcv_markets: ["
             + ", ".join(sparse_markets)
-            + "]",
-        ]
+            + "]"
+        )
         if sparse_roll_window_minutes is not None:
-            sparse_lines.append(
+            causal_base_lines.append(
                 f"  sparse_trade_derived_roll_window_minutes: {sparse_roll_window_minutes}"
             )
+    if vendor_trusted_markets:
+        causal_base_lines.append(
+            "  vendor_trusted_ohlcv_no_trade_markets: ["
+            + ", ".join(vendor_trusted_markets)
+            + "]"
+        )
     path.write_text(
         "\n".join(
             [
@@ -71,10 +83,11 @@ def _write_profile_config(
                 "  years: [2024]",
                 "  max_synthetic_gap_minutes: 120",
                 f"  max_synthetic_rows_pct: {synthetic_pct}",
+                f"  synthetic_gap_threshold_action: {synthetic_action}",
                 f"  max_degraded_rows_pct: {degraded_pct}",
                 f"  max_roll_window_rows_pct: {roll_pct}",
                 "  require_roll_metadata_for_profiles: [tier_1, tier_2, tier_3]",
-                *sparse_lines,
+                *causal_base_lines,
                 "profiles:",
                 "  tier_0:",
                 "    markets: [" + ", ".join(tier0_markets) + "]",
@@ -464,6 +477,110 @@ def test_phase2_readiness_blocks_warn_synthetic_gap_before_writing(
     assert not (output_root / "ES" / "2024.parquet").exists()
 
 
+def test_phase2_readiness_allows_vendor_trusted_ohlcv_no_trade_gap(
+    tmp_path: Path,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(
+        profile_config,
+        synthetic_pct=0.1,
+        tier0_markets=["ZN"],
+        vendor_trusted_markets=["ZN"],
+    )
+    raw_root = tmp_path / "data" / "raw"
+    raw_path = raw_root / "ZN" / "2024.parquet"
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_raw_alignment_report(
+        report_path,
+        raw_root=raw_root,
+        profile="tier_0",
+        resolved_profile="tier_0",
+        overrides={
+            "markets": ["ZN"],
+            "years": [2024],
+            "pre_availability_exemptions": [],
+            "expected_market_year_count": 1,
+        },
+    )
+    _write_raw(
+        raw_path,
+        [
+            _readiness_raw_row("2024-01-02T15:00:00Z", close=100.5, symbol="ZNH4"),
+            _readiness_raw_row("2024-01-02T15:10:00Z", close=101.0, symbol="ZNH4"),
+        ],
+    )
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        output_root=output_root,
+        profile_config_path=profile_config,
+    )
+    result = process_file(
+        raw_path,
+        output_root / "ZN" / "2024.parquet",
+        profile="tier_0",
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "PASS"
+    assert report["checked_market_year_count"] == 1
+    assert report["blocker_count"] == 0
+    assert result.status == "PASS"
+    assert result.synthetic_gap_threshold_breached is True
+    assert result.synthetic_gap_threshold_action == "diagnostic"
+    assert result.vendor_trusted_ohlcv_no_trade_policy == (
+        "databento_ohlcv_1m_trade_derived_no_bar_no_trade"
+    )
+    output = pd.read_parquet(output_root / "ZN" / "2024.parquet")
+    synthetic = output[output["is_synthetic"]]
+    assert not synthetic.empty
+    assert synthetic["raw_row_present"].eq(False).all()
+    assert synthetic["causal_valid"].eq(False).all()
+    assert synthetic["volume"].eq(0).all()
+
+
+def test_vendor_trusted_ohlcv_policy_does_not_override_l0_gate_failure(
+    tmp_path: Path,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(
+        profile_config,
+        synthetic_pct=0.1,
+        tier0_markets=["ZN"],
+        vendor_trusted_markets=["ZN"],
+    )
+    raw_path = tmp_path / "data" / "raw" / "ZN" / "2025.parquet"
+    out_path = tmp_path / "data" / "causally_gated_normalized" / "ZN" / "2025.parquet"
+    _write_raw(
+        raw_path,
+        [
+            _readiness_raw_row("2025-07-21T05:13:00Z", close=110.5, symbol="ZNU5"),
+            _readiness_raw_row("2025-07-21T05:15:00Z", close=110.75, symbol="ZNU5"),
+        ],
+    )
+
+    result = process_file(
+        raw_path,
+        out_path,
+        profile="tier_0",
+        max_synthetic_gap_minutes=3,
+        profile_config_path=profile_config,
+    )
+
+    assert result.status == "PASS"
+    assert result.synthetic_gap_threshold_breached is True
+    assert (
+        phase2_exit_code(
+            [result],
+            _local_trade_gate(status="FAIL", market_statuses={"ZN": "FAIL"}),
+        )
+        == 1
+    )
+
+
 def test_sparse_trade_derived_ohlcv_policy_does_not_fabricate_synthetic_rows(
     tmp_path: Path,
 ) -> None:
@@ -705,6 +822,60 @@ def test_phase2_main_exits_before_writing_when_readiness_fails(
     assert phase2_main() == 1
     assert not (output_root / "ES" / "2024.parquet").exists()
     assert not (reports_root / "causal_base_manifest.json").exists()
+
+
+def test_phase2_main_skips_local_trade_gate_for_smoke_profile(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(profile_config)
+    raw_root = tmp_path / "data" / "raw"
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    reports_root = tmp_path / "reports" / "causal_base"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(
+        raw_root / "ES" / "2024.parquet",
+        [
+            _readiness_raw_row("2024-01-02T15:00:00Z", close=100.5),
+            _readiness_raw_row("2024-01-02T15:01:00Z", close=100.75),
+            _readiness_raw_row("2024-01-02T15:02:00Z", close=101.0),
+        ],
+    )
+
+    def fail_if_called(**_: object) -> dict[str, object]:
+        raise AssertionError("local trade gap gate should not run for tier_0")
+
+    monkeypatch.setattr(causal_base, "build_local_trade_ohlcv_gap_gate", fail_if_called)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_causal_base_data.py",
+            "--profile",
+            "tier_0",
+            "--raw-root",
+            str(raw_root),
+            "--output-root",
+            str(output_root),
+            "--reports-root",
+            str(reports_root),
+            "--profile-config",
+            str(profile_config),
+            "--raw-alignment-report",
+            str(report_path),
+        ],
+    )
+
+    assert profile_requires_local_trade_gap_gate("tier_0", profile_config) is False
+    assert phase2_main() == 0
+
+    manifest = json.loads((reports_root / "causal_base_manifest.json").read_text())
+    assert manifest["status"] == "PASS"
+    assert manifest["local_trade_ohlcv_gap_gate"] is None
+    assert manifest["summary"]["local_trade_ohlcv_gap_gate_status"] == "NOT_RUN"
+    assert manifest["outputs"][0]["local_trade_gap_gate_status"] == "NOT_RUN"
 
 
 def test_phase2_readiness_passes_clean_fixture(tmp_path: Path) -> None:
@@ -1865,6 +2036,59 @@ def test_synthetic_warning_only_triggers_above_threshold(tmp_path: Path) -> None
     assert not any("synthetic threshold breached" in item for item in high.warnings)
     assert low.synthetic_gap_threshold_breached is True
     assert any("synthetic threshold breached" in item for item in low.warnings)
+
+
+def test_synthetic_gap_threshold_can_be_diagnostic_only_for_smoke(tmp_path: Path) -> None:
+    raw_path = tmp_path / "data" / "raw" / "ES" / "2024.parquet"
+    out_path = tmp_path / "data" / "causally_gated_normalized" / "ES" / "2024.parquet"
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(profile_config, synthetic_pct=0.1, synthetic_action="diagnostic")
+    _write_raw(
+        raw_path,
+        [
+            {
+                "rtype": 33,
+                "publisher_id": 1,
+                "instrument_id": 100,
+                "symbol": "ESH4",
+                "ts_event": "2024-01-02T15:00:00Z",
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.5,
+                "volume": 10,
+                "data_quality_status": "available",
+                "data_quality_degraded": False,
+            },
+            {
+                "rtype": 33,
+                "publisher_id": 1,
+                "instrument_id": 100,
+                "symbol": "ESH4",
+                "ts_event": "2024-01-02T15:03:00Z",
+                "open": 100.5,
+                "high": 101.5,
+                "low": 100.0,
+                "close": 101.0,
+                "volume": 12,
+                "data_quality_status": "available",
+                "data_quality_degraded": False,
+            },
+        ],
+    )
+
+    result = process_file(
+        raw_path,
+        out_path,
+        profile="tier_0",
+        max_synthetic_gap_minutes=3,
+        profile_config_path=profile_config,
+    )
+
+    assert result.synthetic_gap_threshold_breached is True
+    assert result.synthetic_gap_threshold_action == "diagnostic"
+    assert not any("synthetic threshold breached" in item for item in result.warnings)
+    assert result.status == "PASS"
 
 
 def test_no_synthetic_fill_across_session_boundary(tmp_path: Path) -> None:
