@@ -1,5 +1,74 @@
 # Codex Handoff
 
+## KE 2026 bounded Phase 1B raw repair
+- Updated at UTC: 2026-06-22T11:17:07Z
+- Scope: accepted KE 2025 repair evidence as sufficient, then ran exactly one additional approved bounded Phase 1B raw repair for KE 2026 and bounded Phase 1C alignment validation. No Phase 2, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, or DBN source modification was run.
+
+Files changed/generated
+- `data/raw/KE/2026.parquet`: generated raw parquet repair output, 83160 rows, 2008762 bytes, SHA256 `BD044B4A31801A91B6FC4E6D418AE34E1A119BCCA542814DB01D9D6B7331DFF6`.
+- `reports/phase_restart/ke_2026_raw_repair_alpha_tiered.yaml`: bounded validation profile for KE 2026.
+- `reports/phase_restart/ke_2026_phase1c_raw_repair_alignment.json`: bounded Phase 1C validation JSON.
+- `reports/phase_restart/ke_2026_phase1c_raw_repair_alignment.md`: bounded Phase 1C validation markdown.
+- `reports/phase_restart/ke_2026_phase1b_raw_repair.md`: repair evidence summary.
+- `reports/phase_restart/phase1b_raw_repair_progress.md`: cumulative Phase 1B raw repair progress.
+- `reports/phase_restart/ke_2025_phase1b_raw_repair.md`: marked KE 2025 evidence accepted.
+- `reports/data_manifest/manifest_coverage_check.csv` and `reports/data_manifest/manifest_coverage_summary.md`: refreshed manifest audit, raw missing reduced from 9 to 8.
+- `reports/data_manifest/remaining_cleanup_blockers.md`: updated current blocker counts.
+- `CODEX_HANDOFF.md`: recorded this run.
+
+Commands run
+- `python -m scripts.phase1B_convert.convert_databento_raw --symbols KE --start 2026-01-01 --end 2026-06-13 --dbn-root data/dbn/ohlcv_1m --raw-root data/raw --reports-root reports/raw_ingest --workers 1 --resume --offline-local-conditions`
+- `python -m scripts.phase1C_validate.audit_raw_dbn_alignment --config reports/phase_restart/ke_2026_raw_repair_alpha_tiered.yaml --profile raw_repair --dbn-root data/dbn --raw-root data/raw --expected-only --json-out reports/phase_restart/ke_2026_phase1c_raw_repair_alignment.json --md-out reports/phase_restart/ke_2026_phase1c_raw_repair_alignment.md`
+- `python scripts\audit_data_manifest.py`
+
+Validation results
+- KE 2025 evidence accepted: bounded Phase 1B command, canonical raw output, DBN source hashes unchanged, Phase 1C PASS, no Phase 2 or cleanup.
+- Phase 1B conversion: PASS, `CONVERT_OK market=KE year=2026 inputs=1 output=data/raw/KE/2026.parquet rows=83160`.
+- Phase 1C alignment: PASS, `expected=1 raw=1 needs_phase1b=0 raw_only=0 invalid_manifests=0 source_hash_mismatches=0 definition_join_status=checked definition_join_mismatches=0`.
+- Manifest audit: PASS, `manifest_check issues=177 failures=0`; raw missing pairs decreased exactly 9 -> 8; `KE:2026` no longer appears as missing raw.
+- DBN source hashes before/after matched for KE 2026 `ohlcv_1m` and `definition`.
+
+Remaining work
+- Phase 1B raw repairs remaining: 8.
+- Phase 2 causal repair rows still require later user decision: 66.
+- Cleanup remains blocked and disabled until blockers are zero and cleanup is explicitly approved.
+
+Next recommended step
+- Review `reports/phase_restart/ke_2026_phase1b_raw_repair.md`; if accepted, run the next single bounded Phase 1B raw repair market/year and stop before Phase 2 or cleanup.
+
+## KE 2025 bounded Phase 1B raw repair
+- Updated at UTC: 2026-06-22T11:11:45Z
+- Scope: ran exactly one approved bounded Phase 1B raw repair for KE 2025 and bounded Phase 1C alignment validation. No Phase 2, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, or DBN source modification was run.
+
+Files changed/generated
+- `data/raw/KE/2025.parquet`: generated raw parquet repair output, 157299 rows, 3653095 bytes, SHA256 `10A2C36BB91C8803388281FC09FA4FE43995726548A2DE4E96A4FADD5144BD8B`.
+- `reports/phase_restart/ke_2025_raw_repair_alpha_tiered.yaml`: bounded validation profile for KE 2025.
+- `reports/phase_restart/ke_2025_phase1c_raw_repair_alignment.json`: bounded Phase 1C validation JSON.
+- `reports/phase_restart/ke_2025_phase1c_raw_repair_alignment.md`: bounded Phase 1C validation markdown.
+- `reports/phase_restart/ke_2025_phase1b_raw_repair.md`: repair evidence summary.
+- `reports/data_manifest/manifest_coverage_check.csv` and `reports/data_manifest/manifest_coverage_summary.md`: refreshed manifest audit, raw missing reduced from 10 to 9.
+- `reports/data_manifest/remaining_cleanup_blockers.md`: updated current blocker counts.
+- `CODEX_HANDOFF.md`: recorded this run.
+
+Commands run
+- `python -m scripts.phase1B_convert.convert_databento_raw --symbols KE --start 2025-01-01 --end 2026-01-01 --dbn-root data/dbn/ohlcv_1m --raw-root data/raw --reports-root reports/raw_ingest --workers 1 --resume --offline-local-conditions`
+- `python -m scripts.phase1C_validate.audit_raw_dbn_alignment --config reports/phase_restart/ke_2025_raw_repair_alpha_tiered.yaml --profile raw_repair --dbn-root data/dbn --raw-root data/raw --expected-only --json-out reports/phase_restart/ke_2025_phase1c_raw_repair_alignment.json --md-out reports/phase_restart/ke_2025_phase1c_raw_repair_alignment.md`
+- `python scripts\audit_data_manifest.py`
+
+Validation results
+- Phase 1B conversion: PASS, `CONVERT_OK market=KE year=2025 inputs=1 output=data/raw/KE/2025.parquet rows=157299`.
+- Phase 1C alignment: PASS, `expected=1 raw=1 needs_phase1b=0 raw_only=0 invalid_manifests=0 source_hash_mismatches=0 definition_join_status=checked definition_join_mismatches=0`.
+- Manifest audit: PASS, `manifest_check issues=178 failures=0`.
+- DBN source hashes before/after matched for KE 2025 `ohlcv_1m` and `definition`.
+
+Remaining work
+- Phase 1B raw repairs remaining: 9.
+- Phase 2 causal repair rows still require later user decision: 66.
+- Cleanup remains blocked and disabled until blockers are zero and cleanup is explicitly approved.
+
+Next recommended step
+- Review `reports/phase_restart/ke_2025_phase1b_raw_repair.md`; if accepted, run the next single bounded Phase 1B raw repair market/year and stop before Phase 2 or cleanup.
+
 ## User cleanup blocker decisions recorded
 - Updated at UTC: 2026-06-22T11:04:54Z
 - Scope: recorded user decisions for duplicate and repair sequencing only. No repair, cleanup, quarantine, merge, move, delete, rebuild, redownload, conversion, data generation, expensive job, phase 3+ command, or DBN source modification was run.
