@@ -215,6 +215,24 @@ class OrderIntentDecision:
 
 
 @dataclass(frozen=True)
+class OrderPreflightResult:
+    accepted: bool
+    preflight_status: str
+    reason_code: str
+    reason: str
+    intent: OrderIntent | None
+    mode: str
+    symbol: str | None
+    side: str | None
+    quantity: int | None
+    timestamp_utc: datetime
+    limit_name: str | None = None
+    limit_value: Any | None = None
+    projected_position: int | None = None
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class RiskDecision:
     approved: bool
     reason_code: str

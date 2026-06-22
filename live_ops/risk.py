@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, time as day_time, timezone
+from typing import Mapping
 from zoneinfo import ZoneInfo
 
 from .schemas import (
@@ -12,6 +13,8 @@ from .schemas import (
     ModelReadinessResult,
     OrderIntent,
     ReconciliationResult,
+    OrderIntentDecision,
+    OrderPreflightResult,
     RiskDecision,
     SignalState,
     position_key,
@@ -71,6 +74,244 @@ class SessionGuard:
 def _parse_time(value: str) -> day_time:
     hour, minute = value.split(":", 1)
     return day_time(int(hour), int(minute))
+
+
+def preflight_order_intent(
+    *,
+    config: LiveTradingConfig,
+    intent_decision: OrderIntentDecision,
+    positions: Mapping[str, int] | None = None,
+    now: datetime | None = None,
+    kill_switch_on: bool = False,
+    open_order_count: int = 0,
+    max_open_orders: int | None = None,
+    existing_order_ids: tuple[str, ...] = (),
+    last_order_time_by_symbol: Mapping[str, datetime] | None = None,
+) -> OrderPreflightResult:
+    timestamp = utc_datetime(now or datetime.now(timezone.utc))
+    positions = positions or {}
+    intent = intent_decision.order_intent
+    if not intent_decision.approved or intent is None:
+        return _preflight_block(
+            "BLOCKED_BEFORE_INTENT",
+            "INTENT_NOT_APPROVED",
+            intent_decision.reason,
+            intent,
+            config=config,
+            timestamp=timestamp,
+            details={"intent_decision": intent_decision},
+        )
+
+    if kill_switch_on:
+        return _preflight_block(
+            "BLOCKED_BY_PREFLIGHT",
+            "KILL_SWITCH_ON",
+            "kill switch blocks routing preflight",
+            intent,
+            config=config,
+            timestamp=timestamp,
+        )
+    if not config.allow_trading or config.mode == "disabled":
+        return _preflight_block(
+            "BLOCKED_BY_PREFLIGHT",
+            "TRADING_DISABLED",
+            "trading is disabled by config",
+            intent,
+            config=config,
+            timestamp=timestamp,
+        )
+    if config.allow_live_broker or config.mode == "live":
+        return _preflight_block(
+            "BLOCKED_BY_PREFLIGHT",
+            "LIVE_BROKER_BLOCKED",
+            "live broker routing is blocked by scaffold preflight",
+            intent,
+            config=config,
+            timestamp=timestamp,
+        )
+    if config.mode != "paper" or not config.allow_paper_trading:
+        return _preflight_block(
+            "BLOCKED_BY_PREFLIGHT",
+            "PAPER_TRADING_DISABLED",
+            "paper routing is not explicitly enabled",
+            intent,
+            config=config,
+            timestamp=timestamp,
+        )
+    if not intent.symbol:
+        return _preflight_block(
+            "BLOCKED_BY_PREFLIGHT",
+            "SYMBOL_MISSING",
+            "order intent symbol is required",
+            intent,
+            config=config,
+            timestamp=timestamp,
+        )
+    if config.allowed_symbols and intent.symbol not in config.allowed_symbols:
+        return _preflight_block(
+            "BLOCKED_BY_PREFLIGHT",
+            "SYMBOL_UNSUPPORTED",
+            "order intent symbol is not allowed",
+            intent,
+            config=config,
+            timestamp=timestamp,
+            limit_name="allowed_symbols",
+            limit_value=config.allowed_symbols,
+        )
+    if config.allowed_contracts and intent.contract not in config.allowed_contracts:
+        return _preflight_block(
+            "BLOCKED_BY_PREFLIGHT",
+            "CONTRACT_UNSUPPORTED",
+            "order intent contract is not allowed",
+            intent,
+            config=config,
+            timestamp=timestamp,
+            limit_name="allowed_contracts",
+            limit_value=config.allowed_contracts,
+        )
+    side = intent.side.upper()
+    if side not in {"BUY", "SELL"}:
+        return _preflight_block(
+            "BLOCKED_BY_PREFLIGHT",
+            "ORDER_SIDE_INVALID",
+            "order intent side must be BUY or SELL",
+            intent,
+            config=config,
+            timestamp=timestamp,
+        )
+    if isinstance(intent.quantity, bool) or not isinstance(intent.quantity, int) or intent.quantity <= 0:
+        return _preflight_block(
+            "BLOCKED_BY_PREFLIGHT",
+            "ORDER_QUANTITY_INVALID",
+            "order intent quantity must be a positive integer",
+            intent,
+            config=config,
+            timestamp=timestamp,
+        )
+    if config.max_order_size <= 0 or intent.quantity > config.max_order_size:
+        return _preflight_block(
+            "BLOCKED_BY_PREFLIGHT",
+            "ORDER_SIZE_LIMIT",
+            "order intent quantity exceeds max order size",
+            intent,
+            config=config,
+            timestamp=timestamp,
+            limit_name="max_order_size",
+            limit_value=config.max_order_size,
+        )
+    if max_open_orders is not None and open_order_count >= max_open_orders:
+        return _preflight_block(
+            "BLOCKED_BY_PREFLIGHT",
+            "OPEN_ORDER_LIMIT",
+            "open order count exceeds scaffold limit",
+            intent,
+            config=config,
+            timestamp=timestamp,
+            limit_name="max_open_orders",
+            limit_value=max_open_orders,
+        )
+    if intent.order_id in existing_order_ids:
+        return _preflight_block(
+            "BLOCKED_BY_PREFLIGHT",
+            "DUPLICATE_ORDER_ID",
+            "duplicate order intent id",
+            intent,
+            config=config,
+            timestamp=timestamp,
+        )
+
+    last_order_time_by_symbol = last_order_time_by_symbol or {}
+    previous_time = last_order_time_by_symbol.get(intent.symbol)
+    if previous_time is not None and config.min_seconds_between_orders_per_symbol > 0:
+        elapsed = (timestamp - utc_datetime(previous_time)).total_seconds()
+        if elapsed < config.min_seconds_between_orders_per_symbol:
+            return _preflight_block(
+                "BLOCKED_BY_PREFLIGHT",
+                "ORDER_COOLDOWN",
+                "symbol order cooldown active",
+                intent,
+                config=config,
+                timestamp=timestamp,
+                limit_name="min_seconds_between_orders_per_symbol",
+                limit_value=config.min_seconds_between_orders_per_symbol,
+                details={"elapsed_seconds": elapsed},
+            )
+
+    current_position = int(positions.get(position_key(intent.symbol, intent.contract), 0))
+    signed_quantity = intent.quantity if side == "BUY" else -intent.quantity
+    projected_position = current_position + signed_quantity
+    if abs(projected_position) > config.max_contracts_per_symbol:
+        return _preflight_block(
+            "BLOCKED_BY_PREFLIGHT",
+            "SYMBOL_POSITION_LIMIT",
+            "projected symbol position exceeds scaffold max",
+            intent,
+            config=config,
+            timestamp=timestamp,
+            limit_name="max_contracts_per_symbol",
+            limit_value=config.max_contracts_per_symbol,
+            projected_position=projected_position,
+        )
+    projected_positions = dict(positions)
+    projected_positions[position_key(intent.symbol, intent.contract)] = projected_position
+    if sum(abs(int(value)) for value in projected_positions.values()) > config.max_total_contracts:
+        return _preflight_block(
+            "BLOCKED_BY_PREFLIGHT",
+            "TOTAL_POSITION_LIMIT",
+            "projected total position exceeds scaffold max",
+            intent,
+            config=config,
+            timestamp=timestamp,
+            limit_name="max_total_contracts",
+            limit_value=config.max_total_contracts,
+            projected_position=projected_position,
+        )
+
+    return OrderPreflightResult(
+        True,
+        "ACCEPTED_FOR_ROUTING",
+        "OK",
+        "order intent accepted by scaffold preflight; no broker submission performed",
+        intent,
+        config.mode,
+        intent.symbol,
+        side,
+        intent.quantity,
+        timestamp,
+        projected_position=projected_position,
+        details={"positions": dict(positions), "projected_positions": projected_positions},
+    )
+
+
+def _preflight_block(
+    status: str,
+    reason_code: str,
+    reason: str,
+    intent: OrderIntent | None,
+    *,
+    config: LiveTradingConfig,
+    timestamp: datetime,
+    limit_name: str | None = None,
+    limit_value: object | None = None,
+    projected_position: int | None = None,
+    details: dict[str, object] | None = None,
+) -> OrderPreflightResult:
+    return OrderPreflightResult(
+        False,
+        status,
+        reason_code,
+        reason,
+        intent,
+        config.mode,
+        intent.symbol if intent is not None else None,
+        intent.side.upper() if intent is not None else None,
+        intent.quantity if intent is not None else None,
+        timestamp,
+        limit_name=limit_name,
+        limit_value=limit_value,
+        projected_position=projected_position,
+        details=details or {},
+    )
 
 
 class KillSwitch:

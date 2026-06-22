@@ -707,3 +707,12 @@ Updated at UTC: 2026-06-22T00:23:29Z
 - Tests run: `python -m pytest tests\test_live_ops.py -q -p no:cacheprovider`; `python -m pytest tests\test_live_ops.py tests\test_live_chart_feed.py -q -p no:cacheprovider`; `git diff --check`.
 - Test results: PASS, focused live ops `40 passed`; PASS, live-ops/chart `69 passed`; PASS, `git diff --check` with CRLF warnings only.
 - Deferred: broker submit, cancel-all, flatten-all, live account integration, production risk sizing, broker SDKs, credentials, GUI/chart launch, and generated artifact staging.
+
+## Broker-agnostic risk preflight gate
+- Updated at UTC: 2026-06-22T08:21:42Z
+- Scope: paper/smoke-only pre-routing risk/limits scaffold after validated order-intent creation.
+- What changed: added `OrderPreflightResult` and `preflight_order_intent`, which accepts or blocks an `OrderIntentDecision` without broker submission or broker state mutation. The gate checks upstream intent status, kill switch, trading/live mode, allowed symbols/contracts, side, quantity, max order size, optional open-order/duplicate/cooldown guards, and projected symbol/total position limits.
+- Files changed by this slice: `live_ops/risk.py`, `live_ops/schemas.py`, `tests/test_live_ops_preflight.py`, `CODEX_HANDOFF.md`.
+- Commands run: `python -m pytest tests\test_live_ops_preflight.py -q -p no:cacheprovider`; `python -m pytest tests\test_live_ops.py -q -p no:cacheprovider`; `python -m pytest tests\test_live_ops.py tests\test_live_chart_feed.py -q -p no:cacheprovider`; `git diff --check`.
+- Test results: PASS, preflight `5 passed`; PASS, focused live ops `41 passed`; PASS, live-ops/chart `71 passed`; PASS, `git diff --check` with CRLF warnings only.
+- Deferred: broker submit, cancel-all, flatten-all, account balance/margin integration, production sizing, live account integration, broker SDKs, credentials, GUI/chart launch, and generated artifact staging.
