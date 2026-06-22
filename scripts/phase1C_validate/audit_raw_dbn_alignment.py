@@ -542,6 +542,7 @@ def build_report(
     raw_root: Path,
     skip_definition_join: bool = False,
     repair_manifest_path: Path | None = None,
+    expected_only: bool = False,
 ) -> dict[str, Any]:
     ohlcv_index = _index_schema_dbns(dbn_root, SCHEMA)
     definition_index = _index_schema_dbns(dbn_root, "definition")
@@ -560,6 +561,10 @@ def build_report(
         markets = sorted({market for market, _ in expected})
         years = sorted({year for _, year in expected})
         pre_availability_exemptions = []
+    if expected_only:
+        ohlcv_index = {key: value for key, value in ohlcv_index.items() if key in expected}
+        definition_index = {key: value for key, value in definition_index.items() if key in expected}
+        raw_index = {key: value for key, value in raw_index.items() if key in expected}
     file_hashes = _build_file_hash_cache(ohlcv_index, definition_index)
     repair_manifest, repair_lookup, repair_manifest_failures = _load_repair_manifest(
         repair_manifest_path,
@@ -639,6 +644,7 @@ def build_report(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "status": "FAIL" if failures else "PASS",
         "audit_completeness": "partial" if skip_definition_join else "full",
+        "expected_only": bool(expected_only),
         "definition_join_skipped": bool(skip_definition_join),
         "definition_join_status": "skipped" if skip_definition_join else "checked",
         "definition_join_checked_market_year_count": definition_join_checked_count,
@@ -750,6 +756,11 @@ def parse_args() -> argparse.Namespace:
         "--repair-manifest",
         help="Optional fail-closed manifest that authorizes non-DBN repaired raw row sources.",
     )
+    parser.add_argument(
+        "--expected-only",
+        action="store_true",
+        help="Bound smoke scope to profile/discovery expected market-years instead of auditing all files under roots.",
+    )
     parser.add_argument("--json-out", default="reports/raw_ingest/raw_dbn_alignment.json")
     parser.add_argument("--md-out", default="reports/raw_ingest/raw_dbn_alignment.md")
     return parser.parse_args()
@@ -764,6 +775,7 @@ def main() -> int:
         raw_root=Path(args.raw_root),
         skip_definition_join=bool(args.skip_definition_join),
         repair_manifest_path=Path(args.repair_manifest) if args.repair_manifest else None,
+        expected_only=bool(args.expected_only),
     )
     write_json(Path(args.json_out), report)
     write_markdown(Path(args.md_out), report)

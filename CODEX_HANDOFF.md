@@ -1,5 +1,60 @@
 # Codex Handoff
 
+## Bounded phase 1A/1B/1C/2 manifest smoke validation
+- Updated at UTC: 2026-06-22T09:32:47Z
+- Scope: ran bounded smoke validation against `configs/data_manifest.yaml` using report-local profile `reports/phase_restart/manifest_smoke_alpha_tiered.yaml` for ZN 2023. No cleanup, quarantine, redownload, full rebuild, phase 3+, DBN source modification, data move, data delete, or data overwrite was run.
+
+Changed
+- `scripts/phase1C_validate/audit_raw_dbn_alignment.py`: added `--expected-only` to bound the alignment audit to expected profile/discovery market-years while preserving default behavior.
+- `scripts/phase2_causal_base/build_causal_base_data.py`: added `--readiness-only` plus readiness JSON/Markdown outputs so phase 2 path/readiness checks can run without writing causal parquet.
+- `tests/validation/test_audit_raw_dbn_alignment.py`: covered expected-only filtering.
+- `tests/phase2_causal_base/test_build_causal_base_data.py`: covered readiness-only report output and no causal manifest/parquet output.
+- `reports/phase_restart/manifest_smoke_alpha_tiered.yaml`: report-local ZN 2023 smoke profile.
+- `reports/phase_restart/phase_1a_smoke.md`
+- `reports/phase_restart/phase_1b_smoke.md`
+- `reports/phase_restart/phase_1c_smoke.md`
+- `reports/phase_restart/phase_2_smoke.md`
+- `reports/phase_restart/phase_restart_summary.md`
+
+Commands run
+- `git status --short`
+- `git log -5 --oneline`
+- `git diff --stat`
+- `git status --short -- data`
+- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema ohlcv-1m --markets ZN --start 2023-01-01 --end 2024-01-01 --chunk year --dbn-root data/dbn/ohlcv_1m --raw-root data/raw --reports-root reports/phase_restart/manifest_phase_1a_smoke --workers 1 --resume --dry-run`
+- `python -m scripts.phase1B_convert.convert_databento_raw --schema ohlcv-1m --markets ZN --start 2023-01-01 --end 2024-01-01 --chunk year --dbn-root data/dbn/ohlcv_1m --raw-root data/raw --reports-root reports/phase_restart/manifest_phase_1b_smoke --workers 1 --resume --offline-local-conditions --include-optional-schemas status,statistics`
+- `python -m scripts.phase1C_validate.audit_raw_dbn_alignment --config reports/phase_restart/manifest_smoke_alpha_tiered.yaml --profile manifest_smoke --dbn-root data/dbn --raw-root data/raw --expected-only --json-out reports/phase_restart/manifest_phase_1c_raw_dbn_alignment.json --md-out reports/phase_restart/manifest_phase_1c_raw_dbn_alignment.md`
+- `python -m scripts.phase2_causal_base.build_causal_base_data --profile manifest_smoke --raw-root data/raw --output-root reports/phase_restart/manifest_phase_2_output --reports-root reports/phase_restart/manifest_phase_2_smoke --profile-config reports/phase_restart/manifest_smoke_alpha_tiered.yaml --raw-alignment-report reports/phase_restart/manifest_phase_1c_raw_dbn_alignment.json --readiness-only --readiness-json-out reports/phase_restart/manifest_phase_2_readiness_summary.json --readiness-md-out reports/phase_restart/manifest_phase_2_readiness_summary.md`
+- `python -m pytest tests\validation\test_audit_raw_dbn_alignment.py::test_raw_dbn_alignment_expected_only_ignores_raw_outside_profile -q -p no:cacheprovider`
+- `python -m pytest tests\phase2_causal_base\test_build_causal_base_data.py::test_phase2_main_readiness_only_writes_reports_without_outputs -q -p no:cacheprovider`
+- `python -m py_compile scripts\phase1C_validate\audit_raw_dbn_alignment.py scripts\phase2_causal_base\build_causal_base_data.py`
+- Targeted parquet probes of `data/raw/ZN/2023.parquet` and `data/causally_gated_normalized/ZN/2023.parquet`.
+
+Smoke results
+- Phase 1A: PASS, dry-run plan only; evidence `reports/phase_restart/manifest_phase_1a_smoke/databento_download_plan_dry_run.json`.
+- Phase 1B: PASS, existing canonical raw parquet reused; evidence `reports/phase_restart/manifest_phase_1b_smoke/databento_convert_results.json`.
+- Phase 1C: PASS, expected-only raw/DBN alignment checked 1 expected ZN 2023 market-year; evidence `reports/phase_restart/manifest_phase_1c_raw_dbn_alignment.json`.
+- Phase 2: PASS, readiness-only checked 1 selected market-year with 0 blockers and did not create `reports/phase_restart/manifest_phase_2_output`; evidence `reports/phase_restart/manifest_phase_2_readiness_summary.json`.
+
+Canonical path resolution result
+- Raw DBN path: `data/dbn`, with phase 1A/1B OHLCV under `data/dbn/ohlcv_1m`.
+- Converted raw parquet path: `data/raw/ZN/2023.parquet`.
+- Phase 2 readiness raw input root: `data/raw`.
+- Phase 2 production causal output root remains `data/causally_gated_normalized`; this smoke used readiness-only and wrote no causal parquet.
+
+Synthetic-row handling result
+- Existing canonical ZN 2023 causal parquet has 353549 rows, 17838 synthetic rows, 5.045411% synthetic rows, 0 synthetic rows with nonzero volume, 0 synthetic rows with `causal_valid=true`, and 0 synthetic rows with `raw_row_present=true`.
+- Phase 2 currently enforces observed causal eligibility through `raw_row_present & ~is_synthetic`; no separate `observed_row` or `trade_entry_eligible` column exists in phase 2 output.
+
+Cleanup gate
+- Cleanup gate remains blocked by manifest policy gaps from the prior manifest check. This smoke run did not attempt cleanup or quarantine.
+
+Remaining work
+- Decide whether `raw_row_present & ~is_synthetic` is the accepted observed-row contract or whether a future protected-contract change should add an explicit `observed_row` field.
+
+Next recommended step
+- Reduce the remaining manifest medium blockers or explicitly defer them, then rerun the same bounded smoke before evaluating whether cleanup/quarantine can be enabled.
+
 ## Canonical data manifest draft and bounded checker
 - Updated at UTC: 2026-06-22T09:20:36Z
 - Scope: preserved the completed lineage audit in commit `0291e58 Map canonical data lineage`, then added a manifest draft and bounded filename-only checker. No data files were moved, deleted, quarantined, regenerated, converted, rebuilt, overwritten, staged, or committed. No phase 1A/1B/1C/2 rebuilds and no post-phase-2 jobs were run.

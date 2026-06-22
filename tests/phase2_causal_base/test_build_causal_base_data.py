@@ -878,6 +878,62 @@ def test_phase2_main_skips_local_trade_gate_for_smoke_profile(
     assert manifest["outputs"][0]["local_trade_gap_gate_status"] == "NOT_RUN"
 
 
+def test_phase2_main_readiness_only_writes_reports_without_outputs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(profile_config)
+    raw_root = tmp_path / "data" / "raw"
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    reports_root = tmp_path / "reports" / "causal_base"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    json_out = reports_root / "phase2_readiness_summary.json"
+    md_out = reports_root / "phase2_readiness_summary.md"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(
+        raw_root / "ES" / "2024.parquet",
+        [
+            _readiness_raw_row("2024-01-02T15:00:00Z", close=100.5),
+            _readiness_raw_row("2024-01-02T15:01:00Z", close=100.75),
+            _readiness_raw_row("2024-01-02T15:02:00Z", close=101.0),
+        ],
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_causal_base_data.py",
+            "--profile",
+            "tier_0",
+            "--raw-root",
+            str(raw_root),
+            "--output-root",
+            str(output_root),
+            "--reports-root",
+            str(reports_root),
+            "--profile-config",
+            str(profile_config),
+            "--raw-alignment-report",
+            str(report_path),
+            "--readiness-only",
+            "--readiness-json-out",
+            str(json_out),
+            "--readiness-md-out",
+            str(md_out),
+        ],
+    )
+
+    assert phase2_main() == 0
+
+    report = json.loads(json_out.read_text(encoding="utf-8"))
+    assert report["status"] == "PASS"
+    assert report["checked_market_year_count"] == 1
+    assert md_out.exists()
+    assert not (output_root / "ES" / "2024.parquet").exists()
+    assert not (reports_root / "causal_base_manifest.json").exists()
+
+
 def test_phase2_readiness_passes_clean_fixture(tmp_path: Path) -> None:
     profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
     _write_profile_config(profile_config)

@@ -194,6 +194,33 @@ def test_raw_dbn_alignment_discovery_profile_uses_raw_market_years(
     assert report["resolved_profile"] == "all_raw"
 
 
+def test_raw_dbn_alignment_expected_only_ignores_raw_outside_profile(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2024])
+    dbn_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m")
+    definition = _write_dbn_with_manifest(dbn_root, "definition")
+    _write_raw(raw_root, ohlcv)
+    _write_raw(raw_root, ohlcv, market="CL", year=2024)
+    _install_fake_databento(monkeypatch, {definition: _definition_frame()})
+
+    report = build_report(
+        config_path=config,
+        profile="tier_3",
+        dbn_root=dbn_root,
+        raw_root=raw_root,
+        expected_only=True,
+    )
+
+    assert report["status"] == "PASS"
+    assert report["expected_only"] is True
+    assert report["raw_market_year_count"] == 1
+    assert report["raw_only_count"] == 0
+
+
 def test_raw_dbn_alignment_reports_dbn_only_market_year_as_phase1b_gap(tmp_path: Path, monkeypatch) -> None:
     config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2024])
     dbn_root = tmp_path / "data" / "dbn"

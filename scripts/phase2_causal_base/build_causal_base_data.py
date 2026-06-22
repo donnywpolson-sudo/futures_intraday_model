@@ -2321,6 +2321,41 @@ def write_reports(
     pd.DataFrame(csv_rows).to_csv(reports_root / "causal_base_validation.csv", index=False)
 
 
+def write_readiness_report(report: dict[str, Any], json_path: Path, markdown_path: Path) -> None:
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    lines = [
+        "# Phase 2 Readiness Summary",
+        "",
+        f"- Status: {report.get('status')}",
+        f"- Profile: {report.get('profile')} -> {report.get('resolved_profile')}",
+        f"- Raw root: {report.get('raw_root')}",
+        f"- Raw alignment report: {report.get('raw_alignment_report')}",
+        f"- Selected market-years: {report.get('selected_market_year_count')}",
+        f"- Checked market-years: {report.get('checked_market_year_count')}",
+        f"- Pending market-years: {report.get('pending_market_year_count')}",
+        f"- Blockers: {report.get('blocker_count')}",
+        f"- Failures: {report.get('failure_count')}",
+        "",
+        "## Failures",
+        "",
+    ]
+    failures = report.get("failures") or []
+    lines.extend([f"- {failure}" for failure in failures] or ["- None"])
+    blockers = report.get("blockers") or []
+    lines.extend(["", "## Blockers", ""])
+    if blockers:
+        for blocker in blockers[:100]:
+            lines.append(
+                f"- {blocker.get('market')} {blocker.get('year')}: {blocker.get('status')} "
+                f"failures={len(blocker.get('failures') or [])} warnings={len(blocker.get('warnings') or [])}"
+            )
+    else:
+        lines.append("- None")
+    markdown_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def phase2_readiness_result_row(
     result: ValidationResult,
     *,
@@ -2660,6 +2695,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MAX_SYNTHETIC_GAP_MINUTES,
         help="Fill only missing in-session gaps up to this size.",
     )
+    parser.add_argument(
+        "--readiness-only",
+        action="store_true",
+        help="Run bounded Phase 2 readiness checks and write reports without writing causal parquet outputs.",
+    )
+    parser.add_argument("--readiness-json-out", help="Override readiness-only JSON report path.")
+    parser.add_argument("--readiness-md-out", help="Override readiness-only markdown report path.")
     return parser
 
 
@@ -2702,6 +2744,16 @@ def main() -> int:
         allow_hardcoded_calendar=args.allow_hardcoded_calendar,
         fail_fast=True,
     )
+    if args.readiness_only:
+        json_path = Path(args.readiness_json_out) if args.readiness_json_out else reports_root / "phase2_readiness_summary.json"
+        markdown_path = Path(args.readiness_md_out) if args.readiness_md_out else reports_root / "phase2_readiness_summary.md"
+        write_readiness_report(readiness, json_path, markdown_path)
+        print(
+            "phase2_readiness_only "
+            f"status={readiness.get('status')} checked={readiness.get('checked_market_year_count')} "
+            f"blockers={readiness.get('blocker_count')} json={json_path.as_posix()}"
+        )
+        return 0 if readiness.get("status") == "PASS" else 1
     if readiness.get("status") != "PASS":
         print("FAIL phase2_readiness_preflight")
         print(json.dumps(readiness, indent=2))
