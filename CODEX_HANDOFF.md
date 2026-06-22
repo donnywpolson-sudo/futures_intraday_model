@@ -1,5 +1,143 @@
 # Codex Handoff
 
+## Live-ops preserved worktree reconciliation
+- Updated at UTC: 2026-06-22T08:43:56Z
+- Scope: closed the completed data-reorg cleanup as no-op and inspected the preserved live-ops/readiness staged changes in `docs/live_trading_readiness.md`, `live_ops/audit.py`, `live_ops/smoke.py`, and `tests/test_live_ops.py`. Data files and `reports/data_reorg` were not touched.
+- Coherence verdict: coherent live-ops audit durability / paper-state rollback change set. The staged code fsyncs audit JSONL writes, snapshots paper broker state before submit, restores paper state if the audit append fails, expands secret redaction test coverage, adds audit-append fail-closed coverage, and updates readiness documentation for Part K.
+
+Changed
+- `CODEX_HANDOFF.md`: recorded live-ops reconciliation and validation result.
+- No code edits were made in this reconciliation pass; the four live-ops/readiness files were inspected as preserved staged changes.
+
+Commands run
+- `git status --short`
+- `git diff -- docs/live_trading_readiness.md live_ops/audit.py live_ops/smoke.py tests/test_live_ops.py`
+- `git diff --cached -- docs/live_trading_readiness.md live_ops/audit.py live_ops/smoke.py tests/test_live_ops.py`
+- `git diff --cached --stat -- docs/live_trading_readiness.md live_ops/audit.py live_ops/smoke.py tests/test_live_ops.py`
+- `git diff --cached --name-status`
+- `git diff --stat`
+- Targeted `Get-Content` / `Select-String` inspection of `live_ops/audit.py`, `live_ops/smoke.py`, and `tests/test_live_ops.py`.
+- `python -m py_compile live_ops\audit.py live_ops\smoke.py tests\test_live_ops.py`
+- `python -m pytest tests\test_live_ops.py -q -p no:cacheprovider`
+
+Results
+- Required unstaged `git diff -- ...` for the four files was empty because those four files are staged-only changes.
+- Staged four-file diff is coherent and focused on live-ops audit durability / fail-closed paper-state rollback.
+- Compile passed.
+- Focused live-ops tests passed: `41 passed in 0.72s`.
+
+Remaining work
+- None for coherence/validation of the preserved live-ops change set.
+
+Next recommended step
+- Review the staged live-ops/readiness changes and decide whether to commit them with the existing staged state; keep data and ignored report artifacts unstaged.
+
+## Fresh no-op nested cleanup preflight
+- Updated at UTC: 2026-06-22T08:40:29Z
+- Scope: re-read `reports/data_reorg/proposed_no_delete_cleanup_scope.md`, ran a fresh read-only preflight against the 18 listed `QUARANTINE_SAFE` source paths, and finalized cleanup as an approved no-op because no eligible exact path exists. No data was deleted, moved, quarantined, rebuilt, redownloaded, or modified. No active pipeline code was changed.
+- Unrelated tracked worktree changes were preserved and not touched: `docs/live_trading_readiness.md`, `live_ops/audit.py`, `live_ops/smoke.py`, `tests/test_live_ops.py`.
+
+Changed
+- `reports/data_reorg/proposed_no_delete_cleanup_scope.md`: added fresh preflight result and no-op completion verdict.
+- `CODEX_HANDOFF.md`: recorded this no-op finalization.
+
+Commands run
+- `git status --short`
+- `git status --short --ignored`
+- `Get-Content -LiteralPath 'reports\data_reorg\proposed_no_delete_cleanup_scope.md'`
+- Read-only Python preflight over the 18 eligible source paths and excluded DBN/repair-candidate paths.
+- `git status --short -- data`
+- Read-only DBN excluded-folder count/size check.
+- `Select-String` validation of approved no-op, eligible count, DBN exclusions, `QUARANTINE_UNCLEAR` exclusions, and eligible/excluded overlap in `reports\data_reorg\proposed_no_delete_cleanup_scope.md`.
+- `(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')`
+
+Results
+- Fresh preflight eligible source count: 18.
+- Existing eligible `QUARANTINE_SAFE` exact paths: 0.
+- Eligible/excluded overlap: none.
+- `git status --short -- data` returned no tracked data changes.
+- Final `git status --short` showed only `CODEX_HANDOFF.md` from this run plus preserved unrelated tracked changes in `docs/live_trading_readiness.md`, `live_ops/audit.py`, `live_ops/smoke.py`, and `tests/test_live_ops.py`.
+- Final `git status --short --ignored` showed `reports/data_reorg/` as ignored; report files were not staged or tracked.
+- Excluded DBN folders remain present and excluded: `data/dbn/ohlcv_1m_parent` 84 files / 326647130 bytes, `data/dbn/statistics_parent` 82 files / 404787255 bytes, `data/dbn/status_parent` 82 files / 40897589 bytes.
+- `QUARANTINE_UNCLEAR` paths remain review-only and missing: `data/raw_repair_candidates`, `data/causally_gated_normalized_repair_candidates`.
+
+Remaining work
+- None for this no-op cleanup review.
+
+Next recommended step
+- Treat the nested data cleanup as complete no-op unless a future fresh preflight finds an existing `QUARANTINE_SAFE` exact path; if that happens, stop and produce a report-only updated scope before any move.
+
+## Proposed no-delete nested cleanup scope
+- Updated at UTC: 2026-06-22T08:36:26Z
+- Scope: reviewed `nested_data_folder_classification.md` plus related CSV/JSON reports and produced an approval-ready no-delete cleanup scope. No data was deleted, moved, quarantined, rebuilt, redownloaded, or modified. No active pipeline code was changed by this run.
+- Cross-check result: 23 classification/inventory rows; 3 exact paths exist and all are excluded `DO_NOT_TOUCH` DBN folders; 18 `QUARANTINE_SAFE` paths are missing; 2 `QUARANTINE_UNCLEAR` paths are missing and remain review-only. Reference CSV shows no active code/test references, only report-only references for DBN and historical underscore tokens.
+
+Changed
+- `reports/data_reorg/proposed_no_delete_cleanup_scope.md`: no-delete approval scope, eligible future quarantine list, exclusions, unresolved review items, exact destination paths, and rollback instructions.
+- `CODEX_HANDOFF.md`: recorded this review.
+
+Commands run
+- `git status --short`
+- `Get-Content -LiteralPath 'reports\data_reorg\nested_data_folder_classification.md'`
+- `Get-Content -LiteralPath 'CODEX_HANDOFF.md' -Head 80`
+- Read-only Python cross-check of `nested_data_folder_inventory.csv/json`, `nested_data_folder_classification.csv`, and `nested_data_folder_references.csv`.
+- `Test-Path` checks for excluded DBN folders.
+- `git status --short --ignored`
+- `git status --short -- data`
+- Read-only DBN excluded-folder count/size check.
+- `Select-String` check that excluded DBN folders appear in the exclusion section of the scope report.
+
+Results
+- Current executable cleanup scope: empty because no `QUARANTINE_SAFE` exact path currently exists.
+- Future eligible quarantine paths: 18, conditional on the exact path existing during a future approved preflight.
+- Excluded from cleanup: `data/dbn/ohlcv_1m_parent`, `data/dbn/statistics_parent`, `data/dbn/status_parent`, plus the 2 `QUARANTINE_UNCLEAR` repair-candidate paths.
+- Required future destination root in the scope report: `C:\Users\donny\Desktop\futures_intraday_model\data_reorg_quarantine\nested_data_cleanup_20260622T083626Z`.
+- Validation: `git status --short -- data` returned no tracked data changes. Excluded DBN folders remain present with the same counts/sizes as the inventory: `ohlcv_1m_parent` 84 files / 326647130 bytes, `statistics_parent` 82 files / 404787255 bytes, `status_parent` 82 files / 40897589 bytes.
+- Preserved unrelated/concurrent tracked changes visible in final status: `live_ops/audit.py` and `live_ops/smoke.py`.
+
+Remaining work
+- Review `reports/data_reorg/proposed_no_delete_cleanup_scope.md` and decide whether an empty current cleanup scope plus conditional future quarantine scope is acceptable.
+
+Next recommended step
+- If cleanup is approved later, run a read-only preflight first and stop unless a `QUARANTINE_SAFE` source path exists, the destination does not exist, and all `DO_NOT_TOUCH`/`QUARANTINE_UNCLEAR` paths remain excluded.
+
+## Nested data folder classification audit
+- Updated at UTC: 2026-06-22T08:31:18Z
+- Read objective attachment `C:\Users\donny\.codex\attachments\e22ce5ae-dbcb-451c-8ae6-12ed11ef5033\goal-objective.md`.
+- Scope: read-only classification audit of the 23 listed nested/stale data folder paths. No data was moved, deleted, quarantined, rebuilt, redownloaded, or modified. No phase scripts were run.
+- Current checkpoint: `git log --oneline -5` starts at `b3f0338 Add live ops risk preflight gate`; tracked worktree was clean after report generation, and the new `reports/data_reorg/nested_data_*` files are ignored by repo rules.
+
+Changed
+- `reports/data_reorg/nested_data_folder_inventory.csv`
+- `reports/data_reorg/nested_data_folder_inventory.json`
+- `reports/data_reorg/nested_data_folder_references.csv`
+- `reports/data_reorg/nested_data_folder_classification.csv`
+- `reports/data_reorg/nested_data_folder_classification.md`
+- `reports/data_reorg/nested_data_cleanup_plan.md`
+- `CODEX_HANDOFF.md`
+
+Commands run
+- `git status --short`
+- `git log --oneline -5`
+- `Get-Content -LiteralPath 'CODEX_HANDOFF.md'`
+- Targeted `Get-ChildItem` and `Get-Content` reads for `data`, `data\dbn`, and prior `reports\data_reorg` context.
+- Read-only inline Python metadata/search/report generation script.
+- Targeted `Import-Csv`, `Get-Item`, `git diff --stat`, `git ls-files`, and ignored-status checks for generated reports.
+
+Results
+- Folders inventoried: 23.
+- Exact paths existing: 3; missing: 20.
+- Classifications: KEEP_CANONICAL=0; MERGE_INTO_CANONICAL=0; MOVE_TO_DBN_METADATA=0; QUARANTINE_SAFE=18; QUARANTINE_UNCLEAR=2; DO_NOT_TOUCH=3.
+- Existing folders are `data/dbn/ohlcv_1m_parent`, `data/dbn/statistics_parent`, and `data/dbn/status_parent`; all are source-like DBN parent/status/statistics folders and are classified `DO_NOT_TOUCH`.
+- Reference search found no active code or test references for the listed folder names/tokens; DBN parent and historical underscore tokens appear in report-only references.
+
+Remaining work
+- Review `reports/data_reorg/nested_data_folder_classification.md`.
+- Do not move any DBN parent/status/statistics folder without explicit user approval and DBN redundancy proof.
+
+Next recommended step
+- Review `reports/data_reorg/nested_data_folder_classification.md` and approve or reject any future no-delete quarantine/merge plan; stop before cleanup if any `DO_NOT_TOUCH` folder remains in scope.
+
 ## Phase/data reorg blocker resolution
 - Updated at UTC: 2026-06-22T04:37:24Z
 - Read objective attachment `C:\Users\donny\.codex\attachments\2de8e284-f885-4179-85d3-364e11187715\goal-objective.md`.
