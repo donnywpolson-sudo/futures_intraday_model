@@ -1,5 +1,387 @@
 # Codex Handoff
 
+## KE Phase 2 exclusion and policy-review decision
+- Updated at UTC: 2026-06-22T23:04:25Z
+- Scope: recorded the report-only KE Phase 2 decision. KE 2013-2015 are excluded from canonical Phase 2 unless explicitly policy-excepted; KE 2014 remains specifically excluded; KE 2016-2026 are policy-reviewable rather than automatically clean. No canonical data was modified, and no Phase 2 build, Phase 3+, cleanup, repair, redownload, quarantine, merge, move, delete, or data artifact staging occurred.
+
+Files changed/generated
+- `reports/phase_restart/ke_phase2_exclusion_policy_review.md`: human-readable KE Phase 2 decision packet.
+- `reports/phase_restart/ke_phase2_exclusion_policy_review.json`: machine-readable KE Phase 2 decision packet.
+- `reports/data_manifest/remaining_cleanup_blockers.md`: updated with KE decision counts/status.
+- `CODEX_HANDOFF.md`: this handoff update.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- `git diff --stat`
+- `git diff --check`
+- Readiness summary read for `reports/phase_restart/ke_2013_phase2_readiness.json` through `reports/phase_restart/ke_2026_phase2_readiness.json`.
+
+Validation results
+- KE 2013: excluded, status missing 4071, statistics missing 0, roll backsteps 0, synthetic rows 59.633118%.
+- KE 2014: excluded, status missing 101536, statistics missing 3, roll backsteps 4, synthetic rows 61.854098%.
+- KE 2015: excluded, status missing 98117, statistics missing 2, roll backsteps 0, synthetic rows 60.032591%.
+- KE 2016-2026: policy-reviewable; status missing 0 for all rows, but readiness still fails on roll and/or synthetic blockers.
+- Automatically clean KE Phase 2 rows: 0.
+- Final `git status --short -- data`: empty.
+- Final `git diff --check`: CRLF warnings only for `CODEX_HANDOFF.md` and `reports/data_manifest/remaining_cleanup_blockers.md`.
+- New KE decision files under `reports/phase_restart` are ignored local reports; explicit force-add approval is required before committing them.
+
+Remaining work
+- Commit/push the KE decision evidence only after explicit approval to force-add ignored report files if needed.
+- Continue Phase 2 planning with KE 2013-2015 excluded unless explicitly policy-excepted, and KE 2016-2026 awaiting roll/synthetic policy decisions.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: approve force-adding only `reports/phase_restart/ke_phase2_exclusion_policy_review.md/json` and staging report/handoff updates, then commit/push evidence only. Stop before Phase 2 build and cleanup.
+
+## KE 2014 alternate-source review
+- Updated at UTC: 2026-06-22T22:41:52Z
+- Scope: implemented the bounded alternate-source review for KE 2014 using existing raw, definition, statistics, symbol, status, and prior report evidence only. No canonical data was modified, and no Phase 1B re-enrichment, Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, redownload, or data artifact staging occurred.
+
+Files changed/generated
+- `reports/phase_restart/ke_2014_alternate_source_review.md`: human-readable alternate-source decision.
+- `reports/phase_restart/ke_2014_alternate_source_review.json`: machine-readable alternate-source decision.
+- `reports/data_manifest/remaining_cleanup_blockers.md`: updated with final alternate-source decision.
+- `CODEX_HANDOFF.md`: this handoff update.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- `git diff --stat`
+- `git diff --check`
+- Read-only Python scan of `data/raw/KE/2014.parquet`, `data/dbn/definition/KE/2014/2014-01-01_2015-01-01.dbn.zst`, `data/dbn/statistics/KE/2014/2014-01-01_2015-01-01.dbn.zst`, and `data/dbn/status/KE/2014/2014-01-01_2015-01-01.dbn.zst`.
+- Targeted source inspection of status/statistics as-of enrichment and Phase 2 readiness reporting logic.
+
+Validation results
+- Raw rows: 101536.
+- Raw instruments: 6, `KEH4`, `KEK4`, `KEN4`, `KEU4`, `KEZ4`, and `KEH5`.
+- Definition DBN: 90146 rows, raw-instrument overlap 6 of 6, causal metadata events available at or before raw bars.
+- Statistics DBN: 38233 rows, raw-instrument overlap 6 of 6, causal statistics events mostly available at or before raw bars.
+- Canonical status DBN: 476 rows, raw-instrument overlap 5 of 6, possible backward as-of matches 0, `KEH5` absent.
+- Exact-contract status lookback: 17 rows, raw-instrument overlap 5 of 6, possible backward as-of matches 0, `KEH5` absent.
+- Phase 2 readiness remains blocked: `status_enrichment_missing_rows=101536`, `status_enrichment_stale_rows=101536`, roll maturity backsteps=4, synthetic rows=61.854098%.
+- Final decision class: `NO_CAUSAL_ALTERNATE_SOURCE_KEEP_EXCLUDED`.
+- Final `git status --short -- data`: empty.
+- Final `git diff --check`: CRLF warnings only for `CODEX_HANDOFF.md` and `reports/data_manifest/remaining_cleanup_blockers.md`.
+- New alternate-source evidence files under `reports/phase_restart` are ignored local reports; explicit force-add approval is required before committing them.
+
+Remaining work
+- KE 2014 remains excluded from Phase 2 build.
+- If KE 2014 inclusion is still desired, it requires a separate explicit policy exception that accepts missing status enrichment, roll maturity backsteps, and synthetic coverage as caveats.
+- Commit/push the alternate-source evidence only after explicit approval to force-add ignored report files if needed.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: accept KE 2014 exclusion and continue Phase 2 only for accepted rows, or approve a separate KE 2014 policy exception path. Stop before Phase 2 build and cleanup.
+
+## KE 2014 exact-contract status lookback
+- Updated at UTC: 2026-06-22T22:29:51Z
+- Scope: performed the user-approved bounded scratch-only Databento status lookback for exact KE 2014 contracts: `KEH4`, `KEK4`, `KEN4`, `KEU4`, `KEZ4`, and `KEH5`. No canonical DBN/raw file was overwritten by this exact-contract lookback, and no Phase 1B re-enrichment, Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, or data artifact staging occurred.
+
+Files changed/generated
+- `reports/status_source_recovery/ke_2014_exact_contract_lookback/**`: generated scratch acquisition and joinability evidence; not staged.
+- `reports/phase_restart/ke_2014_exact_contract_status_lookback.md`: human-readable exact-contract lookback evidence.
+- `reports/phase_restart/ke_2014_exact_contract_status_lookback.json`: machine-readable exact-contract lookback evidence.
+- `reports/data_manifest/remaining_cleanup_blockers.md`: updated with exact-contract lookback result.
+- `CODEX_HANDOFF.md`: this handoff update.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- `git diff --stat`
+- `git diff --check`
+- Bounded one-off Python request using repo Databento download helpers with dataset `GLBX.MDP3`, schema `status`, `stype_in=raw_symbol`, `stype_out=instrument_id`, symbols `KEH4,KEK4,KEN4,KEU4,KEZ4,KEH5`, start `2013-01-01`, end `2015-01-01`, and scratch output root `reports/status_source_recovery/ke_2014_exact_contract_lookback`.
+- Bounded Python joinability check comparing scratch exact-contract status DBN to `data/raw/KE/2014.parquet`.
+
+Validation results
+- Zero-cost gate: PASS.
+- Databento job: `GLBX-20260622-Y3XLQQ4JBC`.
+- Cost: `0.0`.
+- Record count: 17.
+- Scratch output: `reports/status_source_recovery/ke_2014_exact_contract_lookback/dbn/KE_EXACT/2014/2013-01-01_2015-01-01.dbn.zst`.
+- Status timestamp range: 2014-03-14 18:15:00.013000+00:00 through 2014-12-12 18:01:00.029000+00:00.
+- Raw/status instrument overlap: 5 of 6 raw instruments.
+- Possible backward as-of raw matches: 0.
+- `KEH5` returned no status event.
+- Exact-contract lookback result: not joinable; KE 2014 remains excluded.
+- Final `git status --short -- data`: empty.
+- Final `git diff --check`: CRLF warnings only for `CODEX_HANDOFF.md` and `reports/data_manifest/remaining_cleanup_blockers.md`.
+- New exact-contract evidence files under `reports/phase_restart` and `reports/status_source_recovery` are ignored local reports; explicit force-add approval is required before committing them.
+
+Remaining work
+- KE 2014 remains excluded from Phase 2 build unless a separate explicit policy exception accepts missing status enrichment, roll maturity backsteps, and synthetic coverage.
+- Commit/push the exact-contract evidence only after explicit approval to force-add the ignored report files.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: accept KE 2014 exclusion and continue Phase 2 only for accepted rows, or approve a separate policy exception path. Stop before Phase 2 build and cleanup.
+
+## KE 2014 status API redownload
+- Updated at UTC: 2026-06-22T22:19:23Z
+- Scope: performed the user-approved bounded Databento API redownload for `schema=status`, `market=KE`, `year=2014` only. The canonical status DBN and sidecar manifest were overwritten; no Phase 1B re-enrichment, Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, or data artifact staging occurred.
+
+Files changed/generated
+- `data/dbn/status/KE/2014/2014-01-01_2015-01-01.dbn.zst`: ignored status DBN overwritten by API redownload; not staged.
+- `data/dbn/status/KE/2014/2014-01-01_2015-01-01.dbn.zst.manifest.json`: ignored sidecar manifest overwritten by API redownload; not staged.
+- `reports/status_source_recovery/ke_2014_api_redownload/**`: generated API redownload evidence.
+- `reports/phase_restart/ke_2014_status_api_redownload.md`: human-readable redownload evidence.
+- `reports/phase_restart/ke_2014_status_api_redownload.json`: machine-readable redownload evidence.
+- `reports/data_manifest/remaining_cleanup_blockers.md`: updated with redownload result.
+- `reports/data_manifest/manifest_coverage_check.csv` and `reports/data_manifest/manifest_coverage_summary.md`: refreshed manifest audit.
+- `CODEX_HANDOFF.md`: this handoff update.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- `git diff --stat`
+- `git diff --check`
+- `Get-FileHash -Algorithm SHA256 data\dbn\status\KE\2014\2014-01-01_2015-01-01.dbn.zst`
+- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --symbols KE --start 2014-01-01 --end 2015-01-01 --chunk year --dbn-root data/dbn --reports-root reports/status_source_recovery/ke_2014_api_redownload --workers 1 --overwrite --zero-cost-only --batch-wait-timeout-seconds 300 --batch-poll-seconds 10 --max-retries 0`
+- Bounded Python joinability check comparing `data/raw/KE/2014.parquet` to the redownloaded status DBN.
+- `python scripts\audit_data_manifest.py`
+
+Validation results
+- Zero-cost gate: PASS.
+- Databento job: `GLBX-20260622-Y6UBTB3UE7`.
+- Cost: `0.0`.
+- Record count: 476.
+- Previous SHA256: `6b972a329f87a6870d5465a7a432de1c1c2b1b31be237f4691cd52b702abccef`.
+- New SHA256: `1efee9634d7817f28c693661de86d4bfed928f54ebe00ca08150fa1b6368f388`.
+- New file size bytes: 8407.
+- Joinability after redownload: raw/status instrument overlap 5 of 6; possible backward as-of raw matches 0; `KEH5` still has no status event.
+- Manifest audit: `manifest_check issues=168 failures=0`.
+- `git status --short -- data`: empty after redownload and validation.
+
+Remaining work
+- KE 2014 remains excluded from Phase 2 build unless a future explicit policy exception accepts missing status enrichment, roll maturity backsteps, and synthetic coverage, or another trusted status source with prior joinable events is supplied.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: accept KE 2014 exclusion or approve a separate KE 2014 policy exception path. Stop before Phase 2 build and cleanup.
+
+## KE 2014 status mismatch diagnostic and final recovery decision
+- Updated at UTC: 2026-06-22T22:05:00Z
+- Scope: implemented the bounded KE 2014 diagnostic plan after status-source recovery still produced 0 matched status rows. No Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, redownload, DBN source modification, or data artifact staging occurred.
+
+Files changed/generated
+- `reports/phase_restart/ke_2014_status_mismatch_diagnostic.md`: human-readable status mismatch diagnostic.
+- `reports/phase_restart/ke_2014_status_mismatch_diagnostic.json`: machine-readable status mismatch diagnostic.
+- `reports/phase_restart/ke_2014_status_mismatch_phase2_raw_alignment.md/json`: Phase 1C raw alignment evidence for the diagnostic run.
+- `reports/phase_restart/ke_2014_status_mismatch_phase2_readiness.md/json`: readiness-only evidence for the diagnostic run.
+- `reports/phase_restart/ke_2014_final_recovery_decision.md`: final KE 2014 recovery decision.
+- `reports/phase_restart/ke_2014_final_recovery_decision.json`: machine-readable final KE 2014 recovery decision.
+- `reports/data_manifest/remaining_cleanup_blockers.md`: updated with KE 2014 final recovery decision.
+- `CODEX_HANDOFF.md`: this handoff update.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- `git diff --stat`
+- `git diff --check`
+- Bounded Python metadata inspection of `data/raw/KE/2014.parquet`, `data/dbn/status/KE/2014/2014-01-01_2015-01-01.dbn.zst`, and `data/dbn/definition/KE/2014/2014-01-01_2015-01-01.dbn.zst`.
+- `python -m scripts.phase1C_validate.audit_raw_dbn_alignment --config reports/phase_restart/ke_2014_phase2_causal_repair.yaml --profile phase2_repair --dbn-root data/dbn --raw-root data/raw --expected-only --json-out reports/phase_restart/ke_2014_status_mismatch_phase2_raw_alignment.json --md-out reports/phase_restart/ke_2014_status_mismatch_phase2_raw_alignment.md`
+- `python -m scripts.phase2_causal_base.build_causal_base_data --profile phase2_repair --profile-config reports\phase_restart\ke_2014_phase2_causal_repair.yaml --raw-root data\raw --output-root data\causally_gated_normalized --reports-root reports\causal_base --raw-alignment-report reports\phase_restart\ke_2014_status_mismatch_phase2_raw_alignment.json --readiness-only --readiness-json-out reports\phase_restart\ke_2014_status_mismatch_phase2_readiness.json --readiness-md-out reports\phase_restart\ke_2014_status_mismatch_phase2_readiness.md`
+
+Validation results
+- Raw rows: 101536.
+- Raw instruments: 6.
+- Status rows: 476.
+- Status instruments: 200.
+- Raw/status instrument overlap: 5 of 6 raw instruments.
+- Status matched rows: 0 of 101536.
+- Root cause: all status events for overlapping raw instruments occur after the corresponding observed raw rows ended; `KEH5` has no status event.
+- Phase 1C alignment: PASS.
+- Phase 2 readiness-only: FAIL, blockers=1, failures=0; top blocker `roll maturity sequence not monotonic: backsteps=4`; synthetic threshold `rows_pct=61.854098 max_gap_minutes=119`.
+- Final class: `EXCLUDED_STATUS_SOURCE_NOT_JOINABLE`.
+
+Remaining work
+- KE 2014 remains excluded from Phase 2 build unless a future separate explicit policy exception accepts missing status enrichment, roll maturity backsteps, and synthetic coverage, or a new trusted status source with prior joinable events is supplied.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: either accept KE 2014 exclusion and proceed with Phase 2 work on rows that are already accepted, or separately approve a KE 2014 policy exception path. Stop before Phase 2 build and cleanup.
+
+## Batch Phase 2 status-source recovery execution
+- Updated at UTC: 2026-06-22T21:35:10Z
+- Scope: implemented the approved bounded status-source recovery plan for the 8 deferred Phase 2 rows. KE 2014 was recovered from existing equivalent local evidence and re-enriched; the other 7 status-source acquisitions were attempted with `--zero-cost-only --resume` and did not produce canonical status DBNs. No Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, full rebuild, or data artifact staging occurred.
+
+Files changed/generated
+- `data/dbn/status/KE/2014/2014-01-01_2015-01-01.dbn.zst`: ignored generated/canonicalized copy from equivalent local status evidence; not staged.
+- `data/dbn/status/KE/2014/2014-01-01_2015-01-01.dbn.zst.manifest.json`: ignored generated sidecar with canonical path; not staged.
+- `data/raw/KE/2014.parquet`: ignored regenerated raw parquet from bounded Phase 1B re-enrichment; not staged.
+- `reports/phase_restart/batch_phase2_status_source_recovery_execution.md`: human-readable execution packet.
+- `reports/phase_restart/batch_phase2_status_source_recovery_execution.json`: machine-readable execution packet.
+- `reports/phase_restart/ke_2014_status_recovery_raw_repair_alpha_tiered.yaml`: one-row Phase 1C validation profile for KE 2014 status recovery.
+- `reports/phase_restart/ke_2014_status_recovery_phase1c_alignment.md/json`: raw-repair profile Phase 1C PASS evidence.
+- `reports/phase_restart/ke_2014_status_recovery_phase2_raw_alignment.md/json`: Phase 2-profile raw alignment PASS evidence.
+- `reports/phase_restart/ke_2014_status_recovery_phase2_readiness.md/json`: KE 2014 readiness-only FAIL evidence.
+- `reports/status_source_recovery/**`: generated row-level acquisition evidence for absent status-source rows.
+- `reports/data_manifest/remaining_cleanup_blockers.md`: updated status-source recovery status.
+- `reports/data_manifest/manifest_coverage_check.csv` and `reports/data_manifest/manifest_coverage_summary.md`: refreshed manifest audit.
+- `CODEX_HANDOFF.md`: this handoff update.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- `git diff --stat`
+- `git diff --check`
+- `Copy-Item` from `data\dbn\status_parent\status\KE\2014\2014-01-01_2015-01-01.dbn.zst` to `data\dbn\status\KE\2014\2014-01-01_2015-01-01.dbn.zst`
+- `Get-FileHash -Algorithm SHA256` for KE 2014 source and destination status DBNs
+- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent ... --zero-cost-only --resume` for KE 2013, ZL 2012, ZL 2013, ZM 2011, ZM 2012, ZM 2013, and ZM 2014
+- `python -m scripts.phase1B_convert.convert_databento_raw --symbols KE --start 2014-01-01 --end 2015-01-01 --dbn-root data/dbn/ohlcv_1m --raw-root data/raw --reports-root reports/raw_ingest --workers 1 --resume --overwrite --offline-local-conditions --include-optional-schemas status,statistics --optional-dbn-root data/dbn --optional-schema-policy require`
+- `python -m scripts.phase1C_validate.audit_raw_dbn_alignment --config reports/phase_restart/ke_2014_status_recovery_raw_repair_alpha_tiered.yaml --profile raw_repair --dbn-root data/dbn --raw-root data/raw --expected-only --json-out reports/phase_restart/ke_2014_status_recovery_phase1c_alignment.json --md-out reports/phase_restart/ke_2014_status_recovery_phase1c_alignment.md`
+- `python -m scripts.phase1C_validate.audit_raw_dbn_alignment --config reports/phase_restart/ke_2014_phase2_causal_repair.yaml --profile phase2_repair --dbn-root data/dbn --raw-root data/raw --expected-only --json-out reports/phase_restart/ke_2014_status_recovery_phase2_raw_alignment.json --md-out reports/phase_restart/ke_2014_status_recovery_phase2_raw_alignment.md`
+- `python -m scripts.phase2_causal_base.build_causal_base_data --profile phase2_repair --profile-config reports\phase_restart\ke_2014_phase2_causal_repair.yaml --raw-root data\raw --output-root data\causally_gated_normalized --reports-root reports\causal_base --raw-alignment-report reports\phase_restart\ke_2014_status_recovery_phase2_raw_alignment.json --readiness-only --readiness-json-out reports\phase_restart\ke_2014_status_recovery_phase2_readiness.json --readiness-md-out reports\phase_restart\ke_2014_status_recovery_phase2_readiness.md`
+- `python scripts\audit_data_manifest.py`
+
+Validation results
+- KE 2014 status source copied with matching SHA256 `6b972a329f87a6870d5465a7a432de1c1c2b1b31be237f4691cd52b702abccef`.
+- KE 2014 Phase 1B re-enrichment result: `CONVERT_OK market=KE year=2014 inputs=1 output=data/raw/KE/2014.parquet rows=101536`.
+- KE 2014 Phase 1C raw-repair alignment: PASS.
+- KE 2014 Phase 2-profile raw alignment: PASS.
+- KE 2014 Phase 2 readiness-only: FAIL, blockers=1, failures=0; remaining blocker is `roll maturity sequence not monotonic: backsteps=4`; synthetic threshold remains breached at `61.854098%`; status DBN was loaded but matched 0 of 101536 raw rows.
+- KE 2013 acquisition: zero-cost gate PASS but provider returned `422 data_no_data_found_for_request`.
+- ZL 2012, ZM 2011, and ZM 2012 acquisition: zero-cost gate PASS but download ended with `[Errno 22] Invalid argument`.
+- ZL 2013, ZM 2013, and ZM 2014 acquisition: zero-cost gate PASS but timed out waiting for Databento batch jobs.
+- Manifest audit: `manifest_check issues=168 failures=0`.
+- `git status --short -- data`: empty after recovery and validation.
+
+Remaining work
+- KE 2014 is no longer missing a canonical status DBN, but it remains blocked before Phase 2 build due roll-maturity/synthetic readiness.
+- KE 2013, ZL 2012, ZL 2013, ZM 2011, ZM 2012, ZM 2013, and ZM 2014 remain unrecovered status-source rows.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: either keep the 8 status-source rows excluded from Phase 2 build, or approve a separate policy/engineering path for KE 2014 roll-maturity/synthetic exception and a separate acquisition retry strategy for the other 7. Stop before Phase 2 build and cleanup.
+
+## Batch Phase 2 status-source final deferral
+- Updated at UTC: 2026-06-22T20:43:29Z
+- Scope: recorded the final conservative decision to keep all 8 status-source rows deferred, including KE 2014. No Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, source copy/canonicalization, rebuild, policy threshold change, or DBN source modification was run.
+
+Files changed/generated
+- `reports/phase_restart/batch_phase2_status_source_final_deferral.md`: human-readable final deferral decision.
+- `reports/phase_restart/batch_phase2_status_source_final_deferral.json`: machine-readable final deferral decision.
+- `CODEX_HANDOFF.md`: handoff update.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- `git diff --check`
+- No Phase 2 build or cleanup commands were run.
+
+Validation results
+- Rows kept deferred: 8.
+- Rows approved for canonicalization: 0.
+- Rows approved for Phase 2 build: 0.
+- KE 2014 equivalent evidence remains untouched at `data\dbn\status_parent\status\KE\2014\2014-01-01_2015-01-01.dbn.zst`.
+- `git status --short -- data`: empty before edits.
+
+Remaining work
+- Use the 58 accepted rows as the Phase 2 build universe for now.
+- The 8 status-source rows remain excluded unless a separate future approval chooses source recovery, canonicalization, or override.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: approve force-adding only the status-source recovery/final-deferral reports and staging `CODEX_HANDOFF.md`, then commit/push reports only. Stop before Phase 2 build execution.
+
+## Batch Phase 2 status-source recovery review
+- Updated at UTC: 2026-06-22T20:37:23Z
+- Scope: completed bounded local-only status-source recovery/evidence review and readiness-only rerun for the 8 deferred Phase 2 rows. No Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, source copy/canonicalization, rebuild, policy threshold change, or DBN source modification was run.
+
+Files changed/generated
+- `reports/phase_restart/batch_phase2_status_source_recovery_review.md`: human-readable status-source recovery review.
+- `reports/phase_restart/batch_phase2_status_source_recovery_review.json`: machine-readable status-source recovery review.
+- `reports/phase_restart/*_status_source_recovery_readiness.json` and `.md`: readiness-only rerun evidence for the 8 deferred rows.
+- `CODEX_HANDOFF.md`: handoff update.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- `git diff --check`
+- Local path searches under `data`, `_data_reorg_quarantine20260621T222448Z`, and `reports` for status DBN/equivalent evidence.
+- Cheap metadata/hash read for `data\dbn\status_parent\status\KE\2014\2014-01-01_2015-01-01.dbn.zst`.
+- Readiness-only reruns for KE 2013, KE 2014, ZL 2012, ZL 2013, ZM 2011, ZM 2012, ZM 2013, and ZM 2014.
+- No Phase 2 build or cleanup commands were run.
+
+Validation results
+- Canonical `data\dbn\status\<market>\<year>` DBN files found for deferred rows: 0.
+- Canonical `data\dbn\status_parent\<market>\<year>` DBN files found for deferred rows: 0.
+- Equivalent/mislocated status evidence found: KE 2014 only, `data\dbn\status_parent\status\KE\2014\2014-01-01_2015-01-01.dbn.zst`, SHA256 `6b972a329f87a6870d5465a7a432de1c1c2b1b31be237f4691cd52b702abccef`.
+- Readiness-only reruns: 8 completed, 0 PASS, 8 FAIL.
+- `git status --short -- data`: empty after readiness-only reruns.
+
+Remaining work
+- The 8 deferred rows remain blocked before Phase 2 build.
+- Recommended: keep 7 rows without status evidence deferred; separately decide whether to canonicalize/re-enrich KE 2014 from equivalent status evidence or keep it deferred.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: approve force-adding only `reports/phase_restart/batch_phase2_status_source_recovery_review.md/json`, `reports/phase_restart/*_status_source_recovery_readiness.md/json`, and staging `CODEX_HANDOFF.md`, then commit/push reports only. Stop before Phase 2 build execution.
+
+## Phase 2 corrected execution strategy
+- Updated at UTC: 2026-06-22T20:25:56Z
+- Scope: recorded a report-only corrected Phase 2 execution strategy after the KE 2015-2026 build attempt stopped before output. No Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, source acquisition, source reconstruction, policy threshold change, code change, or DBN source modification was run.
+
+Files changed/generated
+- `reports/phase_restart/phase2_corrected_execution_strategy.md`: human-readable corrected execution strategy.
+- `reports/phase_restart/phase2_corrected_execution_strategy.json`: machine-readable corrected execution strategy.
+- `CODEX_HANDOFF.md`: handoff update.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- `git diff --check`
+- Read `reports/phase_restart/ke_2015_2026_phase2_build_attempt_blocked.json`.
+- Read `reports/phase_restart/batch_phase2_build_exclusion_plan.json`.
+- Read Phase 2 readiness/status logic in `scripts/phase2_causal_base/build_causal_base_data.py`.
+- No Phase 2 build or cleanup commands were run in this strategy step.
+
+Validation results
+- Reports-root/manifest blocker identified: `reports\phase_restart\causal_base_manifest.json` missing while canonical output root already contains parquet.
+- Readiness exception blocker identified: current build requires readiness `PASS`; roll-maturity warnings are unconditional and cannot be cleared with threshold-only config.
+- Corrected no-code subset: KE 2015, KE 2020, KE 2023, KE 2025.
+- Corrected code-reviewed roll exception path: KE 2016, KE 2017, KE 2018, KE 2019, KE 2021, KE 2022, KE 2024, KE 2026.
+- `git status --short -- data`: empty before edits.
+
+Remaining work
+- Corrected strategy report is not yet committed.
+- Need a separate explicit approval to run Path A no-code subset or to implement Path B roll-maturity exception handling.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: approve force-adding only `reports/phase_restart/phase2_corrected_execution_strategy.md/json`, `reports/phase_restart/ke_2015_2026_phase2_build_attempt_blocked.md/json`, and staging `CODEX_HANDOFF.md`, then commit/push reports only. Stop before Phase 2 build execution.
+
+## KE 2015-2026 Phase 2 build attempt blocked
+- Updated at UTC: 2026-06-22T19:37:29Z
+- Scope: attempted the user-approved bounded KE Phase 2 build batch for accepted rows only, excluding KE 2013 and KE 2014. The attempt stopped on KE 2015 before any output was written. No Phase 2 causal parquet, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, source acquisition, source reconstruction, policy threshold change, or DBN source modification occurred.
+
+Files changed/generated
+- `reports/phase_restart/ke_2015_2026_phase2_build_attempt_blocked.md`: human-readable blocked attempt evidence.
+- `reports/phase_restart/ke_2015_2026_phase2_build_attempt_blocked.json`: machine-readable blocked attempt evidence.
+- `CODEX_HANDOFF.md`: handoff update.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- `git diff --check`
+- Attempted `python -m scripts.phase2_causal_base.build_causal_base_data --profile phase2_repair --profile-config reports\phase_restart\ke_2015_phase2_causal_repair.yaml --raw-root data\raw --output-root data\causally_gated_normalized --reports-root reports\phase_restart --raw-alignment-report reports\phase_restart\ke_2015_phase2_raw_alignment.json`
+- Read `scripts/phase2_causal_base/build_causal_base_data.py` readiness/build gate logic.
+- No cleanup commands were run.
+
+Validation results
+- Build output written: 0 rows/files.
+- Blocker: `FAIL output_root_guard: output_root already contains parquet files but paired Phase 2 manifest is missing: output_root=data/causally_gated_normalized manifest=reports/phase_restart/causal_base_manifest.json`.
+- Additional gate finding: non-readiness Phase 2 build requires readiness `PASS` before writing output; roll-maturity backsteps remain hard readiness warnings without a profile flag.
+- `git status --short -- data`: empty after the failed attempt.
+
+Remaining work
+- Need an explicitly approved Phase 2 build execution strategy that resolves both the paired reports-root/manifest guard and the readiness exception handling without changing protected core logic unexpectedly.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: approve a corrected report-only Phase 2 execution strategy, or defer Phase 2 build until the code supports recorded exception decisions. Stop before cleanup.
+
 ## Batch Phase 2 build/exclusion plan
 - Updated at UTC: 2026-06-22T19:37:29Z
 - Scope: created the user-approved bounded report-only Phase 2 build/exclusion plan from the recorded decisions. Accepted rows are mapped to future executable one-row/market batches; deferred rows remain excluded. No Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, source acquisition, source reconstruction, policy threshold change, or DBN source modification was run.
@@ -2362,3 +2744,17 @@ Updated at UTC: 2026-06-22T00:23:29Z
 - Test results: PASS, focused live ops/chart `71 passed`; PASS, smoke CLI `PASS live trading smoke scenarios=34 decision_cycles=34 audit_rows=34`; PASS, broad bounded pytest `732 passed, 58 warnings`; PASS, `git diff --check` with CRLF warnings only. Safety search found Databento market-data auth, redaction test strings, audit redaction markers, artifact-policy text, and static blocked-token tests; no real broker SDK/order path was added by this slice.
 - Closeout result: paper/smoke scaffold readiness docs are current and explicitly not production-live ready. Remaining production-depth work is documented as deferred, not blocked.
 - Next recommended step: decide next major track: continue live-ops production-depth work, return to model/research pipeline, or clean the unrelated data-cleanup handoff content.
+
+## Master Data Health Matrix
+- Updated at UTC: 2026-06-22T23:25:02Z.
+- Scope: report-only master matrix for all expected market/year rows and schemas; no repair/build/cleanup/data movement.
+- Files changed by this slice: `reports/data_manifest/master_data_health_summary.md`, `reports/data_manifest/master_data_health_matrix.csv`, `reports/data_manifest/master_data_health_matrix.json`, `reports/data_manifest/remaining_cleanup_blockers.md`, `CODEX_HANDOFF.md`.
+- Evidence sources: `configs/data_manifest.yaml`, `reports/data_manifest/manifest_coverage_check.csv`, `reports/raw_readiness/raw_enriched_optional_schema_audit.json`, Phase 2 readiness/decision reports, cheap canonical file-presence checks.
+- Commands run: read objective attachment; `git status --short`; `git status --short -- data`; `git diff --stat`; `git diff --check`; `python scripts\audit_data_manifest.py`; `python -m scripts.validation.audit_enriched_raw_optional_schemas` (timed out after writing FAIL evidence); report-generation script.
+- Matrix counts: expected rows 527; OK_SOURCE_PRESENT 45; POLICY_REVIEW_REQUIRED 450; EXCLUDED_FROM_PHASE2 9; UNKNOWN_REVIEW_REQUIRED 23.
+- Drilldown: unknown rows 23; excluded rows 9; policy-review rows 450.
+- Important blocker: raw optional-schema audit is `FAIL` with 23 file failures; see `reports/data_manifest/master_data_health_summary.md`.
+- Important blocker: `KE:2015` has decision evidence that must be refreshed before Phase 2 build because latest KE policy excludes it but the older build plan accepted it.
+- Validation results: `git status --short -- data` was empty; `git diff --check` was clean; `reports/data_manifest/master_data_health_summary.md`, `reports/data_manifest/master_data_health_matrix.csv`, and `reports/data_manifest/master_data_health_matrix.json` are ignored reports and were not staged.
+- Data safety: no data files were deleted, moved, merged, quarantined, rebuilt, redownloaded, or staged by this matrix step; DBN source files were not modified by this report generation; cleanup was not run.
+- Remaining work: review the matrix drilldown rows, decide per-row re-enrichment/source-reference correction/deferral/exclusion, then refresh Phase 2 build/exclusion plan before any Phase 2 build.

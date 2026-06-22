@@ -10,7 +10,7 @@ Generated at UTC: 2026-06-22T14:22:47Z
 - Remaining approved Phase 1B raw parquet repairs: 0.
 - User decision recorded: the 66 Phase 2 causal repair rows are approved for later bounded one-market/year repair runs; stop before Phase 2 execution.
 - Cleanup remains disabled in `configs/data_manifest.yaml`.
-- No cleanup, merge, quarantine, data move, data delete, redownload, rebuild, phase 2, phase 3+ command, or DBN source modification was run.
+- No cleanup, merge, quarantine, data move, data delete, rebuild, phase 2 build, phase 3+ command, or unapproved DBN source modification was run. Bounded user-approved KE 2014 status-only API and exact-contract lookback requests were run as evidence.
 
 ## Final Decision Packet
 
@@ -55,4 +55,72 @@ Generated at UTC: 2026-06-22T14:22:47Z
 - All 66 Phase 2 causal rows are now `APPROVE_BOUNDED_REPAIR_LATER`.
 - No Phase 2 command was run in this decision step.
 - Smallest later execution unit: one market/year readiness-only check, then one separately approved bounded Phase 2 build for that same market/year.
-- Suggested first row for a later execution goal: `KE:2013`.
+- KE-specific decision update: KE 2013-2015 are excluded from canonical Phase 2 unless explicitly policy-excepted; KE 2016-2026 are policy-reviewable, not automatically clean.
+
+## Latest Status-Source Recovery Execution
+
+- Evidence packet: `reports/phase_restart/batch_phase2_status_source_recovery_execution.md`.
+- KE 2014 local canonicalization completed by copying the equivalent status DBN from `data/dbn/status_parent/status/KE/2014/2014-01-01_2015-01-01.dbn.zst` to `data/dbn/status/KE/2014/2014-01-01_2015-01-01.dbn.zst`; source SHA256 remained `6b972a329f87a6870d5465a7a432de1c1c2b1b31be237f4691cd52b702abccef`.
+- KE 2014 bounded Phase 1B raw/status re-enrichment completed and Phase 1C alignment passed.
+- KE 2014 Phase 2 readiness-only still failed: blocker `roll maturity sequence not monotonic: backsteps=4`; synthetic threshold still breached at `61.854098%`; status DBN loaded but matched 0 of 101536 raw rows.
+- The other 7 status-source rows were attempted with `--zero-cost-only --resume` and remain unrecovered: KE 2013, ZL 2012, ZL 2013, ZM 2011, ZM 2012, ZM 2013, and ZM 2014.
+- Current manifest audit after recovery: `manifest_check issues=168 failures=0`.
+- No Phase 2 build, cleanup, phase 3+, move, merge, quarantine, delete, full rebuild, or data artifact staging occurred.
+
+## KE 2014 Final Recovery Decision
+
+- Diagnostic: `reports/phase_restart/ke_2014_status_mismatch_diagnostic.md`.
+- Final decision: `EXCLUDED_STATUS_SOURCE_NOT_JOINABLE`.
+- Reason: the canonical status DBN decodes and partially overlaps raw instrument IDs, but every status event for overlapping raw instruments occurs after the corresponding observed raw rows ended; `KEH5` has no status event. Therefore the existing backward as-of status join cannot enrich observed KE 2014 rows without changing status semantics or inventing prior state.
+- KE 2014 remains excluded from Phase 2 build unless a future separate explicit policy exception accepts missing status enrichment, roll maturity backsteps, and synthetic coverage, or a new trusted status source with prior joinable events is supplied.
+- Latest KE 2014 readiness-only: FAIL, blockers=1, failures=0; top blocker `roll maturity sequence not monotonic: backsteps=4`; synthetic threshold `rows_pct=61.854098 max_gap_minutes=119`; status matched rows 0 of 101536.
+
+## KE 2014 Status API Redownload
+
+- Redownload evidence: `reports/phase_restart/ke_2014_status_api_redownload.md`.
+- User-approved status-only API redownload completed for KE 2014 with Databento job `GLBX-20260622-Y6UBTB3UE7`.
+- Zero-cost gate: PASS; cost `0.0`; record count 476.
+- Canonical status file changed from SHA256 `6b972a329f87a6870d5465a7a432de1c1c2b1b31be237f4691cd52b702abccef` to `1efee9634d7817f28c693661de86d4bfed928f54ebe00ca08150fa1b6368f388`.
+- Joinability still failed: raw/status instrument overlap 5 of 6, possible backward as-of raw matches 0, `KEH5` still has no status event.
+- No Phase 1B re-enrichment, Phase 2 build, cleanup, phase 3+, or data artifact staging occurred.
+
+## KE 2014 Exact-Contract Status Lookback
+
+- Exact-contract evidence: `reports/phase_restart/ke_2014_exact_contract_status_lookback.md`.
+- Scratch status-only Databento request completed for `KEH4,KEK4,KEN4,KEU4,KEZ4,KEH5` with Databento job `GLBX-20260622-Y3XLQQ4JBC`.
+- Zero-cost gate: PASS; cost `0.0`; record count 17.
+- Scratch output only: `reports/status_source_recovery/ke_2014_exact_contract_lookback/dbn/KE_EXACT/2014/2013-01-01_2015-01-01.dbn.zst`.
+- Joinability still failed: raw/status instrument overlap 5 of 6, possible backward as-of raw matches 0, `KEH5` still has no status event.
+- No canonical status overwrite, Phase 1B re-enrichment, Phase 2 build, cleanup, phase 3+, or data artifact staging occurred.
+- KE 2014 remains excluded from Phase 2 build unless a separate explicit policy exception accepts missing status enrichment, roll maturity backsteps, and synthetic coverage.
+
+## KE 2014 Alternate-Source Review
+
+- Alternate-source review: `reports/phase_restart/ke_2014_alternate_source_review.md`.
+- Existing definition DBN overlaps all 6 raw instruments and has causal contract metadata coverage.
+- Existing statistics DBN overlaps all 6 raw instruments and has causal statistics coverage.
+- Neither definition nor statistics contains status semantics such as `status_action`, `status_trading_event`, `status_is_trading`, or `status_is_quoting`; they cannot replace the status source without changing semantics.
+- Final decision: `NO_CAUSAL_ALTERNATE_SOURCE_KEEP_EXCLUDED`.
+- KE 2014 remains excluded from Phase 2 build unless a separate explicit policy exception accepts missing status enrichment, roll maturity backsteps, and synthetic coverage.
+- No canonical data modification, Phase 1B re-enrichment, Phase 2 build, cleanup, redownload, or data artifact staging occurred.
+
+## KE Phase 2 Exclusion and Policy Review
+
+- Decision packet: `reports/phase_restart/ke_phase2_exclusion_policy_review.md`.
+- KE 2013-2015 are excluded from canonical Phase 2 unless a future explicit policy exception approves them.
+- KE 2014 remains specifically excluded as `KE_2014_EXCLUDED_NO_CAUSAL_STATUS_SOURCE`.
+- KE 2016-2026 are `KE_2016_2026_POLICY_REVIEWABLE`: status missing rows are 0, but readiness still fails on roll and/or synthetic blockers.
+- Automatically clean KE Phase 2 rows: 0.
+- No Phase 2 build, cleanup, repair, redownload, move, merge, quarantine, delete, canonical data mutation, or data artifact staging occurred.
+
+## Master Data Health Matrix
+- Updated at UTC: 2026-06-22T23:25:02Z.
+- Report-only matrix written to `reports/data_manifest/master_data_health_summary.md`, `reports/data_manifest/master_data_health_matrix.csv`, and `reports/data_manifest/master_data_health_matrix.json`.
+- Expected market/year rows reviewed: 527.
+- Health class counts: OK_SOURCE_PRESENT=45, POLICY_REVIEW_REQUIRED=450, EXCLUDED_FROM_PHASE2=9, UNKNOWN_REVIEW_REQUIRED=23.
+- Drilldown required before Phase 2/model trust: 23 unknown rows and 9 excluded rows.
+- Raw optional-schema audit status: `FAIL` with 23 file failures.
+- Phase 2 build/exclusion evidence must be refreshed before Phase 2 build because latest KE policy excludes `KE:2015` while the older build plan accepted it.
+- Validation result: `git status --short -- data` was empty; `git diff --check` was clean; the matrix report files are ignored and not staged.
+- No repair, Phase 2 build, cleanup, redownload, move, merge, quarantine, delete, or DBN source modification was run by the matrix generation.
+- Cleanup remains disabled.
