@@ -1,11 +1,11 @@
 # Phase 1B Raw Repair Progress
 
-Generated at UTC: 2026-06-22T13:42:19Z
+Generated at UTC: 2026-06-22T13:55:37Z
 
 ## Summary
 
-- Completed and validated raw repairs: 7.
-- Remaining raw missing pairs: 3.
+- Completed and validated raw repairs: 8.
+- Remaining raw missing pairs: 2.
 - Phase 2 causal rows still undecided: 66.
 - Duplicate policy: 12 rows are `KEEP_BOTH_DO_NOT_TOUCH`.
 - Cleanup remains disabled and blocked.
@@ -21,12 +21,12 @@ Generated at UTC: 2026-06-22T13:42:19Z
 | TN:2025 | `data/raw/TN/2025.parquet` | PASS | `reports/phase_restart/tn_2025_phase1b_raw_repair.md` |
 | TN:2026 | `data/raw/TN/2026.parquet` | PASS | `reports/phase_restart/tn_2026_phase1b_raw_repair.md` |
 | ZL:2025 | `data/raw/ZL/2025.parquet` | PASS | `reports/phase_restart/zl_2025_phase1b_raw_repair.md` |
+| ZL:2026 | `data/raw/ZL/2026.parquet` | PASS | `reports/phase_restart/zl_2026_phase1b_raw_repair.md` |
 
 ## Remaining Raw Repairs
 
 | Pair | Status |
 |---|---|
-| ZL:2026 | approved for later bounded Phase 1B raw repair |
 | ZM:2025 | approved for later bounded Phase 1B raw repair |
 | ZM:2026 | approved for later bounded Phase 1B raw repair |
 
