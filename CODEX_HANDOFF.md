@@ -1,5 +1,65 @@
 # Codex Handoff
 
+## Manifest cleanup gate decision refinement
+- Updated at UTC: 2026-06-22T10:01:56Z
+- Scope: resolved the previous cleanup blocker labels into explicit repair/defer/approval decisions without mutating data. No cleanup, quarantine, data move, data delete, DBN redownload, DBN source modification, full rebuild, expensive job, or phase 3+ command was run.
+
+Changed
+- `reports/data_manifest/manifest_policy_gap_decisions.csv`: replaced prior unresolved blocker labels with final decision classes while preserving canonical path, schema, market/year, prior classification, evidence, rationale, next action, and cleanup-gate status.
+- `reports/data_manifest/manifest_policy_gap_decisions.md`: updated grouped decision summary.
+- `reports/data_manifest/manifest_cleanup_gate_decision.md`: added explicit cleanup-gate report.
+- `CODEX_HANDOFF.md`: recorded this refinement.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- `git log -5 --oneline`
+- `git diff --stat`
+- `git diff --check`
+- Targeted reads of `reports/data_manifest/manifest_policy_gap_decisions.csv`, `reports/data_manifest/manifest_policy_gap_decisions.md`, `reports/data_manifest/manifest_coverage_check.csv`, `reports/data_manifest/manifest_coverage_summary.md`, `configs/data_manifest.yaml`, `reports/data_lineage/pipeline_phase_io_map.md`, `reports/data_lineage/canonical_path_summary.md`, `reports/data_lineage/raw_dbn_candidates.csv`, `reports/data_lineage/parquet_candidates.csv`, and `CODEX_HANDOFF.md`.
+- Directory metadata checks for `data/raw_repair_candidates`, `data/causally_gated_normalized_repair_candidates`, `data/raw/_repair_candidates`, and `data/causally_gated_normalized/_repair_candidates`.
+- Generated updated `reports/data_manifest/manifest_policy_gap_decisions.csv`, `reports/data_manifest/manifest_policy_gap_decisions.md`, and `reports/data_manifest/manifest_cleanup_gate_decision.md`.
+- `python scripts\audit_data_manifest.py`
+- Final validation: `git status --short`, `git status --short -- data`, `git diff --stat`, and `git diff --check`.
+
+Updated blocker counts
+- REPAIR_REQUIRED_BEFORE_CLEANUP: 0.
+- DUPLICATE_POLICY_DEFERRED: 0.
+- STALE_OR_UNKNOWN_REVIEW_REQUIRED: 0.
+- UNKNOWN_BLOCKING_CLEANUP: 0.
+- REPAIR_APPROVAL_REQUIRED: 76.
+- MANIFEST_POLICY_FIX_REQUIRED: 68.
+- DUPLICATE_MERGE_APPROVAL_REQUIRED: 12.
+- EXPLICITLY_DEFERRED_POLICY_GAP: 23.
+- SAFE_TO_DEFER_DO_NOT_TOUCH: 2.
+
+Cleanup gate decision
+- Cleanup gate remains blocked.
+- Approval-required actions remain for 156 rows: 76 canonical raw/causal repair approvals, 68 status manifest-policy or repair approvals, and 12 duplicate merge/quarantine/keep approvals.
+- `configs/data_manifest.yaml` was not edited. Proposed policy work is documented in `reports/data_manifest/manifest_cleanup_gate_decision.md`: decide whether `data/dbn/status` remains complete required coverage or becomes optional/deferred for the Phase 1A/1B/1C/2 restart cleanup gate.
+
+Repair-candidate path decisions
+- `data/raw_repair_candidates`: exact no-underscore path absent.
+- `data/causally_gated_normalized_repair_candidates`: exact no-underscore path absent.
+- `data/raw/_repair_candidates`: `SAFE_TO_DEFER_DO_NOT_TOUCH`; existing non-canonical repair-candidate root, 24 files, 3 child dirs, 48287054 bytes.
+- `data/causally_gated_normalized/_repair_candidates`: `SAFE_TO_DEFER_DO_NOT_TOUCH`; existing non-canonical repair-candidate root, 2 files, 1 child dir, 14492021 bytes.
+
+Safety confirmations
+- No data files were deleted.
+- No DBN source files were modified.
+- Cleanup was not run.
+- Manifest audit passed: `manifest_check issues=179 failures=0`.
+- `git status --short -- data` returned no output after validation.
+- `git diff --check` reported no errors; only CRLF warnings for `CODEX_HANDOFF.md`.
+
+Remaining work
+- Approve bounded repair/generation or explicit deferral for 76 `REPAIR_APPROVAL_REQUIRED` rows.
+- Approve manifest policy change or status repair plan for 68 `MANIFEST_POLICY_FIX_REQUIRED` rows.
+- Approve duplicate content review and merge/quarantine/keep policy for 12 `DUPLICATE_MERGE_APPROVAL_REQUIRED` rows.
+
+Next recommended step
+- Review `reports/data_manifest/manifest_cleanup_gate_decision.md` and choose the first approval path: bounded raw/causal repair, status manifest-policy change, or duplicate content review.
+
 ## Manifest cleanup blocker classification
 - Updated at UTC: 2026-06-22T09:55:46Z
 - Scope: classified manifest cleanup blockers using `reports/data_manifest/manifest_coverage_check.csv`, `reports/data_manifest/manifest_coverage_summary.md`, `configs/data_manifest.yaml`, and repo/report text references. No cleanup, quarantine, data move, data delete, DBN redownload, DBN source modification, full rebuild, or phase 3+ command was run.
