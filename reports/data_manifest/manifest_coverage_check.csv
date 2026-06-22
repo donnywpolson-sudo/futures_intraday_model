@@ -102,9 +102,6 @@ data/dbn/definition,definition,ZL:2010,extra_pair,allowed_extra,false,present in
 data/dbn/definition,definition,ZM:2010,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
 data/dbn/definition,definition,6M:2026,duplicate_pair,known_duplicate_policy_deferred,false,data/dbn/definition/6M/2026/2026-01-01_2026-06-13.dbn.zst;data/dbn/definition/6M/2026/2026-06-12_2026-06-13.dbn.zst
 data/dbn/trades,trades,6M:2026,duplicate_pair,known_duplicate_policy_deferred,false,data/dbn/trades/6M/2026/2026-01-01_2026-06-13.dbn.zst;data/dbn/trades/6M/2026/2026-06-12_2026-06-13.dbn.zst
-data/raw/{market}/{year}.parquet,phase1b_raw_parquet,KE:2025,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
-data/raw/{market}/{year}.parquet,phase1b_raw_parquet,KE:2026,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
-data/raw/{market}/{year}.parquet,phase1b_raw_parquet,SR1:2025,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
 data/raw/{market}/{year}.parquet,phase1b_raw_parquet,SR1:2026,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
 data/raw/{market}/{year}.parquet,phase1b_raw_parquet,TN:2025,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
 data/raw/{market}/{year}.parquet,phase1b_raw_parquet,TN:2026,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
