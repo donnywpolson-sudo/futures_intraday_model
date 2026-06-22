@@ -1,0 +1,74 @@
+{
+  "mode": "download-dbn",
+  "chunk": "year",
+  "raw_format": "dbn-zstd",
+  "schema": "ohlcv-1m",
+  "schemas": [
+    "ohlcv-1m"
+  ],
+  "zero_cost_only": false,
+  "zero_cost_start_search": false,
+  "zero_cost_start_search_report": null,
+  "stype_in": "continuous",
+  "stype_out": "instrument_id",
+  "start": "2023-01-01",
+  "end": "2024-01-01",
+  "universe": "extended_cme",
+  "product_count": 1,
+  "task_count": 1,
+  "datasets": [
+    "GLBX.MDP3"
+  ],
+  "products": [
+    "ZN"
+  ],
+  "workers": 1,
+  "resume": true,
+  "overwrite": false,
+  "dbn_root": "data/dbn/ohlcv_1m",
+  "raw_root": "data/raw",
+  "reports_root": "reports/phase_restart/manifest_phase_1a_smoke",
+  "required_schema_columns": [
+    "ts_event",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "rtype",
+    "publisher_id",
+    "instrument_id",
+    "symbol",
+    "data_quality_status",
+    "data_quality_degraded"
+  ],
+  "data_quality_fields": [
+    "data_quality_status",
+    "data_quality_degraded"
+  ],
+  "price_type": "float",
+  "price_scale_policy": "databento_dbnstore_to_df_price_type_float",
+  "output_role": "dbn_archive",
+  "pipeline_raw_ready": false,
+  "archive_only": true,
+  "tasks": [
+    {
+      "dataset": "GLBX.MDP3",
+      "product": "ZN",
+      "year": 2023,
+      "start": "2023-01-01",
+      "end": "2024-01-01",
+      "symbol": "ZN.v.0",
+      "output_path": "data/dbn/ohlcv_1m/ZN/2023/2023-01-01_2024-01-01.dbn.zst",
+      "schema": "ohlcv-1m",
+      "stype_in": "continuous",
+      "stype_out": "instrument_id",
+      "chunk": "year",
+      "raw_format": "dbn-zstd"
+    }
+  ],
+  "generated_at": "2026-06-22T09:29:24.653472+00:00",
+  "run_id": "f24b651e57dd4f8a860d489999ad0acf",
+  "run_kind": "dry_run",
+  "plan_hash": "4c818070d8a4b5a9f2be2945f191ce93c06b30d9b109577a5547a36b2e3aecc0"
+}

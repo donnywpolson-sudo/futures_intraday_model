@@ -1,0 +1,33 @@
+paths:
+  raw_root: data/raw
+  causal_base_root: data/causally_gated_normalized
+  reports_root: reports/phase_restart
+
+defaults:
+  require_roll_metadata_for_profiles: []
+  max_synthetic_gap_minutes: 120
+  sparse_trade_derived_roll_window_minutes: 15
+
+causal_base:
+  sparse_trade_derived_ohlcv_markets: ["SR1", "SR3"]
+  sparse_trade_derived_roll_window_minutes: 15
+  vendor_trusted_ohlcv_no_trade_markets: ["ZN"]
+
+profile_defaults:
+  smoke:
+    max_synthetic_rows_pct: 5.0
+    max_degraded_rows_pct: 5.0
+    max_roll_window_rows_pct: 2.0
+
+profiles:
+  manifest_smoke_zn_2023:
+    description: "Manifest bounded smoke: ZN 2023."
+    intent: manifest_bounded_smoke
+    requirement_set: production_like
+    settings_profile: smoke
+    markets: ["ZN"]
+    years: [2023]
+    forbid_research_use: true
+
+aliases:
+  manifest_smoke: manifest_smoke_zn_2023

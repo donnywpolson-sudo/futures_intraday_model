@@ -1,0 +1,141 @@
+{
+  "stage": "raw_ingest",
+  "mode": "convert-parquet",
+  "generated_at": "2026-06-22T09:32:31.937023+00:00",
+  "run_id": null,
+  "plan_hash": null,
+  "dbn_root": "data/dbn/ohlcv_1m",
+  "raw_root": "data/raw",
+  "schema": "ohlcv-1m",
+  "required_schema_columns": [
+    "ts_event",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "rtype",
+    "publisher_id",
+    "instrument_id",
+    "symbol",
+    "data_quality_status",
+    "data_quality_degraded"
+  ],
+  "price_type": "float",
+  "price_scale_policy": "databento_dbnstore_to_df_price_type_float",
+  "data_quality_fields": [
+    "data_quality_status",
+    "data_quality_degraded"
+  ],
+  "data_quality_sources": [
+    "offline_local_all_available"
+  ],
+  "optional_schemas": [
+    "statistics",
+    "status"
+  ],
+  "optional_schema_warning_count": 0,
+  "vendor_quality_available": true,
+  "decoded_symbols": [
+    "ZN.v.0"
+  ],
+  "input_hashes": {
+    "data/dbn/ohlcv_1m/ZN/2023/2023-01-01_2024-01-01.dbn.zst": "849b39b12513460b790dbb9778592ac6bc1475189072c0654e256c9c968f9127",
+    "data/dbn/definition/ZN/2023/2023-01-01_2024-01-01.dbn.zst": "6c626dd749d979e1db02565c9037acb431de8c2ef39fb73ea5f8fbede46d7380"
+  },
+  "output_hashes": {
+    "data/raw/ZN/2023.parquet": "c44fc0a3e6fe877d272676b5758cd82ba1c989fa6a88b78c16129304dd99bee7"
+  },
+  "output_count": 1,
+  "failure_count": 0,
+  "outputs": [
+    {
+      "status": "ok_existing",
+      "market": "ZN",
+      "year": 2023,
+      "input_paths": [
+        "data/dbn/ohlcv_1m/ZN/2023/2023-01-01_2024-01-01.dbn.zst"
+      ],
+      "definition_path": "data/dbn/definition/ZN/2023/2023-01-01_2024-01-01.dbn.zst",
+      "definition_paths": [
+        "data/dbn/definition/ZN/2023/2023-01-01_2024-01-01.dbn.zst"
+      ],
+      "input_hashes": {
+        "data/dbn/ohlcv_1m/ZN/2023/2023-01-01_2024-01-01.dbn.zst": "849b39b12513460b790dbb9778592ac6bc1475189072c0654e256c9c968f9127",
+        "data/dbn/definition/ZN/2023/2023-01-01_2024-01-01.dbn.zst": "6c626dd749d979e1db02565c9037acb431de8c2ef39fb73ea5f8fbede46d7380"
+      },
+      "output_path": "data/raw/ZN/2023.parquet",
+      "output_hash": "c44fc0a3e6fe877d272676b5758cd82ba1c989fa6a88b78c16129304dd99bee7",
+      "schema": "ohlcv-1m",
+      "required_schema_columns": [
+        "ts_event",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "rtype",
+        "publisher_id",
+        "instrument_id",
+        "symbol",
+        "data_quality_status",
+        "data_quality_degraded"
+      ],
+      "raw_schema_variant": "databento_full",
+      "price_type": "float",
+      "price_scale_policy": "databento_dbnstore_to_df_price_type_float",
+      "data_quality_source": "offline_local_all_available",
+      "vendor_quality_available": true,
+      "definition_point_in_time_enforced": true,
+      "definition_metadata_policy": "latest definition row per instrument_id at or before OHLCV ts_event",
+      "optional_schemas": [
+        "status",
+        "statistics"
+      ],
+      "optional_schema_policy": "warn",
+      "optional_dbn_root": "data/dbn",
+      "optional_schema_input_paths": {
+        "status": [],
+        "statistics": []
+      },
+      "optional_schema_match_summary": {},
+      "optional_schema_warning_count": 0,
+      "warnings": [],
+      "validation": {
+        "path": "data/raw/ZN/2023.parquet",
+        "valid": true,
+        "errors": [],
+        "warnings": [],
+        "rows": 335711,
+        "timestamp_ok": true,
+        "timestamp_monotonic": true,
+        "invalid_ts_count": 0,
+        "duplicate_ts_count": 0,
+        "missing_columns": [],
+        "bad_ohlc_count": 0,
+        "negative_volume_count": 0,
+        "metadata_null_counts": {
+          "rtype": 0,
+          "publisher_id": 0,
+          "instrument_id": 0,
+          "symbol": 0
+        },
+        "instrument_id_nonnull": 335711,
+        "symbol_nonnull": 335711,
+        "blank_symbol_count": 0,
+        "degraded_bar_count": 0
+      },
+      "elapsed_seconds": 0.875,
+      "row_count": 335711,
+      "first_ts": "2023-01-02T23:00:00+00:00",
+      "last_ts": "2023-12-29T21:59:00+00:00",
+      "decoded_symbols": [
+        "ZN.v.0"
+      ],
+      "data_quality_status_counts": {
+        "available": 335711
+      },
+      "degraded_bar_count": 0
+    }
+  ]
+}
