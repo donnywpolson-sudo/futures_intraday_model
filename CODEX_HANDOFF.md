@@ -128,6 +128,36 @@
 - Focused tests: PASS, 18 passed.
 - Requested script command no longer failed with `data_end_date_after_available_end_date`; it logged `requested=2026-06-23`, `available_exclusive=2026-06-22`, `final=2026-06-22`.
 - Requested script command then exited on pre-existing ES continuous-symbol ambiguity over `[2026-06-15, 2026-06-22)`: candidates `42140864[2026-06-15,2026-06-17)` and `42140870[2026-06-17,2026-06-22)`.
+- Rechecked after continuation: focused tests still PASS, 18 passed; requested script command still clamps to `available_exclusive=2026-06-22` and fails only on the same ES roll-window ambiguity.
 
 ## Live chart Databento available-end clamp next recommended step
 - Decide whether to change ES continuous-symbol resolution over roll windows, or rerun with a shorter `--lookback-hours` that does not cross the roll.
+
+## Live chart ES roll-window resolution
+- Follow-up to the default command output: `ES.v.0` resolved to two candidates across the 168-hour lookback because the window crossed a roll.
+- Updated `resolve_single_instrument` to select the unique instrument candidate active immediately before the request's exclusive `end_date`.
+- Kept the existing ambiguity failure when multiple candidates are active at that right edge.
+
+## Live chart ES roll-window resolution files changed
+- `live_chart_feed.py`
+- `tests/test_live_chart_feed.py`
+- `CODEX_HANDOFF.md`
+
+## Live chart ES roll-window resolution commands run
+- `git status --short`
+- `python -m pytest tests\test_live_chart_feed.py -q`
+- `c:\Users\donny\Desktop\futures_intraday_model\.venv\Scripts\python.exe c:/Users/donny/Desktop/futures_intraday_model/live_chart_feed.py  # timed out after 184s because live chart kept running`
+- `Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" | Select-Object ProcessId,CommandLine | Format-List`
+- `Stop-Process -Id 19144,5360 -Force  # stopped only validation-run live_chart_feed.py processes`
+- `c:\Users\donny\Desktop\futures_intraday_model\.venv\Scripts\python.exe c:/Users/donny/Desktop/futures_intraday_model/live_chart_feed.py --timeout-seconds 30  # printed market-selection help because explicit args bypass default run-button args`
+- `c:\Users\donny\Desktop\futures_intraday_model\.venv\Scripts\python.exe c:/Users/donny/Desktop/futures_intraday_model/live_chart_feed.py --market ES --historical-backfill --lookback-hours 168 --timeout-seconds 30`
+- `git diff -- live_chart_feed.py tests\test_live_chart_feed.py`
+
+## Live chart ES roll-window resolution validation results
+- Focused tests: PASS, 19 passed.
+- Exact default command no longer exited on the ES roll-window ambiguity; it continued running until the command wrapper timed out, consistent with the live chart staying open.
+- Bounded explicit equivalent command exited 0 and streamed live status through `records=9998`, `latest=2026-06-22T00:14:00Z`, `last_close=7531.00`.
+- No leftover `live_chart_feed.py` processes remained after cleanup and bounded validation.
+
+## Live chart ES roll-window resolution next recommended step
+- Review the live chart changes and run the exact default command interactively when you want the chart to remain open.

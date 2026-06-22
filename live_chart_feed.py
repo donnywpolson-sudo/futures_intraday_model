@@ -989,6 +989,32 @@ def format_candidates(candidates: Sequence[SymbologyCandidate]) -> str:
     )
 
 
+def parse_iso_date_or_bound(value: str, *, upper: bool) -> date:
+    if not value:
+        return date.max if upper else date.min
+    return date.fromisoformat(value)
+
+
+def candidate_active_before_end(candidate: SymbologyCandidate, end_date: str) -> bool:
+    request_end = date.fromisoformat(end_date)
+    candidate_start = parse_iso_date_or_bound(candidate.start_date, upper=False)
+    candidate_end = parse_iso_date_or_bound(candidate.end_date, upper=True)
+    return candidate_start < request_end <= candidate_end
+
+
+def candidate_symbols_active_before_end(
+    candidates: Sequence[SymbologyCandidate],
+    *,
+    end_date: str,
+) -> tuple[str, ...]:
+    active_candidates = [
+        candidate
+        for candidate in candidates
+        if candidate_active_before_end(candidate, end_date)
+    ]
+    return unique_candidate_symbols(active_candidates)
+
+
 def symbology_date_window(
     *,
     live_start: SubscriptionStart,
@@ -1067,6 +1093,13 @@ def resolve_single_instrument(
     )
     candidates = symbology_candidates(mapping)
     candidate_symbols = unique_candidate_symbols(candidates)
+    if len(candidate_symbols) != 1:
+        active_symbols = candidate_symbols_active_before_end(
+            candidates,
+            end_date=end_date,
+        )
+        if len(active_symbols) == 1:
+            candidate_symbols = active_symbols
     if len(candidate_symbols) != 1:
         raise ValueError(
             "market resolution did not produce exactly one live instrument for "

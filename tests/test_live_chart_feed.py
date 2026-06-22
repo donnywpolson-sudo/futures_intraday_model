@@ -283,11 +283,33 @@ def test_resolve_single_instrument_requires_one_candidate() -> None:
     assert resolved.raw_symbol == "ESM6"
 
 
-def test_resolve_single_instrument_reports_ambiguous_candidates() -> None:
+def test_resolve_single_instrument_selects_candidate_active_at_end() -> None:
     historical = SimpleNamespace(
         symbology=FakeSymbology(
             [
                 {"d0": "2026-06-21", "d1": "2026-06-22", "s": "12345"},
+                {"d0": "2026-06-22", "d1": "2026-06-23", "s": "67890"},
+            ]
+        )
+    )
+
+    resolved = chart.resolve_single_instrument(
+        historical,
+        dataset="GLBX.MDP3",
+        market="ES",
+        query_symbol="ES.v.0",
+        start_date="2026-06-21",
+        end_date="2026-06-23",
+    )
+
+    assert resolved.instrument_id == 67890
+
+
+def test_resolve_single_instrument_reports_overlapping_active_candidates() -> None:
+    historical = SimpleNamespace(
+        symbology=FakeSymbology(
+            [
+                {"d0": "2026-06-21", "d1": "2026-06-23", "s": "12345"},
                 {"d0": "2026-06-22", "d1": "2026-06-23", "s": "67890"},
             ]
         )
