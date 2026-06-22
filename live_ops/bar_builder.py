@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from math import floor
 from typing import Any, Iterable, Mapping
 
@@ -21,6 +21,7 @@ BAR_CONTRACT_FIELDS = (
     "bar_is_final",
     "source_schema",
 )
+EXPECTED_OHLCV_COLUMNS = BAR_CONTRACT_FIELDS
 FEATURE_EXCLUSION_FIELDS = ("bar_is_final", "source_schema")
 
 
@@ -39,37 +40,119 @@ def check_bar_parity(
 ) -> BarParityResult:
     historical = list(historical_rows)
     live = list(live_rows)
+    details: dict[str, Any] = {
+        "expected_columns": EXPECTED_OHLCV_COLUMNS,
+        "timestamp_convention": "UTC timezone-aware bar start",
+        "bar_close_timing": "final bars only after bucket advances or explicit flush",
+        "no_trade_interval_behavior": "no synthetic zero-volume bars are emitted by default",
+        "session_boundary_rules": "consumer must supply explicit session policy",
+        "feature_exclusion_rules": FEATURE_EXCLUSION_FIELDS,
+    }
     if not historical or not live:
-        return BarParityResult(False, "EMPTY_INPUT", {"historical_rows": len(historical), "live_rows": len(live)})
+        return BarParityResult(
+            False,
+            "EMPTY_INPUT",
+            {**details, "historical_rows": len(historical), "live_rows": len(live)},
+            timezone_status="MISSING",
+            partial_bar_status="MISSING",
+        )
 
-    expected = set(BAR_CONTRACT_FIELDS)
+    expected = EXPECTED_OHLCV_COLUMNS
     for label, rows in (("historical", historical), ("live", live)):
-        fields = set(rows[0])
-        if fields != expected:
+        fields = tuple(rows[0])
+        missing = tuple(field for field in expected if field not in fields)
+        extra = tuple(field for field in fields if field not in expected)
+        if missing or extra:
             return BarParityResult(
                 False,
                 "FIELD_MISMATCH",
-                {"side": label, "expected": sorted(expected), "actual": sorted(fields)},
+                {**details, "side": label, "actual_columns": fields},
+                missing_columns=missing,
+                extra_columns=extra,
+                timezone_status="UNVERIFIED",
+                partial_bar_status="UNVERIFIED",
             )
-        timestamp = rows[0]["timestamp_utc"]
-        if not isinstance(timestamp, datetime) or timestamp.tzinfo is None:
-            return BarParityResult(False, "TIMESTAMP_NOT_TZ_AWARE", {"side": label})
+        if fields != expected:
+            return BarParityResult(
+                False,
+                "COLUMN_ORDER_MISMATCH",
+                {**details, "side": label, "actual_columns": fields},
+                timezone_status="UNVERIFIED",
+                partial_bar_status="UNVERIFIED",
+            )
+        for index, row in enumerate(rows):
+            timestamp = row["timestamp_utc"]
+            if not isinstance(timestamp, datetime) or timestamp.tzinfo is None or timestamp.utcoffset() is None:
+                return BarParityResult(
+                    False,
+                    "TIMESTAMP_NOT_TZ_AWARE",
+                    {**details, "side": label, "row_index": index},
+                    timezone_status="NOT_TZ_AWARE",
+                    partial_bar_status="UNVERIFIED",
+                )
+            if timestamp.utcoffset() != timedelta(0):
+                return BarParityResult(
+                    False,
+                    "TIMESTAMP_NOT_UTC",
+                    {**details, "side": label, "row_index": index},
+                    timezone_status="NOT_UTC",
+                    partial_bar_status="UNVERIFIED",
+                )
+            if not isinstance(row["bar_is_final"], bool):
+                return BarParityResult(
+                    False,
+                    "PARTIAL_BAR_STATUS_INVALID",
+                    {**details, "side": label, "row_index": index},
+                    timezone_status="UTC",
+                    partial_bar_status="INVALID",
+                )
+            if row["bar_is_final"] is not True:
+                return BarParityResult(
+                    False,
+                    "PARTIAL_BAR_NOT_SCORABLE",
+                    {**details, "side": label, "row_index": index},
+                    timezone_status="UTC",
+                    partial_bar_status="HAS_PARTIAL",
+                )
 
     historical_types = {field: type(historical[0][field]).__name__ for field in BAR_CONTRACT_FIELDS}
     live_types = {field: type(live[0][field]).__name__ for field in BAR_CONTRACT_FIELDS}
-    if historical_types != live_types:
-        return BarParityResult(False, "DTYPE_MISMATCH", {"historical": historical_types, "live": live_types})
+    dtype_mismatches = {
+        field: (historical_types[field], live_types[field])
+        for field in BAR_CONTRACT_FIELDS
+        if historical_types[field] != live_types[field]
+    }
+    if dtype_mismatches:
+        return BarParityResult(
+            False,
+            "DTYPE_MISMATCH",
+            {**details, "historical_types": historical_types, "live_types": live_types},
+            dtype_mismatches=dtype_mismatches,
+            timezone_status="UTC",
+            partial_bar_status="FINAL_ONLY",
+        )
+
+    historical_contracts = {f"{row['symbol']}:{row['contract']}" for row in historical}
+    live_contracts = {f"{row['symbol']}:{row['contract']}" for row in live}
+    if len(historical_contracts) != 1 or len(live_contracts) != 1 or historical_contracts != live_contracts:
+        return BarParityResult(
+            False,
+            "CONTRACT_WINDOW_MISMATCH",
+            {
+                **details,
+                "historical_contracts": sorted(historical_contracts),
+                "live_contracts": sorted(live_contracts),
+            },
+            timezone_status="UTC",
+            partial_bar_status="FINAL_ONLY",
+        )
 
     return BarParityResult(
         True,
         "OK",
-        {
-            "timestamp_convention": "UTC timezone-aware bar start",
-            "bar_close_timing": "final bars only after bucket advances or explicit flush",
-            "no_trade_interval_behavior": "no synthetic zero-volume bars are emitted by default",
-            "session_boundary_rules": "consumer must supply explicit session policy",
-            "feature_exclusion_rules": FEATURE_EXCLUSION_FIELDS,
-        },
+        details,
+        timezone_status="UTC",
+        partial_bar_status="FINAL_ONLY",
     )
 
 

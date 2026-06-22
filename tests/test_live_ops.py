@@ -178,13 +178,16 @@ def test_l1_like_records_derive_final_ohlcv_bar() -> None:
         LiveRecord("ES", "ESU6", BASE + timedelta(seconds=1), 100.0, 2),
         LiveRecord("ES", "ESU6", BASE + timedelta(seconds=20), 101.0, 3),
         LiveRecord("ES", "ESU6", BASE + timedelta(minutes=1), 99.0, 1),
+        LiveRecord("ES", "ESU6", BASE + timedelta(minutes=1, seconds=20), 100.0, 4),
+        LiveRecord("ES", "ESU6", BASE + timedelta(minutes=2), 102.0, 1),
     ]
     emitted = []
     for record in records:
         emitted.extend(builder.update(record))
 
     assert emitted == [
-        LiveBar("ES", "ESU6", BASE, "1m", 100.0, 101.0, 100.0, 101.0, 5, True, "synthetic-l1")
+        LiveBar("ES", "ESU6", BASE, "1m", 100.0, 101.0, 100.0, 101.0, 5, True, "synthetic-l1"),
+        LiveBar("ES", "ESU6", BASE + timedelta(minutes=1), "1m", 99.0, 100.0, 99.0, 100.0, 5, True, "synthetic-l1"),
     ]
 
 
@@ -208,8 +211,73 @@ def test_bar_final_and_partial_handling() -> None:
 def test_bar_parity_contract_checks_fields_and_timezone() -> None:
     test_bar = bar()
     row = bar_contract_row(test_bar)
+    result = check_bar_parity([row], [row])
 
-    assert check_bar_parity([row], [row]).passed
+    assert result.passed
+    assert result.reason_code == "OK"
+    assert result.missing_columns == ()
+    assert result.extra_columns == ()
+    assert result.dtype_mismatches == {}
+    assert result.timezone_status == "UTC"
+    assert result.partial_bar_status == "FINAL_ONLY"
+
+
+def test_bar_parity_fails_closed_for_schema_order_dtype_and_contract_window() -> None:
+    row = bar_contract_row(bar())
+    missing_live = dict(row)
+    missing_live.pop("volume")
+    extra_live = {**row, "unexpected": 1}
+    misordered_live = {
+        "symbol": row["symbol"],
+        "timestamp_utc": row["timestamp_utc"],
+        "contract": row["contract"],
+        "timeframe": row["timeframe"],
+        "open": row["open"],
+        "high": row["high"],
+        "low": row["low"],
+        "close": row["close"],
+        "volume": row["volume"],
+        "bar_is_final": row["bar_is_final"],
+        "source_schema": row["source_schema"],
+    }
+    dtype_live = {**row, "volume": float(row["volume"])}
+    mixed_contract_live = [
+        row,
+        bar_contract_row(bar(timestamp_utc=BASE + timedelta(minutes=1), contract="ESZ6")),
+    ]
+
+    missing_result = check_bar_parity([row], [missing_live])
+    extra_result = check_bar_parity([row], [extra_live])
+    order_result = check_bar_parity([row], [misordered_live])
+    dtype_result = check_bar_parity([row], [dtype_live])
+    contract_result = check_bar_parity([row], mixed_contract_live)
+
+    assert missing_result.reason_code == "FIELD_MISMATCH"
+    assert missing_result.missing_columns == ("volume",)
+    assert extra_result.reason_code == "FIELD_MISMATCH"
+    assert extra_result.extra_columns == ("unexpected",)
+    assert order_result.reason_code == "COLUMN_ORDER_MISMATCH"
+    assert dtype_result.reason_code == "DTYPE_MISMATCH"
+    assert dtype_result.dtype_mismatches == {"volume": ("int", "float")}
+    assert contract_result.reason_code == "CONTRACT_WINDOW_MISMATCH"
+
+
+def test_bar_parity_catches_timestamp_and_partial_bar_status() -> None:
+    row = bar_contract_row(bar())
+    naive_live = {**row, "timestamp_utc": datetime(2026, 6, 22, 14, 30)}
+    non_utc_live = {**row, "timestamp_utc": BASE.astimezone(timezone(timedelta(hours=-5)))}
+    partial_live = bar_contract_row(bar(bar_is_final=False))
+
+    naive_result = check_bar_parity([row], [naive_live])
+    non_utc_result = check_bar_parity([row], [non_utc_live])
+    partial_result = check_bar_parity([row], [partial_live])
+
+    assert naive_result.reason_code == "TIMESTAMP_NOT_TZ_AWARE"
+    assert naive_result.timezone_status == "NOT_TZ_AWARE"
+    assert non_utc_result.reason_code == "TIMESTAMP_NOT_UTC"
+    assert non_utc_result.timezone_status == "NOT_UTC"
+    assert partial_result.reason_code == "PARTIAL_BAR_NOT_SCORABLE"
+    assert partial_result.partial_bar_status == "HAS_PARTIAL"
 
 
 def test_data_quality_gate_blocks_bad_ohlc_and_duplicate_timestamp() -> None:
@@ -317,8 +385,53 @@ def test_model_unavailable_and_feature_missing_emit_no_signal() -> None:
     unavailable = ModelReadinessGate().evaluate(symbol="ES", features={"close": 100.5}, model_available=False)
     missing = ModelReadinessGate(expected_features=("close", "volume")).evaluate(symbol="ES", features={"close": 100.5})
 
+    assert unavailable.status == "UNAVAILABLE"
+    assert unavailable.reason_code == "MODEL_UNAVAILABLE"
+    assert missing.status == "BLOCKED"
+    assert missing.reason_code == "FEATURES_MISSING"
+    assert missing.missing_features == ("volume",)
+    assert missing.ordered_features == ("close",)
     assert build_signal_state(bar=test_bar, data_quality=dq, model_status=unavailable, signal="LONG").signal == "NO_SIGNAL"
     assert build_signal_state(bar=test_bar, data_quality=dq, model_status=missing, signal="LONG").signal == "NO_SIGNAL"
+
+
+def test_model_readiness_blocks_order_nonfinite_warmup_symbol_and_versions(tmp_path) -> None:
+    missing_model = ModelReadinessGate(model_path=tmp_path / "missing.pkl").evaluate(
+        symbol="ES",
+        features={"close": 100.5},
+    )
+    gate = ModelReadinessGate(
+        expected_features=("close", "volume"),
+        supported_symbols=("ES",),
+        warmup_bars_required=3,
+        model_version="model-v1",
+        config_version="config-v1",
+        feature_version="feature-v1",
+    )
+
+    ready = gate.evaluate(symbol="ES", features={"close": 100.5, "volume": 10}, warmup_bars_available=3)
+    order_mismatch = gate.evaluate(symbol="ES", features={"volume": 10, "close": 100.5}, warmup_bars_available=3)
+    warmup = gate.evaluate(symbol="ES", features={"close": 100.5, "volume": 10}, warmup_bars_available=2)
+    unsupported = gate.evaluate(symbol="NQ", features={"close": 100.5, "volume": 10}, warmup_bars_available=3)
+
+    assert missing_model.status == "UNAVAILABLE"
+    assert missing_model.reason_code == "MODEL_FILE_MISSING"
+    assert ready.status == "READY"
+    assert ready.ordered_features == ("close", "volume")
+    assert ready.model_version == "model-v1"
+    assert ready.config_version == "config-v1"
+    assert ready.feature_version == "feature-v1"
+    assert order_mismatch.status == "BLOCKED"
+    assert order_mismatch.reason_code == "FEATURE_ORDER_MISMATCH"
+    assert order_mismatch.ordered_features == ("volume", "close")
+    for value in (float("nan"), float("inf")):
+        not_finite = gate.evaluate(symbol="ES", features={"close": value, "volume": 10}, warmup_bars_available=3)
+        assert not_finite.status == "BLOCKED"
+        assert not_finite.reason_code == "FEATURE_NOT_FINITE"
+    assert warmup.status == "UNAVAILABLE"
+    assert warmup.reason_code == "WARMUP_INCOMPLETE"
+    assert unsupported.status == "BLOCKED"
+    assert unsupported.reason_code == "SYMBOL_UNSUPPORTED"
 
 
 def test_partial_bar_signal_is_non_tradable() -> None:
@@ -327,9 +440,19 @@ def test_partial_bar_signal_is_non_tradable() -> None:
     model = ModelReadinessGate().evaluate(symbol="ES", features={"close": 100.5})
 
     signal = build_signal_state(bar=test_bar, data_quality=dq, model_status=model, signal="LONG")
+    preview = build_signal_state(
+        bar=test_bar,
+        data_quality=dq,
+        model_status=model,
+        signal="LONG",
+        allow_partial_preview=True,
+    )
 
     assert signal.signal == "NO_SIGNAL"
     assert signal.tradable is False
+    assert preview.signal == "LONG"
+    assert preview.tradable is False
+    assert preview.skip_reason == "NO_TRADABLE_SIGNAL"
 
 
 def test_risk_blocks_by_default_and_paper_override_does_not_weaken_defaults() -> None:

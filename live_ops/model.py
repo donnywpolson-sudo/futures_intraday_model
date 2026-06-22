@@ -97,6 +97,7 @@ class ModelReadinessGate:
             expected_features=self.expected_features,
             missing_features=missing,
             extra_features=extra,
+            ordered_features=actual,
             model_version=self.model_version,
             config_version=self.config_version,
             feature_version=self.feature_version,

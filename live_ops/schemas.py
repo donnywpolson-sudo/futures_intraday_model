@@ -6,7 +6,7 @@ imports and defaults to disabled, paper-only behavior.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -124,6 +124,11 @@ class BarParityResult:
     passed: bool
     reason_code: str
     details: dict[str, Any]
+    missing_columns: tuple[str, ...] = ()
+    extra_columns: tuple[str, ...] = ()
+    dtype_mismatches: dict[str, tuple[str, str]] = field(default_factory=dict)
+    timezone_status: str = "UNKNOWN"
+    partial_bar_status: str = "UNKNOWN"
 
 
 @dataclass(frozen=True)
@@ -145,6 +150,7 @@ class ModelReadinessResult:
     expected_features: tuple[str, ...] = ()
     missing_features: tuple[str, ...] = ()
     extra_features: tuple[str, ...] = ()
+    ordered_features: tuple[str, ...] = ()
     model_version: str | None = None
     config_version: str | None = None
     feature_version: str | None = None
