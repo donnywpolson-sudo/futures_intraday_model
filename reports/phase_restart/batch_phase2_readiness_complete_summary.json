@@ -1,0 +1,57 @@
+{
+  "updated_at_utc": "2026-06-22T16:29:31Z",
+  "scope": "batch Phase 2 readiness-only report automation",
+  "status": "COMPLETE_READINESS_ONLY_ALL_ROWS",
+  "approved_phase2_rows": 66,
+  "readiness_evidence_present": 66,
+  "missing_readiness_evidence": 0,
+  "readiness_pass_rows": 0,
+  "readiness_fail_rows": 66,
+  "readiness_hard_failures": 0,
+  "rows_with_blockers": 66,
+  "blocker_classes": {
+    "synthetic_threshold": 31,
+    "roll_maturity": 35
+  },
+  "market_counts": {
+    "KE": {
+      "readiness_rows": 14,
+      "fail": 14
+    },
+    "SR1": {
+      "readiness_rows": 9,
+      "fail": 9
+    },
+    "TN": {
+      "readiness_rows": 11,
+      "fail": 11
+    },
+    "ZL": {
+      "readiness_rows": 16,
+      "fail": 16
+    },
+    "ZM": {
+      "readiness_rows": 16,
+      "fail": 16
+    }
+  },
+  "canonical_raw_repairs": [
+    "SR1:2018",
+    "SR1:2019",
+    "SR1:2020",
+    "SR1:2021",
+    "SR1:2022",
+    "SR1:2023",
+    "SR1:2024"
+  ],
+  "safety": {
+    "phase2_build_run": false,
+    "cleanup_run": false,
+    "move_merge_quarantine_delete_run": false,
+    "redownload_run": false,
+    "dbn_source_modified": false,
+    "approved_canonical_causal_outputs_written": 0,
+    "generated_data_staged": false,
+    "data_status_empty": true
+  }
+}

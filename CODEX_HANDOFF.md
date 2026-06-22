@@ -1,5 +1,332 @@
 # Codex Handoff
 
+## Batch Phase 2 readiness automation completed
+- Updated at UTC: 2026-06-22T16:29:31Z
+- Scope: completed the approved batch automation for all 66 Phase 2 causal rows, readiness-only and report-only. For source-hash-only alignment blockers, ran the same bounded Phase 1B raw repair from canonical DBN before readiness-only. No Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, source acquisition, policy threshold change, or DBN source modification was run.
+
+Files changed/generated
+- `reports/phase_restart/batch_phase2_readiness_complete_summary.md`: final batch completion summary.
+- `reports/phase_restart/batch_phase2_readiness_complete_summary.json`: machine-readable final batch completion summary.
+- `reports/phase_restart/*_phase2_causal_repair.yaml`: bounded one-row readiness profiles.
+- `reports/phase_restart/*_phase2_raw_alignment.json` and `.md`: bounded raw alignment evidence.
+- `reports/phase_restart/*_phase2_readiness.json` and `.md`: readiness-only evidence.
+- `reports/phase_restart/*_phase2_batch_decision.md`: explicit blocker-plan decision reports.
+- `reports/phase_restart/sr1_2018_phase1b_canonical_raw_repair.*` through `reports/phase_restart/sr1_2024_phase1b_canonical_raw_repair.*`: canonical raw repair evidence for SR1 source-hash-only blockers.
+- `data/raw/SR1/2018.parquet` through `data/raw/SR1/2024.parquet`: repaired raw parquet artifacts from canonical DBN; ignored data artifacts, not staged.
+- No canonical causal parquet was written for any approved Phase 2 row.
+
+Commands run
+- Batch chunks of bounded Phase 1C raw alignment and `scripts.phase2_causal_base.build_causal_base_data --readiness-only`.
+- For SR1 2019-2024 source-hash-only blockers, bounded Phase 1B raw repair from `data/dbn/ohlcv_1m` followed by Phase 1C alignment, then readiness-only.
+- SR1 2018 had already been repaired from canonical DBN before the continued batch; readiness-only was run during this continuation.
+
+Validation results
+- Approved Phase 2 causal rows: 66.
+- Readiness evidence present: 66.
+- Missing readiness evidence: 0.
+- Readiness PASS rows: 0.
+- Readiness FAIL rows: 66.
+- Readiness hard failures: 0.
+- Rows with blockers: 66.
+- Top blocker classes: synthetic threshold 31; roll maturity 35.
+- Market counts: KE 14 FAIL; SR1 9 FAIL; TN 11 FAIL; ZL 16 FAIL; ZM 16 FAIL.
+- Canonical raw repairs during batch: SR1 2018, SR1 2019, SR1 2020, SR1 2021, SR1 2022, SR1 2023, SR1 2024.
+- All repaired SR1 rows passed Phase 1C alignment before readiness-only.
+- Approved canonical causal outputs written: 0.
+- `git status --short -- data`: empty.
+
+Remaining work
+- All 66 Phase 2 rows remain blocked at readiness and need policy decisions before any Phase 2 build.
+- Batch evidence and repair evidence remain ignored/uncommitted until force-add approval is explicit.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: approve force-adding only approved ignored Phase 2 readiness/decision evidence and SR1 canonical raw repair evidence reports under `reports/phase_restart`, then commit/push reports only. Stop before Phase 2 build execution.
+
+## SR1 2018 canonical Phase 1B raw repair
+- Updated at UTC: 2026-06-22T16:00:46Z
+- Scope: ran the user-approved bounded Phase 1B raw repair for SR1 2018 from the canonical DBN source and refreshed Phase 1C alignment evidence. No Phase 2 readiness-only command, Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, source acquisition, policy threshold change, or DBN source modification was run.
+
+Files changed/generated
+- `data/raw/SR1/2018.parquet`: repaired raw parquet from canonical `data/dbn/ohlcv_1m/SR1/2018/2018-04-23_2019-01-01.dbn.zst`; generated data artifact remains ignored and was not staged.
+- `reports/phase_restart/sr1_2018_raw_repair_alpha_tiered.yaml`: bounded Phase 1B repair validation profile.
+- `reports/phase_restart/sr1_2018_phase1c_raw_repair_alignment.json`: Phase 1C repair validation JSON.
+- `reports/phase_restart/sr1_2018_phase1c_raw_repair_alignment.md`: Phase 1C repair validation markdown.
+- `reports/phase_restart/sr1_2018_phase2_raw_alignment.json`: refreshed pre-readiness Phase 1C alignment evidence; now PASS.
+- `reports/phase_restart/sr1_2018_phase2_raw_alignment.md`: refreshed pre-readiness Phase 1C alignment summary; now PASS.
+- `reports/phase_restart/sr1_2018_phase1b_canonical_raw_repair.md`: repair evidence summary.
+- `reports/phase_restart/sr1_2018_phase1b_canonical_raw_repair.json`: machine-readable repair evidence.
+- No canonical causal parquet was written.
+
+Commands run
+- `python -m scripts.phase1B_convert.convert_databento_raw --symbols SR1 --start 2018-04-23 --end 2019-01-01 --dbn-root data/dbn/ohlcv_1m --raw-root data/raw --reports-root reports/raw_ingest --workers 1 --resume --offline-local-conditions --overwrite`
+- `python -m scripts.phase1C_validate.audit_raw_dbn_alignment --config reports/phase_restart/sr1_2018_raw_repair_alpha_tiered.yaml --profile raw_repair --dbn-root data/dbn --raw-root data/raw --expected-only --json-out reports/phase_restart/sr1_2018_phase1c_raw_repair_alignment.json --md-out reports/phase_restart/sr1_2018_phase1c_raw_repair_alignment.md`
+- `python -m scripts.phase1C_validate.audit_raw_dbn_alignment --config reports/phase_restart/sr1_2018_phase2_causal_repair.yaml --profile phase2_repair --dbn-root data/dbn --raw-root data/raw --expected-only --json-out reports/phase_restart/sr1_2018_phase2_raw_alignment.json --md-out reports/phase_restart/sr1_2018_phase2_raw_alignment.md`
+
+Validation results
+- Phase 1B conversion: PASS, `CONVERT_OK market=SR1 year=2018 inputs=1 output=data/raw/SR1/2018.parquet rows=1562`.
+- Phase 1C raw repair alignment: PASS, `expected=1 raw=1 needs_phase1b=0 raw_only=0 invalid_manifests=0 source_hash_mismatches=0 definition_join_status=checked definition_join_mismatches=0`.
+- Phase 1C pre-readiness alignment: PASS, `expected=1 raw=1 needs_phase1b=0 raw_only=0 invalid_manifests=0 source_hash_mismatches=0 definition_join_status=checked definition_join_mismatches=0`.
+- Repaired raw source file: `data/dbn/ohlcv_1m/SR1/2018/2018-04-23_2019-01-01.dbn.zst`.
+- Repaired raw source SHA256: `7830e41d9da6a7753d309a38d09bea12deaa08bda72ef18b3f5ee379adf0d2d7`.
+- Repaired raw SHA256: `a521c825963887c0e0649002de57e0775dd92ae908bd9a51d2722537f5e867a5`.
+- DBN source hashes after repair: OHLCV `7830e41d9da6a7753d309a38d09bea12deaa08bda72ef18b3f5ee379adf0d2d7`; definition `73621e11d540ffe9f8a8a08e7f2415cc226bafadf117a7761d7b5b21e0484c58`.
+- `data/causally_gated_normalized/SR1/2018.parquet`: absent.
+- `git status --short -- data`: empty.
+
+Remaining work
+- SR1 2018 is ready for a future Phase 2 readiness-only check, but that check was not run in this repair step.
+- Batch evidence remains uncommitted.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- Continue the batch from SR1 2018 with readiness-only, or commit/push the accumulated report evidence first. Stop before Phase 2 build execution.
+
+## SR1 2018 source-alignment review
+- Updated at UTC: 2026-06-22T15:33:00Z
+- Scope: completed the user-approved bounded SR1 2018 source-alignment review after the Phase 1C precheck blocked Phase 2 readiness-only. No Phase 2 readiness-only rerun, Phase 2 build, Phase 3+, cleanup, repair, quarantine, merge, move, delete, DBN redownload, rebuild, source acquisition, policy threshold change, or DBN source modification was run.
+
+Files changed/generated
+- `reports/phase_restart/sr1_2018_phase2_source_alignment_review.md`: bounded source-alignment review and trust decision.
+- `reports/phase_restart/sr1_2018_phase2_source_alignment_review.json`: machine-readable review summary.
+
+Commands run
+- Preflight: `git status --short`; `git status --short -- data`; `git diff --stat`; `git diff --check`.
+- Read `reports/phase_restart/sr1_2018_phase2_raw_alignment.json`.
+- Checked existence and SHA256 for `data/dbn/ohlcv_1m/SR1/2018/2018-04-23_2019-01-01.dbn.zst`.
+- Checked existence and SHA256 for `_data_reorg_quarantine20260621T222448Z/dbn_sr_parent_candidate/SR1/2018/2018-04-23_2019-01-01.dbn.zst`.
+- Read canonical and quarantined candidate DBN manifest fields.
+- Read bounded metadata from `data/raw/SR1/2018.parquet`.
+
+Validation results
+- SR1 2018 alignment precheck remains `FAIL`, `source_hash_mismatches=1`.
+- Raw parquet records source file `data/dbn_sr_parent_candidate/SR1/2018/2018-04-23_2019-01-01.dbn.zst` with SHA256 `42d2be31d9151f09d6cf84d2a8a30aa10f6d1fe5fe6a8d1188dd5d9ab5ca6e9b`.
+- That original source is absent under `data/`, but exists in `_data_reorg_quarantine20260621T222448Z/dbn_sr_parent_candidate/SR1/2018/2018-04-23_2019-01-01.dbn.zst` and matches SHA256 `42d2be31d9151f09d6cf84d2a8a30aa10f6d1fe5fe6a8d1188dd5d9ab5ca6e9b`.
+- Current canonical DBN is `data/dbn/ohlcv_1m/SR1/2018/2018-04-23_2019-01-01.dbn.zst` with SHA256 `7830e41d9da6a7753d309a38d09bea12deaa08bda72ef18b3f5ee379adf0d2d7`.
+- Raw source manifest requested `SR1.FUT` with `stype_in=parent`; canonical DBN manifest requested `SR1.v.0` with `stype_in=continuous`.
+- Trust decision: for the current canonical pipeline contract, trust the canonical DBN under `data/dbn/ohlcv_1m`; the existing raw parquet is traceable but noncanonical for this contract.
+- `git status --short -- data`: empty.
+
+Remaining work
+- SR1 2018 remains blocked before Phase 2 readiness/build until the user approves bounded Phase 1B raw repair from canonical DBN, explicitly accepts the parent-candidate raw source as an exception, or defers SR1 2018.
+- Batch evidence remains uncommitted.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: approve bounded SR1 2018 Phase 1B raw repair from canonical DBN, approve an explicit parent-candidate exception for readiness-only, or defer SR1 2018 and continue batch. Stop before Phase 2 build execution.
+
+## Batch Phase 2 readiness automation stopped on SR1 2018
+- Updated at UTC: 2026-06-22T15:23:00Z
+- Scope: ran approved batch automation for Phase 2 readiness-only evidence, explicit blocker-plan reports, and report-only outputs. The batch stopped at the first unexpected precheck blocker. No Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, source acquisition, policy threshold change, or DBN source modification was run.
+
+Files changed/generated
+- `reports/phase_restart/batch_phase2_readiness_stop_summary.md`: batch stop summary.
+- `reports/phase_restart/batch_phase2_readiness_stop_summary.json`: machine-readable batch stop summary.
+- `reports/phase_restart/ke_2015_phase2_*` through `reports/phase_restart/ke_2026_phase2_*`: bounded profiles, Phase 1C alignment evidence, readiness-only evidence, and batch decision reports for KE 2015 through KE 2026.
+- `reports/phase_restart/sr1_2018_phase2_causal_repair.yaml`: bounded profile generated before the SR1 2018 precheck.
+- `reports/phase_restart/sr1_2018_phase2_raw_alignment.json`: SR1 2018 alignment failure evidence.
+- `reports/phase_restart/sr1_2018_phase2_raw_alignment.md`: SR1 2018 alignment failure summary.
+- No canonical causal parquet was written.
+
+Commands run
+- Batch readiness automation for missing Phase 2 rows, in chunks of 8.
+- For each completed KE row: bounded Phase 1C raw DBN alignment followed by `scripts.phase2_causal_base.build_causal_base_data --readiness-only`.
+- For SR1 2018: bounded Phase 1C raw DBN alignment only; Phase 2 readiness-only was not run after precheck failure.
+
+Validation results
+- Approved Phase 2 causal rows: 66.
+- Existing readiness evidence reused: 2 rows, KE 2013 and KE 2014.
+- New readiness-only rows completed: 12 rows, KE 2015 through KE 2026.
+- Total readiness evidence now present: 14 rows.
+- Completed KE readiness rows all have readiness `FAIL`, blockers 1, failures 0.
+- Remaining rows without readiness evidence: 52.
+- Stop blocker: SR1 2018 Phase 1C alignment `FAIL`, `source_hash_mismatches=1`.
+- SR1 2018 raw recorded source SHA256: `42d2be31d9151f09d6cf84d2a8a30aa10f6d1fe5fe6a8d1188dd5d9ab5ca6e9b`.
+- SR1 2018 local canonical DBN SHA256: `7830e41d9da6a7753d309a38d09bea12deaa08bda72ef18b3f5ee379adf0d2d7`.
+- `git status --short -- data`: empty.
+
+Remaining work
+- SR1 2018 needs a separate decision before the batch can continue: accept the source-hash mismatch as an explicit bounded exception for readiness-only, defer SR1 2018, or approve bounded source-alignment review.
+- Batch evidence remains uncommitted because the batch stopped on the first unexpected blocker before commit/push.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: resolve SR1 2018 source-hash mismatch handling, then continue the batch or commit the partial evidence. Stop before Phase 2 build execution.
+
+## KE 2014 policy-exception/source-status/roll-maturity plan recorded
+- Updated at UTC: 2026-06-22T15:10:28Z
+- Scope: recorded the user approval to make the KE 2014 blocker explicit through a bounded policy-exception/source-status/roll-maturity plan. No source acquisition, redownload, policy threshold change, Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, rebuild, or DBN source modification was run.
+
+Files changed/generated
+- `reports/phase_restart/ke_2014_phase2_roll_maturity_synthetic_review.md`: decision state updated to `EXPLICIT_BLOCKER_POLICY_EXCEPTION_SOURCE_STATUS_ROLL_MATURITY_PLAN_APPROVED`.
+- `CODEX_HANDOFF.md`: recorded this decision.
+
+Commands run
+- Preflight: `git status --short`; `git status --short -- data`; `git diff --stat`; `git diff --check`.
+
+Validation results
+- KE 2014 remains blocked for Phase 2 build under current readiness policy.
+- The explicit plan requires a separately approved source/status acquisition or reconstruction step for `data/dbn/status/KE/2014`, plus a bounded keep/defer/exception decision for the four roll maturity backsteps.
+- If source/status evidence cannot be recovered, the plan requires a separate KE 2014-only policy exception documenting sparse observed coverage, 61.854098% synthetic rows, and the four roll maturity backsteps.
+- Follow-up KE 2014 readiness-only must run before any Phase 2 build.
+- `git status --short -- data`: empty.
+
+Remaining work
+- Ignored KE 2013/KE 2014 review evidence reports remain uncommitted until force-add approval is explicit.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: approve force-adding only the ignored KE 2013/KE 2014 evidence reports, or continue with the next approved Phase 2 readiness-only row. Stop before Phase 2 build execution.
+
+## KE 2014 bounded roll-maturity/synthetic review
+- Updated at UTC: 2026-06-22T15:07:24Z
+- Scope: completed the user-approved bounded KE 2014 roll-maturity/synthetic review. No Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, source acquisition, policy threshold change, or DBN source modification was run.
+
+Files changed/generated
+- `reports/phase_restart/ke_2014_phase2_roll_maturity_synthetic_review.md`: bounded review note; KE 2014 is reviewable but not ready for Phase 2 execution.
+
+Commands run
+- Preflight: `git status --short`; `git status --short -- data`; `git diff --stat`; `git diff --check`.
+- Metadata checks for `data/dbn/ohlcv_1m/KE/2014`, `data/dbn/definition/KE/2014`, `data/dbn/statistics/KE/2014`, `data/dbn/status/KE/2014`, `data/dbn/status_parent/KE/2014`, and `data/raw/KE/2014.parquet`.
+- Bounded raw parquet metadata read for KE 2014 timestamp gaps, status/statistics enrichment flags, and roll-symbol context.
+
+Validation results
+- KE 2014 readiness remains `FAIL`, `blockers=1`, `failures=0`.
+- KE 2014 roll blocker: `roll maturity sequence not monotonic: backsteps=4`, with readiness examples for `KEN4 -> KEK4` and `KEZ4 -> KEU4`.
+- KE 2014 synthetic blocker: `synthetic threshold breached: rows_pct=61.854098 max_gap_minutes=119`.
+- KE 2014 canonical OHLCV, definition, and statistics DBN files exist.
+- KE 2014 canonical status folder exists but has no DBN files; parent status folder is absent.
+- KE 2014 raw parquet has 101536 rows, no duplicate timestamps, and timestamp range 2014-01-02 14:30:00+00:00 through 2014-12-31 19:14:00+00:00.
+- KE 2014 raw parquet has 22369 observed timestamp gaps greater than 1 minute, including 22096 gaps from 2 to 120 minutes and 273 gaps greater than 120 minutes.
+- KE 2014 status enrichment columns are present but `status_missing=true` and `status_stale=true` for all 101536 observed raw rows.
+- KE 2014 statistics enrichment has 3 missing/stale observed rows.
+- `git status --short -- data`: empty.
+
+Remaining work
+- KE 2014 is reviewable but still not ready for Phase 2 build execution.
+- Ignored KE 2013/KE 2014 review evidence reports remain uncommitted until force-add approval is explicit.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: defer KE 2014 or approve a separate bounded policy exception/source-status/roll-maturity plan; optionally approve force-adding only the ignored KE 2013/KE 2014 evidence reports. Stop before Phase 2 build execution.
+
+## KE 2013 policy-exception/source-status plan recorded
+- Updated at UTC: 2026-06-22T15:00:51Z
+- Scope: recorded the user approval to make the KE 2013 blocker explicit through a bounded policy-exception/source-status acquisition plan. No source acquisition, redownload, policy threshold change, Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, rebuild, or DBN source modification was run.
+
+Files changed/generated
+- `reports/phase_restart/ke_2013_phase2_synthetic_threshold_review.md`: decision state updated to `EXPLICIT_BLOCKER_POLICY_EXCEPTION_OR_SOURCE_STATUS_PLAN_APPROVED`.
+- `CODEX_HANDOFF.md`: recorded this decision.
+
+Commands run
+- Preflight: `git status --short`; `git status --short -- data`; `git diff --stat`; `git diff --check`.
+
+Validation results
+- KE 2013 remains blocked for Phase 2 build under current readiness policy.
+- The explicit plan requires either a separately approved source/status acquisition or reconstruction step for `data/dbn/status/KE/2013`, or a separately approved KE 2013-only policy exception.
+- Follow-up KE 2013 readiness-only must run before any Phase 2 build.
+- `git status --short -- data`: empty.
+
+Remaining work
+- KE 2014 remains undecided after its readiness-only blocker.
+- Ignored KE 2013/KE 2014 review evidence reports remain uncommitted until force-add approval is explicit.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: defer KE 2014 or approve bounded roll-maturity/synthetic review; optionally approve force-adding only the ignored KE 2013/KE 2014 evidence reports. Stop before Phase 2 build execution.
+
+## KE 2013 deeper source/status review
+- Updated at UTC: 2026-06-22T15:02:00Z
+- Scope: completed the user-approved bounded deeper source/status review for the existing KE 2013 Phase 2 readiness blocker. No Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, or DBN source modification was run.
+
+Files changed/generated
+- `reports/phase_restart/ke_2013_phase2_synthetic_threshold_review.md`: updated with source/status availability and raw timestamp-gap evidence.
+
+Commands run
+- Metadata checks for `data/dbn/ohlcv_1m/KE/2013`, `data/dbn/definition/KE/2013`, `data/dbn/statistics/KE/2013`, `data/dbn/status/KE/2013`, `data/dbn/status_parent/KE/2013`, and `data/raw/KE/2013.parquet`.
+- Bounded raw parquet metadata read for KE 2013 timestamp gaps and status/statistics enrichment flags.
+
+Validation results
+- KE 2013 canonical OHLCV, definition, and statistics DBN files exist.
+- KE 2013 canonical status folder exists but has no DBN files; parent status folder is absent.
+- KE 2013 raw parquet has 4071 rows, no duplicate timestamps, and timestamp range 2013-12-16 01:00:00+00:00 through 2013-12-31 19:14:00+00:00.
+- KE 2013 raw parquet has 696 observed timestamp gaps greater than 1 minute, including 680 gaps from 2 to 120 minutes and 16 gaps greater than 120 minutes.
+- KE 2013 status enrichment columns are present but `status_missing=true` and `status_stale=true` for all 4071 observed raw rows.
+- KE 2013 statistics enrichment is present and complete for observed raw rows.
+- Existing KE 2013 Phase 2 readiness remains `FAIL`, `blockers=1`, `failures=0`; blocker remains synthetic threshold `rows_pct=59.633118 max_gap_minutes=105`.
+- `git status --short -- data`: empty.
+
+Remaining work
+- KE 2013 is reviewable but still not ready for Phase 2 build execution.
+- KE 2014 remains undecided after its readiness-only blocker.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: defer KE 2013 or approve a bounded policy exception/source-status acquisition plan; separately decide whether to defer KE 2014 or approve bounded roll-maturity/synthetic review. Stop before Phase 2 build execution.
+
+## KE 2013 bounded review and KE 2014 readiness-only check
+- Updated at UTC: 2026-06-22T14:52:08Z
+- Scope: accepted the user approval for bounded KE 2013 synthetic-threshold review, then ran exactly one additional bounded Phase 2 readiness-only check for KE 2014. No Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, or DBN source modification was run.
+
+Files changed/generated
+- `reports/phase_restart/ke_2013_phase2_synthetic_threshold_review.md`: bounded review note; KE 2013 is reviewable but not ready for Phase 2 execution.
+- `reports/phase_restart/ke_2014_phase2_causal_repair.yaml`: bounded one-market/year readiness profile.
+- `reports/phase_restart/ke_2014_phase2_raw_alignment.json`: bounded Phase 1C raw alignment evidence.
+- `reports/phase_restart/ke_2014_phase2_raw_alignment.md`: bounded Phase 1C raw alignment summary.
+- `reports/phase_restart/ke_2014_phase2_readiness.json`: KE 2014 readiness-only result.
+- `reports/phase_restart/ke_2014_phase2_readiness.md`: KE 2014 readiness-only summary.
+- No canonical causal parquet was written.
+
+Commands run
+- `python -m scripts.phase1C_validate.audit_raw_dbn_alignment --config reports/phase_restart/ke_2014_phase2_causal_repair.yaml --profile phase2_repair --dbn-root data/dbn --raw-root data/raw --expected-only --json-out reports/phase_restart/ke_2014_phase2_raw_alignment.json --md-out reports/phase_restart/ke_2014_phase2_raw_alignment.md`
+- `python -m scripts.phase2_causal_base.build_causal_base_data --profile phase2_repair --profile-config reports/phase_restart/ke_2014_phase2_causal_repair.yaml --raw-root data/raw --output-root reports/phase_restart/ke_2014_phase2_output --reports-root reports/phase_restart/ke_2014_phase2_readiness --raw-alignment-report reports/phase_restart/ke_2014_phase2_raw_alignment.json --readiness-only --readiness-json-out reports/phase_restart/ke_2014_phase2_readiness.json --readiness-md-out reports/phase_restart/ke_2014_phase2_readiness.md`
+
+Validation results
+- KE 2013 bounded review: REVIEWABLE_NOT_READY. Existing readiness-only status remains `FAIL`, `blockers=1`, `failures=0`; blocker is `synthetic threshold breached: rows_pct=59.633118 max_gap_minutes=105`.
+- KE 2014 Phase 1C raw alignment: PASS, `expected=1 raw=1 needs_phase1b=0 raw_only=0 invalid_manifests=0 source_hash_mismatches=0 definition_join_status=checked definition_join_mismatches=0`.
+- KE 2014 Phase 2 readiness-only: FAIL, `checked=1 blockers=1 failures=0`.
+- KE 2014 blockers: `roll maturity sequence not monotonic: backsteps=4`; also `synthetic threshold breached: rows_pct=61.854098 max_gap_minutes=119`.
+- Safety: `reports/phase_restart/ke_2014_phase2_output` absent; `data/causally_gated_normalized/KE/2014.parquet` absent; `git status --short -- data` empty.
+
+Remaining work
+- KE 2013 and KE 2014 are not ready for Phase 2 build execution.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: defer KE 2013 and KE 2014, approve bounded blocker review for KE 2014 roll maturity/synthetic warnings, or pick another approved Phase 2 causal row for readiness-only; stop before Phase 2 build execution.
+
+## KE 2013 Phase 2 readiness-only check
+- Updated at UTC: 2026-06-22T14:22:47Z
+- Scope: committed and pushed the Phase 2 causal decision record, then ran one bounded Phase 2 readiness-only check for KE 2013. No Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, or DBN source modification was run.
+
+Files changed/generated
+- `reports/phase_restart/ke_2013_phase2_causal_repair.yaml`: bounded one-market/year profile.
+- `reports/phase_restart/ke_2013_phase2_raw_alignment.json`: bounded Phase 1C raw alignment evidence.
+- `reports/phase_restart/ke_2013_phase2_raw_alignment.md`: bounded Phase 1C raw alignment summary.
+- `reports/phase_restart/ke_2013_phase2_readiness.json`: Phase 2 readiness-only result.
+- `reports/phase_restart/ke_2013_phase2_readiness.md`: Phase 2 readiness-only summary.
+- No canonical causal parquet was written.
+
+Commands run
+- `git commit -m "Record Phase 2 causal repair decisions"`
+- `git push`
+- `python -m scripts.phase1C_validate.audit_raw_dbn_alignment --config reports/phase_restart/ke_2013_phase2_causal_repair.yaml --profile phase2_repair --dbn-root data/dbn --raw-root data/raw --expected-only --json-out reports/phase_restart/ke_2013_phase2_raw_alignment.json --md-out reports/phase_restart/ke_2013_phase2_raw_alignment.md`
+- `python -m scripts.phase2_causal_base.build_causal_base_data --profile phase2_repair --profile-config reports/phase_restart/ke_2013_phase2_causal_repair.yaml --raw-root data/raw --output-root reports/phase_restart/ke_2013_phase2_output --reports-root reports/phase_restart/ke_2013_phase2_readiness --raw-alignment-report reports/phase_restart/ke_2013_phase2_raw_alignment.json --readiness-only --readiness-json-out reports/phase_restart/ke_2013_phase2_readiness.json --readiness-md-out reports/phase_restart/ke_2013_phase2_readiness.md`
+
+Validation results
+- Decision record commit/push: PASS, commit `73cef4e Record Phase 2 causal repair decisions` pushed to `main`.
+- Phase 1C raw alignment: PASS, `expected=1 raw=1 needs_phase1b=0 raw_only=0 invalid_manifests=0 source_hash_mismatches=0 definition_join_status=checked definition_join_mismatches=0`.
+- Phase 2 readiness-only: FAIL, `checked=1 blockers=1 failures=0`.
+- Blocker: KE 2013 synthetic threshold breached, `synthetic_rows_pct=59.633118`, `max_synthetic_gap_minutes=105`.
+- Safety: `reports/phase_restart/ke_2013_phase2_output` absent; `data/causally_gated_normalized/KE/2013.parquet` absent; `git status --short -- data` empty.
+
+Remaining work
+- KE 2013 Phase 2 build is not ready without a decision on the synthetic threshold blocker.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: defer KE 2013, adjust bounded readiness policy for KE 2013, or pick another approved Phase 2 causal row for readiness-only; stop before Phase 2 build execution.
+
 ## Phase 2 causal repair decision recorded
 - Updated at UTC: 2026-06-22T14:22:47Z
 - Scope: recorded the user decision to approve all 66 Phase 2 causal repair rows for later bounded one-market/year repair runs. No Phase 2 command, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, or DBN source modification was run.

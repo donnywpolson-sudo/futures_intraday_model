@@ -1,0 +1,44 @@
+{
+  "generated_at_utc": "2026-06-22T16:00:46Z",
+  "pair": "SR1:2018",
+  "scope": "bounded Phase 1B raw repair from canonical DBN",
+  "decision_state": "CANONICAL_RAW_REPAIRED_PHASE2_READINESS_NOT_RUN",
+  "conversion": {
+    "command": "python -m scripts.phase1B_convert.convert_databento_raw --symbols SR1 --start 2018-04-23 --end 2019-01-01 --dbn-root data/dbn/ohlcv_1m --raw-root data/raw --reports-root reports/raw_ingest --workers 1 --resume --offline-local-conditions --overwrite",
+    "status": "PASS",
+    "rows": 1562,
+    "output": "data/raw/SR1/2018.parquet"
+  },
+  "alignment": {
+    "raw_repair_report": "reports/phase_restart/sr1_2018_phase1c_raw_repair_alignment.json",
+    "phase2_precheck_report": "reports/phase_restart/sr1_2018_phase2_raw_alignment.json",
+    "status": "PASS",
+    "source_hash_mismatches": 0,
+    "definition_join_status": "checked",
+    "definition_join_mismatches": 0
+  },
+  "sources": {
+    "ohlcv_dbn": "data/dbn/ohlcv_1m/SR1/2018/2018-04-23_2019-01-01.dbn.zst",
+    "ohlcv_dbn_sha256": "7830e41d9da6a7753d309a38d09bea12deaa08bda72ef18b3f5ee379adf0d2d7",
+    "definition_dbn": "data/dbn/definition/SR1/2018/2018-04-23_2019-01-01.dbn.zst",
+    "definition_dbn_sha256": "73621e11d540ffe9f8a8a08e7f2415cc226bafadf117a7761d7b5b21e0484c58"
+  },
+  "raw_output": {
+    "previous_sha256": "b21e7bce76fba22c3a11330ff387e706232d3ee91837306976c1ca8291e27fb8",
+    "repaired_sha256": "a521c825963887c0e0649002de57e0775dd92ae908bd9a51d2722537f5e867a5",
+    "source_file": "data/dbn/ohlcv_1m/SR1/2018/2018-04-23_2019-01-01.dbn.zst",
+    "source_sha256": "7830e41d9da6a7753d309a38d09bea12deaa08bda72ef18b3f5ee379adf0d2d7",
+    "rows": 1562,
+    "columns": 25,
+    "duplicate_timestamps": 0
+  },
+  "safety": {
+    "phase2_readiness_run_after_repair": false,
+    "phase2_build_run": false,
+    "cleanup_run": false,
+    "redownload_run": false,
+    "dbn_source_modified": false,
+    "canonical_causal_written": false,
+    "generated_data_staged": false
+  }
+}

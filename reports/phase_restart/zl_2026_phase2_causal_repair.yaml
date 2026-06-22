@@ -1,0 +1,33 @@
+paths:
+  raw_root: data/raw
+  causal_base_root: data/causally_gated_normalized
+  reports_root: reports/phase_restart
+
+defaults:
+  require_roll_metadata_for_profiles: []
+  max_synthetic_gap_minutes: 120
+  sparse_trade_derived_roll_window_minutes: 15
+
+causal_base:
+  sparse_trade_derived_ohlcv_markets: ["SR1", "SR3"]
+  sparse_trade_derived_roll_window_minutes: 15
+  vendor_trusted_ohlcv_no_trade_markets: ["ZN"]
+
+profile_defaults:
+  smoke:
+    max_synthetic_rows_pct: 5.0
+    max_degraded_rows_pct: 5.0
+    max_roll_window_rows_pct: 2.0
+
+profiles:
+  zl_2026_phase2_causal_repair:
+    description: "Bounded Phase 2 causal readiness: ZL 2026."
+    intent: repair_readiness_only
+    requirement_set: production_like
+    settings_profile: smoke
+    markets: ["ZL"]
+    years: [2026]
+    forbid_research_use: true
+
+aliases:
+  phase2_repair: zl_2026_phase2_causal_repair

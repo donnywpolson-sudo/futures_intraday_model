@@ -1,0 +1,19 @@
+{
+  "generated_at_utc": "2026-06-22T16:12:42Z",
+  "pair": "SR1:2020",
+  "scope": "bounded Phase 1B raw repair from canonical DBN",
+  "conversion_status": "PASS",
+  "raw_path": "data/raw/SR1/2020.parquet",
+  "previous_raw_sha256": "1803cb3e2864cce1795b13547ff0557a6e75a925883899babbb3f90df7726a6c",
+  "repaired_raw_sha256": "9d57a7f37b4baad118eeffec2206b3eba9098ed61ee014c56d13f3a96f8571fc",
+  "ohlcv_dbn": "data/dbn/ohlcv_1m/SR1/2020/2020-01-01_2021-01-01.dbn.zst",
+  "ohlcv_dbn_sha256": "3ea62d9e4a384ef70d812c7d0c7d97d1d1aa88924c45c98f8ea92bfb05aa3607",
+  "definition_dbn": "data/dbn/definition/SR1/2020/2020-01-01_2021-01-01.dbn.zst",
+  "definition_dbn_sha256": "9d56e4e5b4adfde0e8c963769d5c802612ff67e30e4469ccd70a39dc08728030",
+  "phase1c_alignment_report": "reports/phase_restart/sr1_2020_phase1c_raw_repair_alignment.json",
+  "phase2_readiness_run_after_repair": false,
+  "phase2_build_run": false,
+  "cleanup_run": false,
+  "redownload_run": false,
+  "dbn_source_modified": false
+}

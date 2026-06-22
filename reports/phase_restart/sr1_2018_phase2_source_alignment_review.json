@@ -1,0 +1,48 @@
+{
+  "reviewed_at_utc": "2026-06-22T15:33:00Z",
+  "pair": "SR1:2018",
+  "scope": "bounded source-alignment review before Phase 2 readiness/build",
+  "decision_state": "CANONICAL_DBN_TRUSTED_RAW_REQUIRES_REPAIR_OR_EXCEPTION",
+  "alignment": {
+    "report": "reports/phase_restart/sr1_2018_phase2_raw_alignment.json",
+    "status": "FAIL",
+    "failure": "source hash mismatches: 1",
+    "raw_path": "data/raw/SR1/2018.parquet",
+    "raw_rows": 1357
+  },
+  "raw_recorded_source": {
+    "path": "data/dbn_sr_parent_candidate/SR1/2018/2018-04-23_2019-01-01.dbn.zst",
+    "sha256": "42d2be31d9151f09d6cf84d2a8a30aa10f6d1fe5fe6a8d1188dd5d9ab5ca6e9b",
+    "current_data_path_exists": false,
+    "quarantine_path": "_data_reorg_quarantine20260621T222448Z/dbn_sr_parent_candidate/SR1/2018/2018-04-23_2019-01-01.dbn.zst",
+    "quarantine_path_exists": true,
+    "quarantine_sha256": "42d2be31d9151f09d6cf84d2a8a30aa10f6d1fe5fe6a8d1188dd5d9ab5ca6e9b",
+    "symbols_requested": ["SR1.FUT"],
+    "stype_in": "parent",
+    "stype_out": "instrument_id"
+  },
+  "canonical_source": {
+    "path": "data/dbn/ohlcv_1m/SR1/2018/2018-04-23_2019-01-01.dbn.zst",
+    "exists": true,
+    "sha256": "7830e41d9da6a7753d309a38d09bea12deaa08bda72ef18b3f5ee379adf0d2d7",
+    "symbols_requested": ["SR1.v.0"],
+    "stype_in": "continuous",
+    "stype_out": "instrument_id"
+  },
+  "trusted_source_for_current_contract": "data/dbn/ohlcv_1m/SR1/2018/2018-04-23_2019-01-01.dbn.zst",
+  "recommended_next_decisions": [
+    "approve bounded Phase 1B raw repair for SR1 2018 from canonical DBN",
+    "approve explicit SR1 2018 exception accepting parent-candidate raw source for readiness-only",
+    "defer SR1 2018 and continue batch with later rows"
+  ],
+  "safety": {
+    "phase2_readiness_run_for_sr1_2018_after_failed_alignment": false,
+    "phase2_build_run": false,
+    "cleanup_run": false,
+    "repair_run": false,
+    "redownload_run": false,
+    "dbn_source_modified": false,
+    "canonical_causal_written": false,
+    "generated_data_staged": false
+  }
+}

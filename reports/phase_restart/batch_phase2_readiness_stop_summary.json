@@ -1,0 +1,46 @@
+{
+  "updated_at_utc": "2026-06-22T15:23:00Z",
+  "scope": "batch Phase 2 readiness-only report automation",
+  "stop_status": "STOPPED_ON_UNEXPECTED_PRECHECK_BLOCKER",
+  "approved_phase2_rows": 66,
+  "existing_readiness_rows_reused": 2,
+  "new_readiness_rows_completed": 12,
+  "total_readiness_rows_present": 14,
+  "remaining_rows_without_readiness": 52,
+  "completed_rows": [
+    "KE:2013",
+    "KE:2014",
+    "KE:2015",
+    "KE:2016",
+    "KE:2017",
+    "KE:2018",
+    "KE:2019",
+    "KE:2020",
+    "KE:2021",
+    "KE:2022",
+    "KE:2023",
+    "KE:2024",
+    "KE:2025",
+    "KE:2026"
+  ],
+  "stop_blocker": {
+    "pair": "SR1:2018",
+    "stage": "phase1c_raw_dbn_alignment_precheck",
+    "status": "FAIL",
+    "failure": "source hash mismatches: 1",
+    "raw_path": "data/raw/SR1/2018.parquet",
+    "raw_rows": 1357,
+    "raw_recorded_source_file": "data/dbn_sr_parent_candidate/SR1/2018/2018-04-23_2019-01-01.dbn.zst",
+    "raw_recorded_source_sha256": "42d2be31d9151f09d6cf84d2a8a30aa10f6d1fe5fe6a8d1188dd5d9ab5ca6e9b",
+    "local_canonical_dbn_path": "data/dbn/ohlcv_1m/SR1/2018/2018-04-23_2019-01-01.dbn.zst",
+    "local_canonical_dbn_sha256": "7830e41d9da6a7753d309a38d09bea12deaa08bda72ef18b3f5ee379adf0d2d7"
+  },
+  "safety": {
+    "phase2_build_run": false,
+    "cleanup_run": false,
+    "canonical_causal_written": false,
+    "data_status_empty": true,
+    "dbn_source_modified": false,
+    "generated_data_staged": false
+  }
+}
