@@ -1,5 +1,30 @@
 # Codex Handoff
 
+## Manifest policy decision point
+- Updated at UTC: 2026-06-22T10:16:53Z
+- Scope: recorded the next manifest policy decision after committing the approval packet. No cleanup, quarantine, merge, data move, data delete, DBN redownload, DBN source modification, rebuild, conversion, data generation, expensive job, phase 3+ command, or `configs/data_manifest.yaml` edit was run.
+
+Approval packet commit
+- `bcb6392 Prepare manifest cleanup approval packet`
+
+Cleanup gate status
+- Cleanup gate remains blocked.
+- Approval packet evidence: `reports/data_manifest/manifest_cleanup_approval_packet.md`.
+- Current approval-packet counts: 76 `APPROVE_REPAIR_PLAN_REQUIRED`, 68 `MANIFEST_FIX_RECOMMENDED`, 4 `USER_DECISION_REQUIRED`, 0 `UNKNOWN_BLOCKING_CLEANUP`.
+
+Next user decision needed
+- Approve or reject the `data/dbn/status` manifest policy recommendation.
+- Recommended policy change if approved: update `configs/data_manifest.yaml` so the 68 missing `data/dbn/status` pairs are optional/deferred for cleanup-gate purposes, or add the 68 pairs to an allowed-missing/deferred policy with an explicit optional-enrichment rationale.
+- If approved: a later scoped manifest-policy edit can reduce the largest approval blocker group without generating data.
+- If rejected: keep full status DBN coverage required and approve a bounded status repair/download plan before cleanup can be evaluated.
+- Repair work remains required either way for 76 raw/causal rows unless those rows are explicitly deferred by later approval.
+
+Safety confirmations
+- No data cleanup occurred.
+- No data files were deleted.
+- No DBN source files were modified.
+- `configs/data_manifest.yaml` was not edited.
+
 ## Manifest cleanup approval packet
 - Updated at UTC: 2026-06-22T10:12:22Z
 - Scope: prepared an approval packet for the remaining cleanup blockers. This was report-only. No cleanup, quarantine, merge, data move, data delete, DBN redownload, DBN source modification, rebuild, conversion, data generation, expensive job, or phase 3+ command was run. `configs/data_manifest.yaml` was not edited.
