@@ -514,3 +514,167 @@ Updated at UTC: 2026-06-22T00:23:29Z
 - Send Phase 3 goal for broader production-readiness gaps only after accepting the Phase 2A/2B/2C focused safety gates.
 - Prioritize a finite, non-GUI, paper/sim-only decision-loop integration that wires runtime audit rows and operator status from real scaffold state without adding live broker execution.
 - Keep Phase 3 validations hard-timeout wrapped; do not run broad pytest until touched and focused live ops/chart gates pass.
+
+## Phase 3 finite paper/sim decision-loop integration
+- Updated at UTC: 2026-06-22T04:59:48Z
+- Scope: finite, deterministic, non-GUI, paper/sim-only decision-loop integration and focused tests only.
+- No broker SDKs, broker credentials, account IDs, broker env vars, live order paths, production live trading, chart/UI order path, GUI/chart launch, `--no-timeout`, broad pytest, or tracked generated report/log/data modifications were added.
+- The smoke CLI writes `reports/live_trading_smoke/audit.jsonl`; `reports/` and `*.jsonl` are ignored. This is the explicitly allowed finite smoke output path.
+- `scripts\phase2_causal_base\build_higher_timeframe_bars.py` still exists and was not modified.
+
+## Phase 3 files changed
+- `live_ops/smoke.py`: hardened the smoke path into a single finite decision-cycle runner that executes data quality, model readiness, signal state, risk, paper broker, reconciliation, audit row, and operator status for each scenario.
+- `scripts/smoke_live_trading.py`: added repo-root import bootstrap, `--audit-dir`, and `--force-failure` CLI support while keeping the default command finite and non-GUI.
+- `tests/test_live_ops.py`: expanded smoke tests to verify audit row shape/count, decision-loop operator status, default safe rejection, explicit paper fill, exception fail-closed logging, and CLI zero/nonzero behavior.
+- `CODEX_HANDOFF.md`: recorded Phase 3 commands, results, remaining Medium blockers, recommended Phase 4 scope, and updated requirement map.
+
+## Phase 3 commands run
+- `Get-Content -LiteralPath 'C:\Users\donny\.codex\attachments\06f71253-960b-4a6a-93f5-e07b1aa4ec20\pasted-text-1.txt'`
+- `git status --short --untracked-files=all`
+- `git diff --stat`
+- `Get-Content -LiteralPath 'C:\Users\donny\Desktop\futures_intraday_model\CODEX_HANDOFF.md' -Tail 140`
+- Targeted `rg` and `Get-Content` inspection of `live_ops\smoke.py`, `scripts\smoke_live_trading.py`, `tests\test_live_ops.py`, `live_ops\schemas.py`, `live_ops\broker.py`, `live_ops\audit.py`, and `live_ops\reconciliation.py`.
+- `python -m py_compile live_ops\smoke.py scripts\smoke_live_trading.py tests\test_live_ops.py`
+- `python -m pytest --help | Select-String -Pattern '--timeout'`
+- PowerShell job wrapper: `python -X faulthandler -m pytest tests\test_live_ops.py -vv -s --tb=short --durations=20`
+- PowerShell job wrapper: `python -X faulthandler -m pytest tests\test_live_ops.py tests\test_live_chart_feed.py -vv -s --tb=short --durations=20`
+- `python scripts\smoke_live_trading.py`
+- `git diff --check -- live_ops\smoke.py scripts\smoke_live_trading.py tests\test_live_ops.py CODEX_HANDOFF.md live_ops\operator.py`
+- `Test-Path -LiteralPath 'scripts\phase2_causal_base\build_higher_timeframe_bars.py'`
+- `(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')`
+
+## Phase 3 validation results
+- `pytest-timeout` was not available from `python -m pytest --help`; all pytest validation used the 120s PowerShell `Start-Job` / `Wait-Job` / `Stop-Job` wrapper.
+- Compile check: PASS, `python -m py_compile live_ops\smoke.py scripts\smoke_live_trading.py tests\test_live_ops.py`.
+- First actual smoke CLI attempt: FAIL before scenario execution because `python scripts\smoke_live_trading.py` could not import `live_ops` from the script directory. Fixed by bootstrapping repo root into `sys.path`.
+- Final touched tests: PASS, `tests\test_live_ops.py` collected 29 tests and passed in 0.44s.
+- Final focused live ops/chart gate: PASS, `tests\test_live_ops.py tests\test_live_chart_feed.py` collected 58 tests and passed in 1.31s.
+- Final deterministic smoke CLI: PASS, `python scripts\smoke_live_trading.py` reported `PASS live trading smoke scenarios=26 decision_cycles=26 audit_rows=26`.
+- Touched-file whitespace check: PASS; only line-ending warnings were reported.
+
+## Phase 3 safety evidence added
+- Finite smoke runner uses deterministic synthetic bars/signals and requires no Databento credentials, broker credentials, chart, GUI, broker SDK, or live broker path.
+- Every completed smoke decision cycle writes exactly one JSONL audit row with nullable `exception`, `operator_status`, `operator_status_line`, data quality, model, signal, risk, broker response, reconciliation, positions, and open orders.
+- Operator status in smoke now reflects actual decision-loop state, including paper fill position `ES:ESU6=1`, current signal, risk reason, reconciliation reason, and error code.
+- Default safe config remains disabled/fail-closed; explicit paper override is required for deterministic paper fill.
+- Smoke scenarios cover missing model output, missing features, disabled trading, paper fill, operator kill switch, operator trading disabled, operator pause new entries, bad OHLC, stale bar, stale heartbeat, duplicate timestamp, kill switch, oversize, duplicate order ID, reconciliation mismatch, reconnect timestamp gap, reconnect pending/cleared, contract mismatch, outside session, missing session config, unsafe live mode, and forced exception fail-closed audit logging.
+- `scripts\smoke_live_trading.py --force-failure` returns nonzero in focused tests without changing the safe default smoke behavior.
+- Existing no-real-broker-SDK and chart/status no-order-path tests remain covered in the focused gate.
+
+## Phase 3 requirement map update
+- No Severe blockers remain in the focused live-ops/chart scaffold gate or finite smoke CLI.
+- Phase 3 completed the requested finite, deterministic, non-GUI, paper/sim-only decision-loop integration path.
+- Parts K, O, and Q were improved by Phase 3 through full smoke audit rows, decision-loop-derived operator status, CLI coverage, forced failure coverage, and focused tests.
+- Remaining items below are broader production-depth gaps, not blockers for the Phase 3 paper/sim smoke objective.
+
+## Phase 3 remaining Medium blockers
+- Remaining deferred scaffold gaps by Part ID: A, C, F, H, I, J, K, L, M, N, O, Q.
+- A: explicit debug/verbose logging mode remains minimal.
+- C: full historical/live data contract coverage for sessions, rollover policy, no-trade intervals, and model feature exclusion remains incomplete outside smoke/parity checks.
+- F: imputer/scaler object integration is still represented by readiness flags, not concrete model artifact adapters.
+- H: optional cancel/flatten-on-kill config action is not wired as a runtime behavior.
+- I: next-bar-open paper fill policy and direct broker-owned audit append remain deferred.
+- J: audit-state reconciliation remains minimal.
+- K: finite smoke audit integration exists, but fsync/atomic durability hardening and broader runtime durability remain deferred.
+- L: system clock drift, low disk warnings, and full reconnect/backfill policy remain deferred.
+- M: rollover calendar automation/interface remains deferred beyond explicit active-contract checks.
+- N: monitor-only outside session and flatten-before-close runtime behavior remain deferred.
+- O: finite smoke operator status uses decision-loop state, but live chart status is still not wired to a full live decision-loop state feed.
+- Q: focused tests cover the Phase 3 path, but bounded broader validation and best-effort system-check tests/scripts remain deferred.
+
+## Phase 3 recommended Phase 4 scope
+- Send Phase 4 validation/docs goal to run bounded broader validation, inspect ignored generated smoke output hygiene, and update readiness documentation to reflect the completed finite paper/sim decision-loop path.
+- Keep Phase 4 paper/sim only; do not add live broker SDKs, credentials, live order paths, GUI/manual chart validation, or production go-live behavior.
+- Stop Phase 4 with a final scaffold status that separates completed safety gates from remaining Medium production-depth gaps.
+
+## Phase 4 bounded validation, readiness docs, final scaffold status
+- Updated at UTC: 2026-06-22T05:08:07Z
+- Scope: validation and documentation for the current paper/smoke scaffold only.
+- No broker SDKs, broker credentials, account IDs, broker env vars, live order paths, production live trading, chart/UI order path, GUI/chart launch, `--no-timeout`, or tracked generated report/log/data modifications were added.
+- The smoke CLI wrote ignored output under `reports/live_trading_smoke/`. `git status --short --ignored -- reports\live_trading_smoke\audit.jsonl` reported `!! reports/live_trading_smoke/`.
+- `scripts\phase2_causal_base\build_higher_timeframe_bars.py` still exists and was not modified.
+- No commit was created; repo policy says not to commit unless explicitly asked.
+
+## Phase 4 files changed
+- `docs/live_trading_readiness.md`: updated current status, validation commands, smoke commands, paper control commands, smoke scenario coverage, known limitations, remaining Medium blockers, skipped chart validation reason, broad validation status, and go-live checklist.
+- `CODEX_HANDOFF.md`: recorded Phase 4 commands, validation results, smoke result, chart command skip, final scaffold status, remaining blockers, and recommended next step.
+
+## Phase 4 commands run
+- `Get-Content -LiteralPath 'C:\Users\donny\.codex\attachments\61f8a267-ad2f-4839-bb98-0f0258be1a2f\pasted-text-1.txt'`
+- `git status --short --untracked-files=all`
+- `git diff --stat`
+- `Get-Content -LiteralPath 'C:\Users\donny\Desktop\futures_intraday_model\CODEX_HANDOFF.md' -Tail 160`
+- PowerShell job wrapper: `python -X faulthandler -m pytest tests\test_live_ops.py tests\test_live_chart_feed.py -vv -s --tb=short --durations=20`
+- `python scripts\smoke_live_trading.py`
+- PowerShell job wrapper: `python -X faulthandler -m pytest tests -q --tb=short --durations=20`
+- `git diff --check`
+- `rg -n "chart_factory|\.show\(|DATABENTO_API_KEY|db_module\.Live|block_for_close|--timeout-seconds" live_chart_feed.py tests\test_live_chart_feed.py`
+- `git status --short --ignored -- reports\live_trading_smoke\audit.jsonl`
+- `rg -n "ib_insync|ibapi|InteractiveBrokers|TWS|CQG|Rithmic|Tradovate|NinjaTrader|broker credential|account_id|api_key|secret|password" .`
+- `rg -n "ib_insync|ibapi|InteractiveBrokers|TWS|CQG|Rithmic|Tradovate|NinjaTrader" live_ops scripts tests live_chart_feed.py docs configs`
+- `rg -n "from live_ops\.broker|PaperBroker|LiveBroker|OrderIntent|place_order" live_chart_feed.py live_ops scripts tests\test_live_ops.py`
+- Targeted `Get-Content` inspection of `docs\live_trading_readiness.md` and `live_chart_feed.py`
+- `Test-Path -LiteralPath 'scripts\phase2_causal_base\build_higher_timeframe_bars.py'`
+- `(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')`
+
+## Phase 4 validation results
+- Focused live ops/chart gate: PASS, `tests\test_live_ops.py tests\test_live_chart_feed.py` collected 58 tests and passed in 1.28s.
+- Deterministic smoke CLI: PASS, `python scripts\smoke_live_trading.py` reported `PASS live trading smoke scenarios=26 decision_cycles=26 audit_rows=26`.
+- Broad bounded pytest: FAIL outside the live scaffold, `2 failed, 712 passed, 58 warnings in 99.09s`.
+- Broad failures:
+  - `tests/phase8_model_selection/test_audit_event_level_edge_feasibility.py::test_event_level_audit_selects_non_overlapping_events`: expected `current_policy_traded_rows == 4`, actual `3`.
+  - `tests/phase8_model_selection/test_audit_event_level_edge_feasibility.py::test_event_level_audit_fails_closed_without_target_windows`: expected `SystemExit` message matching `policy frame missing required diagnostic columns`, actual `policy executable signals missing target_entry_ts/target_exit_ts: 4`.
+- Touched-file whitespace/static diff check: PASS; only CRLF warnings were reported.
+- Generated smoke output hygiene: PASS for this phase; smoke output stayed under ignored `reports/live_trading_smoke/`.
+
+## Phase 4 chart command result
+- Skipped `python .\live_chart_feed.py --timeout-seconds 10`.
+- Reason: `run_live_chart` constructs a chart and calls `show_chart(chart)` before live subscription; `show_chart` calls `show(block=False)` when available. This phase forbids opening a blocking GUI/chart, and the command also depends on live Databento chart/feed setup rather than the finite paper/smoke scaffold.
+- Replacement evidence: focused chart tests passed using fake chart and Databento objects, and static tests still assert chart/status has no broker placement path.
+
+## Phase 4 static safety results
+- No real broker SDK imports were found in the live scaffold targeted search. Hits for `ibapi`/`ib_insync` were only blocked-token strings in `tests/test_live_ops.py`.
+- `live_chart_feed.py` has no `from live_ops.broker` import, no `PaperBroker`, no `LiveBroker`, no `OrderIntent`, and no `place_order` path in the targeted order-path search.
+- Broad secret/credential search hits were Databento market-data auth references, documentation/checklist text, audit redaction marker names, test fixture strings, and generated build metadata. No broker credential/account/live order path was added by this work.
+
+## Phase 4 final scaffold status
+- Current scaffold status: paper/smoke only.
+- Production live trading status: not implemented.
+- Real broker execution status: disabled; `LiveBroker.place_order` raises `NotImplementedError`.
+- Chart/UI order status: no chart/status broker placement path in targeted static search and focused tests.
+- Focused safety gate: passing.
+- Deterministic paper/smoke decision loop: passing.
+- Readiness documentation: updated.
+- Broad repo validation: not fully green because of unrelated Phase 8 model-selection test failures listed above.
+
+## Phase 4 remaining Medium blockers
+- Remaining production-depth scaffold gaps by Part ID: A, C, F, H, I, J, K, L, M, N, O, Q.
+- A: explicit debug/verbose logging mode remains minimal.
+- C: full historical/live data contract coverage for sessions, rollover policy, no-trade intervals, and model feature exclusion remains incomplete outside smoke/parity checks.
+- F: imputer/scaler object integration is still represented by readiness flags, not concrete model artifact adapters.
+- H: optional cancel/flatten-on-kill config action is not wired as runtime behavior.
+- I: next-bar-open paper fill policy and direct broker-owned audit append remain deferred.
+- J: audit-state reconciliation remains minimal.
+- K: finite smoke audit integration exists, but fsync/atomic durability hardening and broader runtime durability remain deferred.
+- L: system clock drift, low disk warnings, and full reconnect/backfill policy remain deferred.
+- M: rollover calendar automation/interface remains deferred beyond explicit active-contract checks.
+- N: monitor-only outside session and flatten-before-close runtime behavior remain deferred.
+- O: finite smoke operator status uses decision-loop state, but live chart status is not wired to a full live decision-loop state feed.
+- Q: focused tests cover the paper/smoke path, but best-effort system-check tests/scripts remain deferred.
+- Chart command validation was skipped because it would open chart UI.
+- Broad validation has two unrelated Phase 8 model-selection failures; focused live-ops/chart validation and smoke pass.
+
+## Phase 4 recommended next step
+- Review final scaffold status and decide whether to commit Phase 0-4 work.
+- If committing, keep generated/ignored smoke output untracked and do not stage ignored `reports/`, caches, logs, or data artifacts.
+- If continuing implementation instead of committing, next useful scope is a separate production-depth cleanup goal for selected Medium blockers, still without live broker execution.
+
+## Operator controls scaffold slice
+- Updated at UTC: 2026-06-22T05:18:32Z
+- Scope: paper/smoke-only operator control state and local JSON control source for preventing new paper order submissions.
+- What changed: added operator control state/decision loading and evaluation; wired smoke decision cycles to block broker submission after existing risk approval when kill switch, trading disabled, pause-new-entries, or malformed control input applies; added audit/status fields and focused tests.
+- Files changed by this slice: `live_ops/operator.py`, `live_ops/smoke.py`, `tests/test_live_ops.py`, `CODEX_HANDOFF.md`.
+- Commands run: `python -m py_compile live_ops\operator.py live_ops\smoke.py`; `python -m pytest tests\test_live_ops.py -q -p no:cacheprovider`; `python -m pytest tests\test_live_ops.py tests\test_live_chart_feed.py -q -p no:cacheprovider`; `git diff --check`; `git status --short`.
+- Test results: PASS, `tests\test_live_ops.py` collected 30 tests; PASS, `tests\test_live_ops.py tests\test_live_chart_feed.py` collected 59 tests; `git diff --check` reported only CRLF warnings.
+- Remaining work: no broker cancel-all, flatten-all, live broker integration, or real order path was added.
+- Next recommended step: included in the commit gate after reviewing the expected Phase 0-4 scaffold files and rerunning focused validation.

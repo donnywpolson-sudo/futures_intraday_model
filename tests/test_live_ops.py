@@ -14,6 +14,7 @@ import scripts.kill_switch_off as kill_switch_off_script
 import scripts.kill_switch_on as kill_switch_on_script
 import scripts.paper_cancel_all as paper_cancel_all_script
 import scripts.paper_flatten_all as paper_flatten_all_script
+import scripts.smoke_live_trading as smoke_live_trading_script
 from live_ops.audit import AuditLogger
 from live_ops.bar_builder import LiveBarBuilder, bar_contract_row, check_bar_parity
 from live_ops.broker import LiveBroker, PaperBroker
@@ -125,6 +126,42 @@ def test_operator_status_rendering_width() -> None:
         "err=DATA_STALE",
     ):
         assert expected in wide_line
+
+
+def test_operator_control_state_file_source_blocks_fail_closed(tmp_path) -> None:
+    from live_ops.operator import evaluate_operator_controls, load_operator_control_state
+
+    missing = load_operator_control_state(tmp_path / "missing.json", now=BASE)
+    assert evaluate_operator_controls(missing).allowed is True
+
+    valid_path = tmp_path / "operator_control.json"
+    valid_path.write_text(
+        json.dumps(
+            {
+                "trading_enabled": True,
+                "kill_switch_active": True,
+                "pause_new_entries": False,
+                "reason": "manual stop",
+                "message": "manual stop requested",
+                "updated_at": "2026-06-22T14:30:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    valid = load_operator_control_state(valid_path, now=BASE)
+    valid_decision = evaluate_operator_controls(valid)
+    assert valid.kill_switch_active is True
+    assert valid.updated_at == BASE
+    assert valid_decision.allowed is False
+    assert valid_decision.reason_code == "OPERATOR_KILL_SWITCH"
+
+    malformed_path = tmp_path / "malformed.json"
+    malformed_path.write_text("{not-json", encoding="utf-8")
+    malformed = load_operator_control_state(malformed_path, now=BASE)
+    malformed_decision = evaluate_operator_controls(malformed)
+    assert malformed.trading_enabled is False
+    assert malformed_decision.allowed is False
+    assert malformed_decision.reason_code == "OPERATOR_CONTROL_MALFORMED"
 
 
 def test_timeout_args_support_disabled_and_enabled() -> None:
@@ -690,4 +727,60 @@ def test_smoke_live_trading_script_scenarios(tmp_path) -> None:
     stdout = StringIO()
 
     assert run_smoke(audit_dir=tmp_path, stdout=stdout)
-    assert "PASS live trading smoke" in stdout.getvalue()
+    text = stdout.getvalue()
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    by_scenario = {row["scenario"]: row for row in rows}
+
+    assert "PASS live trading smoke" in text
+    assert f"decision_cycles={len(rows)}" in text
+    assert f"audit_rows={len(rows)}" in text
+    assert all("exception" in row for row in rows)
+    assert all("operator_status" in row for row in rows)
+    assert all(len(row["operator_status_line"]) == 119 for row in rows)
+    assert "operator_status_render" not in by_scenario
+    assert by_scenario["missing_model_output"]["signal_state"]["signal"] == "NO_SIGNAL"
+    assert by_scenario["missing_features"]["signal_state"]["signal"] == "NO_SIGNAL"
+    assert by_scenario["trading_disabled"]["risk_decision"]["reason_code"] == "TRADING_DISABLED"
+    assert by_scenario["paper_fill"]["broker_response"]["status"] == "FILLED"
+    assert by_scenario["paper_fill"]["operator_status"]["signal"] == "LONG"
+    assert by_scenario["paper_fill"]["operator_status"]["risk_status"] == "OK"
+    assert by_scenario["paper_fill"]["operator_status"]["paper_position"] == "ES:ESU6=1"
+    assert by_scenario["bad_ohlc"]["data_quality_result"]["reason_code"] == "BAD_OHLC"
+    assert by_scenario["stale_bar"]["data_quality_result"]["reason_code"] == "DATA_STALE"
+    assert by_scenario["stale_heartbeat"]["data_quality_result"]["reason_code"] == "HEARTBEAT_STALE"
+    assert by_scenario["duplicate_timestamp"]["data_quality_result"]["reason_code"] == "DUPLICATE_TIMESTAMP"
+    assert by_scenario["kill_switch"]["risk_decision"]["reason_code"] == "KILL_SWITCH_ON"
+    assert by_scenario["operator_kill_switch"]["risk_decision"]["reason_code"] == "OPERATOR_KILL_SWITCH"
+    assert by_scenario["operator_kill_switch"]["operator_control_decision"]["reason_code"] == "OPERATOR_KILL_SWITCH"
+    assert by_scenario["operator_kill_switch"]["operator_status"]["kill_switch"] == "ON"
+    assert by_scenario["operator_kill_switch"]["broker_response"] is None
+    assert by_scenario["operator_trading_disabled"]["risk_decision"]["reason_code"] == "OPERATOR_TRADING_DISABLED"
+    assert by_scenario["operator_trading_disabled"]["broker_response"] is None
+    assert by_scenario["operator_pause_new_entries"]["risk_decision"]["reason_code"] == "OPERATOR_PAUSE_NEW_ENTRIES"
+    assert by_scenario["operator_pause_new_entries"]["broker_response"] is None
+    assert by_scenario["oversized_order"]["risk_decision"]["reason_code"] == "ORDER_SIZE_LIMIT"
+    assert by_scenario["duplicate_order_id"]["broker_response"]["reason_code"] == "DUPLICATE_ORDER_ID"
+    assert by_scenario["reconciliation_mismatch"]["risk_decision"]["reason_code"] == "RECONCILIATION_FAILED"
+    assert by_scenario["reconnect_gap"]["data_quality_result"]["reason_code"] == "TIMESTAMP_GAP"
+    assert by_scenario["reconnect_pending"]["risk_decision"]["reason_code"] == "RECONNECT_RECONCILIATION_PENDING"
+    assert by_scenario["reconnect_cleared"]["risk_decision"]["approved"] is True
+    assert by_scenario["contract_mismatch"]["data_quality_result"]["reason_code"] == "CONTRACT_MISMATCH"
+    assert by_scenario["outside_session"]["risk_decision"]["reason_code"] == "OUTSIDE_SESSION"
+    assert by_scenario["missing_session_config"]["risk_decision"]["reason_code"] == "OUTSIDE_SESSION"
+    assert by_scenario["unsafe_live_mode"]["risk_decision"]["reason_code"] == "LIVE_BROKER_BLOCKED"
+    assert by_scenario["forced_exception"]["exception"] is not None
+    assert by_scenario["forced_exception"]["risk_decision"]["reason_code"] == "EXCEPTION"
+    assert by_scenario["forced_exception"]["broker_response"] is None
+
+
+def test_smoke_live_trading_cli_returns_zero_and_forced_failure_nonzero(tmp_path) -> None:
+    passing_dir = tmp_path / "passing"
+    forced_dir = tmp_path / "forced"
+
+    assert smoke_live_trading_script.main(["--audit-dir", str(passing_dir)]) == 0
+    assert smoke_live_trading_script.main(["--audit-dir", str(forced_dir), "--force-failure"]) == 1
+    assert (passing_dir / "audit.jsonl").exists()
+    assert (forced_dir / "audit.jsonl").exists()
