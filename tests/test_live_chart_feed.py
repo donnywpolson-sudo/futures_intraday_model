@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from io import StringIO
+import queue
 from types import SimpleNamespace
 
 import pytest
@@ -359,6 +360,44 @@ def test_status_text_reports_model_placeholder_and_stale_data() -> None:
 
     assert "model output unavailable" in text
     assert "stale" in text
+
+
+def test_model_overlay_status_formats_available_fields() -> None:
+    state = chart.ModelOverlayState(
+        available=True,
+        signal="LONG",
+        score=0.7,
+        position="flat",
+        gate_status="open",
+        realized_pnl=1.25,
+        unrealized_pnl=-0.5,
+    )
+
+    text = chart.model_overlay_status_text(state)
+
+    assert "signal=LONG" in text
+    assert "score=0.7" in text
+    assert "position=flat" in text
+    assert "gate=open" in text
+    assert "realized=1.25" in text
+    assert "unrealized=-0.5" in text
+
+
+def test_market_queue_selects_changed_valid_market_only() -> None:
+    markets = {
+        "ES": chart.MarketInfo(symbol="ES"),
+        "NQ": chart.MarketInfo(symbol="NQ"),
+    }
+    market_queue: queue.Queue[str] = queue.Queue()
+    market_queue.put("ES")
+    market_queue.put("BAD")
+    market_queue.put("NQ")
+
+    assert chart.drain_market_queue(
+        market_queue,
+        current_market="ES",
+        markets=markets,
+    ) == "NQ"
 
 
 class FakeSymbology:

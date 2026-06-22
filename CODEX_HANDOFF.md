@@ -47,3 +47,83 @@ Updated at UTC: 2026-06-22T00:23:29Z
 
 ## Next recommended step
 - Review and approve/reject the refreshed Step 4 classification/checkpoint report.
+
+## Live chart tier3 universe and higher-timeframe update
+- Read goal objective attachment `C:\Users\donny\.codex\attachments\10b71462-502f-4513-a69b-68794f78fb36\goal-objective.md`.
+- Located live chart implementation in `live_chart_feed.py`; this Python app owns chart UI setup, Databento historical/live calls, symbol resolution, market discovery, topbar interval controls, and candle aggregation.
+- Added `4h` and `1d` chart intervals while preserving existing `1m`, `5m`, `15m`, `30m`, and `1h` behavior.
+- Added timeframe-aware candle bucketing: `4h` anchors in exchange time and `1d` uses Globex trading-day starts based on `America/Chicago` 17:00 session open.
+- Preserved config-driven tier3 market loading from `configs/alpha_tiered.yaml` and changed returned market order to match the YAML universe order.
+- Added `chart_market_universe()` helper for UI/API-style callers.
+- Added a topbar market selector populated from the config-driven market universe. It is currently a visible selector/watchlist control; full in-process Databento reconnect on selection remains incomplete.
+- Added status HUD text for stale latest bars and `model output unavailable` placeholder; no fake model outputs were invented.
+- Hardened chart UI event draining to ignore non-callable handlers.
+
+## Live chart tier3 universe and higher-timeframe files changed
+- `live_chart_feed.py`
+- `tests/test_live_chart_feed.py`
+- `CODEX_HANDOFF.md`
+
+## Live chart tier3 universe and higher-timeframe commands run
+- `Get-Content -LiteralPath 'C:\Users\donny\.codex\attachments\10b71462-502f-4513-a69b-68794f78fb36\goal-objective.md'`
+- `git status --short`
+- `rg -n "SUPPORTED_CHART_TIMEFRAMES|DEFAULT_CHART_TIMEFRAMES|timeframe_seconds|aggregate_candles|configure_chart|topbar|switcher|market|search|localStorage|query|model|overlay|prediction|signal|session" live_chart_feed.py tests\test_live_chart_feed.py tests\live -S`
+- `rg -n "tier_3_research|tier3research|markets:" configs\alpha_tiered.yaml live_chart_feed.py tests\test_live_chart_feed.py`
+- `python -m pytest tests\test_live_chart_feed.py tests\live\test_live_chart_lightweight.py -q`
+- `python -m py_compile live_chart_feed.py`
+- `c:\Users\donny\Desktop\futures_intraday_model\.venv\Scripts\python.exe c:/Users/donny/Desktop/futures_intraday_model/live_chart_feed.py --market ES --timeframe 5m --historical-backfill --lookback-hours 4 --timeout-seconds 10`
+- `c:\Users\donny\Desktop\futures_intraday_model\.venv\Scripts\python.exe c:/Users/donny/Desktop/futures_intraday_model/live_chart_feed.py --market NQ --timeframe 4h --historical-backfill --lookback-hours 24 --timeout-seconds 8`
+- `c:\Users\donny\Desktop\futures_intraday_model\.venv\Scripts\python.exe c:/Users/donny/Desktop/futures_intraday_model/live_chart_feed.py --market ES --timeframe 1d --historical-backfill --lookback-hours 72 --timeout-seconds 8`
+- `git diff --check -- live_chart_feed.py tests\test_live_chart_feed.py CODEX_HANDOFF.md`
+- `Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" | Select-Object ProcessId,CommandLine | Format-List`
+
+## Live chart tier3 universe and higher-timeframe validation results
+- Focused tests: PASS, 30 passed.
+- `py_compile`: PASS.
+- `git diff --check`: PASS.
+- ES 5m bounded live validation: PASS, exit 0, streamed live status and retained Databento available-end clamp logs.
+- NQ 4h bounded live validation: PASS, exit 0, streamed live status with 4h bucket `2026-06-21T21:00:00Z`.
+- ES 1d bounded live validation: PASS, exit 0, streamed daily bars from Globex session starts including `2026-06-18T22:00:00Z` and `2026-06-21T22:00:00Z`.
+- No `live_chart_feed.py` Python processes remained after validation.
+
+## Live chart tier3 universe and higher-timeframe remaining work
+- Full in-process market switching without restarting the Databento subscription remains incomplete. Current selector is visible and config-driven, but it uses a no-op callback to avoid false switch events from `lightweight_charts`.
+- URL/local-storage persistence is not implemented in this Python chart surface.
+- Model overlay adapter is only a UI/status placeholder; no real model endpoint/artifact adapter was added.
+
+## Live chart tier3 universe and higher-timeframe next recommended step
+- Implement real market-change handling by stopping the current Databento live client, resolving the selected market, backfilling, clearing candles, and subscribing to the new instrument in the same chart window.
+
+## Live chart in-process market switching update
+- Added market switch callback plumbing with an initialization gate to avoid startup switch events.
+- `drain_chart_queue` can now return a requested `switch_market`.
+- `run_live_chart` now handles a market switch by stopping the active Databento live client, clearing chart candles/session markers/status, resolving the selected market, replaying historical backfill for the original lookback window, and subscribing to the new instrument in the same chart window.
+- Added a small model overlay adapter surface with `ModelOverlayState`, `model_overlay_state()`, and `model_overlay_status_text()`.
+- Added a visible model overlay toggle control; unavailable model output remains explicit and no fake predictions are generated.
+- Added focused tests for market switch queue filtering and model overlay status formatting.
+
+## Live chart in-process market switching files changed
+- `live_chart_feed.py`
+- `tests/test_live_chart_feed.py`
+- `CODEX_HANDOFF.md`
+
+## Live chart in-process market switching commands run
+- `python -m pytest tests\test_live_chart_feed.py tests\live\test_live_chart_lightweight.py -q`
+- `python -m py_compile live_chart_feed.py`
+- `python live_chart_feed.py --list-markets`
+- `git diff --check -- live_chart_feed.py tests\test_live_chart_feed.py CODEX_HANDOFF.md`
+- `git status --short`
+
+## Live chart in-process market switching validation results
+- Focused tests: PASS, 32 passed.
+- `py_compile`: PASS.
+- `--list-markets`: PASS, printed 33 Tier 3 Research markets from `configs/alpha_tiered.yaml`.
+- `git diff --check`: PASS, line-ending warnings only.
+- Bounded live Databento validation was not rerun in this continuation because the required escalation was rejected by the approval system: usage limit reached.
+
+## Live chart in-process market switching remaining work
+- Live in-window market switching is implemented but not live-validated after this update because the environment rejected Databento validation for usage-limit reasons.
+- URL/local-storage persistence remains unimplemented in this Python chart surface.
+
+## Live chart in-process market switching next recommended step
+- When Databento/live-command approval is available, run `python live_chart_feed.py --market ES --timeframe 5m --historical-backfill --lookback-hours 4 --timeout-seconds 30`, use the chart market selector to switch to `NQ`, and confirm the same window clears, backfills, and streams NQ without a restart.

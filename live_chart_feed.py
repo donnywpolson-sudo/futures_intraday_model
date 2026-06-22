@@ -89,6 +89,7 @@ CHART_RENDER_BATCH_RECORDS = 2_000
 CHART_RENDER_BATCH_WAIT_SECONDS = 0.01
 CHART_RENDER_THROTTLE_SECONDS = 0.50
 TOPBAR_STATUS_NAME = "status"
+TOPBAR_MODEL_OVERLAY_NAME = "model"
 LOADING_STATUS_TEXT = "Loading candles..."
 EXCHANGE_TZ_NAME = "America/Chicago"
 RTH_OPEN_HOUR = 8
@@ -171,6 +172,18 @@ class ResolvedInstrument:
     instrument_id: int
     raw_symbol: str | None
     candidates: tuple[SymbologyCandidate, ...]
+
+
+@dataclass(frozen=True)
+class ModelOverlayState:
+    available: bool = False
+    signal: str | None = None
+    score: float | None = None
+    position: str | None = None
+    confidence: str | None = None
+    gate_status: str | None = None
+    realized_pnl: float | None = None
+    unrealized_pnl: float | None = None
 
 
 ChartQueueItem = dict[str, CandleValue] | ProviderStartClamp
@@ -571,14 +584,35 @@ def format_chart_title(
     return f"{symbols} \u00b7 {chart_timeframe}"
 
 
+def model_overlay_state(*, market: str, symbol: str | None = None) -> ModelOverlayState:
+    _ = (market, symbol)
+    return ModelOverlayState()
+
+
+def model_overlay_status_text(state: ModelOverlayState) -> str:
+    if not state.available:
+        return MODEL_OVERLAY_UNAVAILABLE_TEXT
+    parts = [
+        f"signal={state.signal or 'n/a'}",
+        f"score={state.score if state.score is not None else 'n/a'}",
+        f"position={state.position or 'n/a'}",
+        f"gate={state.gate_status or state.confidence or 'n/a'}",
+        f"realized={state.realized_pnl if state.realized_pnl is not None else 'n/a'}",
+        f"unrealized={state.unrealized_pnl if state.unrealized_pnl is not None else 'n/a'}",
+    ]
+    return "model " + " ".join(parts)
+
+
 def format_topbar_status(
     *,
     symbols: str,
     display: ChartDisplayState,
     status: ChartStatus,
+    overlay: ModelOverlayState | None = None,
 ) -> str:
+    overlay_text = model_overlay_status_text(overlay or model_overlay_state(market=symbols, symbol=symbols))
     if display.loading:
-        return f"Loading... {status.records_updated:,} bars | {MODEL_OVERLAY_UNAVAILABLE_TEXT}"
+        return f"Loading... {status.records_updated:,} bars | {overlay_text}"
     latest = short_display_time_label(status.latest_time, display.display_tz)
     stale = ""
     if status.latest_time is not None:
@@ -587,7 +621,7 @@ def format_topbar_status(
             stale = " | stale"
     return (
         f"{symbols} {display.timeframe} | {status.records_updated:,} bars | "
-        f"last {latest}{stale} | {MODEL_OVERLAY_UNAVAILABLE_TEXT}"
+        f"last {latest}{stale} | {overlay_text}"
     )
 
 
@@ -1508,6 +1542,7 @@ def configure_chart(
         selected_market=selected_market,
         on_market_change=on_market_change,
     )
+    configure_model_overlay_toggle(chart)
     configure_status_text(chart, status_text)
 
 
@@ -1550,6 +1585,19 @@ def configure_market_selector(
         tuple(market_options),
         default=selected_market,
         func=on_market_change,
+    )
+
+
+def configure_model_overlay_toggle(chart: object) -> None:
+    topbar = getattr(chart, "topbar", None)
+    switcher = getattr(topbar, "switcher", None)
+    if not callable(switcher):
+        return
+    switcher(
+        TOPBAR_MODEL_OVERLAY_NAME,
+        ("model off", "model on"),
+        default="model off",
+        func=noop_chart_callback,
     )
 
 
@@ -1846,6 +1894,26 @@ def build_timeframe_callback(
     return handle_timeframe_change
 
 
+def build_market_callback(
+    market_queue: queue.Queue[str],
+    *,
+    current_market: Callable[[], str],
+    enabled_after: Callable[[], float],
+) -> Callable[[object], None]:
+    def handle_market_change(chart: object) -> None:
+        if time.monotonic() < enabled_after():
+            return
+        try:
+            selected = cast(Any, chart).topbar["market"].value
+        except Exception:
+            return
+        selected_market = str(selected).strip().upper()
+        if selected_market and selected_market != current_market():
+            market_queue.put(selected_market)
+
+    return handle_market_change
+
+
 def drain_timeframe_queue(
     timeframe_queue: queue.Queue[str],
     *,
@@ -1865,6 +1933,22 @@ def drain_timeframe_queue(
         display.timeframe_seconds = timeframe_seconds(selected)
         display.rendered_candle_count = 0
         changed = True
+
+
+def drain_market_queue(
+    market_queue: queue.Queue[str],
+    *,
+    current_market: str,
+    markets: MappingABC[str, MarketInfo],
+) -> str | None:
+    switch_market = None
+    while True:
+        try:
+            selected = market_queue.get_nowait()
+        except queue.Empty:
+            return switch_market
+        if selected in markets and selected != current_market:
+            switch_market = selected
 
 
 def parse_chart_event_message(chart: object, response: str) -> tuple[Callable[..., object], list[str]]:
@@ -1917,6 +2001,7 @@ class ChartRunResult:
     no_data_warned: bool = False
     retry_start: datetime | None = None
     provider_message: str | None = None
+    switch_market: str | None = None
 
 
 def chart_result(
@@ -1927,6 +2012,7 @@ def chart_result(
     no_data_warned: bool,
     retry_start: datetime | None = None,
     provider_message: str | None = None,
+    switch_market: str | None = None,
 ) -> ChartRunResult:
     return ChartRunResult(
         records_updated=status.records_updated,
@@ -1938,6 +2024,7 @@ def chart_result(
         no_data_warned=no_data_warned,
         retry_start=retry_start,
         provider_message=provider_message,
+        switch_market=switch_market,
     )
 
 
@@ -1948,12 +2035,15 @@ def drain_chart_queue(
     series_factory: Callable[[dict[str, CandleValue]], Any],
     display: ChartDisplayState,
     timeframe_queue: queue.Queue[str],
+    market_queue: queue.Queue[str],
     chart_timeframes: Sequence[str],
+    markets: MappingABC[str, MarketInfo],
     max_records: int,
     timeout_seconds: float | None,
     no_data_warning_seconds: float,
     status: ChartStatus,
     symbols: str,
+    market: str,
     schema: str,
     mode: str,
     stdout: TextIO,
@@ -1976,6 +2066,19 @@ def drain_chart_queue(
         if drain_chart_event_queue(chart, stderr):
             chart_closed = True
             break
+        switch_market = drain_market_queue(
+            market_queue,
+            current_market=market,
+            markets=markets,
+        )
+        if switch_market is not None:
+            return chart_result(
+                status,
+                timed_out=False,
+                chart_closed=False,
+                no_data_warned=no_data_warned,
+                switch_market=switch_market,
+            )
 
         if drain_timeframe_queue(
             timeframe_queue,
@@ -2421,9 +2524,12 @@ def run_live_chart(
             print(f"Databento instrument resolution failed: {retry_exc}", file=stderr)
             return 1
 
-    display_symbol = resolved.raw_symbol or resolved.market
-
     timeframe_queue: queue.Queue[str] = queue.Queue()
+    market_queue: queue.Queue[str] = queue.Queue()
+    active_market = market
+    display_symbol = resolved.raw_symbol or resolved.market
+    requested_live_start = live_start
+    market_switch_enabled_after = time.monotonic() + 2.0
     live = None
     chart = None
     status = ChartStatus()
@@ -2452,8 +2558,12 @@ def run_live_chart(
             selected_timeframe=display.timeframe,
             on_timeframe_change=build_timeframe_callback(timeframe_queue),
             market_options=tuple(markets),
-            selected_market=market,
-            on_market_change=noop_chart_callback,
+            selected_market=active_market,
+            on_market_change=build_market_callback(
+                market_queue,
+                current_market=lambda: active_market,
+                enabled_after=lambda: market_switch_enabled_after,
+            ),
             status_text=LOADING_STATUS_TEXT,
         )
         show_chart(chart)
@@ -2556,18 +2666,107 @@ def run_live_chart(
                 series_factory=series_factory,
                 display=display,
                 timeframe_queue=timeframe_queue,
+                market_queue=market_queue,
                 chart_timeframes=chart_timeframes,
+                markets=markets,
                 max_records=args.max_records,
                 timeout_seconds=args.timeout_seconds,
                 no_data_warning_seconds=args.no_data_warning_seconds,
                 status=status,
                 symbols=display_symbol,
+                market=active_market,
                 schema=args.schema,
                 mode=mode,
                 stdout=stdout,
                 stderr=stderr,
                 clock=clock,
             )
+            if result.switch_market is not None:
+                finish_status_line(status, stdout)
+                print(
+                    f"Switching live chart from {active_market} to {result.switch_market}.",
+                    file=stdout,
+                )
+                stop_live_client(live)
+                live = None
+                clear_queue_values(candle_queue)
+                clear_session_markers(display)
+                display.raw_candles.clear()
+                display.rendered_candle_count = 0
+                display.loading = True
+                reset_status(status)
+                replace_chart_candles(chart, [], series_factory=series_factory)
+
+                active_market = result.switch_market
+                query_symbol = market_query_symbol(active_market, args.symbols)
+                resolved = resolve_single_instrument(
+                    historical,
+                    dataset=args.dataset,
+                    market=active_market,
+                    query_symbol=query_symbol,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+                display_symbol = resolved.raw_symbol or resolved.market
+                live_symbol = resolved.instrument_id
+                update_chart_title(
+                    chart,
+                    format_chart_title(
+                        symbols=display_symbol,
+                        schema=args.historical_schema,
+                        mode=mode,
+                        chart_timeframe=display.timeframe,
+                        display_tz=display.display_tz,
+                        display_tz_name=display_tz_name,
+                    ),
+                )
+                update_chart_status_text(chart, f"{LOADING_STATUS_TEXT} {active_market}")
+                live_start = requested_live_start
+                if args.historical_backfill:
+                    historical_request = {
+                        "dataset": args.dataset,
+                        "schema": args.historical_schema,
+                        "symbols": live_symbol,
+                        "stype_in": DEFAULT_STYPE_IN,
+                        "start": live_start,
+                        "end": historical_end,
+                    }
+                    try:
+                        store = historical.timeseries.get_range(**historical_request)
+                    except Exception as exc:
+                        retry_end = parse_available_end_from_text(str(exc))
+                        if retry_end is None:
+                            raise
+                        available_retry_end_date = retry_end.date().isoformat()
+                        historical_request["end"] = clamp_historical_end(
+                            start=live_start,
+                            requested_end=historical_end,
+                            available_exclusive_end_date=available_retry_end_date,
+                            stderr=stderr,
+                        )
+                        store = historical.timeseries.get_range(**historical_request)
+                    historical_candles = aggregate_candles(
+                        historical_store_to_candles(store),
+                        seconds=display.timeframe_seconds,
+                        timeframe=display.timeframe,
+                    )
+                    for candle in historical_candles:
+                        append_display_candle(display, status, candle)
+                    if display.raw_candles:
+                        render_chart_display(
+                            display,
+                            chart=chart,
+                            series_factory=series_factory,
+                            status=status,
+                            symbols=display_symbol,
+                            schema=args.historical_schema,
+                            mode=mode,
+                            stdout=stdout,
+                        )
+                    live_start = historical_end
+                retried_clamped_start = False
+                market_switch_enabled_after = time.monotonic() + 1.0
+                continue
             if result.retry_start is None or retried_clamped_start:
                 break
 
