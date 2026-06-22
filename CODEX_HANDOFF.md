@@ -1,5 +1,37 @@
 # Codex Handoff
 
+## Batch Phase 2 policy/roll acceptance
+- Updated at UTC: 2026-06-22T17:55:17Z
+- Scope: recorded the user's `Accept` decision for the 32 remaining non-source/status Phase 2 policy/roll rows. This is a report-only acceptance of exception handling; no Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, source acquisition, source reconstruction, policy threshold change, or DBN source modification was run.
+
+Files changed/generated
+- `reports/phase_restart/batch_phase2_policy_roll_acceptance.md`: human-readable acceptance packet.
+- `reports/phase_restart/batch_phase2_policy_roll_acceptance.json`: machine-readable acceptance matrix.
+- `CODEX_HANDOFF.md`: handoff update.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- PowerShell parse of `reports/phase_restart/batch_phase2_synthetic_threshold_policy.json` and `reports/phase_restart/batch_phase2_roll_maturity_policy.json`.
+- No Phase 2 build or cleanup commands were run.
+
+Validation results
+- Non-source/status policy/roll rows accepted: 32.
+- `ACCEPT_SYNTHETIC_POLICY_EXCEPTION`: 10 rows.
+- `ACCEPT_PURE_ROLL_REVIEW_EXCEPTION`: 9 rows.
+- `ACCEPT_ROLL_SYNTHETIC_POLICY_EXCEPTION`: 13 rows.
+- Approved for Phase 2 build: 0 rows.
+- Approved for cleanup: 0 rows.
+- `git status --short -- data`: empty before edits.
+
+Remaining work
+- The 32 non-source/status policy/roll rows are accepted for exception handling, but not approved for Phase 2 build.
+- The 34 source/status rows still require recovery, reconciliation, exception, or deferral decisions before Phase 2 blockers can be zero.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: approve force-adding only `reports/phase_restart/batch_phase2_policy_roll_acceptance.md/json` and staging `CODEX_HANDOFF.md`, then commit/push reports only. Stop before Phase 2 build execution.
+
 ## Batch Phase 2 source/status review
 - Updated at UTC: 2026-06-22T17:31:31Z
 - Scope: completed the user-approved bounded report-only source/status review for the 34 Phase 2 rows previously classified as source/status reviewable. No Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, source acquisition, source reconstruction, policy threshold change, or DBN source modification was run.
