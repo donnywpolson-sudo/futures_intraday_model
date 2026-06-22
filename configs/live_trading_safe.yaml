@@ -1,0 +1,23 @@
+live_trading:
+  mode: disabled
+  allow_trading: false
+  allow_paper_trading: false
+  allow_live_broker: false
+  max_contracts_per_symbol: 1
+  max_total_contracts: 1
+  max_order_size: 1
+  max_daily_loss: 0
+  max_trades_per_day: 0
+  max_orders_per_minute: 2
+  allowed_symbols: []
+  allowed_contracts: []
+  allowed_sessions: []
+  flatten_before_session_close_minutes: 0
+  stale_bar_seconds: 90
+  heartbeat_timeout_seconds: 30
+  no_trade_on_partial_bar: true
+  reject_market_orders: true
+  no_flip_within_same_bar: true
+  duplicate_timestamp_policy: block
+  audit_dir: reports/live_trading_smoke
+  kill_switch_file: .runtime/KILL_SWITCH_ON

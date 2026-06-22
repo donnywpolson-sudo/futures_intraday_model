@@ -6,10 +6,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib
+import json
 import os
 import queue
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -29,6 +31,7 @@ from scripts.databento_auth import (  # noqa: E402
     load_databento_api_key_from_file,
     resolve_databento_api_key,
 )
+from live_ops.operator import OperatorStatusState, print_operator_status  # noqa: E402
 
 
 DEFAULT_DATASET = "GLBX.MDP3"
@@ -46,6 +49,7 @@ DEFAULT_CHART_TIMEFRAME = "1m"
 SUPPORTED_CHART_TIMEFRAMES = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
 DEFAULT_CHART_TIMEFRAMES = ",".join(SUPPORTED_CHART_TIMEFRAMES)
 DEFAULT_DISPLAY_TZ = "local"
+SELECTION_STATE_FILENAME = "live_chart_feed_state.json"
 VSCODE_RUN_BUTTON_ARGS = (
     "--historical-backfill",
     "--market",
@@ -408,6 +412,82 @@ def chart_market_universe(root: Path = ROOT) -> tuple[MarketInfo, ...]:
     return tuple(discover_available_markets(root).values())
 
 
+def default_selection_state_path(env: MappingABC[str, str] | None = None) -> Path:
+    values = os.environ if env is None else env
+    local_appdata = values.get("LOCALAPPDATA")
+    if local_appdata:
+        return Path(local_appdata) / "futures_intraday_model" / SELECTION_STATE_FILENAME
+    return Path.home() / ".futures_intraday_model" / SELECTION_STATE_FILENAME
+
+
+def load_selection_state(path: Path) -> dict[str, str]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+    if not isinstance(data, MappingABC):
+        return {}
+    state: dict[str, str] = {}
+    for key in ("market", "timeframe"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            state[key] = value.strip()
+    return state
+
+
+def write_selection_state(
+    path: Path,
+    *,
+    market: str,
+    timeframe: str,
+    stderr: TextIO,
+) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"market": market, "timeframe": timeframe}, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        print(f"Could not persist live chart selection: {exc}", file=stderr)
+
+
+def option_present(args: Sequence[str], names: set[str]) -> bool:
+    return any(arg in names or any(arg.startswith(f"{name}=") for name in names) for arg in args)
+
+
+def resolve_selection_state_path(args: argparse.Namespace, env: dict[str, str] | None) -> Path:
+    value = getattr(args, "selection_state_path", None)
+    if value:
+        return Path(value)
+    return default_selection_state_path(env)
+
+
+def apply_persisted_selection(
+    args: argparse.Namespace,
+    *,
+    markets: MappingABC[str, MarketInfo],
+    state: MappingABC[str, str],
+) -> None:
+    if (
+        getattr(args, "market", None) is None
+        and getattr(args, "search_market", None) is None
+        and not getattr(args, "_market_explicit", False)
+    ):
+        market = state.get("market", "").strip().upper()
+        if market in markets:
+            args.market = market
+    if not getattr(args, "_timeframe_explicit", False):
+        timeframe = state.get("timeframe", "").strip()
+        if timeframe:
+            try:
+                args.chart_timeframe = normalize_timeframe(timeframe)
+            except argparse.ArgumentTypeError:
+                return
+
+
 def matching_markets(markets: MappingABC[str, MarketInfo], query: str | None) -> list[MarketInfo]:
     if query is None or not query.strip():
         return list(markets.values())
@@ -569,6 +649,12 @@ def format_chart_status(status: ChartStatus) -> str:
         f"latest={format_utc_time(status.latest_time)} "
         f"last_close={format_close(status.last_close)}"
     )
+
+
+def effective_timeout_seconds(args: argparse.Namespace) -> float | None:
+    if getattr(args, "no_timeout", False):
+        return None
+    return args.timeout_seconds
 
 
 def format_chart_title(
@@ -1795,12 +1881,41 @@ def render_chart_display(
         chart,
         format_topbar_status(symbols=symbols, display=display, status=status),
     )
-    emit_status_line(status, stdout)
+    emit_status_line(status, stdout, symbols=symbols, timeframe=display.timeframe)
 
 
-def emit_status_line(status: ChartStatus, stdout: TextIO) -> None:
-    stdout.write("\rLive chart status: " + format_chart_status(status))
-    stdout.flush()
+def emit_status_line(
+    status: ChartStatus,
+    stdout: TextIO,
+    *,
+    symbols: str = "n/a",
+    timeframe: str = DEFAULT_CHART_TIMEFRAME,
+) -> None:
+    latest_age = None
+    feed_status = "CLOSED"
+    if status.latest_time is not None:
+        latest_age = max(0.0, (utc_now() - normalize_ts_event(status.latest_time)).total_seconds())
+        feed_status = "LIVE" if latest_age <= DEFAULT_NO_DATA_WARNING_SECONDS else "STALE"
+    print_operator_status(
+        OperatorStatusState(
+            feed_status=feed_status,
+            active_symbol=symbols,
+            active_contract=symbols,
+            timeframe=timeframe,
+            records_count=status.records_updated,
+            latest_bar_time=status.latest_time,
+            latest_bar_age_seconds=latest_age,
+            last_close=status.last_close,
+            model_status="OFF",
+            signal="NO_SIGNAL",
+            trading_mode="DISABLED",
+            kill_switch="OFF",
+            risk_status="OK",
+            reconciliation_status="OK",
+        ),
+        stdout=stdout,
+        width=shutil.get_terminal_size((140, 20)).columns,
+    )
     status.status_line_printed = True
 
 
@@ -1842,7 +1957,7 @@ def apply_chart_candle(
             status=status,
         ),
     )
-    emit_status_line(status, stdout)
+    emit_status_line(status, stdout, symbols=symbols, timeframe=chart_timeframe or schema.removeprefix("ohlcv-"))
 
 
 def stop_live_client(live: object | None) -> None:
@@ -1900,13 +2015,15 @@ def build_market_callback(
     current_market: Callable[[], str],
     enabled_after: Callable[[], float],
 ) -> Callable[[object], None]:
-    def handle_market_change(chart: object) -> None:
+    def handle_market_change(chart_or_value: object) -> None:
         if time.monotonic() < enabled_after():
             return
-        try:
-            selected = cast(Any, chart).topbar["market"].value
-        except Exception:
-            return
+        selected = chart_or_value
+        if not isinstance(chart_or_value, str):
+            try:
+                selected = cast(Any, chart_or_value).topbar["market"].value
+            except Exception:
+                return
         selected_market = str(selected).strip().upper()
         if selected_market and selected_market != current_market():
             market_queue.put(selected_market)
@@ -2048,6 +2165,7 @@ def drain_chart_queue(
     mode: str,
     stdout: TextIO,
     stderr: TextIO,
+    on_timeframe_change: Callable[[str], None] | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> ChartRunResult:
     started_at = clock()
@@ -2085,6 +2203,8 @@ def drain_chart_queue(
             display=display,
             chart_timeframes=chart_timeframes,
         ):
+            if on_timeframe_change is not None:
+                on_timeframe_change(display.timeframe)
             if status.records_updated > 0:
                 display.loading = False
             render_chart_display(
@@ -2264,6 +2384,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Comma-separated topbar chart timeframes.",
     )
     parser.add_argument(
+        "--selection-state-path",
+        default=None,
+        help="Path for persisted live chart market/timeframe selection.",
+    )
+    parser.add_argument(
+        "--no-persist-selection",
+        action="store_true",
+        help="Disable persisted live chart market/timeframe selection.",
+    )
+    parser.add_argument(
         "--display-tz",
         default=DEFAULT_DISPLAY_TZ,
         help="Timezone for chart axis/title display: local, UTC, or an IANA name.",
@@ -2297,6 +2427,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=nonnegative_float,
         default=DEFAULT_TIMEOUT_SECONDS,
         help="Maximum runtime after subscription. Omit for no timeout.",
+    )
+    parser.add_argument(
+        "--no-timeout",
+        action="store_true",
+        help="Never stop due to timeout.",
     )
     parser.add_argument(
         "--no-data-warning-seconds",
@@ -2334,6 +2469,15 @@ def run_live_chart(
         matches = matching_markets(markets, args.search_market)
         print(format_available_markets(matches), file=stdout)
         return 0 if matches else 2
+
+    persist_selection = not getattr(args, "no_persist_selection", False)
+    selection_state_path = resolve_selection_state_path(args, env)
+    if persist_selection:
+        apply_persisted_selection(
+            args,
+            markets=markets,
+            state=load_selection_state(selection_state_path),
+        )
 
     market = args.market
     if market is None and args.search_market is not None:
@@ -2530,6 +2674,13 @@ def run_live_chart(
     display_symbol = resolved.raw_symbol or resolved.market
     requested_live_start = live_start
     market_switch_enabled_after = time.monotonic() + 2.0
+    if persist_selection:
+        write_selection_state(
+            selection_state_path,
+            market=active_market,
+            timeframe=chart_timeframe,
+            stderr=stderr,
+        )
     live = None
     chart = None
     status = ChartStatus()
@@ -2670,7 +2821,7 @@ def run_live_chart(
                 chart_timeframes=chart_timeframes,
                 markets=markets,
                 max_records=args.max_records,
-                timeout_seconds=args.timeout_seconds,
+                timeout_seconds=effective_timeout_seconds(args),
                 no_data_warning_seconds=args.no_data_warning_seconds,
                 status=status,
                 symbols=display_symbol,
@@ -2679,6 +2830,16 @@ def run_live_chart(
                 mode=mode,
                 stdout=stdout,
                 stderr=stderr,
+                on_timeframe_change=(
+                    lambda selected: write_selection_state(
+                        selection_state_path,
+                        market=active_market,
+                        timeframe=selected,
+                        stderr=stderr,
+                    )
+                    if persist_selection
+                    else None
+                ),
                 clock=clock,
             )
             if result.switch_market is not None:
@@ -2698,6 +2859,13 @@ def run_live_chart(
                 replace_chart_candles(chart, [], series_factory=series_factory)
 
                 active_market = result.switch_market
+                if persist_selection:
+                    write_selection_state(
+                        selection_state_path,
+                        market=active_market,
+                        timeframe=display.timeframe,
+                        stderr=stderr,
+                    )
                 query_symbol = market_query_symbol(active_market, args.symbols)
                 resolved = resolve_single_instrument(
                     historical,
@@ -2821,7 +2989,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if should_launch_vscode_run_child(raw_args):
         return launch_vscode_run_child()
     parser = build_arg_parser()
-    args = parser.parse_args(resolve_main_argv(raw_args))
+    resolved_args = resolve_main_argv(raw_args)
+    args = parser.parse_args(resolved_args)
+    args._market_explicit = option_present(resolved_args, {"--market"})
+    args._timeframe_explicit = option_present(resolved_args, {"--timeframe", "--chart-timeframe"})
     return run_live_chart(args)
 
 

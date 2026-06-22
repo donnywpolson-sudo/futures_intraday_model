@@ -127,3 +127,41 @@ Updated at UTC: 2026-06-22T00:23:29Z
 
 ## Live chart in-process market switching next recommended step
 - When Databento/live-command approval is available, run `python live_chart_feed.py --market ES --timeframe 5m --historical-backfill --lookback-hours 4 --timeout-seconds 30`, use the chart market selector to switch to `NQ`, and confirm the same window clears, backfills, and streams NQ without a restart.
+
+## Live chart market switching bug fix continuation
+- Fixed the market selector callback to accept both the real chart-object callback shape and a direct selected market value.
+- Added a local fake-Databento/fake-chart regression test that emits a synthetic `market_~_NQ` UI event while ES has an old queued live tick.
+- The regression proves ES -> NQ switches the historical `get_range` request from instrument `101` to `202`, switches the live subscription from `101` to `202`, stops the old live client, clears the chart, renders NQ close `200.0`, and does not render the stale ES close `999.0`.
+- URL/local-storage persistence was not implemented in this pass because this app is a Python `lightweight_charts` surface without a clean URL/localStorage startup read path.
+
+## Live chart market switching bug fix files changed
+- `live_chart_feed.py`
+- `tests/test_live_chart_feed.py`
+- `CODEX_HANDOFF.md`
+
+## Live chart market switching bug fix commands run
+- `python -m pytest tests/test_live_chart_feed.py -q`
+- `python -m py_compile live_chart_feed.py`
+- `python live_chart_feed.py --list-markets`
+- `git diff --check`
+- `git status --short`
+- `python -m pytest tests\live\test_live_chart_lightweight.py -q`
+- `python live_chart_feed.py --market ES --timeframe 5m --historical-backfill --lookback-hours 4 --timeout-seconds 30`
+- `Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" | Select-Object ProcessId,CommandLine | Format-List`
+
+## Live chart market switching bug fix validation results
+- Focused live chart tests: PASS, 27 passed.
+- Wrapper/CLI live chart tests: PASS, 7 passed.
+- `py_compile`: PASS.
+- `--list-markets`: PASS, printed 33 Tier 3 Research markets.
+- `git diff --check`: PASS, line-ending warnings only.
+- Bounded ES 5m live command: PASS, exit 0, streamed ES bars and retained Databento available-end clamp logs.
+- Manual live ES -> NQ selector switching was not performed in this continuation, so live selector switching is not claimed as manually validated.
+- No `live_chart_feed.py` Python processes remained after the bounded live run.
+
+## Live chart market switching bug fix remaining work
+- Manually validate ES -> NQ selector switching in the native chart window when interactive access is available.
+- Add selected market/timeframe persistence if a clean Python chart startup/local-state path is chosen.
+
+## Live chart market switching bug fix next recommended step
+- Run the bounded live chart command interactively, switch the market selector from ES to NQ, and confirm the same chart window clears, backfills, and streams NQ.

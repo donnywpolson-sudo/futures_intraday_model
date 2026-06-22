@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from io import StringIO
+from pathlib import Path
 import queue
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -398,6 +399,276 @@ def test_market_queue_selects_changed_valid_market_only() -> None:
         current_market="ES",
         markets=markets,
     ) == "NQ"
+
+
+def test_market_callback_accepts_direct_selected_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    market_queue: queue.Queue[str] = queue.Queue()
+    monkeypatch.setattr(chart.time, "monotonic", lambda: 10.0)
+    callback = chart.build_market_callback(
+        market_queue,
+        current_market=lambda: "ES",
+        enabled_after=lambda: 0.0,
+    )
+
+    callback("nq")
+
+    assert market_queue.get_nowait() == "NQ"
+
+
+def test_selection_state_round_trips_market_and_timeframe(tmp_path: Path) -> None:
+    state_path = tmp_path / "live_chart_feed_state.json"
+
+    chart.write_selection_state(
+        state_path,
+        market="NQ",
+        timeframe="4h",
+        stderr=StringIO(),
+    )
+
+    assert chart.load_selection_state(state_path) == {"market": "NQ", "timeframe": "4h"}
+
+
+class FakeTopbarWidget:
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+    def set(self, value: str) -> None:
+        self.value = value
+
+
+class FakeTopbar:
+    def __init__(self, chart_obj: "FakeChart") -> None:
+        self._chart = chart_obj
+        self.widgets: dict[str, FakeTopbarWidget] = {}
+
+    def switcher(
+        self,
+        name: str,
+        options: tuple[str, ...],
+        default: str | None = None,
+        func: object = None,
+    ) -> None:
+        _ = options
+        widget = FakeTopbarWidget(default or "")
+        self.widgets[name] = widget
+
+        if callable(func):
+            def handler(value: str) -> None:
+                widget.value = value
+                func(self._chart)
+
+            self._chart.win.handlers[name] = handler
+
+    def textbox(self, name: str, value: str, align: str = "left") -> None:
+        _ = align
+        self.widgets[name] = FakeTopbarWidget(value)
+
+    def get(self, name: str) -> FakeTopbarWidget | None:
+        return self.widgets.get(name)
+
+    def __getitem__(self, name: str) -> FakeTopbarWidget:
+        return self.widgets[name]
+
+
+class FakeWebView:
+    def __init__(self) -> None:
+        self.emit_queue: queue.Queue[str] = queue.Queue()
+
+    def exit(self) -> None:
+        return None
+
+
+class FakeChart:
+    WV = FakeWebView()
+
+    def __init__(self) -> None:
+        type(self).WV = FakeWebView()
+        self.win = SimpleNamespace(handlers={})
+        self.topbar = FakeTopbar(self)
+        self.frames: list[object] = []
+        self.is_alive = True
+
+    def set(self, frame: object) -> None:
+        self.frames.append(frame)
+
+    def update(self, series: object) -> None:
+        self.frames.append(series)
+
+    def show(self, block: bool = False) -> None:
+        _ = block
+
+    def watermark(self, **kwargs: object) -> None:
+        _ = kwargs
+
+    def exit(self) -> None:
+        self.is_alive = False
+
+
+class FakeStore:
+    def __init__(self, instrument_id: int) -> None:
+        self.instrument_id = instrument_id
+
+    def to_df(self, **kwargs: object) -> object:
+        _ = kwargs
+        pandas = __import__("pandas")
+        close = 100.0 if self.instrument_id == 101 else 200.0
+        return pandas.DataFrame(
+            [
+                {
+                    "ts_event": datetime(2026, 6, 21, 22, 0, tzinfo=timezone.utc),
+                    "open": close - 1,
+                    "high": close + 1,
+                    "low": close - 2,
+                    "close": close,
+                    "volume": 10,
+                }
+            ]
+        )
+
+
+class FakeHistorical:
+    def __init__(self, key: str, state: SimpleNamespace) -> None:
+        _ = key
+        self._state = state
+        self.metadata = SimpleNamespace(get_dataset_range=lambda dataset: {"end": "2026-06-22"})
+        self.symbology = SimpleNamespace(resolve=self.resolve)
+        self.timeseries = SimpleNamespace(get_range=self.get_range)
+
+    def resolve(self, **kwargs: object) -> dict[str, object]:
+        stype_out = kwargs["stype_out"]
+        symbols = kwargs["symbols"]
+        if stype_out == "instrument_id":
+            instrument_id = 101 if symbols == "ES.v.0" else 202
+            return {"result": {symbols: [{"d0": kwargs["start_date"], "d1": kwargs["end_date"], "s": str(instrument_id)}]}}
+        raw_symbol = "ESU6" if int(symbols) == 101 else "NQU6"
+        return {"result": {str(symbols): [{"d0": kwargs["start_date"], "d1": kwargs["end_date"], "s": raw_symbol}]}}
+
+    def get_range(self, **kwargs: object) -> FakeStore:
+        self._state.historical_requests.append(dict(kwargs))
+        return FakeStore(int(kwargs["symbols"]))
+
+
+class FakeLive:
+    def __init__(self, key: str, state: SimpleNamespace) -> None:
+        _ = key
+        self._state = state
+        self._callback = None
+        self._stopped = False
+        self._state.lives.append(self)
+
+    def subscribe(self, **kwargs: object) -> None:
+        self._state.live_subscriptions.append(dict(kwargs))
+
+    def add_callback(self, callback: object) -> None:
+        self._callback = callback
+
+    def start(self) -> None:
+        if len(self._state.live_subscriptions) == 1:
+            assert callable(self._callback)
+            self._callback(
+                SimpleNamespace(
+                    ts_event=datetime(2026, 6, 21, 22, 1, tzinfo=timezone.utc),
+                    price=999.0,
+                    size=1,
+                )
+            )
+            FakeChart.WV.emit_queue.put("market_~_NQ")
+
+    def stop(self) -> None:
+        self._stopped = True
+
+    def block_for_close(self, timeout: float = 1.0) -> None:
+        _ = timeout
+
+
+def fake_databento_module(state: SimpleNamespace) -> ModuleType:
+    module = ModuleType("fake_databento")
+    module.Historical = lambda key: FakeHistorical(key, state)
+    module.Live = lambda key: FakeLive(key, state)
+    return module
+
+
+def test_run_live_chart_switches_backfill_and_subscription_to_selected_market(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = SimpleNamespace(historical_requests=[], live_subscriptions=[], lives=[])
+    fake_chart = FakeChart()
+    monotonic_values = iter([100.0, 103.0, 103.0, 103.0, 103.1, 103.2, 103.3])
+    monkeypatch.setattr(chart.time, "monotonic", lambda: next(monotonic_values, 103.3))
+
+    result = chart.run_live_chart(
+        chart.build_arg_parser().parse_args(
+            [
+                "--market",
+                "ES",
+                "--timeframe",
+                "5m",
+                "--historical-backfill",
+                "--lookback-hours",
+                "4",
+                "--timeout-seconds",
+                "0.01",
+                "--no-persist-selection",
+            ]
+        ),
+        env={"DATABENTO_API_KEY": "db-test"},
+        db_module=fake_databento_module(state),
+        chart_factory=lambda: fake_chart,
+        series_factory=lambda candle: candle,
+        stdout=StringIO(),
+        stderr=StringIO(),
+        now=datetime(2026, 6, 21, 23, 0, tzinfo=timezone.utc),
+    )
+
+    assert result == 0
+    assert [request["symbols"] for request in state.historical_requests] == [101, 202]
+    assert [subscription["symbols"] for subscription in state.live_subscriptions] == [101, 202]
+    assert state.lives[0]._stopped is True
+    final_non_empty_frame = [frame for frame in fake_chart.frames if getattr(frame, "empty", False) is False][-1]
+    assert float(final_non_empty_frame.iloc[-1]["close"]) == 200.0
+    assert 999.0 not in [
+        float(frame.iloc[-1]["close"])
+        for frame in fake_chart.frames
+        if hasattr(frame, "empty") and not frame.empty
+    ]
+
+
+def test_run_live_chart_uses_persisted_market_and_timeframe(tmp_path: Path) -> None:
+    state = SimpleNamespace(historical_requests=[], live_subscriptions=[], lives=[])
+    state_path = tmp_path / "live_chart_feed_state.json"
+    chart.write_selection_state(
+        state_path,
+        market="NQ",
+        timeframe="4h",
+        stderr=StringIO(),
+    )
+
+    result = chart.run_live_chart(
+        chart.build_arg_parser().parse_args(
+            [
+                "--historical-backfill",
+                "--lookback-hours",
+                "4",
+                "--timeout-seconds",
+                "0.01",
+                "--selection-state-path",
+                str(state_path),
+            ]
+        ),
+        env={"DATABENTO_API_KEY": "db-test"},
+        db_module=fake_databento_module(state),
+        chart_factory=FakeChart,
+        series_factory=lambda candle: candle,
+        stdout=StringIO(),
+        stderr=StringIO(),
+        now=datetime(2026, 6, 21, 23, 0, tzinfo=timezone.utc),
+        clock=lambda: 103.0,
+    )
+
+    assert result == 0
+    assert [request["symbols"] for request in state.historical_requests] == [202]
+    assert [subscription["symbols"] for subscription in state.live_subscriptions] == [202]
+    assert chart.load_selection_state(state_path) == {"market": "NQ", "timeframe": "4h"}
 
 
 class FakeSymbology:
