@@ -1,5 +1,50 @@
 # Codex Handoff
 
+## Manifest cleanup blocker classification
+- Updated at UTC: 2026-06-22T09:55:46Z
+- Scope: classified manifest cleanup blockers using `reports/data_manifest/manifest_coverage_check.csv`, `reports/data_manifest/manifest_coverage_summary.md`, `configs/data_manifest.yaml`, and repo/report text references. No cleanup, quarantine, data move, data delete, DBN redownload, DBN source modification, full rebuild, or phase 3+ command was run.
+
+Changed
+- `reports/data_manifest/manifest_policy_gap_decisions.csv`: one row per manifest blocker, including 179 pair-level coverage issues plus 2 `STALE_OR_UNKNOWN` repair-candidate roots.
+- `reports/data_manifest/manifest_policy_gap_decisions.md`: grouped cleanup-gate decision summary.
+- `CODEX_HANDOFF.md`: recorded this classification pass.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- `git diff --stat`
+- `git diff --check`
+- `git diff -- reports\phase_restart CODEX_HANDOFF.md`
+- `git add reports\phase_restart CODEX_HANDOFF.md` (directory-level add failed because `reports` is ignored, but tracked files were staged)
+- `git add CODEX_HANDOFF.md reports\phase_restart\manifest_phase_1c_raw_dbn_alignment.json reports\phase_restart\phase_1c_smoke.md reports\phase_restart\phase_2_smoke.md reports\phase_restart\phase_restart_summary.md`
+- `git commit -m "Refresh phase smoke evidence"`
+- `git log -3 --oneline`
+- Targeted reads of manifest coverage summary, manifest config, handoff, manifest coverage grouped counts, and repo/report text references for `_repair_candidates`.
+- Generated `reports/data_manifest/manifest_policy_gap_decisions.csv` and `reports/data_manifest/manifest_policy_gap_decisions.md`.
+
+Smoke evidence commit
+- `89aaf58 Refresh phase smoke evidence`
+
+Cleanup gate decision
+- Cleanup gate remains blocked.
+- REPAIR_REQUIRED_BEFORE_CLEANUP: 144 rows. These are missing expected canonical artifacts under the current `configs/data_manifest.yaml` contract: 10 raw parquet pairs, 66 causal parquet pairs, and 68 DBN status pairs.
+- EXPLICITLY_DEFERRED_POLICY_GAP: 23 rows. These are allowed extra DBN pairs encoded in `configs/data_manifest.yaml`; cleanup remains disabled by policy.
+- DUPLICATE_POLICY_DEFERRED: 12 rows. These are known duplicate DBN market-year pairs with policy-deferred review-before-cleanup.
+- STALE_OR_UNKNOWN_REVIEW_REQUIRED: 2 rows. Exact paths: `data/raw/_repair_candidates` and `data/causally_gated_normalized/_repair_candidates`.
+- UNKNOWN_BLOCKING_CLEANUP: 0 rows in the generated decision CSV, but the 2 `STALE_OR_UNKNOWN` paths still require review before cleanup evaluation.
+
+STALE_OR_UNKNOWN path decisions
+- `data/raw/_repair_candidates`: review required before cleanup; repo/report text references repair-candidate outputs and does not prove safe cleanup.
+- `data/causally_gated_normalized/_repair_candidates`: review required before cleanup; repo/report text references repair-candidate outputs and does not prove safe cleanup.
+
+Remaining work
+- Repair or explicitly defer the 144 missing expected pairs under the manifest contract.
+- Review duplicate DBN market-year path evidence and choose keep/merge/quarantine policy before any cleanup evaluation.
+- Review the 2 `STALE_OR_UNKNOWN` repair-candidate roots and document whether they are safe to defer, repair-required, or still unknown.
+
+Next recommended step
+- Start with `reports/data_manifest/manifest_policy_gap_decisions.csv` and resolve the 144 `REPAIR_REQUIRED_BEFORE_CLEANUP` rows by either restoring/generating the expected artifacts through approved bounded phase work or explicitly changing/defering manifest policy.
+
 ## Refreshed phase 1C/2 smoke evidence and cleanup gate decision
 - Updated at UTC: 2026-06-22T09:51:13Z
 - Scope: reran only the exact bounded phase 1C and phase 2 smoke commands recorded in `reports/phase_restart/phase_1c_smoke.md` and `reports/phase_restart/phase_2_smoke.md`. No cleanup, quarantine, data move, data delete, DBN redownload, DBN source modification, full rebuild, or phase 3+ command was run.
