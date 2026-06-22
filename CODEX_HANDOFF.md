@@ -1,5 +1,45 @@
 # Codex Handoff
 
+## Applied status manifest policy
+- Updated at UTC: 2026-06-22T10:39:26Z
+- Scope: applied the approved `data/dbn/status` missing-pair policy in `configs/data_manifest.yaml` and reran the manifest audit. No cleanup, quarantine, merge, data move, data delete, DBN redownload, DBN source modification, rebuild, conversion, data generation, expensive job, phase 3+ command, or missing-data repair was run.
+
+Files changed
+- `configs/data_manifest.yaml`: added the 68 approved missing `data/dbn/status` pairs under `coverage_policy.missing_pairs.allowed_missing_pairs.data/dbn/status`; cleanup remains disabled.
+- `reports/data_manifest/manifest_coverage_check.csv`: status missing pairs changed from `unexpected_missing` to `expected_missing`.
+- `reports/data_manifest/manifest_coverage_summary.md`: status missing summary changed from 0 expected/68 unexpected to 68 expected/0 unexpected.
+- `reports/data_manifest/manifest_cleanup_gate_decision.md`: refreshed cleanup-gate blocker counts.
+- `reports/data_manifest/manifest_cleanup_approval_packet.md`: refreshed approval-packet blocker counts.
+- `CODEX_HANDOFF.md`: recorded this policy application.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- `git diff --stat`
+- `git diff --check`
+- Targeted reads of `reports/data_manifest/status_manifest_policy_decision.md`, `reports/data_manifest/manifest_cleanup_approval_packet.md`, `reports/data_manifest/manifest_policy_fix_proposal.csv`, `reports/data_manifest/manifest_coverage_check.csv`, `configs/data_manifest.yaml`, and `CODEX_HANDOFF.md`.
+- `python scripts\audit_data_manifest.py`
+- Post-audit grouped inspections of `reports/data_manifest/manifest_coverage_check.csv` and `reports/data_manifest/manifest_coverage_summary.md`.
+
+Manifest audit result
+- PASS: `manifest_check issues=179 failures=0`.
+- Status missing pairs: 68 expected missing, 0 unexpected missing.
+- Unexpected missing pairs now remain only for 10 raw parquet pairs and 66 causal parquet pairs.
+
+Blocker counts
+- Before approved status policy: 76 repair approvals, 68 status manifest-policy rows, 12 duplicate rows; total 156.
+- After approved status policy: 76 repair approvals, 0 status manifest-policy rows, 12 duplicate rows; total 88.
+- `UNKNOWN_BLOCKING_CLEANUP`: 0.
+
+Cleanup gate status
+- Cleanup remains blocked and disabled.
+- No data files were modified or deleted.
+- No DBN source files were modified.
+- No cleanup, move, quarantine, merge, delete, rebuild, redownload, conversion, data generation, phase 3+ command, expensive job, or data repair occurred.
+
+Next recommended step
+- Review the remaining 76 repair approval rows and 12 duplicate policy rows; stop before running repair or moving/deleting data.
+
 ## Status manifest policy decision point
 - Updated at UTC: 2026-06-22T10:36:00Z
 - Scope: reviewed and accepted the bounded smoke-validation evidence commit `ead39bc`, then wrote a report-only `data/dbn/status` manifest policy decision point. No cleanup, quarantine, merge, data move, data delete, DBN redownload, DBN source modification, rebuild, conversion, data generation, expensive job, phase 3+ command, or `configs/data_manifest.yaml` edit was run.

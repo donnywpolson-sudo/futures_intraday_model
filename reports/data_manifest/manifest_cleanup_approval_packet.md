@@ -1,15 +1,21 @@
 # Manifest Cleanup Approval Packet
 
-Generated at UTC: 2026-06-22T10:11:46+00:00
+Generated at UTC: 2026-06-22T10:39:26+00:00
 
 ## Summary
 
 - Cleanup gate remains blocked.
 - No cleanup, move, quarantine, merge, delete, rebuild, redownload, conversion, or data generation was performed.
-- `configs/data_manifest.yaml` was not edited.
-- This packet converts remaining blocker rows into approval-ready repair, manifest-policy, and duplicate-handling decisions.
+- Approved `data/dbn/status` manifest policy was applied in `configs/data_manifest.yaml`; cleanup remains disabled.
+- This packet converts remaining blocker rows into approval-ready repair and duplicate-handling decisions.
 
 ## Current Blocker Counts
+
+- REPAIR_APPROVAL_REQUIRED: 76
+- MANIFEST_POLICY_FIX_REQUIRED: 0
+- DUPLICATE_MERGE_APPROVAL_REQUIRED: 12
+
+Before approved status policy:
 
 - REPAIR_APPROVAL_REQUIRED: 76
 - MANIFEST_POLICY_FIX_REQUIRED: 68
@@ -19,7 +25,7 @@ Generated at UTC: 2026-06-22T10:11:46+00:00
 
 - APPROVE_REPAIR_PLAN_REQUIRED: 76
 - KEEP_BOTH_DO_NOT_TOUCH: 8
-- MANIFEST_FIX_RECOMMENDED: 68
+- MANIFEST_FIX_RECOMMENDED: 0
 - USER_DECISION_REQUIRED: 4
 - UNKNOWN_BLOCKING_CLEANUP: 0
 
@@ -36,9 +42,11 @@ Recommended repair sequencing:
 
 ## Manifest Policy Packet
 
-- 68 status DBN rows -> MANIFEST_FIX_RECOMMENDED. See `reports/data_manifest/manifest_policy_fix_proposal.csv`.
-- Proposed later policy choice: mark status coverage optional/deferred for cleanup-gate purposes, or keep the requirement and approve a bounded status repair/download plan.
-- `configs/data_manifest.yaml` needs a later approved edit only if the user accepts the optional/deferred status policy.
+- Approved status policy applied: 68 missing `data/dbn/status` rows are now allowed missing pairs under `coverage_policy.missing_pairs.allowed_missing_pairs`.
+- Manifest audit command: `python scripts\audit_data_manifest.py`.
+- Manifest audit result: `manifest_check issues=179 failures=0`.
+- Status missing classification after audit: 68 expected missing, 0 unexpected missing.
+- No status DBN repair or redownload was run.
 
 ## Duplicate Packet
 
@@ -48,7 +56,7 @@ Recommended repair sequencing:
 
 ## Recommended Next Approval Choice
 
-Approve the manifest policy decision for `data/dbn/status` first. It is report/config policy work only, avoids data generation, and resolves the largest single blocker group if accepted.
+Review the remaining repair approval rows first, then duplicate policy rows. Do not run repair or mutate duplicate data without separate explicit approval.
 
 ## Cleanup Gate
 
@@ -56,5 +64,5 @@ Approve the manifest policy decision for `data/dbn/status` first. It is report/c
 - Exact rows still requiring user decision: 4.
 - Exact UNKNOWN_BLOCKING_CLEANUP rows: 0.
 - Later repair requires approved bounded rebuild/conversion for raw/causal rows: true.
-- Later manifest policy edit required if status optional/deferred policy is accepted: true.
+- Later manifest policy edit required for status optional/deferred policy: false.
 - Later duplicate data mutation is not recommended in this packet; keep-both policy can be approved without moving data.

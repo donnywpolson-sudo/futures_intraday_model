@@ -85,7 +85,79 @@ schemas:
 coverage_policy:
   missing_pairs:
     default: unexpected_requires_review
-    allowed_missing_pairs: {}
+    allowed_missing_pairs:
+      data/dbn/status:
+        # Approved status DBN optional-enrichment deferral. Phase 1B treats
+        # status as optional enrichment; Phase 1C/2 restart smoke does not
+        # require these status DBN pairs for raw/causal path validation.
+        - 6A:2014
+        - 6B:2014
+        - 6C:2010
+        - 6C:2011
+        - 6C:2014
+        - 6E:2012
+        - 6E:2013
+        - 6E:2014
+        - 6J:2010
+        - 6J:2014
+        - 6M:2013
+        - 6M:2014
+        - ES:2014
+        - GC:2010
+        - GC:2014
+        - HE:2013
+        - HG:2011
+        - HG:2014
+        - HO:2010
+        - HO:2011
+        - HO:2012
+        - HO:2013
+        - KE:2013
+        - KE:2014
+        - LE:2010
+        - LE:2011
+        - LE:2012
+        - LE:2013
+        - NQ:2012
+        - NQ:2014
+        - RB:2010
+        - RB:2011
+        - RB:2012
+        - RB:2013
+        - RB:2014
+        - SI:2014
+        - UB:2010
+        - UB:2011
+        - UB:2012
+        - YM:2011
+        - YM:2012
+        - YM:2013
+        - YM:2014
+        - ZB:2010
+        - ZB:2011
+        - ZB:2012
+        - ZC:2010
+        - ZC:2014
+        - ZF:2010
+        - ZF:2011
+        - ZF:2012
+        - ZL:2012
+        - ZL:2013
+        - ZM:2011
+        - ZM:2012
+        - ZM:2013
+        - ZM:2014
+        - ZN:2010
+        - ZN:2011
+        - ZN:2012
+        - ZS:2011
+        - ZS:2013
+        - ZT:2010
+        - ZT:2011
+        - ZT:2012
+        - ZT:2013
+        - ZT:2014
+        - ZW:2013
   extra_pairs:
     default: unexpected_requires_review
     allowed_extra_pairs:

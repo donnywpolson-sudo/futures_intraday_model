@@ -1,6 +1,6 @@
 # Data Manifest Coverage Summary
 
-Generated at UTC: 2026-06-22T09:21:08.718991+00:00
+Generated at UTC: 2026-06-22T10:38:41.401387+00:00
 
 ## Verdict
 
@@ -14,7 +14,7 @@ Generated at UTC: 2026-06-22T09:21:08.718991+00:00
 
 - `data/raw/{market}/{year}.parquet`: expected missing 0; unexpected missing 10.
 - `data/causally_gated_normalized/{market}/{year}.parquet`: expected missing 0; unexpected missing 66.
-- `data/dbn/status`: expected missing 0; unexpected missing 68.
+- `data/dbn/status`: expected missing 68; unexpected missing 0.
 
 ## Extras And Duplicates
 
