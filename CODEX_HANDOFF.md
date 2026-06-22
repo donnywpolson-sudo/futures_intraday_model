@@ -1,5 +1,56 @@
 # Codex Handoff
 
+## Manifest cleanup approval packet
+- Updated at UTC: 2026-06-22T10:12:22Z
+- Scope: prepared an approval packet for the remaining cleanup blockers. This was report-only. No cleanup, quarantine, merge, data move, data delete, DBN redownload, DBN source modification, rebuild, conversion, data generation, expensive job, or phase 3+ command was run. `configs/data_manifest.yaml` was not edited.
+
+Changed
+- `reports/data_manifest/manifest_cleanup_approval_packet.md`: summary approval packet with recommended next approval choice.
+- `reports/data_manifest/manifest_repair_plan.csv`: 76 row bounded repair approval plan for missing raw/causal canonical outputs.
+- `reports/data_manifest/manifest_policy_fix_proposal.csv`: 68 row status coverage policy proposal.
+- `reports/data_manifest/manifest_duplicate_policy_proposal.csv`: 12 row duplicate handling proposal with cheap file metadata only.
+- `reports/data_manifest/manifest_cleanup_gate_decision.md`: refreshed cleanup gate decision and links to approval packet reports.
+- `CODEX_HANDOFF.md`: recorded this approval packet pass.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- `git log -5 --oneline`
+- `git diff --stat`
+- `git diff --check`
+- Targeted reads of `reports/data_manifest/manifest_cleanup_gate_decision.md`, `reports/data_manifest/manifest_policy_gap_decisions.csv`, `reports/data_manifest/manifest_policy_gap_decisions.md`, `reports/data_manifest/manifest_coverage_check.csv`, `reports/data_manifest/manifest_coverage_summary.md`, `configs/data_manifest.yaml`, `configs/alpha_tiered.yaml`, `reports/data_lineage/pipeline_phase_io_map.md`, `reports/data_lineage/canonical_path_summary.md`, `reports/data_lineage/raw_dbn_candidates.csv`, `reports/data_lineage/parquet_candidates.csv`, `reports/phase_restart/phase_restart_summary.md`, and `CODEX_HANDOFF.md`.
+- Cheap metadata inspection for duplicate DBN path pairs from existing report evidence.
+- Generated the approval packet reports listed above.
+- `python scripts\audit_data_manifest.py`
+- Final validation: `git status --short`, `git status --short -- data`, `git diff --stat`, and `git diff --check`.
+
+Blocker counts by decision class
+- APPROVE_REPAIR_PLAN_REQUIRED: 76.
+- MANIFEST_FIX_RECOMMENDED: 68.
+- KEEP_BOTH_DO_NOT_TOUCH: 8.
+- USER_DECISION_REQUIRED: 4.
+- UNKNOWN_BLOCKING_CLEANUP: 0.
+
+Recommended user decision
+- Decide the `data/dbn/status` manifest policy first: either approve a later manifest edit making status coverage optional/deferred for cleanup-gate purposes, or keep full status coverage required and approve a bounded status repair/download plan.
+
+Cleanup gate status
+- Cleanup gate remains blocked.
+- Repair approval is required before any bounded raw/causal data generation.
+- Manifest policy approval is required before any `configs/data_manifest.yaml` edit.
+- Duplicate rows are handled as keep-both unless the user requests further content/provenance review; four duplicate rows still require user choice because matching file sizes do not prove content equivalence.
+
+Safety confirmations
+- No data files were deleted.
+- No DBN source files were modified.
+- Cleanup was not run.
+- Manifest audit passed: `manifest_check issues=179 failures=0`.
+- `git status --short -- data` returned no output after validation.
+- `git diff --check` reported no errors; only CRLF warnings for `CODEX_HANDOFF.md` and `reports/data_manifest/manifest_cleanup_gate_decision.md`.
+
+Next recommended step
+- Review `reports/data_manifest/manifest_cleanup_approval_packet.md`, then approve or reject the proposed `data/dbn/status` manifest policy decision.
+
 ## Manifest cleanup gate decision refinement
 - Updated at UTC: 2026-06-22T10:01:56Z
 - Scope: resolved the previous cleanup blocker labels into explicit repair/defer/approval decisions without mutating data. No cleanup, quarantine, data move, data delete, DBN redownload, DBN source modification, full rebuild, expensive job, or phase 3+ command was run.
