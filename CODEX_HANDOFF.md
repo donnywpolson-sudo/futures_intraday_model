@@ -1,5 +1,26 @@
 # Codex Handoff
 
+## User cleanup blocker decisions recorded
+- Updated at UTC: 2026-06-22T11:04:54Z
+- Scope: recorded user decisions for duplicate and repair sequencing only. No repair, cleanup, quarantine, merge, move, delete, rebuild, redownload, conversion, data generation, expensive job, phase 3+ command, or DBN source modification was run.
+
+Report locations
+- `reports/data_manifest/final_repair_duplicate_decision_packet.md`.
+- `reports/data_manifest/final_repair_duplicate_decision_matrix.csv`.
+- `reports/data_manifest/remaining_cleanup_blockers.md`.
+
+Decision counts
+- Repair rows: 10 `APPROVE_BOUNDED_REPAIR_LATER` for Phase 1B raw parquet only; 66 `USER_DECISION_REQUIRED` for Phase 2 causal repair after raw evidence; 0 `UNKNOWN_BLOCKING_CLEANUP`.
+- Duplicate rows: 12 `KEEP_BOTH_DO_NOT_TOUCH`; 0 duplicate rows still requiring user decision; 0 explicit duplicate mutation approvals.
+
+Cleanup gate status
+- Cleanup remains blocked and disabled until repair blockers are zero and cleanup is explicitly approved.
+- No data files were deleted.
+- No DBN source files were modified.
+- Cleanup was not run.
+
+Next recommended step
+- Start a separate bounded Phase 1B raw repair goal for one approved market/year, validate Phase 1C alignment, and stop before Phase 2 or cleanup.
 ## Final repair/duplicate decision packet
 - Updated at UTC: 2026-06-22T10:56:58Z
 - Scope: reviewed the remaining repair and duplicate blockers into explicit decision classes. No repair, cleanup, quarantine, merge, move, delete, rebuild, redownload, conversion, data generation, expensive job, phase 3+ command, or DBN source modification was run.
