@@ -1,163 +1,49 @@
 # Codex Handoff
 
-## Current latest status
-- Step 6 blocker-fix validation completed.
-- Overall Step 6 validation: PASS.
-- Phase 1B metadata-network blocker resolved: yes, via explicit `--offline-local-conditions`; default production metadata behavior is unchanged.
-- Pytest collection blocker resolved: yes, via `scripts/phase1A_download/plan_raw_layout_migration.py` compatibility module.
-- Bounded Phase 1A dry-run, Phase 1B offline CLI conversion, Phase 1C alignment, Phase 2 readiness, and Phase 2 causal smoke passed.
-- Broad previously failing pytest command passed: 207 passed.
-- `data/` top-level canonical: yes.
-- Noncanonical `data/` top-level folders remaining: none.
-- DBN immutability: PASS (7692 files, 0 missing/added/changed).
-- Data deleted/moved/quarantined/renamed in this run: no.
-- DBN redownloaded or modified in this run: no.
-- Safe to run full phase 1A->2 rebuild next: yes from these Step 6 blockers, pending explicit user approval.
-- Caveat: one earlier offline Phase 1B attempt before the date-range filter fix timed out after converting 68 local market-years into `data/raw/_smoke_step6_blockerfix_20260621`; it was preserved and not deleted.
+Updated at UTC: 2026-06-22T00:23:29Z
 
-## Files changed
-- `scripts/phase1A_download/download_databento_raw.py`
-- `scripts/phase1A_download/plan_raw_layout_migration.py`
-- `tests/phase1A_download/test_download_databento_raw.py`
-- `reports/data_reorg/STEP6_POST_CLEANUP_VALIDATION.md`
-- `reports/data_reorg/FINAL_DATA_REORG_REPORT.md`
-- `reports/phase_restart/phase_restart_summary.md`
+## Current latest status
+- Active instruction was Step 4/reporting only. No cleanup, movement, quarantine, rename, delete, Step 5, Step 6, DBN redownload, WFA, backtest, metrics, model selection, or final holdout was run in this continuation.
+- Current `data/` top-level folders are exactly the six canonical names by read-only inspection.
+- Existing local reports show Step 5 cleanup and Step 6 validation had already been performed before this continuation; those historical actions were not repeated.
+- DBN immutability current compare: PASS; before=7692; current=7692; added=0; removed=0; changed=0.
+- DBN coverage audit: 33 markets; missing OHLCV years remain for ['RTY', 'SR3', 'SR1', 'TN', 'KE'].
+- L0/OHLCV overlap latest report status: PASS.
+- Full rebuild continuation was not resumed because the active pasted instruction limits this run to Step 4/reporting scope.
+
+## Files changed in this continuation
+- `reports/data_reorg/dbn_immutability_after.csv`
+- `reports/data_reorg/dbn_immutability_after.json`
+- `reports/data_reorg/dbn_immutability_compare.md`
+- `reports/data_reorg/data_folder_classification.csv`
+- `reports/data_reorg/data_folder_classification.md`
+- `reports/data_reorg/DATA_REORG_CHECKPOINT_STEP4.md`
+- `reports/phase_restart/phase_restart_summary.md`
 - `CODEX_HANDOFF.md`
 
-## Passed commands
-- `python -m pytest tests\phase1A_download\test_download_databento_raw.py tests\phase1A_download\test_plan_raw_layout_migration.py`
-- `python -m scripts.phase1B_convert.convert_databento_raw --schema ohlcv-1m --markets ES,CL,ZN,6E --start 2024-01-01 --end 2025-01-01 --chunk year --dbn-root data\dbn\ohlcv_1m --raw-root data\raw\_smoke_step6_blockerfix_bounded_20260621 --reports-root reports\phase_restart\step6_blockerfix_bounded_phase_1b_smoke --workers 2 --resume --include-optional-schemas status,statistics --optional-dbn-root data\dbn --offline-local-conditions`
-- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema ohlcv-1m --markets ES --start 2024-01-01 --end 2025-01-01 --chunk year --dbn-root data\dbn\ohlcv_1m --reports-root reports\phase_restart\step6_blockerfix_phase_1a_smoke --workers 1 --resume --dry-run`
-- `python -m scripts.phase1C_validate.audit_raw_dbn_alignment --config reports\phase_restart\tier1refs_2024_smoke_alpha_tiered.yaml --profile tier_0 --dbn-root data\dbn --raw-root data\raw\_smoke_step6_blockerfix_bounded_20260621 --json-out reports\phase_restart\step6_blockerfix_phase_1c_raw_dbn_alignment.json --md-out reports\phase_restart\step6_blockerfix_phase_1c_raw_dbn_alignment.md`
-- `python -m scripts.validation.audit_phase2_readiness --profile tier_0 --raw-root data\raw\_smoke_step6_blockerfix_bounded_20260621 --raw-alignment-report reports\phase_restart\step6_blockerfix_phase_1c_raw_dbn_alignment.json --profile-config reports\phase_restart\tier1refs_2024_smoke_alpha_tiered.yaml --summary-only --top-blockers 10 --json-out reports\phase_restart\step6_blockerfix_phase2_readiness_summary.json`
-- `python -m scripts.phase2_causal_base.build_causal_base_data --profile tier_0 --raw-root data\raw\_smoke_step6_blockerfix_bounded_20260621 --output-root data\causally_gated_normalized\_smoke_step6_blockerfix_bounded_20260621 --reports-root reports\phase_restart\step6_blockerfix_phase_2_causal --profile-config reports\phase_restart\tier1refs_2024_smoke_alpha_tiered.yaml --raw-alignment-report reports\phase_restart\step6_blockerfix_phase_1c_raw_dbn_alignment.json`
-- `python -m pytest tests\phase1A_download\test_download_databento_raw.py tests\phase1A_download\test_plan_raw_layout_migration.py tests\validation\test_audit_raw_dbn_alignment.py tests\phase2_causal_base\test_build_causal_base_data.py tests\validation\test_audit_local_trade_ohlcv_gaps.py tests\validation\test_build_sr_front_contract_candidate.py tests\validation\test_audit_sr_roll_repair_sources.py`
-- `git diff --check -- scripts\phase1A_download\download_databento_raw.py scripts\phase1A_download\plan_raw_layout_migration.py tests\phase1A_download\test_download_databento_raw.py`
-
-## Attempted non-passing command
-- `python -m scripts.phase1B_convert.convert_databento_raw --schema ohlcv-1m --markets ES,CL,ZN,6E --start 2024-01-01 --end 2025-01-01 --chunk year --dbn-root data\dbn\ohlcv_1m --raw-root data\raw\_smoke_step6_blockerfix_20260621 --reports-root reports\phase_restart\step6_blockerfix_phase_1b_smoke --workers 2 --resume --include-optional-schemas status,statistics --optional-dbn-root data\dbn --offline-local-conditions  # timed out after converting 68 local market-years before date-range filter fix; generated output preserved, not deleted`
+## Commands run in this continuation
+- `Get-Content -LiteralPath 'C:\Users\donny\.codex\attachments\ffd3af13-5673-4898-a8a1-c41beb0875a2\pasted-text-1.txt'`
+- `Get-Location; git status --short`
+- `if (Test-Path -LiteralPath 'CODEX_HANDOFF.md') { Get-Content -LiteralPath 'CODEX_HANDOFF.md' }`
+- `rg -n \"def resolve_profile_inputs|def discover_raw_inputs|def build_phase2_readiness_report|raw alignment eligible\" scripts\phase2_causal_base\build_causal_base_data.py scripts\validation\audit_phase2_readiness.py`
+- `rg -n \"futures_intraday_model|data_reorg|phase_restart|Step 4|phase 1A\" 'C:\Users\donny\.codex\memories\MEMORY.md'`
+- `git status --short`
+- `Get-ChildItem -LiteralPath data -Directory | Select-Object Name,FullName,LastWriteTime | Sort-Object Name | Format-Table -AutoSize`
+- `Get-ChildItem -LiteralPath reports\data_reorg,reports\phase_restart -File -ErrorAction SilentlyContinue | Select-Object FullName,Length,LastWriteTime | Sort-Object FullName | Format-Table -AutoSize`
+- `Read-only Python snippets to inspect existing JSON report schemas and summaries.`
+- `Get-ChildItem -LiteralPath . -Directory -Filter '_data_reorg_quarantine*' | Select-Object Name,FullName,LastWriteTime | Sort-Object Name | Format-Table -AutoSize`
+- `Get-ChildItem -LiteralPath _data_reorg_quarantine20260621T222448Z -Directory -ErrorAction SilentlyContinue | Select-Object Name,FullName | Sort-Object Name | Format-Table -AutoSize`
+- `Get-ChildItem -LiteralPath data\dbn -Directory | Select-Object Name,FullName | Sort-Object Name | Format-Table -AutoSize`
+- `rg -n --glob '!reports/**' --glob '!data/**' --glob '!_data_reorg_quarantine*/**' --glob '!CODEX_HANDOFF.md' \"causally_gated_normalized_tier3_candidate|dbn_sr_parent_candidate|raw_sr_front_contract_candidate|raw_sr_front_contract_candidate_parent_20260621|raw_sr_front_contract_candidate_quarterly\" .`
+- `PowerShell here-string piped to python - to refresh report-only files listed in this checkpoint; first attempt failed at parse time and wrote nothing, second attempt wrote reports, third report-only command corrected immutable timestamp precision.`
+- `apply_patch` report-only correction to replace a self-referential Phase 2 causal smoke evidence path with `reports/phase_restart/step6_blockerfix_phase_2_causal/causal_base_manifest.json`.
 
 ## Test results
-- Targeted blocker tests: PASS, 92 passed.
-- Broad previously failing pytest command: PASS, 207 passed.
+- No tests or phase scripts were run in this continuation; existing smoke/test evidence is referenced in the refreshed reports.
 
 ## Remaining work
-- Review the refreshed Step 6 reports.
-- Do not run a full phase 1A->2 rebuild until explicitly approved.
+- Review `reports/data_reorg/DATA_REORG_CHECKPOINT_STEP4.md` and `reports/data_reorg/data_folder_classification.md`.
+- Decide whether to approve any further cleanup or full rebuild work. No such work should run without approval.
 
 ## Next recommended step
-- Approve or reject running the full phase 1A->2 rebuild.
-
-## Live chart wrapper removal
-- Migrated `.vscode/launch.json` from `live_chart_lightweight.py` to `live_chart_feed.py`.
-- Updated `.vscode/launch.json` args from old `--symbols ES.c.0` / `--chart-timeframe` style to current `--market ES` / `--timeframe 5m` semantics.
-- Updated `README_RUNBOOK.md` live chart command to `python live_chart_feed.py --market ES --historical-backfill --lookback-hours 2 --timeout-seconds 30`.
-- Replaced stale `tests/live/test_live_chart_lightweight.py` contents with current `live_chart_feed.py` entrypoint and guard tests; it no longer imports or executes the wrapper.
-- Removed `live_chart_lightweight.py` with `git rm -f` after reference searches and focused tests passed.
-- Preserved unrelated dirty worktree files.
-
-## Live chart wrapper removal files changed
-- `.vscode/launch.json`
-- `README_RUNBOOK.md`
-- `tests/live/test_live_chart_lightweight.py`
-- `live_chart_lightweight.py` deleted
-- `CODEX_HANDOFF.md`
-
-## Live chart wrapper removal commands run
-- `git status --short`
-- `rg -n -S "live_chart_lightweight|live_chart_feed" .vscode README_RUNBOOK.md tests live_chart_lightweight.py live_chart_feed.py --glob "!**/__pycache__/**" --glob "!*.pyc"`
-- `python -m pytest tests\test_live_chart_feed.py tests\live\test_live_chart_lightweight.py -q`
-- `rg live_chart_lightweight .vscode README_RUNBOOK.md tests`
-- `git grep -n "live_chart_lightweight"`
-- `git rm live_chart_lightweight.py`
-- `git rm -f live_chart_lightweight.py`
-- `rg live_chart_lightweight .vscode README_RUNBOOK.md tests`
-- `git grep -n "live_chart_lightweight"`
-- `python -m pytest tests\test_live_chart_feed.py tests\live\test_live_chart_lightweight.py -q`
-- `git status --short`
-
-## Live chart wrapper removal validation results
-- Pre-removal focused tests: PASS, 21 passed.
-- Pre-removal `rg live_chart_lightweight .vscode README_RUNBOOK.md tests`: no matches.
-- Pre-removal `git grep -n "live_chart_lightweight"`: one remaining match in `live_chart_lightweight.py` itself.
-- `git rm live_chart_lightweight.py`: refused because the file had local modifications.
-- `git rm -f live_chart_lightweight.py`: PASS, removed the verified wrapper.
-- Post-removal `rg live_chart_lightweight .vscode README_RUNBOOK.md tests`: no matches.
-- Post-removal `git grep -n "live_chart_lightweight"`: no matches.
-- Post-removal focused tests: PASS, 21 passed.
-
-## Live chart wrapper removal next recommended step
-- Review the staged wrapper deletion plus unstaged launch/docs/test edits, then commit them together when ready.
-
-## Live chart NQ 5m visual verification
-- Result: PASS; remaining visual blocker resolved.
-- Exact command run from interactive desktop session:
-  `python live_chart_feed.py --market NQ --timeframe 5m --historical-backfill --lookback-hours 4 --timeout-seconds 120`
-- Visual evidence:
-  - User-provided screenshot `C:\Users\donny\AppData\Local\Temp\codex-clipboard-49569f91-26f0-4c44-a71b-9b59340d5e43.png` showed an open chart window titled `NQU6 5m`, 5m selected, rendered candles and volume, and live status around 770 bars.
-  - Process-scoped `PrintWindow` screenshot `C:\Users\donny\AppData\Local\Temp\live_chart_feed_printwindow_20260621_163419_9307316.png` showed the same `NQU6 5m` chart, 5m selected, rendered candles and volume, and live status around 700 bars.
-- Terminal evidence:
-  - `C:\Users\donny\AppData\Local\Temp\live_chart_feed_20260621_163059.out.log`: ran from 2026-06-21 16:30:59 to 16:33:11 local, stderr was empty, no traceback observed.
-  - `C:\Users\donny\AppData\Local\Temp\live_chart_feed_20260621_163419.out.log`: showed changing `last_close` and records through `records=784`, `latest=2026-06-21T23:35:00Z`, `last_close=30402.75`.
-  - `C:\Users\donny\AppData\Local\Temp\live_chart_feed_20260621_163419.err.log`: only WebView cleanup warning `Failed to unregister class Chrome_WidgetWin_0. Error = 1411`; no Python traceback.
-- Historical candles rendered from the available Globex session start visible around 15:00 local through 16:30-16:35 local; the requested 4-hour window was bounded by available session history.
-- No source, data, report, or canonical layout changes were made beyond this handoff update.
-
-## Live chart Databento available-end clamp
-- Added Databento dataset-range metadata lookup through `Historical.metadata.get_dataset_range` before symbology and historical requests.
-- Added reusable exclusive-end clamp helpers and logging for requested, available exclusive, and final end dates.
-- Extended the Databento available-end parser to match `data available up to, but not including YYYY-MM-DD`.
-- Added one retry for symbology and historical requests when Databento returns the specific available-end error message.
-- Added guardrails so clamping to `end <= start` fails locally with an actionable message before an invalid API call.
-
-## Live chart Databento available-end clamp files changed
-- `live_chart_feed.py`
-- `tests/test_live_chart_feed.py`
-- `CODEX_HANDOFF.md`
-
-## Live chart Databento available-end clamp commands run
-- `git status --short`
-- `rg -n "Databento|start_date|end_date|Historical|timeseries|get_range|metadata|resolve|instrument" live_chart_feed.py`
-- `python -c "import databento as db; ..."` to inspect installed SDK metadata helpers
-- `python -m pytest tests\test_live_chart_feed.py -q`
-- `c:\Users\donny\Desktop\futures_intraday_model\.venv\Scripts\python.exe c:/Users/donny/Desktop/futures_intraday_model/live_chart_feed.py`
-- `git diff -- live_chart_feed.py tests\test_live_chart_feed.py`
-- `git status --short`
-
-## Live chart Databento available-end clamp validation results
-- Focused tests: PASS, 18 passed.
-- Requested script command no longer failed with `data_end_date_after_available_end_date`; it logged `requested=2026-06-23`, `available_exclusive=2026-06-22`, `final=2026-06-22`.
-- Requested script command then exited on pre-existing ES continuous-symbol ambiguity over `[2026-06-15, 2026-06-22)`: candidates `42140864[2026-06-15,2026-06-17)` and `42140870[2026-06-17,2026-06-22)`.
-- Rechecked after continuation: focused tests still PASS, 18 passed; requested script command still clamps to `available_exclusive=2026-06-22` and fails only on the same ES roll-window ambiguity.
-
-## Live chart Databento available-end clamp next recommended step
-- Decide whether to change ES continuous-symbol resolution over roll windows, or rerun with a shorter `--lookback-hours` that does not cross the roll.
-
-## Live chart ES roll-window resolution
-- Follow-up to the default command output: `ES.v.0` resolved to two candidates across the 168-hour lookback because the window crossed a roll.
-- Updated `resolve_single_instrument` to select the unique instrument candidate active immediately before the request's exclusive `end_date`.
-- Kept the existing ambiguity failure when multiple candidates are active at that right edge.
-
-## Live chart ES roll-window resolution files changed
-- `live_chart_feed.py`
-- `tests/test_live_chart_feed.py`
-- `CODEX_HANDOFF.md`
-
-## Live chart ES roll-window resolution commands run
-- `git status --short`
-- `python -m pytest tests\test_live_chart_feed.py -q`
-- `c:\Users\donny\Desktop\futures_intraday_model\.venv\Scripts\python.exe c:/Users/donny/Desktop/futures_intraday_model/live_chart_feed.py  # timed out after 184s because live chart kept running`
-- `Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" | Select-Object ProcessId,CommandLine | Format-List`
-- `Stop-Process -Id 19144,5360 -Force  # stopped only validation-run live_chart_feed.py processes`
-- `c:\Users\donny\Desktop\futures_intraday_model\.venv\Scripts\python.exe c:/Users/donny/Desktop/futures_intraday_model/live_chart_feed.py --timeout-seconds 30  # printed market-selection help because explicit args bypass default run-button args`
-- `c:\Users\donny\Desktop\futures_intraday_model\.venv\Scripts\python.exe c:/Users/donny/Desktop/futures_intraday_model/live_chart_feed.py --market ES --historical-backfill --lookback-hours 168 --timeout-seconds 30`
-- `git diff -- live_chart_feed.py tests\test_live_chart_feed.py`
-
-## Live chart ES roll-window resolution validation results
-- Focused tests: PASS, 19 passed.
-- Exact default command no longer exited on the ES roll-window ambiguity; it continued running until the command wrapper timed out, consistent with the live chart staying open.
-- Bounded explicit equivalent command exited 0 and streamed live status through `records=9998`, `latest=2026-06-22T00:14:00Z`, `last_close=7531.00`.
-- No leftover `live_chart_feed.py` processes remained after cleanup and bounded validation.
-
-## Live chart ES roll-window resolution next recommended step
-- Review the live chart changes and run the exact default command interactively when you want the chart to remain open.
+- Review and approve/reject the refreshed Step 4 classification/checkpoint report.

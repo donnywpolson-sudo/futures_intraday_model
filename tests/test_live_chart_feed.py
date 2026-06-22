@@ -24,12 +24,14 @@ def test_watermark_is_market_and_timeframe_only() -> None:
 
 
 def test_timeframe_parser_accepts_supported_values() -> None:
-    assert [chart.normalize_timeframe(value) for value in ("1m", "5m", "15m", "30m", "1h")] == [
+    assert [chart.normalize_timeframe(value) for value in ("1m", "5m", "15m", "30m", "1h", "4H", "1D")] == [
         "1m",
         "5m",
         "15m",
         "30m",
         "1h",
+        "4h",
+        "1d",
     ]
 
 
@@ -84,6 +86,90 @@ def test_aggregate_one_minute_candles_to_fifteen_minutes() -> None:
     assert aggregated[0]["low"] == 199.0
     assert aggregated[0]["close"] == 214.0
     assert aggregated[0]["volume"] == 30
+
+
+def test_aggregate_one_minute_candles_to_four_hour_exchange_bucket() -> None:
+    candles = [
+        {
+            "time": datetime(2026, 6, 21, 22, 30, tzinfo=timezone.utc),
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.5,
+            "volume": 2,
+        },
+        {
+            "time": datetime(2026, 6, 21, 23, 45, tzinfo=timezone.utc),
+            "open": 100.5,
+            "high": 103.0,
+            "low": 98.5,
+            "close": 102.0,
+            "volume": 3,
+        },
+    ]
+
+    aggregated = chart.aggregate_candles(candles, seconds=chart.timeframe_seconds("4h"), timeframe="4h")
+
+    assert aggregated == [
+        {
+            "time": datetime(2026, 6, 21, 21, 0, tzinfo=timezone.utc),
+            "open": 100.0,
+            "high": 103.0,
+            "low": 98.5,
+            "close": 102.0,
+            "volume": 5,
+        }
+    ]
+
+
+def test_aggregate_one_minute_candles_to_globex_trading_day() -> None:
+    candles = [
+        {
+            "time": datetime(2026, 6, 21, 22, 30, tzinfo=timezone.utc),
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.5,
+            "volume": 2,
+        },
+        {
+            "time": datetime(2026, 6, 22, 20, 0, tzinfo=timezone.utc),
+            "open": 100.5,
+            "high": 104.0,
+            "low": 98.0,
+            "close": 103.0,
+            "volume": 4,
+        },
+        {
+            "time": datetime(2026, 6, 22, 22, 30, tzinfo=timezone.utc),
+            "open": 200.0,
+            "high": 201.0,
+            "low": 199.0,
+            "close": 200.5,
+            "volume": 1,
+        },
+    ]
+
+    aggregated = chart.aggregate_candles(candles, seconds=chart.timeframe_seconds("1d"), timeframe="1d")
+
+    assert aggregated == [
+        {
+            "time": datetime(2026, 6, 21, 22, 0, tzinfo=timezone.utc),
+            "open": 100.0,
+            "high": 104.0,
+            "low": 98.0,
+            "close": 103.0,
+            "volume": 6,
+        },
+        {
+            "time": datetime(2026, 6, 22, 22, 0, tzinfo=timezone.utc),
+            "open": 200.0,
+            "high": 201.0,
+            "low": 199.0,
+            "close": 200.5,
+            "volume": 1,
+        },
+    ]
 
 
 def test_trade_aggregator_builds_active_one_minute_candle() -> None:
@@ -239,12 +325,40 @@ def test_real_tier3_market_count_from_alpha_config() -> None:
     assert "ES" in markets
 
 
+def test_chart_market_universe_matches_tier3_config_order() -> None:
+    config = chart.load_yaml_mapping(chart.ROOT / "configs" / "alpha_tiered.yaml")
+    profile = chart.tier3_research_profile(config)
+    expected = tuple(str(symbol) for symbol in profile["markets"])
+
+    assert tuple(info.symbol for info in chart.chart_market_universe(chart.ROOT)) == expected
+
+
 def test_market_search_one_multiple_and_none() -> None:
     markets = chart.discover_available_markets(chart.ROOT)
 
     assert [market.symbol for market in chart.matching_markets(markets, "nasdaq")] == ["NQ"]
     assert {market.symbol for market in chart.matching_markets(markets, "energy")} == {"CL", "NG", "RB", "HO"}
     assert chart.matching_markets(markets, "crypto") == []
+
+
+def test_status_text_reports_model_placeholder_and_stale_data() -> None:
+    display = chart.ChartDisplayState(
+        raw_candles=[],
+        timeframe="5m",
+        timeframe_seconds=chart.timeframe_seconds("5m"),
+        display_tz=timezone.utc,
+        display_tz_name="UTC",
+        loading=False,
+    )
+    status = chart.ChartStatus(
+        records_updated=10,
+        latest_time=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+
+    text = chart.format_topbar_status(symbols="ESU6", display=display, status=status)
+
+    assert "model output unavailable" in text
+    assert "stale" in text
 
 
 class FakeSymbology:

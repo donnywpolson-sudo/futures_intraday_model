@@ -43,7 +43,7 @@ DEFAULT_MAX_RECORDS = 0
 DEFAULT_TIMEOUT_SECONDS: float | None = None
 DEFAULT_NO_DATA_WARNING_SECONDS = 60.0
 DEFAULT_CHART_TIMEFRAME = "1m"
-SUPPORTED_CHART_TIMEFRAMES = ("1m", "5m", "15m", "30m", "1h")
+SUPPORTED_CHART_TIMEFRAMES = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
 DEFAULT_CHART_TIMEFRAMES = ",".join(SUPPORTED_CHART_TIMEFRAMES)
 DEFAULT_DISPLAY_TZ = "local"
 VSCODE_RUN_BUTTON_ARGS = (
@@ -95,6 +95,7 @@ RTH_OPEN_HOUR = 8
 RTH_OPEN_MINUTE = 30
 GLOBEX_OPEN_HOUR = 17
 GLOBEX_OPEN_MINUTE = 0
+MODEL_OVERLAY_UNAVAILABLE_TEXT = "model output unavailable"
 CHART_INSTALL_MESSAGE = (
     'Missing lightweight-charts package; install optional chart support with: '
     'python -m pip install "lightweight-charts>=2.1,<3"'
@@ -387,7 +388,11 @@ def discover_available_markets(root: Path = ROOT) -> dict[str, MarketInfo]:
             aliases=MARKET_SEARCH_ALIASES.get(normalized, ()),
             description=str(description) if description is not None else None,
         )
-    return dict(sorted(markets.items()))
+    return markets
+
+
+def chart_market_universe(root: Path = ROOT) -> tuple[MarketInfo, ...]:
+    return tuple(discover_available_markets(root).values())
 
 
 def matching_markets(markets: MappingABC[str, MarketInfo], query: str | None) -> list[MarketInfo]:
@@ -573,10 +578,16 @@ def format_topbar_status(
     status: ChartStatus,
 ) -> str:
     if display.loading:
-        return f"Loading... {status.records_updated:,} bars"
+        return f"Loading... {status.records_updated:,} bars | {MODEL_OVERLAY_UNAVAILABLE_TEXT}"
+    latest = short_display_time_label(status.latest_time, display.display_tz)
+    stale = ""
+    if status.latest_time is not None:
+        age_seconds = (datetime.now(timezone.utc) - normalize_ts_event(status.latest_time)).total_seconds()
+        if age_seconds > DEFAULT_NO_DATA_WARNING_SECONDS:
+            stale = " | stale"
     return (
         f"{symbols} {display.timeframe} | {status.records_updated:,} bars | "
-        f"last {short_display_time_label(status.latest_time, display.display_tz)}"
+        f"last {latest}{stale} | {MODEL_OVERLAY_UNAVAILABLE_TEXT}"
     )
 
 
@@ -678,6 +689,50 @@ def floor_timeframe(value: datetime, seconds: int) -> datetime:
     return datetime.fromtimestamp(timestamp - (timestamp % seconds), tz=timezone.utc)
 
 
+def exchange_tz() -> tzinfo:
+    try:
+        return ZoneInfo(EXCHANGE_TZ_NAME)
+    except ZoneInfoNotFoundError:
+        return timezone.utc
+
+
+def session_trading_day(value: datetime) -> date:
+    exchange_value = normalize_ts_event(value).astimezone(exchange_tz())
+    globex_open = datetime_time(GLOBEX_OPEN_HOUR, GLOBEX_OPEN_MINUTE)
+    if exchange_value.time() >= globex_open:
+        return exchange_value.date() + timedelta(days=1)
+    return exchange_value.date()
+
+
+def trading_day_start(value: datetime) -> datetime:
+    day = session_trading_day(value)
+    start_date = day - timedelta(days=1)
+    exchange_start = datetime.combine(
+        start_date,
+        datetime_time(GLOBEX_OPEN_HOUR, GLOBEX_OPEN_MINUTE),
+        tzinfo=exchange_tz(),
+    )
+    return exchange_start.astimezone(timezone.utc)
+
+
+def floor_exchange_timeframe(value: datetime, seconds: int) -> datetime:
+    exchange_value = normalize_ts_event(value).astimezone(exchange_tz())
+    midnight = datetime.combine(exchange_value.date(), datetime_time.min, tzinfo=exchange_tz())
+    elapsed = int((exchange_value - midnight).total_seconds())
+    bucket_elapsed = elapsed - (elapsed % seconds)
+    return (midnight + timedelta(seconds=bucket_elapsed)).astimezone(timezone.utc)
+
+
+def candle_bucket_time(value: object, timeframe: str) -> datetime:
+    normalized = normalize_timeframe(timeframe)
+    utc_value = normalize_ts_event(value)
+    if normalized == "1d":
+        return trading_day_start(utc_value)
+    if normalized == "4h":
+        return floor_exchange_timeframe(utc_value, timeframe_seconds(normalized))
+    return floor_timeframe(utc_value, timeframe_seconds(normalized))
+
+
 def chart_display_time(value: object, display_tz: tzinfo) -> datetime:
     utc_value = normalize_ts_event(value)
     return utc_value.astimezone(display_tz).replace(tzinfo=None)
@@ -687,10 +742,15 @@ def aggregate_candles(
     candles: Sequence[dict[str, CandleValue]],
     *,
     seconds: int,
+    timeframe: str | None = None,
 ) -> list[dict[str, CandleValue]]:
     aggregated: dict[datetime, dict[str, CandleValue]] = {}
     for candle in candles:
-        bucket = floor_timeframe(normalize_ts_event(candle["time"]), seconds)
+        bucket = (
+            candle_bucket_time(candle["time"], timeframe)
+            if timeframe is not None
+            else floor_timeframe(normalize_ts_event(candle["time"]), seconds)
+        )
         if bucket not in aggregated:
             aggregated[bucket] = {
                 "time": bucket,
@@ -1180,6 +1240,7 @@ def trade_record_to_values(record: object) -> tuple[datetime, float, int]:
 @dataclass
 class TradeCandleAggregator:
     timeframe_seconds: int = 60
+    timeframe: str | None = None
     current_bucket: datetime | None = None
     current_candle: dict[str, CandleValue] | None = None
     last_trade_ts: datetime | None = None
@@ -1190,7 +1251,11 @@ class TradeCandleAggregator:
         if self.last_trade_ts is not None and ts_event < self.last_trade_ts:
             self.ignored_out_of_order += 1
             return None
-        bucket = floor_timeframe(ts_event, self.timeframe_seconds)
+        bucket = (
+            candle_bucket_time(ts_event, self.timeframe)
+            if self.timeframe is not None
+            else floor_timeframe(ts_event, self.timeframe_seconds)
+        )
         if self.current_bucket is not None and bucket < self.current_bucket:
             self.ignored_out_of_order += 1
             return None
@@ -1370,6 +1435,9 @@ def configure_chart(
     timeframe_options: Sequence[str] = (),
     selected_timeframe: str | None = None,
     on_timeframe_change: Callable[[object], None] | None = None,
+    market_options: Sequence[str] = (),
+    selected_market: str | None = None,
+    on_market_change: Callable[[object], None] | None = None,
     status_text: str = LOADING_STATUS_TEXT,
 ) -> None:
     call_if_available(
@@ -1434,6 +1502,12 @@ def configure_chart(
         selected_timeframe=selected_timeframe,
         on_timeframe_change=on_timeframe_change,
     )
+    configure_market_selector(
+        chart,
+        market_options=market_options,
+        selected_market=selected_market,
+        on_market_change=on_market_change,
+    )
     configure_status_text(chart, status_text)
 
 
@@ -1456,6 +1530,31 @@ def configure_timeframe_switcher(
         default=selected_timeframe,
         func=on_timeframe_change,
     )
+
+
+def configure_market_selector(
+    chart: object,
+    *,
+    market_options: Sequence[str],
+    selected_market: str | None,
+    on_market_change: Callable[[object], None] | None,
+) -> None:
+    if not market_options or selected_market is None:
+        return
+    topbar = getattr(chart, "topbar", None)
+    switcher = getattr(topbar, "switcher", None)
+    if not callable(switcher):
+        return
+    switcher(
+        "market",
+        tuple(market_options),
+        default=selected_market,
+        func=on_market_change,
+    )
+
+
+def noop_chart_callback(_chart: object) -> None:
+    return None
 
 
 def update_chart_title(chart: object, title: str) -> None:
@@ -1608,6 +1707,7 @@ def render_chart_display(
     aggregated = aggregate_candles(
         display.raw_candles,
         seconds=display.timeframe_seconds,
+        timeframe=display.timeframe,
     )
     display_candles = [
         candle_for_display(candle, display_tz=display.display_tz)
@@ -1795,6 +1895,8 @@ def drain_chart_event_queue(chart: object, stderr: TextIO) -> bool:
 
         try:
             func, args = parse_chart_event_message(chart, response)
+            if not callable(func):
+                continue
             if asyncio.iscoroutinefunction(func):
                 asyncio.run(func(*args))
             else:
@@ -2349,6 +2451,9 @@ def run_live_chart(
             timeframe_options=chart_timeframes,
             selected_timeframe=display.timeframe,
             on_timeframe_change=build_timeframe_callback(timeframe_queue),
+            market_options=tuple(markets),
+            selected_market=market,
+            on_market_change=noop_chart_callback,
             status_text=LOADING_STATUS_TEXT,
         )
         show_chart(chart)
@@ -2381,6 +2486,7 @@ def run_live_chart(
             historical_candles = aggregate_candles(
                 historical_store_to_candles(store),
                 seconds=display.timeframe_seconds,
+                timeframe=display.timeframe,
             )
             for candle in historical_candles:
                 append_display_candle(display, status, candle)
@@ -2432,7 +2538,12 @@ def run_live_chart(
                     allow_start_clamp=not retried_clamped_start,
                     trade_aggregator=TradeCandleAggregator(
                         timeframe_seconds=display.timeframe_seconds,
-                        current_bucket=normalize_ts_event(seed["time"]) if seed is not None else None,
+                        timeframe=display.timeframe,
+                        current_bucket=(
+                            candle_bucket_time(seed["time"], display.timeframe)
+                            if seed is not None
+                            else None
+                        ),
                         current_candle=seed,
                     ),
                 )
