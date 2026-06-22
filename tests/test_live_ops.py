@@ -85,28 +85,46 @@ def ready_signal(test_bar: LiveBar | None = None):
 
 
 def test_operator_status_rendering_width() -> None:
-    line = render_operator_status(
-        OperatorStatusState(
-            feed_status="LIVE",
-            active_symbol="ES",
-            active_contract="ESU6",
-            timeframe="1m",
-            records_count=20939,
-            latest_bar_time=BASE,
-            latest_bar_age_seconds=4,
-            last_close=7552.25,
-            model_status="OFF",
-            signal="NO_SIGNAL",
-            trading_mode="DISABLED",
-            kill_switch="OFF",
-            risk_status="OK",
-            reconciliation_status="OK",
-        ),
-        width=80,
+    state = OperatorStatusState(
+        feed_status="LIVE",
+        active_symbol="ES",
+        active_contract="ESU6",
+        timeframe="1m",
+        records_count=20939,
+        latest_bar_time=BASE,
+        latest_bar_age_seconds=4,
+        last_close=7552.25,
+        model_status="OFF",
+        signal="NO_SIGNAL",
+        trading_mode="DISABLED",
+        kill_switch="OFF",
+        risk_status="OK",
+        reconciliation_status="OK",
+        paper_position="ES:1",
+        last_error_code="DATA_STALE",
     )
+    line = render_operator_status(state, width=80)
+    wide_line = render_operator_status(state, width=220)
 
     assert len(line) == 79
     assert "\n" not in line
+    for expected in (
+        "LIVE",
+        "ES/ESU6 1m",
+        "rows=20939",
+        "latest=2026-06-22 14:30Z",
+        "age=4s",
+        "close=7552.25",
+        "model=OFF",
+        "sig=NO_SIGNAL",
+        "mode=DISABLED",
+        "kill=OFF",
+        "risk=OK",
+        "recon=OK",
+        "pos=ES:1",
+        "err=DATA_STALE",
+    ):
+        assert expected in wide_line
 
 
 def test_timeout_args_support_disabled_and_enabled() -> None:
@@ -131,6 +149,14 @@ def test_l1_like_records_derive_final_ohlcv_bar() -> None:
     assert emitted == [
         LiveBar("ES", "ESU6", BASE, "1m", 100.0, 101.0, 100.0, 101.0, 5, True, "synthetic-l1")
     ]
+
+
+def test_bar_builder_blocks_mixed_contract_window() -> None:
+    builder = LiveBarBuilder(timeframe="1m", timeframe_seconds=60)
+
+    assert builder.update(LiveRecord("ES", "ESU6", BASE + timedelta(seconds=1), 100.0, 1)) == []
+    with pytest.raises(ValueError, match="cannot mix symbols or contracts"):
+        builder.update(LiveRecord("ES", "ESZ6", BASE + timedelta(seconds=2), 101.0, 1))
 
 
 def test_bar_final_and_partial_handling() -> None:
@@ -171,10 +197,80 @@ def test_data_quality_gate_blocks_contract_mismatch_and_reconnect_gap() -> None:
     assert gate.validate(bar(), now=BASE + timedelta(seconds=1)).passed
 
     gap = gate.validate(bar(timestamp_utc=BASE + timedelta(minutes=10)), now=BASE + timedelta(minutes=10))
-    mismatch = DataQualityGate(config).validate(bar(contract="ESZ6"), now=BASE, active_contract="ESU6")
+    mismatch_config = replace(config, allowed_contracts=("ESU6", "ESZ6"))
+    mismatch = DataQualityGate(mismatch_config).validate(bar(contract="ESZ6"), now=BASE, active_contract="ESU6")
 
     assert gap.reason_code == "TIMESTAMP_GAP"
-    assert mismatch.reason_code in {"UNKNOWN_CONTRACT", "CONTRACT_MISMATCH"}
+    assert mismatch.reason_code == "CONTRACT_MISMATCH"
+
+
+def test_data_quality_stale_heartbeat_blocks_risk() -> None:
+    config = paper_smoke_config()
+    dq = DataQualityGate(config).validate(
+        bar(),
+        now=BASE + timedelta(seconds=40),
+        heartbeat_timestamp_utc=BASE,
+    )
+    model = ModelReadinessGate().evaluate(symbol="ES", features={"close": 100.5})
+    signal = build_signal_state(bar=bar(), data_quality=dq, model_status=model, now=BASE, signal="LONG")
+
+    decision = RiskManager(config).evaluate(
+        order=order(order_id="HEARTBEAT", signal_id="SIG-HEARTBEAT"),
+        signal=signal,
+        data_quality=dq,
+        model_status=model,
+        reconciliation=ReconciliationResult("OK", "OK", {}),
+        positions={},
+        now=BASE,
+        session_ok=True,
+    )
+
+    assert dq.reason_code == "HEARTBEAT_STALE"
+    assert decision.reason_code == "DATA_QUALITY_HEARTBEAT_STALE"
+
+
+def test_data_quality_gap_and_duplicate_after_reconnect_block_risk() -> None:
+    config = paper_smoke_config()
+    gate = DataQualityGate(config)
+    assert gate.validate(bar(), now=BASE + timedelta(seconds=1)).passed
+
+    gap_bar = bar(timestamp_utc=BASE + timedelta(minutes=10))
+    gap = gate.validate(gap_bar, now=BASE + timedelta(minutes=10))
+    duplicate_gate = DataQualityGate(config)
+    assert duplicate_gate.validate(bar(), now=BASE + timedelta(seconds=1)).passed
+    duplicate = duplicate_gate.validate(bar(), now=BASE + timedelta(seconds=2))
+    model = ModelReadinessGate().evaluate(symbol="ES", features={"close": 100.5})
+    gap_signal = build_signal_state(bar=gap_bar, data_quality=gap, model_status=model, now=BASE, signal="LONG")
+    duplicate_signal = build_signal_state(bar=bar(), data_quality=duplicate, model_status=model, now=BASE, signal="LONG")
+
+    gap_decision = RiskManager(config).evaluate(
+        order=order(order_id="GAP", signal_id="SIG-GAP", bar_timestamp=gap_bar.timestamp_utc),
+        signal=gap_signal,
+        data_quality=gap,
+        model_status=model,
+        reconciliation=ReconciliationResult("OK", "OK", {}),
+        positions={},
+        now=BASE,
+        session_ok=True,
+        reconnect_reconciled=True,
+    )
+    duplicate_decision = RiskManager(config).evaluate(
+        order=order(order_id="DUP", signal_id="SIG-DUP"),
+        signal=duplicate_signal,
+        data_quality=duplicate,
+        model_status=model,
+        reconciliation=ReconciliationResult("OK", "OK", {}),
+        positions={},
+        now=BASE,
+        session_ok=True,
+        reconnect_reconciled=True,
+    )
+
+    assert gap.reason_code == "TIMESTAMP_GAP"
+    assert gap_decision.reason_code == "DATA_QUALITY_TIMESTAMP_GAP"
+    assert duplicate.reason_code == "DUPLICATE_TIMESTAMP"
+    assert duplicate.duplicate_timestamp_policy == "block"
+    assert duplicate_decision.reason_code == "DATA_QUALITY_DUPLICATE_TIMESTAMP"
 
 
 def test_model_unavailable_and_feature_missing_emit_no_signal() -> None:
@@ -280,6 +376,91 @@ def test_session_guard_missing_or_closed_session_is_false() -> None:
 
     assert guard.is_session_open(BASE, "ES") is False
     assert guard.is_session_open(BASE, "NQ") is False
+
+
+def test_missing_session_config_rejects_risk_approval() -> None:
+    dq, model, signal = ready_signal()
+    guard = SessionGuard.from_strings({"NQ": ("00:00", "23:59", "UTC")})
+
+    decision = RiskManager(paper_smoke_config(), session_guard=guard).evaluate(
+        order=order(order_id="SESSION-MISSING", signal_id="SIG-SESSION-MISSING"),
+        signal=signal,
+        data_quality=dq,
+        model_status=model,
+        reconciliation=ReconciliationResult("OK", "OK", {}),
+        positions={},
+        now=BASE,
+        session_ok=None,
+    )
+    dq_session = DataQualityGate(paper_smoke_config(), session_guard=guard).validate(bar(), now=BASE)
+
+    assert decision.reason_code == "OUTSIDE_SESSION"
+    assert dq_session.reason_code == "SESSION_CLOSED"
+
+
+def test_contract_mismatch_blocks_risk_approval() -> None:
+    config = replace(paper_smoke_config(), allowed_contracts=("ESU6", "ESZ6"))
+    mismatch_bar = bar(contract="ESZ6")
+    dq = DataQualityGate(config).validate(mismatch_bar, now=BASE, active_contract="ESU6")
+    model = ModelReadinessGate().evaluate(symbol="ES", features={"close": 100.5})
+    signal = build_signal_state(bar=mismatch_bar, data_quality=dq, model_status=model, now=BASE, signal="LONG")
+
+    decision = RiskManager(config).evaluate(
+        order=order(order_id="CONTRACT-MISMATCH", signal_id="SIG-CONTRACT-MISMATCH", contract="ESZ6"),
+        signal=signal,
+        data_quality=dq,
+        model_status=model,
+        reconciliation=ReconciliationResult("OK", "OK", {}),
+        positions={},
+        now=BASE,
+        session_ok=True,
+    )
+
+    assert dq.reason_code == "CONTRACT_MISMATCH"
+    assert decision.reason_code == "DATA_QUALITY_CONTRACT_MISMATCH"
+
+
+def test_reconnect_requires_data_quality_and_reconciliation_before_risk_approval() -> None:
+    dq, model, signal = ready_signal()
+    config = paper_smoke_config()
+
+    pending = RiskManager(config).evaluate(
+        order=order(order_id="RECONNECT-PENDING", signal_id="SIG-RECONNECT-PENDING"),
+        signal=signal,
+        data_quality=dq,
+        model_status=model,
+        reconciliation=ReconciliationResult("OK", "OK", {}),
+        positions={},
+        now=BASE,
+        session_ok=True,
+        reconnect_reconciled=False,
+    )
+    failed = RiskManager(config).evaluate(
+        order=order(order_id="RECONNECT-FAIL", signal_id="SIG-RECONNECT-FAIL"),
+        signal=signal,
+        data_quality=dq,
+        model_status=model,
+        reconciliation=ReconciliationResult("FAIL", "POSITION_MISMATCH", {}),
+        positions={},
+        now=BASE,
+        session_ok=True,
+        reconnect_reconciled=True,
+    )
+    approved = RiskManager(config).evaluate(
+        order=order(order_id="RECONNECT-OK", signal_id="SIG-RECONNECT-OK"),
+        signal=signal,
+        data_quality=dq,
+        model_status=model,
+        reconciliation=ReconciliationResult("OK", "OK", {}),
+        positions={},
+        now=BASE,
+        session_ok=True,
+        reconnect_reconciled=True,
+    )
+
+    assert pending.reason_code == "RECONNECT_RECONCILIATION_PENDING"
+    assert failed.reason_code == "RECONCILIATION_FAILED"
+    assert approved.approved
 
 
 def test_paper_broker_fill_cancel_flatten_and_duplicate_reject(tmp_path) -> None:
@@ -475,6 +656,23 @@ def test_live_scaffold_has_no_real_broker_sdk_imports() -> None:
                 root = module.split(".", 1)[0].lower().replace("-", "_")
                 if root in blocked_roots:
                     found.append(f"{path}:{module}")
+
+    assert found == []
+
+
+def test_live_chart_status_path_has_no_broker_order_calls() -> None:
+    path = Path("live_chart_feed.py")
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    forbidden_names = {"PaperBroker", "LiveBroker", "OrderIntent"}
+    found: list[str] = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "live_ops.broker":
+            found.append(f"{path}:{node.lineno}:import {node.module}")
+        elif isinstance(node, ast.Attribute) and node.attr == "place_order":
+            found.append(f"{path}:{node.lineno}:place_order")
+        elif isinstance(node, ast.Name) and node.id in forbidden_names:
+            found.append(f"{path}:{node.lineno}:{node.id}")
 
     assert found == []
 

@@ -443,3 +443,74 @@ Updated at UTC: 2026-06-22T00:23:29Z
 - Send Phase 2C goal for remaining safety gaps in session/calendar behavior, contract/rollover safety, reconnect/backfill handling, and operator status wiring.
 - Keep Phase 2C focused, paper/sim only, and stop when touched tests and the focused live ops/chart gate pass under hard timeouts.
 - Continue to avoid broker SDKs, credentials, real order paths, GUI/chart validation, generated artifact changes, and broad scaffold completion.
+
+## Phase 2C session, contract, reconnect, operator status layer
+- Updated at UTC: 2026-06-22T04:48:27Z
+- Scope: session/calendar fail-closed evidence, contract/symbol mismatch evidence, reconnect/gap/stale-feed fail-closed evidence, operator status rendering/state display, and focused tests only.
+- No broker SDKs, broker credentials, account IDs, broker env vars, live order paths, production live trading, chart/UI order path, GUI/chart launch, `--no-timeout`, broad pytest, or generated report/log/data modifications were added.
+- The older interrupted-goal recovery objective file was read as context only. This run followed the active Phase 2C goal and kept validation finite.
+- The default smoke CLI was not run because `python scripts\smoke_live_trading.py` writes under `reports/live_trading_smoke/`; the smoke path remains covered through `run_smoke(..., audit_dir=tmp_path)` in the focused tests.
+
+## Phase 2C files changed
+- `live_ops/operator.py`: status renderer now displays both root symbol and active contract as `symbol/contract` when both are available, preserving the single-token display when they match.
+- `tests/test_live_ops.py`: added/expanded focused coverage for operator fields, mixed-contract bar windows, active-contract mismatch risk blocking, missing session config risk blocking, stale heartbeat risk blocking, reconnect reconciliation gating, reconnect timestamp gap and duplicate timestamp blocking, and chart/status no-order-path assertions.
+- `CODEX_HANDOFF.md`: recorded Phase 2C commands, results, remaining Medium blockers, recommended Phase 3 scope, and updated requirement map.
+
+## Phase 2C commands run
+- `Get-Content -LiteralPath 'C:\Users\donny\.codex\attachments\10b205c7-cc5c-419c-a58c-81e00f2e6c12\goal-objective.md'`
+- `Get-Content -LiteralPath 'C:\Users\donny\Desktop\futures_intraday_model\CODEX_HANDOFF.md' -Tail 180`
+- `git status --short`
+- `git status --short --untracked-files=all`
+- `git diff --stat`
+- `git diff --cached --stat`
+- Targeted `rg` and `Get-Content` inspection of `live_ops\risk.py`, `live_ops\quality.py`, `live_ops\bar_builder.py`, `live_ops\operator.py`, `live_ops\schemas.py`, `live_chart_feed.py`, `tests\test_live_ops.py`, and `tests\test_live_chart_feed.py`.
+- `git diff -- live_ops\operator.py tests\test_live_ops.py`
+- `python -m pytest --help | Select-String -Pattern '--timeout'`
+- PowerShell job wrapper: `python -X faulthandler -m pytest tests\test_live_ops.py -vv -s --tb=short --durations=20`
+- PowerShell job wrapper rerun after fixing a too-narrow test assertion: `python -X faulthandler -m pytest tests\test_live_ops.py -vv -s --tb=short --durations=20`
+- PowerShell job wrapper: `python -X faulthandler -m pytest tests\test_live_ops.py tests\test_live_chart_feed.py -vv -s --tb=short --durations=20`
+- `git diff --check -- live_ops\operator.py tests\test_live_ops.py CODEX_HANDOFF.md`
+- `(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')`
+
+## Phase 2C validation results
+- `pytest-timeout` was not available from `python -m pytest --help`; all pytest validation used the 120s PowerShell `Start-Job` / `Wait-Job` / `Stop-Job` wrapper.
+- First touched-test attempt: FAIL, `tests\test_live_ops.py::test_operator_status_rendering_width` used `width=180` and truncated the final `err=DATA_STALE` field. The test width was corrected; no runtime logic changed for that failure.
+- Final touched tests: PASS, `tests\test_live_ops.py` collected 28 tests and passed in 0.42s.
+- Focused live ops/chart gate: PASS, `tests\test_live_ops.py tests\test_live_chart_feed.py` collected 57 tests and passed in 1.29s.
+- Touched-file whitespace check: PASS; only line-ending warnings were reported.
+
+## Phase 2C safety evidence added
+- Operator status rendering shows feed status, root symbol and active contract, timeframe, row count, latest bar time, latest age, close, model status, signal, trading mode, kill switch, risk status, reconciliation status, paper position, and last error code within bounded width.
+- Missing session config fails closed through both `SessionGuard`-backed risk approval and `DataQualityGate` session checks.
+- Active-contract mismatch now has direct data-quality and risk-layer assertions for `CONTRACT_MISMATCH` / `DATA_QUALITY_CONTRACT_MISMATCH`.
+- Mixed contract updates inside one live bar builder window raise before producing a mixed bar.
+- Stale heartbeat blocks at data quality and propagates to `DATA_QUALITY_HEARTBEAT_STALE` at risk.
+- Reconnect approval is blocked until the explicit reconnect reconciliation flag is true and reconciliation status is `OK`; the positive path remains paper-only approval.
+- Timestamp gaps and duplicate timestamps after reconnect-style sequences both fail closed at risk. Duplicate timestamp policy remains `block`.
+- Chart/status path is statically asserted to have no `live_ops.broker` import, no `place_order` attribute call, and no `PaperBroker`/`LiveBroker`/`OrderIntent` usage.
+- No real broker SDK import test remains covered across the live scaffold surface.
+
+## Phase 2C requirement map update
+- No Severe blockers remain in the focused live-ops/chart scaffold gate.
+- Core Phase 2C safety layer is now covered: session fail-closed behavior, contract mismatch/mix behavior, reconnect/gap/stale heartbeat behavior, operator status fields, and chart no-order-path assertions.
+- Parts D, G, L, M, N, O, and Q were improved by Phase 2C. Their core fail-closed checks are no longer unresolved for this phase, but broader production-depth items below remain deferred Medium work.
+
+## Phase 2C remaining Medium blockers
+- Remaining deferred scaffold gaps by Part ID: A, C, F, H, I, J, K, L, M, N, O, Q.
+- A: explicit debug/verbose logging mode remains minimal.
+- C: full historical/live data contract coverage for sessions, rollover policy, no-trade intervals, and model feature exclusion remains incomplete.
+- F: imputer/scaler object integration is still represented by readiness flags, not concrete model artifact adapters.
+- H: optional cancel/flatten-on-kill config action is not wired as a runtime behavior.
+- I: next-bar-open paper fill policy and direct broker audit append remain deferred.
+- J: audit-state reconciliation remains minimal.
+- K: full runtime audit integration and fsync/atomic durability hardening remain deferred.
+- L: system clock drift, low disk warnings, and full reconnect/backfill policy remain deferred.
+- M: rollover calendar automation/interface remains deferred beyond explicit active-contract checks.
+- N: monitor-only outside session and flatten-before-close runtime behavior remain deferred.
+- O: live chart status still displays scaffold status values rather than a full decision-loop state feed.
+- Q: best-effort system-check tests/scripts remain deferred.
+
+## Phase 2C recommended Phase 3 scope
+- Send Phase 3 goal for broader production-readiness gaps only after accepting the Phase 2A/2B/2C focused safety gates.
+- Prioritize a finite, non-GUI, paper/sim-only decision-loop integration that wires runtime audit rows and operator status from real scaffold state without adding live broker execution.
+- Keep Phase 3 validations hard-timeout wrapped; do not run broad pytest until touched and focused live ops/chart gates pass.

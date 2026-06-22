@@ -38,7 +38,7 @@ def render_operator_status(state: OperatorStatusState, width: int | None = None)
     latest = _format_latest(state.latest_bar_time)
     age = _format_age(state.latest_bar_age_seconds)
     close = "n/a" if state.last_close is None else f"{state.last_close:.2f}"
-    symbol_contract = state.active_contract or state.active_symbol
+    symbol_contract = _format_symbol_contract(state.active_symbol, state.active_contract)
     parts = [
         state.feed_status,
         f"{symbol_contract} {state.timeframe}",
@@ -71,6 +71,12 @@ def _format_latest(value: datetime | None) -> str:
     if value is None:
         return "n/a"
     return utc_datetime(value).strftime("%Y-%m-%d %H:%MZ")
+
+
+def _format_symbol_contract(symbol: str, contract: str) -> str:
+    if symbol and symbol != "n/a" and contract and contract != "n/a" and symbol != contract:
+        return f"{symbol}/{contract}"
+    return contract or symbol
 
 
 def _format_age(value: float | None) -> str:
