@@ -124,3 +124,15 @@ Generated at UTC: 2026-06-22T14:22:47Z
 - Validation result: `git status --short -- data` was empty; `git diff --check` was clean; the matrix report files are ignored and not staged.
 - No repair, Phase 2 build, cleanup, redownload, move, merge, quarantine, delete, or DBN source modification was run by the matrix generation.
 - Cleanup remains disabled.
+
+## Unknown Review Decision Packet
+- Updated at UTC: 2026-06-22T23:36:26Z.
+- Decision packet: `reports/data_manifest/unknown_review_decision_packet.md` and `reports/data_manifest/unknown_review_decision_packet.json`.
+- Starting `UNKNOWN_REVIEW_REQUIRED` rows: 23.
+- `APPROVE_SOURCE_REFERENCE_CORRECTION_LATER`: 6 rows, SR3 2019-2024.
+- `APPROVE_BOUNDED_RAW_REENRICHMENT_LATER`: 17 rows, SR1 2018-2026; TN/ZL/ZM/KE 2025-2026.
+- `USER_DECISION_REQUIRED`: 0 rows.
+- Phase 2 build/exclusion plan refreshed: accepted rows 57, deferred/excluded rows 9, accepted rows with pre-build raw evidence prerequisites 17.
+- `KE:2015` is now excluded from future Phase 2 build batches unless separately policy-excepted.
+- No repair, raw re-enrichment, source-reference correction, Phase 2 build, cleanup, redownload, move, merge, quarantine, delete, or DBN source modification was run.
+- Cleanup remains disabled.

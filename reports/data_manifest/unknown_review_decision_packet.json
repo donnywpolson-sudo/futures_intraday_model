@@ -1,0 +1,254 @@
+{
+  "updated_at_utc": "2026-06-22T23:36:26Z",
+  "scope": "report-only decisions for master data health UNKNOWN_REVIEW_REQUIRED rows",
+  "starting_unknown_rows": 23,
+  "decision_counts": {
+    "APPROVE_SOURCE_REFERENCE_CORRECTION_LATER": 6,
+    "APPROVE_BOUNDED_RAW_REENRICHMENT_LATER": 17,
+    "USER_DECISION_REQUIRED": 0
+  },
+  "decisions": [
+    {
+      "pair": "SR3:2019",
+      "decision_class": "APPROVE_SOURCE_REFERENCE_CORRECTION_LATER",
+      "reason": "Raw optional-schema audit failed because embedded source_file/status/statistics source-reference paths point at stale/nonexistent data/dbn_sr_parent_candidate paths.",
+      "expected_later_action": "Bounded metadata/source-reference correction or re-enrichment for this market/year only, using existing canonical DBN/raw sources; no data deletion or cleanup.",
+      "stop_condition": "Stop before Phase 2 build or cleanup; require separate execution approval.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json",
+      "raw_failure_summary": "source_file path does not exist | status_source_file path does not exist | stat_opening_price_source_file path does not exist | stat_settlement_price_source_file path does not exist | stat_session_low_source_file path does not exist | stat_session_high_source_file path does not exist | stat_cleared_volume_source_file path does not exist | stat_open_interest_source_file path does not exist"
+    },
+    {
+      "pair": "SR3:2020",
+      "decision_class": "APPROVE_SOURCE_REFERENCE_CORRECTION_LATER",
+      "reason": "Raw optional-schema audit failed because embedded source_file/status/statistics source-reference paths point at stale/nonexistent data/dbn_sr_parent_candidate paths.",
+      "expected_later_action": "Bounded metadata/source-reference correction or re-enrichment for this market/year only, using existing canonical DBN/raw sources; no data deletion or cleanup.",
+      "stop_condition": "Stop before Phase 2 build or cleanup; require separate execution approval.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json",
+      "raw_failure_summary": "source_file path does not exist | status_source_file path does not exist | stat_opening_price_source_file path does not exist | stat_settlement_price_source_file path does not exist | stat_session_low_source_file path does not exist | stat_session_high_source_file path does not exist | stat_cleared_volume_source_file path does not exist | stat_open_interest_source_file path does not exist"
+    },
+    {
+      "pair": "SR3:2021",
+      "decision_class": "APPROVE_SOURCE_REFERENCE_CORRECTION_LATER",
+      "reason": "Raw optional-schema audit failed because embedded source_file/status/statistics source-reference paths point at stale/nonexistent data/dbn_sr_parent_candidate paths.",
+      "expected_later_action": "Bounded metadata/source-reference correction or re-enrichment for this market/year only, using existing canonical DBN/raw sources; no data deletion or cleanup.",
+      "stop_condition": "Stop before Phase 2 build or cleanup; require separate execution approval.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json",
+      "raw_failure_summary": "source_file path does not exist | status_source_file path does not exist | stat_opening_price_source_file path does not exist | stat_settlement_price_source_file path does not exist | stat_session_low_source_file path does not exist | stat_session_high_source_file path does not exist | stat_cleared_volume_source_file path does not exist | stat_open_interest_source_file path does not exist"
+    },
+    {
+      "pair": "SR3:2022",
+      "decision_class": "APPROVE_SOURCE_REFERENCE_CORRECTION_LATER",
+      "reason": "Raw optional-schema audit failed because embedded source_file/status/statistics source-reference paths point at stale/nonexistent data/dbn_sr_parent_candidate paths.",
+      "expected_later_action": "Bounded metadata/source-reference correction or re-enrichment for this market/year only, using existing canonical DBN/raw sources; no data deletion or cleanup.",
+      "stop_condition": "Stop before Phase 2 build or cleanup; require separate execution approval.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json",
+      "raw_failure_summary": "source_file path does not exist | status_source_file path does not exist | stat_opening_price_source_file path does not exist | stat_settlement_price_source_file path does not exist | stat_session_low_source_file path does not exist | stat_session_high_source_file path does not exist | stat_cleared_volume_source_file path does not exist | stat_open_interest_source_file path does not exist"
+    },
+    {
+      "pair": "SR3:2023",
+      "decision_class": "APPROVE_SOURCE_REFERENCE_CORRECTION_LATER",
+      "reason": "Raw optional-schema audit failed because embedded source_file/status/statistics source-reference paths point at stale/nonexistent data/dbn_sr_parent_candidate paths.",
+      "expected_later_action": "Bounded metadata/source-reference correction or re-enrichment for this market/year only, using existing canonical DBN/raw sources; no data deletion or cleanup.",
+      "stop_condition": "Stop before Phase 2 build or cleanup; require separate execution approval.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json",
+      "raw_failure_summary": "source_file path does not exist | status_source_file path does not exist | stat_opening_price_source_file path does not exist | stat_settlement_price_source_file path does not exist | stat_session_low_source_file path does not exist | stat_session_high_source_file path does not exist | stat_cleared_volume_source_file path does not exist | stat_open_interest_source_file path does not exist"
+    },
+    {
+      "pair": "SR3:2024",
+      "decision_class": "APPROVE_SOURCE_REFERENCE_CORRECTION_LATER",
+      "reason": "Raw optional-schema audit failed because embedded source_file/status/statistics source-reference paths point at stale/nonexistent data/dbn_sr_parent_candidate paths.",
+      "expected_later_action": "Bounded metadata/source-reference correction or re-enrichment for this market/year only, using existing canonical DBN/raw sources; no data deletion or cleanup.",
+      "stop_condition": "Stop before Phase 2 build or cleanup; require separate execution approval.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json",
+      "raw_failure_summary": "source_file path does not exist | status_source_file path does not exist | stat_opening_price_source_file path does not exist | stat_settlement_price_source_file path does not exist | stat_session_low_source_file path does not exist | stat_session_high_source_file path does not exist | stat_cleared_volume_source_file path does not exist | stat_open_interest_source_file path does not exist"
+    },
+    {
+      "pair": "SR1:2018",
+      "decision_class": "APPROVE_BOUNDED_RAW_REENRICHMENT_LATER",
+      "reason": "Raw parquet exists, but raw optional-schema audit reports missing enriched status/statistics columns or expected schema columns.",
+      "expected_later_action": "Bounded one-market/year raw optional status/statistics re-enrichment from existing canonical DBN inputs; no redownload, no DBN source modification, no Phase 2 build.",
+      "stop_condition": "Stop after raw audit passes for the selected row and git status --short -- data only shows intended ignored generated raw output.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json; reports/phase_restart/sr1_2018_phase2_readiness.json; reports/data_manifest/manifest_coverage_check.csv; reports/phase_restart/batch_phase2_build_exclusion_plan.json",
+      "raw_failure_summary": "missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price,stat_close_price_missing,stat_ | expected 86 columns, found 25 | status audit columns missing: status_missing,status_source_file,status_source_sha256,status_stale,status_ts_event | statistics audit columns missing: stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price_missing,stat_close_price_source_file,stat_clos"
+    },
+    {
+      "pair": "SR1:2019",
+      "decision_class": "APPROVE_BOUNDED_RAW_REENRICHMENT_LATER",
+      "reason": "Raw parquet exists, but raw optional-schema audit reports missing enriched status/statistics columns or expected schema columns.",
+      "expected_later_action": "Bounded one-market/year raw optional status/statistics re-enrichment from existing canonical DBN inputs; no redownload, no DBN source modification, no Phase 2 build.",
+      "stop_condition": "Stop after raw audit passes for the selected row and git status --short -- data only shows intended ignored generated raw output.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json; reports/phase_restart/sr1_2019_phase2_readiness.json; reports/data_manifest/manifest_coverage_check.csv; reports/phase_restart/batch_phase2_build_exclusion_plan.json",
+      "raw_failure_summary": "missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price,stat_close_price_missing,stat_ | expected 86 columns, found 25 | status audit columns missing: status_missing,status_source_file,status_source_sha256,status_stale,status_ts_event | statistics audit columns missing: stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price_missing,stat_close_price_source_file,stat_clos"
+    },
+    {
+      "pair": "SR1:2020",
+      "decision_class": "APPROVE_BOUNDED_RAW_REENRICHMENT_LATER",
+      "reason": "Raw parquet exists, but raw optional-schema audit reports missing enriched status/statistics columns or expected schema columns.",
+      "expected_later_action": "Bounded one-market/year raw optional status/statistics re-enrichment from existing canonical DBN inputs; no redownload, no DBN source modification, no Phase 2 build.",
+      "stop_condition": "Stop after raw audit passes for the selected row and git status --short -- data only shows intended ignored generated raw output.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json; reports/phase_restart/sr1_2020_phase2_readiness.json; reports/data_manifest/manifest_coverage_check.csv; reports/phase_restart/batch_phase2_build_exclusion_plan.json",
+      "raw_failure_summary": "missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price,stat_close_price_missing,stat_ | expected 86 columns, found 25 | status audit columns missing: status_missing,status_source_file,status_source_sha256,status_stale,status_ts_event | statistics audit columns missing: stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price_missing,stat_close_price_source_file,stat_clos"
+    },
+    {
+      "pair": "SR1:2021",
+      "decision_class": "APPROVE_BOUNDED_RAW_REENRICHMENT_LATER",
+      "reason": "Raw parquet exists, but raw optional-schema audit reports missing enriched status/statistics columns or expected schema columns.",
+      "expected_later_action": "Bounded one-market/year raw optional status/statistics re-enrichment from existing canonical DBN inputs; no redownload, no DBN source modification, no Phase 2 build.",
+      "stop_condition": "Stop after raw audit passes for the selected row and git status --short -- data only shows intended ignored generated raw output.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json; reports/phase_restart/sr1_2021_phase2_readiness.json; reports/data_manifest/manifest_coverage_check.csv; reports/phase_restart/batch_phase2_build_exclusion_plan.json",
+      "raw_failure_summary": "missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price,stat_close_price_missing,stat_ | expected 86 columns, found 25 | status audit columns missing: status_missing,status_source_file,status_source_sha256,status_stale,status_ts_event | statistics audit columns missing: stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price_missing,stat_close_price_source_file,stat_clos"
+    },
+    {
+      "pair": "SR1:2022",
+      "decision_class": "APPROVE_BOUNDED_RAW_REENRICHMENT_LATER",
+      "reason": "Raw parquet exists, but raw optional-schema audit reports missing enriched status/statistics columns or expected schema columns.",
+      "expected_later_action": "Bounded one-market/year raw optional status/statistics re-enrichment from existing canonical DBN inputs; no redownload, no DBN source modification, no Phase 2 build.",
+      "stop_condition": "Stop after raw audit passes for the selected row and git status --short -- data only shows intended ignored generated raw output.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json; reports/phase_restart/sr1_2022_phase2_readiness.json; reports/data_manifest/manifest_coverage_check.csv; reports/phase_restart/batch_phase2_build_exclusion_plan.json",
+      "raw_failure_summary": "missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price,stat_close_price_missing,stat_ | expected 86 columns, found 25 | status audit columns missing: status_missing,status_source_file,status_source_sha256,status_stale,status_ts_event | statistics audit columns missing: stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price_missing,stat_close_price_source_file,stat_clos"
+    },
+    {
+      "pair": "SR1:2023",
+      "decision_class": "APPROVE_BOUNDED_RAW_REENRICHMENT_LATER",
+      "reason": "Raw parquet exists, but raw optional-schema audit reports missing enriched status/statistics columns or expected schema columns.",
+      "expected_later_action": "Bounded one-market/year raw optional status/statistics re-enrichment from existing canonical DBN inputs; no redownload, no DBN source modification, no Phase 2 build.",
+      "stop_condition": "Stop after raw audit passes for the selected row and git status --short -- data only shows intended ignored generated raw output.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json; reports/phase_restart/sr1_2023_phase2_readiness.json; reports/data_manifest/manifest_coverage_check.csv; reports/phase_restart/batch_phase2_build_exclusion_plan.json",
+      "raw_failure_summary": "missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price,stat_close_price_missing,stat_ | expected 86 columns, found 25 | status audit columns missing: status_missing,status_source_file,status_source_sha256,status_stale,status_ts_event | statistics audit columns missing: stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price_missing,stat_close_price_source_file,stat_clos"
+    },
+    {
+      "pair": "SR1:2024",
+      "decision_class": "APPROVE_BOUNDED_RAW_REENRICHMENT_LATER",
+      "reason": "Raw parquet exists, but raw optional-schema audit reports missing enriched status/statistics columns or expected schema columns.",
+      "expected_later_action": "Bounded one-market/year raw optional status/statistics re-enrichment from existing canonical DBN inputs; no redownload, no DBN source modification, no Phase 2 build.",
+      "stop_condition": "Stop after raw audit passes for the selected row and git status --short -- data only shows intended ignored generated raw output.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json; reports/phase_restart/sr1_2024_phase2_readiness.json; reports/data_manifest/manifest_coverage_check.csv; reports/phase_restart/batch_phase2_build_exclusion_plan.json",
+      "raw_failure_summary": "missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price,stat_close_price_missing,stat_ | expected 86 columns, found 25 | status audit columns missing: status_missing,status_source_file,status_source_sha256,status_stale,status_ts_event | statistics audit columns missing: stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price_missing,stat_close_price_source_file,stat_clos"
+    },
+    {
+      "pair": "SR1:2025",
+      "decision_class": "APPROVE_BOUNDED_RAW_REENRICHMENT_LATER",
+      "reason": "Raw parquet exists, but raw optional-schema audit reports missing enriched status/statistics columns or expected schema columns.",
+      "expected_later_action": "Bounded one-market/year raw optional status/statistics re-enrichment from existing canonical DBN inputs; no redownload, no DBN source modification, no Phase 2 build.",
+      "stop_condition": "Stop after raw audit passes for the selected row and git status --short -- data only shows intended ignored generated raw output.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json; reports/phase_restart/sr1_2025_phase2_readiness.json; reports/data_manifest/manifest_coverage_check.csv; reports/phase_restart/batch_phase2_build_exclusion_plan.json",
+      "raw_failure_summary": "missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price,stat_close_price_missing,stat_ | expected 86 columns, found 25 | status audit columns missing: status_missing,status_source_file,status_source_sha256,status_stale,status_ts_event | statistics audit columns missing: stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price_missing,stat_close_price_source_file,stat_clos"
+    },
+    {
+      "pair": "SR1:2026",
+      "decision_class": "APPROVE_BOUNDED_RAW_REENRICHMENT_LATER",
+      "reason": "Raw parquet exists, but raw optional-schema audit reports missing enriched status/statistics columns or expected schema columns.",
+      "expected_later_action": "Bounded one-market/year raw optional status/statistics re-enrichment from existing canonical DBN inputs; no redownload, no DBN source modification, no Phase 2 build.",
+      "stop_condition": "Stop after raw audit passes for the selected row and git status --short -- data only shows intended ignored generated raw output.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json; reports/phase_restart/sr1_2026_phase2_readiness.json; reports/data_manifest/manifest_coverage_check.csv; reports/phase_restart/batch_phase2_build_exclusion_plan.json",
+      "raw_failure_summary": "missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price,stat_close_price_missing,stat_ | expected 86 columns, found 25 | status audit columns missing: status_missing,status_source_file,status_source_sha256,status_stale,status_ts_event | statistics audit columns missing: stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price_missing,stat_close_price_source_file,stat_clos"
+    },
+    {
+      "pair": "TN:2025",
+      "decision_class": "APPROVE_BOUNDED_RAW_REENRICHMENT_LATER",
+      "reason": "Raw parquet exists, but raw optional-schema audit reports missing enriched status/statistics columns or expected schema columns.",
+      "expected_later_action": "Bounded one-market/year raw optional status/statistics re-enrichment from existing canonical DBN inputs; no redownload, no DBN source modification, no Phase 2 build.",
+      "stop_condition": "Stop after raw audit passes for the selected row and git status --short -- data only shows intended ignored generated raw output.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json; reports/phase_restart/tn_2025_phase2_readiness.json; reports/data_manifest/manifest_coverage_check.csv; reports/phase_restart/batch_phase2_build_exclusion_plan.json",
+      "raw_failure_summary": "missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price,stat_close_price_missing,stat_ | expected 86 columns, found 25 | status audit columns missing: status_missing,status_source_file,status_source_sha256,status_stale,status_ts_event | statistics audit columns missing: stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price_missing,stat_close_price_source_file,stat_clos"
+    },
+    {
+      "pair": "TN:2026",
+      "decision_class": "APPROVE_BOUNDED_RAW_REENRICHMENT_LATER",
+      "reason": "Raw parquet exists, but raw optional-schema audit reports missing enriched status/statistics columns or expected schema columns.",
+      "expected_later_action": "Bounded one-market/year raw optional status/statistics re-enrichment from existing canonical DBN inputs; no redownload, no DBN source modification, no Phase 2 build.",
+      "stop_condition": "Stop after raw audit passes for the selected row and git status --short -- data only shows intended ignored generated raw output.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json; reports/phase_restart/tn_2026_phase2_readiness.json; reports/data_manifest/manifest_coverage_check.csv; reports/phase_restart/batch_phase2_build_exclusion_plan.json",
+      "raw_failure_summary": "missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price,stat_close_price_missing,stat_ | expected 86 columns, found 25 | status audit columns missing: status_missing,status_source_file,status_source_sha256,status_stale,status_ts_event | statistics audit columns missing: stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price_missing,stat_close_price_source_file,stat_clos"
+    },
+    {
+      "pair": "ZL:2025",
+      "decision_class": "APPROVE_BOUNDED_RAW_REENRICHMENT_LATER",
+      "reason": "Raw parquet exists, but raw optional-schema audit reports missing enriched status/statistics columns or expected schema columns.",
+      "expected_later_action": "Bounded one-market/year raw optional status/statistics re-enrichment from existing canonical DBN inputs; no redownload, no DBN source modification, no Phase 2 build.",
+      "stop_condition": "Stop after raw audit passes for the selected row and git status --short -- data only shows intended ignored generated raw output.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json; reports/phase_restart/zl_2025_phase2_readiness.json; reports/data_manifest/manifest_coverage_check.csv; reports/phase_restart/batch_phase2_build_exclusion_plan.json",
+      "raw_failure_summary": "missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price,stat_close_price_missing,stat_ | expected 86 columns, found 25 | status audit columns missing: status_missing,status_source_file,status_source_sha256,status_stale,status_ts_event | statistics audit columns missing: stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price_missing,stat_close_price_source_file,stat_clos"
+    },
+    {
+      "pair": "ZL:2026",
+      "decision_class": "APPROVE_BOUNDED_RAW_REENRICHMENT_LATER",
+      "reason": "Raw parquet exists, but raw optional-schema audit reports missing enriched status/statistics columns or expected schema columns.",
+      "expected_later_action": "Bounded one-market/year raw optional status/statistics re-enrichment from existing canonical DBN inputs; no redownload, no DBN source modification, no Phase 2 build.",
+      "stop_condition": "Stop after raw audit passes for the selected row and git status --short -- data only shows intended ignored generated raw output.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json; reports/phase_restart/zl_2026_phase2_readiness.json; reports/data_manifest/manifest_coverage_check.csv; reports/phase_restart/batch_phase2_build_exclusion_plan.json",
+      "raw_failure_summary": "missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price,stat_close_price_missing,stat_ | expected 86 columns, found 25 | status audit columns missing: status_missing,status_source_file,status_source_sha256,status_stale,status_ts_event | statistics audit columns missing: stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price_missing,stat_close_price_source_file,stat_clos"
+    },
+    {
+      "pair": "ZM:2025",
+      "decision_class": "APPROVE_BOUNDED_RAW_REENRICHMENT_LATER",
+      "reason": "Raw parquet exists, but raw optional-schema audit reports missing enriched status/statistics columns or expected schema columns.",
+      "expected_later_action": "Bounded one-market/year raw optional status/statistics re-enrichment from existing canonical DBN inputs; no redownload, no DBN source modification, no Phase 2 build.",
+      "stop_condition": "Stop after raw audit passes for the selected row and git status --short -- data only shows intended ignored generated raw output.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json; reports/phase_restart/zm_2025_phase2_readiness.json; reports/data_manifest/manifest_coverage_check.csv; reports/phase_restart/batch_phase2_build_exclusion_plan.json",
+      "raw_failure_summary": "missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price,stat_close_price_missing,stat_ | expected 86 columns, found 25 | status audit columns missing: status_missing,status_source_file,status_source_sha256,status_stale,status_ts_event | statistics audit columns missing: stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price_missing,stat_close_price_source_file,stat_clos"
+    },
+    {
+      "pair": "ZM:2026",
+      "decision_class": "APPROVE_BOUNDED_RAW_REENRICHMENT_LATER",
+      "reason": "Raw parquet exists, but raw optional-schema audit reports missing enriched status/statistics columns or expected schema columns.",
+      "expected_later_action": "Bounded one-market/year raw optional status/statistics re-enrichment from existing canonical DBN inputs; no redownload, no DBN source modification, no Phase 2 build.",
+      "stop_condition": "Stop after raw audit passes for the selected row and git status --short -- data only shows intended ignored generated raw output.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json; reports/phase_restart/zm_2026_phase2_readiness.json; reports/data_manifest/manifest_coverage_check.csv; reports/phase_restart/batch_phase2_build_exclusion_plan.json",
+      "raw_failure_summary": "missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price,stat_close_price_missing,stat_ | expected 86 columns, found 25 | status audit columns missing: status_missing,status_source_file,status_source_sha256,status_stale,status_ts_event | statistics audit columns missing: stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price_missing,stat_close_price_source_file,stat_clos"
+    },
+    {
+      "pair": "KE:2025",
+      "decision_class": "APPROVE_BOUNDED_RAW_REENRICHMENT_LATER",
+      "reason": "Raw parquet exists, but raw optional-schema audit reports missing enriched status/statistics columns or expected schema columns.",
+      "expected_later_action": "Bounded one-market/year raw optional status/statistics re-enrichment from existing canonical DBN inputs; no redownload, no DBN source modification, no Phase 2 build.",
+      "stop_condition": "Stop after raw audit passes for the selected row and git status --short -- data only shows intended ignored generated raw output.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json; reports/phase_restart/ke_2025_phase2_readiness.json; reports/data_manifest/manifest_coverage_check.csv; reports/phase_restart/ke_phase2_exclusion_policy_review.json; reports/phase_restart/batch_phase2_build_exclusion_plan.json",
+      "raw_failure_summary": "missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price,stat_close_price_missing,stat_ | expected 86 columns, found 25 | status audit columns missing: status_missing,status_source_file,status_source_sha256,status_stale,status_ts_event | statistics audit columns missing: stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price_missing,stat_close_price_source_file,stat_clos"
+    },
+    {
+      "pair": "KE:2026",
+      "decision_class": "APPROVE_BOUNDED_RAW_REENRICHMENT_LATER",
+      "reason": "Raw parquet exists, but raw optional-schema audit reports missing enriched status/statistics columns or expected schema columns.",
+      "expected_later_action": "Bounded one-market/year raw optional status/statistics re-enrichment from existing canonical DBN inputs; no redownload, no DBN source modification, no Phase 2 build.",
+      "stop_condition": "Stop after raw audit passes for the selected row and git status --short -- data only shows intended ignored generated raw output.",
+      "evidence": "reports/raw_readiness/raw_enriched_optional_schema_audit.json; reports/phase_restart/ke_2026_phase2_readiness.json; reports/data_manifest/manifest_coverage_check.csv; reports/phase_restart/ke_phase2_exclusion_policy_review.json; reports/phase_restart/batch_phase2_build_exclusion_plan.json",
+      "raw_failure_summary": "missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price,stat_close_price_missing,stat_ | expected 86 columns, found 25 | status audit columns missing: status_missing,status_source_file,status_source_sha256,status_stale,status_ts_event | statistics audit columns missing: stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_sha256,stat_cleared_volume_ts_event,stat_close_price_missing,stat_close_price_source_file,stat_clos"
+    }
+  ],
+  "safety": {
+    "repair_run": false,
+    "raw_reenrichment_run": false,
+    "source_reference_correction_run": false,
+    "phase2_build_run": false,
+    "cleanup_run": false,
+    "redownload_run": false,
+    "data_deleted": false,
+    "data_moved_or_quarantined": false,
+    "dbn_source_modified": false
+  },
+  "related_refresh": {
+    "phase2_build_exclusion_plan": "reports/phase_restart/batch_phase2_build_exclusion_plan.json",
+    "accepted_rows_after_refresh": 57,
+    "deferred_excluded_rows_after_refresh": 9,
+    "pre_build_blocked_rows": [
+      "KE:2025",
+      "KE:2026",
+      "SR1:2018",
+      "SR1:2019",
+      "SR1:2020",
+      "SR1:2021",
+      "SR1:2022",
+      "SR1:2023",
+      "SR1:2024",
+      "SR1:2025",
+      "SR1:2026",
+      "TN:2025",
+      "TN:2026",
+      "ZL:2025",
+      "ZL:2026",
+      "ZM:2025",
+      "ZM:2026"
+    ]
+  }
+}
