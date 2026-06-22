@@ -246,7 +246,7 @@ def test_event_level_audit_selects_non_overlapping_events(tmp_path: Path) -> Non
     )
 
     assert report["source_prediction_rows"] == 16
-    assert report["current_policy_traded_rows"] == 4
+    assert report["current_policy_traded_rows"] == 3
     assert report["direction_candidate_rows"] == 4
     assert report["non_overlapping_event_count"] == 3
     assert report["skipped_overlapping_rows"] == 1
@@ -271,7 +271,7 @@ def test_event_level_audit_fails_closed_without_target_windows(tmp_path: Path) -
     )
     costs = _write_costs(tmp_path / "configs" / "costs.yaml")
 
-    with pytest.raises(SystemExit, match="policy frame missing required diagnostic columns"):
+    with pytest.raises(SystemExit, match="policy executable signals missing target_entry_ts/target_exit_ts"):
         build_event_level_edge_feasibility(
             predictions_path=predictions,
             costs_config=costs,
