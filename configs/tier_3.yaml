@@ -1,0 +1,343 @@
+default_profile: tier_1
+
+# Public research ladder:
+# - tier_0: smoke only; never alpha evidence.
+# - tier_1: core recent alpha research.
+# - tier_2: balanced robustness expansion.
+# - tier_3: full-universe long-horizon stress.
+# Keep *_holdout and *_forward profiles locked out of research selection.
+
+paths:
+  raw_root: data/raw
+  causal_base_root: data/causally_gated_normalized
+  labeled_root: data/labeled
+  feature_matrix_root: data/feature_matrices/baseline
+  predictions_root: data/predictions
+  executions_root: data/executions
+  frozen_features_root: data/frozen_features
+  reports_root: reports
+
+defaults:
+  downloaded_years: &downloaded_years [2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
+
+  recent_years: [2023, 2024, 2025]
+  long_years: [2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
+  balanced_research_years: &balanced_research_years [2018, 2019, 2020, 2021, 2022, 2023, 2024]
+  long_research_years: &long_research_years [2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024]
+  forward_years: &forward_years [2026]
+
+  research_years: &research_years [2023, 2024]
+  final_holdout_years: &final_holdout_years [2025]
+
+  core_markets: &core_markets ["ES", "CL", "ZN", "6E"]
+  balanced_markets: &balanced_markets ["ES", "NQ", "CL", "NG", "GC", "HG", "SR3", "ZN", "ZB", "6E", "6J", "6B", "ZC", "ZS", "LE"]
+  full_markets: &full_markets ["ES", "NQ", "RTY", "YM", "CL", "NG", "RB", "HO", "GC", "SI", "HG", "SR3", "SR1", "TN", "ZT", "ZF", "ZN", "ZB", "UB", "6A", "6B", "6C", "6E", "6J", "6M", "ZC", "ZS", "ZL", "ZM", "ZW", "KE", "LE", "HE"]
+
+  core_market_families: &core_market_families
+    ES: equity_index
+    CL: energy
+    ZN: rates
+    6E: fx
+
+  balanced_market_families: &balanced_market_families
+    ES: equity_index
+    NQ: equity_index
+    CL: energy
+    NG: energy
+    GC: metals
+    HG: metals
+    SR3: rates
+    ZN: rates
+    ZB: rates
+    6E: fx
+    6J: fx
+    6B: fx
+    ZC: ag_livestock
+    ZS: ag_livestock
+    LE: ag_livestock
+
+  full_market_families: &full_market_families
+    ES: equity_index
+    NQ: equity_index
+    RTY: equity_index
+    YM: equity_index
+    CL: energy
+    NG: energy
+    RB: energy
+    HO: energy
+    GC: metals
+    SI: metals
+    HG: metals
+    SR3: rates
+    SR1: rates
+    TN: rates
+    ZT: rates
+    ZF: rates
+    ZN: rates
+    ZB: rates
+    UB: rates
+    6A: fx
+    6B: fx
+    6C: fx
+    6E: fx
+    6J: fx
+    6M: fx
+    ZC: ag_livestock
+    ZS: ag_livestock
+    ZL: ag_livestock
+    ZM: ag_livestock
+    ZW: ag_livestock
+    KE: ag_livestock
+    LE: ag_livestock
+    HE: ag_livestock
+
+  entry_lag_bars: 1
+  target_horizon_bars: 15
+  trend_horizon_bars: 30
+  purge_bars: auto
+  resolved_purge_bars: 16
+
+  roll_window_bars: 15
+  max_synthetic_gap_minutes: 120
+
+  atr_window_bars: 60
+  profit_atr_mult: 0.50
+  stop_atr_mult: 1.00
+  trend_adverse_atr_mult: 1.50
+
+  require_roll_metadata_for_profiles:
+    - tier_1_research
+    - tier_1_holdout
+    - tier_1_forward
+    - tier_2_research
+    - tier_2_holdout
+    - tier_2_forward
+    - tier_3_research
+    - tier_3_holdout
+    - tier_3_forward
+
+causal_base:
+  # Databento OHLCV bars are trade-derived and no bar is printed for a no-trade
+  # interval. For sparse short-rate products, Phase 2 preserves this convention
+  # instead of fabricating flat synthetic price bars. Their roll exclusion window
+  # is elapsed minutes, not observed trade bars, because sparse bars can span
+  # much longer than one minute between adjacent rows.
+  sparse_trade_derived_ohlcv_markets: ["SR1", "SR3"]
+  sparse_trade_derived_roll_window_minutes: 15
+  # For configured markets, synthetic rows created from missing in-session
+  # Databento OHLCV-1m minutes are treated as vendor-trusted no-trade intervals
+  # after DBN coverage, raw/DBN alignment, timestamp ordering, OHLC, volume,
+  # tick-grid, and session/calendar checks pass. Synthetic row pct and max gap
+  # are diagnostic in causal readiness; the local L0/OHLCV gate still fails
+  # closed for overlapping local-trades windows with contradictory trade rows.
+  vendor_trusted_ohlcv_no_trade_markets: ["ZN"]
+
+profile_defaults:
+  smoke:
+    train_days: 90
+    test_days: 15
+    step_days: 15
+    max_synthetic_rows_pct: 5.0
+    max_degraded_rows_pct: 5.0
+    max_roll_window_rows_pct: 2.0
+
+  recent_research:
+    train_days: 365
+    test_days: 30
+    step_days: 30
+    max_synthetic_rows_pct: 2.0
+    max_degraded_rows_pct: 1.0
+    max_roll_window_rows_pct: 1.0
+
+  long_research:
+    train_days: 730
+    test_days: 30
+    step_days: 30
+    max_synthetic_rows_pct: 2.0
+    max_degraded_rows_pct: 1.0
+    max_roll_window_rows_pct: 1.0
+
+  production_like:
+    train_days: 730
+    test_days: 30
+    step_days: 30
+    max_synthetic_rows_pct: 1.0
+    max_degraded_rows_pct: 0.5
+    max_roll_window_rows_pct: 1.0
+
+profile_requirements:
+  production_like:
+    require_market_config: true
+    require_session_config: true
+    require_roll_metadata: true
+    require_cost_config: false
+    allow_missing_raw_files: false
+    allow_hardcoded_calendar: false
+    allow_metadata_optional: false
+
+  research_only:
+    require_market_config: true
+    require_session_config: true
+    require_roll_metadata: true
+    require_cost_config: false
+    allow_missing_raw_files: false
+    allow_hardcoded_calendar: false
+    allow_metadata_optional: false
+
+  test_only:
+    require_market_config: false
+    require_session_config: false
+    require_roll_metadata: false
+    require_cost_config: false
+    allow_missing_raw_files: false
+    allow_hardcoded_calendar: true
+    allow_metadata_optional: true
+
+  inventory_only:
+    require_market_config: false
+    require_session_config: false
+    require_roll_metadata: false
+    require_cost_config: false
+    allow_missing_raw_files: true
+    allow_hardcoded_calendar: true
+    allow_metadata_optional: true
+
+profiles:
+  tier_0:
+    description: "Tier 0 smoke: ES, 2024."
+    intent: smoke_test
+    requirement_set: production_like
+    settings_profile: smoke
+    markets: ["ES"]
+    years: [2024]
+    forbid_research_use: true
+
+  metadata_optional_test:
+    description: "Unit-test-only relaxed raw schema."
+    intent: unit_test_only
+    requirement_set: test_only
+    settings_profile: smoke
+    markets: ["ES"]
+    years: [2024]
+    forbid_research_use: true
+
+  tier_1_research:
+    description: "Tier 1 research: core family-diverse markets, 2023-2024."
+    intent: core_recent_research
+    requirement_set: production_like
+    settings_profile: recent_research
+    markets: *core_markets
+    years: *research_years
+    market_families: *core_market_families
+
+  tier_1_holdout:
+    description: "Tier 1 locked holdout: core markets, 2025."
+    intent: core_final_holdout
+    requirement_set: production_like
+    settings_profile: recent_research
+    markets: *core_markets
+    years: *final_holdout_years
+    forbid_research_use: true
+    market_families: *core_market_families
+
+  tier_1_forward:
+    description: "Tier 1 forward validation: core markets, 2026."
+    intent: core_forward_validation
+    requirement_set: production_like
+    settings_profile: recent_research
+    markets: *core_markets
+    years: *forward_years
+    forbid_research_use: true
+    market_families: *core_market_families
+
+  tier_2_research:
+    description: "Tier 2 robustness: 15 balanced markets, 2018-2024."
+    intent: balanced_medium_research
+    requirement_set: production_like
+    settings_profile: long_research
+    markets: *balanced_markets
+    years: *balanced_research_years
+    market_families: *balanced_market_families
+
+  tier_2_holdout:
+    description: "Tier 2 locked holdout: 15 balanced markets, 2025."
+    intent: balanced_final_holdout
+    requirement_set: production_like
+    settings_profile: long_research
+    markets: *balanced_markets
+    years: *final_holdout_years
+    forbid_research_use: true
+    market_families: *balanced_market_families
+
+  tier_2_forward:
+    description: "Tier 2 forward validation: 15 balanced markets, 2026."
+    intent: balanced_forward_validation
+    requirement_set: production_like
+    settings_profile: long_research
+    markets: *balanced_markets
+    years: *forward_years
+    forbid_research_use: true
+    market_families: *balanced_market_families
+
+  tier_3_research:
+    description: "Tier 3 full stress: 33 markets, 2010-2024."
+    intent: full_universe_long_research
+    requirement_set: production_like
+    settings_profile: long_research
+    markets: *full_markets
+    years: *long_research_years
+    requires_all_market_configs: true
+    requires_cost_configs: true
+    market_families: *full_market_families
+
+  tier_3_holdout:
+    description: "Tier 3 locked holdout: 33 markets, 2025."
+    intent: full_universe_final_holdout
+    requirement_set: production_like
+    settings_profile: long_research
+    markets: *full_markets
+    years: *final_holdout_years
+    forbid_research_use: true
+    requires_all_market_configs: true
+    requires_cost_configs: true
+    market_families: *full_market_families
+
+  tier_3_forward:
+    description: "Tier 3 forward validation: 33 markets, 2026."
+    intent: full_universe_forward_validation
+    requirement_set: production_like
+    settings_profile: long_research
+    markets: *full_markets
+    years: *forward_years
+    forbid_research_use: true
+    requires_all_market_configs: true
+    requires_cost_configs: true
+    market_families: *full_market_families
+
+  all_raw:
+    description: "Inventory every discovered raw parquet file."
+    intent: inventory_only
+    requirement_set: inventory_only
+    settings_profile: smoke
+    discovery: true
+    forbid_research_use: true
+
+aliases:
+  # Primary research ladder aliases.
+  tier_0_smoke: tier_0
+  tier_1: tier_1_research
+  tier_2: tier_2_research
+  tier_3: tier_3_research
+  # Backward-compatible research aliases.
+  tier_1_core: tier_1_research
+  tier_1_core_recent: tier_1_research
+  tier_1_recent: tier_1_research
+  tier_2_long: tier_2_research
+  # Locked validation aliases.
+  tier_1_final_holdout: tier_1_holdout
+  tier_1_forward_2026: tier_1_forward
+  tier_2_final_holdout: tier_2_holdout
+  tier_2_forward_2026: tier_2_forward
+  tier_3_final_holdout: tier_3_holdout
+  tier_3_forward_2026: tier_3_forward
+  all_raw: all_raw
