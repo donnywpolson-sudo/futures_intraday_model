@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from io import StringIO
 from types import SimpleNamespace
 
 import pytest
@@ -301,3 +302,48 @@ def test_resolve_single_instrument_reports_ambiguous_candidates() -> None:
             start_date="2026-06-21",
             end_date="2026-06-23",
         )
+
+
+def test_parse_available_end_matches_databento_exclusive_message() -> None:
+    parsed = chart.parse_available_end_from_text(
+        "GLBX.MDP3 has data available up to, but not including 2026-06-22. "
+        "The query end_date was 2026-06-23."
+    )
+
+    assert parsed == datetime(2026, 6, 22, tzinfo=timezone.utc)
+
+
+def test_clamp_exclusive_end_date_uses_available_end() -> None:
+    stderr = StringIO()
+    final_end = chart.clamp_exclusive_end_date(
+        start_date="2026-06-20",
+        requested_end_date="2026-06-23",
+        available_exclusive_end_date="2026-06-22",
+        context="symbology",
+        stderr=stderr,
+    )
+
+    assert final_end == "2026-06-22"
+    assert "requested=2026-06-23" in stderr.getvalue()
+
+
+def test_clamp_exclusive_end_date_rejects_empty_window() -> None:
+    with pytest.raises(ValueError, match="is not after start date"):
+        chart.clamp_exclusive_end_date(
+            start_date="2026-06-22",
+            requested_end_date="2026-06-23",
+            available_exclusive_end_date="2026-06-22",
+            context="symbology",
+            stderr=StringIO(),
+        )
+
+
+def test_clamp_historical_end_uses_available_midnight() -> None:
+    final_end = chart.clamp_historical_end(
+        start=datetime(2026, 6, 21, 20, tzinfo=timezone.utc),
+        requested_end=datetime(2026, 6, 22, 12, tzinfo=timezone.utc),
+        available_exclusive_end_date="2026-06-22",
+        stderr=StringIO(),
+    )
+
+    assert final_end == datetime(2026, 6, 22, tzinfo=timezone.utc)

@@ -102,3 +102,32 @@
   - `C:\Users\donny\AppData\Local\Temp\live_chart_feed_20260621_163419.err.log`: only WebView cleanup warning `Failed to unregister class Chrome_WidgetWin_0. Error = 1411`; no Python traceback.
 - Historical candles rendered from the available Globex session start visible around 15:00 local through 16:30-16:35 local; the requested 4-hour window was bounded by available session history.
 - No source, data, report, or canonical layout changes were made beyond this handoff update.
+
+## Live chart Databento available-end clamp
+- Added Databento dataset-range metadata lookup through `Historical.metadata.get_dataset_range` before symbology and historical requests.
+- Added reusable exclusive-end clamp helpers and logging for requested, available exclusive, and final end dates.
+- Extended the Databento available-end parser to match `data available up to, but not including YYYY-MM-DD`.
+- Added one retry for symbology and historical requests when Databento returns the specific available-end error message.
+- Added guardrails so clamping to `end <= start` fails locally with an actionable message before an invalid API call.
+
+## Live chart Databento available-end clamp files changed
+- `live_chart_feed.py`
+- `tests/test_live_chart_feed.py`
+- `CODEX_HANDOFF.md`
+
+## Live chart Databento available-end clamp commands run
+- `git status --short`
+- `rg -n "Databento|start_date|end_date|Historical|timeseries|get_range|metadata|resolve|instrument" live_chart_feed.py`
+- `python -c "import databento as db; ..."` to inspect installed SDK metadata helpers
+- `python -m pytest tests\test_live_chart_feed.py -q`
+- `c:\Users\donny\Desktop\futures_intraday_model\.venv\Scripts\python.exe c:/Users/donny/Desktop/futures_intraday_model/live_chart_feed.py`
+- `git diff -- live_chart_feed.py tests\test_live_chart_feed.py`
+- `git status --short`
+
+## Live chart Databento available-end clamp validation results
+- Focused tests: PASS, 18 passed.
+- Requested script command no longer failed with `data_end_date_after_available_end_date`; it logged `requested=2026-06-23`, `available_exclusive=2026-06-22`, `final=2026-06-22`.
+- Requested script command then exited on pre-existing ES continuous-symbol ambiguity over `[2026-06-15, 2026-06-22)`: candidates `42140864[2026-06-15,2026-06-17)` and `42140870[2026-06-17,2026-06-22)`.
+
+## Live chart Databento available-end clamp next recommended step
+- Decide whether to change ES continuous-symbol resolution over roll windows, or rerun with a shorter `--lookback-hours` that does not cross the roll.

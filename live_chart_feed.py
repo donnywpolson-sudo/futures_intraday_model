@@ -15,7 +15,7 @@ import sys
 import time
 from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone, tzinfo
+from datetime import date, datetime, time as datetime_time, timedelta, timezone, tzinfo
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, Sequence, TextIO, cast
@@ -82,7 +82,7 @@ MARKET_SEARCH_ALIASES = {
 }
 START_CLAMP_PATTERN = re.compile(r"Must be\s+([^,\s]+)\s+or later", re.IGNORECASE)
 AVAILABLE_END_PATTERN = re.compile(
-    r"data available up to\s+['\"]([^'\"]+)['\"]",
+    r"data available up to(?:,\s*but\s+not\s+including)?\s+['\"]?([0-9]{4}-[0-9]{2}-[0-9]{2})['\"]?",
     re.IGNORECASE,
 )
 CHART_RENDER_BATCH_RECORDS = 2_000
@@ -839,6 +839,107 @@ def parse_available_end_from_text(value: str) -> datetime | None:
         return normalize_ts_event(match.group(1))
     except Exception:
         return None
+
+
+def iso_date_from_value(value: object) -> str | None:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value.isoformat()
+    try:
+        return normalize_ts_event(value).date().isoformat()
+    except Exception:
+        return None
+
+
+def available_exclusive_end_from_range(value: object) -> str | None:
+    if isinstance(value, MappingABC):
+        for key in ("end", "end_date", "data_end", "data_end_date", "available_end_date"):
+            parsed = iso_date_from_value(value.get(key))
+            if parsed is not None:
+                return parsed
+        for nested in value.values():
+            parsed = available_exclusive_end_from_range(nested)
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def lookup_dataset_available_exclusive_end(
+    historical: object,
+    *,
+    dataset: str,
+    stderr: TextIO,
+) -> str | None:
+    metadata = getattr(historical, "metadata", None)
+    get_dataset_range = getattr(metadata, "get_dataset_range", None)
+    if not callable(get_dataset_range):
+        return None
+    try:
+        dataset_range = get_dataset_range(dataset=dataset)
+    except TypeError:
+        dataset_range = get_dataset_range(dataset)
+    except Exception as exc:
+        print(f"Databento dataset range lookup unavailable: {exc}", file=stderr)
+        return None
+    return available_exclusive_end_from_range(dataset_range)
+
+
+def clamp_exclusive_end_date(
+    *,
+    start_date: str,
+    requested_end_date: str,
+    available_exclusive_end_date: str | None,
+    context: str,
+    stderr: TextIO,
+) -> str:
+    final_end_date = requested_end_date
+    if available_exclusive_end_date is not None:
+        final_end_date = min(requested_end_date, available_exclusive_end_date)
+    print(
+        "Databento "
+        f"{context} end date: requested={requested_end_date}, "
+        f"available_exclusive={available_exclusive_end_date or 'unknown'}, "
+        f"final={final_end_date}",
+        file=stderr,
+    )
+    if final_end_date <= start_date:
+        raise ValueError(
+            "Databento "
+            f"{context} end date {final_end_date} is not after start date {start_date}. "
+            "Reduce --lookback-hours, use a later start, or wait for newer dataset data."
+        )
+    return final_end_date
+
+
+def clamp_historical_end(
+    *,
+    start: SubscriptionStart,
+    requested_end: datetime,
+    available_exclusive_end_date: str | None,
+    stderr: TextIO,
+) -> datetime:
+    if available_exclusive_end_date is None:
+        return requested_end
+    start_dt = normalize_ts_event(start)
+    available_end = datetime.combine(
+        date.fromisoformat(available_exclusive_end_date),
+        datetime_time.min,
+        tzinfo=timezone.utc,
+    )
+    final_end = min(normalize_ts_event(requested_end), available_end)
+    print(
+        "Databento historical end date: "
+        f"requested={normalize_ts_event(requested_end).date().isoformat()}, "
+        f"available_exclusive={available_exclusive_end_date}, "
+        f"final={final_end.date().isoformat()}",
+        file=stderr,
+    )
+    if final_end <= start_dt:
+        raise ValueError(
+            "Databento historical end time "
+            f"{final_end.isoformat()} is not after start time {start_dt.isoformat()}. "
+            "Reduce --lookback-hours, use a later start, or wait for newer dataset data."
+        )
+    return final_end
 
 
 def provider_start_clamp_from_record(record: object) -> ProviderStartClamp | None:
@@ -2106,6 +2207,29 @@ def run_live_chart(
         end=historical_end,
         fallback_start=current_time,
     )
+    available_exclusive_end_date = lookup_dataset_available_exclusive_end(
+        historical,
+        dataset=args.dataset,
+        stderr=stderr,
+    )
+    try:
+        end_date = clamp_exclusive_end_date(
+            start_date=start_date,
+            requested_end_date=end_date,
+            available_exclusive_end_date=available_exclusive_end_date,
+            context="symbology",
+            stderr=stderr,
+        )
+        if args.historical_backfill:
+            historical_end = clamp_historical_end(
+                start=live_start,
+                requested_end=historical_end,
+                available_exclusive_end_date=available_exclusive_end_date,
+                stderr=stderr,
+            )
+    except ValueError as exc:
+        print(str(exc), file=stderr)
+        return 2
     try:
         resolved = resolve_single_instrument(
             historical,
@@ -2119,8 +2243,48 @@ def run_live_chart(
         print(str(exc), file=stderr)
         return 2
     except Exception as exc:
-        print(f"Databento instrument resolution failed: {exc}", file=stderr)
-        return 1
+        retry_available_end = parse_available_end_from_text(str(exc))
+        if retry_available_end is None:
+            print(f"Databento instrument resolution failed: {exc}", file=stderr)
+            return 1
+        available_exclusive_end_date = retry_available_end.date().isoformat()
+        try:
+            retry_end_date = clamp_exclusive_end_date(
+                start_date=start_date,
+                requested_end_date=end_date,
+                available_exclusive_end_date=available_exclusive_end_date,
+                context="symbology retry",
+                stderr=stderr,
+            )
+            if args.historical_backfill:
+                historical_end = clamp_historical_end(
+                    start=live_start,
+                    requested_end=historical_end,
+                    available_exclusive_end_date=available_exclusive_end_date,
+                    stderr=stderr,
+                )
+        except ValueError as clamp_exc:
+            print(str(clamp_exc), file=stderr)
+            return 2
+        if retry_end_date == end_date:
+            print(f"Databento instrument resolution failed: {exc}", file=stderr)
+            return 1
+        end_date = retry_end_date
+        try:
+            resolved = resolve_single_instrument(
+                historical,
+                dataset=args.dataset,
+                market=market,
+                query_symbol=query_symbol,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        except ValueError as retry_exc:
+            print(str(retry_exc), file=stderr)
+            return 2
+        except Exception as retry_exc:
+            print(f"Databento instrument resolution failed: {retry_exc}", file=stderr)
+            return 1
 
     display_symbol = resolved.raw_symbol or resolved.market
 
@@ -2172,7 +2336,13 @@ def run_live_chart(
                 retry_end = parse_available_end_from_text(str(exc))
                 if retry_end is None:
                     raise
-                historical_end = retry_end
+                available_retry_end_date = retry_end.date().isoformat()
+                historical_end = clamp_historical_end(
+                    start=live_start,
+                    requested_end=historical_end,
+                    available_exclusive_end_date=available_retry_end_date,
+                    stderr=stderr,
+                )
                 historical_request["end"] = historical_end
                 store = historical.timeseries.get_range(**historical_request)
             historical_candles = aggregate_candles(
