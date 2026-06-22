@@ -1,5 +1,31 @@
 # Codex Handoff
 
+## Remaining cleanup blockers
+- Updated at UTC: 2026-06-22T10:44:37Z
+- Scope: documented the remaining repair and duplicate decision paths after committing the approved status manifest policy. No cleanup, quarantine, merge, data move, data delete, DBN redownload, DBN source modification, rebuild, conversion, data generation, expensive job, phase 3+ command, or missing-data repair was run.
+
+Status policy commit
+- `c2f9998 Apply status manifest policy`
+
+Remaining cleanup blockers
+- Report: `reports/data_manifest/remaining_cleanup_blockers.md`.
+- Repair approvals remaining: 76 rows: 10 raw parquet repairs and 66 causal parquet repairs.
+- Duplicate policy rows remaining: 12 rows: 8 keep-both recommendations and 4 user-decision rows.
+- Status manifest-policy rows remaining: 0.
+
+Remaining decisions needed
+- Review the 76 repair approval rows and decide whether to approve bounded repair later or explicitly defer repair.
+- Review the 12 duplicate policy rows and decide whether to keep both files, approve later content/provenance review plus merge/quarantine, or defer duplicate policy.
+
+Safety confirmations
+- No data files were deleted.
+- No DBN source files were modified.
+- Cleanup was not run.
+- No repair, merge, quarantine, move, delete, rebuild, redownload, conversion, data generation, or phase 3+ command was run.
+
+Next recommended step
+- Review `reports/data_manifest/remaining_cleanup_blockers.md`; stop before any repair or data mutation.
+
 ## Applied status manifest policy
 - Updated at UTC: 2026-06-22T10:39:26Z
 - Scope: applied the approved `data/dbn/status` missing-pair policy in `configs/data_manifest.yaml` and reran the manifest audit. No cleanup, quarantine, merge, data move, data delete, DBN redownload, DBN source modification, rebuild, conversion, data generation, expensive job, phase 3+ command, or missing-data repair was run.
