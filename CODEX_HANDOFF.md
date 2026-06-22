@@ -1,5 +1,61 @@
 # Codex Handoff
 
+## Phase 1A/1B/1C/2 canonical data lineage audit
+- Updated at UTC: 2026-06-22T09:09:38Z
+- Scope: read-only lineage audit of `scripts/phase1A_download`, `scripts/phase1B_convert`, `scripts/phase1C_validate`, `scripts/phase2_causal_base`, configs, reports, and filesystem metadata. No Databento download, DBN conversion, validation/normalization pipeline job, data move, data delete, data rename, data quarantine, or data overwrite was run.
+
+Changed
+- `reports/data_lineage/pipeline_phase_io_map.md`
+- `reports/data_lineage/pipeline_phase_io_map.csv`
+- `reports/data_lineage/raw_dbn_candidates.csv`
+- `reports/data_lineage/parquet_candidates.csv`
+- `reports/data_lineage/expected_vs_actual_coverage.csv`
+- `reports/data_lineage/canonical_path_summary.md`
+- `CODEX_HANDOFF.md`
+
+Commands run
+- Read objective attachments, repo state commands, `CODEX_HANDOFF.md`, and targeted phase/config/report files.
+- `git status --short`; `git log -5 --oneline`; `git diff --stat`.
+- `rg --files scripts\phase1A_download scripts\phase1B_convert scripts\phase1C_validate scripts\phase2_causal_base`.
+- Targeted `rg` searches for DBN/parquet/data-root references across phase scripts, configs, reports, and tests.
+- Read-only PowerShell/Python inventory of file paths, counts, sizes, year/market coverage, duplicate market-year groups, and small parquet schema metadata samples.
+- `Get-ChildItem` directory inventory for `data`, `data\dbn`, `data\raw`, `data\causally_gated_normalized`, `reports\raw_ingest`, `reports\causal_base`, and `reports\data_reorg`.
+
+Lineage report locations
+- `reports/data_lineage/pipeline_phase_io_map.md`
+- `reports/data_lineage/pipeline_phase_io_map.csv`
+- `reports/data_lineage/raw_dbn_candidates.csv`
+- `reports/data_lineage/parquet_candidates.csv`
+- `reports/data_lineage/expected_vs_actual_coverage.csv`
+- `reports/data_lineage/canonical_path_summary.md`
+
+Current best canonical paths
+- Raw DBN: `data/dbn` as the canonical schema root; Phase 1B default OHLCV input is `data/dbn/ohlcv_1m`, while Phase 1C validates against `data/dbn` plus `data/raw`.
+- Converted parquet: `data/raw/<market>/<year>.parquet`.
+- Causal normalized parquet: `data/causally_gated_normalized/<market>/<year>.parquet`.
+
+Unresolved UNKNOWN / review paths
+- No candidate rows were classified exactly `UNKNOWN`.
+- Review-only ambiguous folders remain: `data/dbn/ohlcv_1m_parent`, `data/dbn/statistics_parent`, `data/dbn/status_parent` (`DO_NOT_TOUCH`), plus `data/raw/_repair_candidates` and `data/causally_gated_normalized/_repair_candidates` (`STALE_OR_UNKNOWN`).
+
+Missing or ambiguous expected coverage
+- Canonical DBN `status`: 462/527 expected market-year pairs, 68 missing, 3 extra, 3 duplicate market-year groups.
+- Canonical DBN `ohlcv_1m`, `ohlcv_1s`, `statistics`, and `definition`: no expected pairs missing, but each has extra early market-years; duplicate groups are recorded in `expected_vs_actual_coverage.csv`.
+- Canonical DBN `trades`: 66/66 expected 2025-2026 market-year pairs, with one duplicate 6M 2026 group.
+- Top-level `data/raw`: 517/527 expected market-year parquet pairs; missing 2025-2026 for `KE`, `SR1`, `TN`, `ZL`, and `ZM`.
+- Top-level `data/causally_gated_normalized`: 461/527 expected market-year parquet pairs; missing `KE`, `SR1`, `TN`, `ZL`, and `ZM` entirely.
+- Nested underscore parquet folders under `data/raw` and `data/causally_gated_normalized` are classified as audit/smoke/rebuild artifacts or stale/unknown, not canonical top-level phase inputs.
+
+Results
+- `canonical_path_summary.md` directly answers the canonical raw DBN, Phase 1B raw parquet, Phase 1C validation, Phase 2 consume/produce, audit artifact, ambiguous path, and coverage questions.
+- Confirmation: no data files were moved, deleted, rewritten, regenerated, converted, quarantined, staged, or committed by this audit.
+
+Remaining work
+- Define a machine-checkable canonical data manifest for expected markets, schemas, years, known late-start markets, allowed extra historical market-years, and duplicate/overlap policy.
+
+Next recommended step
+- Define the canonical data manifest scope, then use `reports/data_lineage/expected_vs_actual_coverage.csv` as the seed for automated coverage checks.
+
 ## Live-ops preserved worktree reconciliation
 - Updated at UTC: 2026-06-22T08:43:56Z
 - Scope: closed the completed data-reorg cleanup as no-op and inspected the preserved live-ops/readiness staged changes in `docs/live_trading_readiness.md`, `live_ops/audit.py`, `live_ops/smoke.py`, and `tests/test_live_ops.py`. Data files and `reports/data_reorg` were not touched.
