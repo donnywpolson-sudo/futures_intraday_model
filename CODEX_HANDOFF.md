@@ -1,5 +1,39 @@
 # Codex Handoff
 
+## Batch Phase 2 roll-maturity policy
+- Updated at UTC: 2026-06-22T17:22:50Z
+- Scope: created a report-only batch policy for the 35 Phase 2 readiness rows whose top blocker is `roll maturity sequence not monotonic`. No Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, source acquisition, policy threshold change, or DBN source modification was run.
+
+Files changed/generated
+- `reports/phase_restart/batch_phase2_roll_maturity_policy.md`: human-readable policy packet.
+- `reports/phase_restart/batch_phase2_roll_maturity_policy.json`: machine-readable policy matrix.
+- `CODEX_HANDOFF.md`: handoff update.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- `git push`
+- PowerShell parse of `reports/phase_restart/*_phase2_readiness.json` to isolate rows with `roll maturity sequence not monotonic`.
+- No Phase 2 build or cleanup commands were run.
+
+Validation results
+- Pushed `b721186` to `main`.
+- Roll-maturity blockers found: 35.
+- `PURE_ROLL_MATURITY_REVIEWABLE`: 9 rows.
+- `ROLL_SOURCE_STATUS_REVIEWABLE`: 13 rows.
+- `ROLL_POLICY_EXCEPTION_REVIEWABLE`: 13 rows.
+- Explicitly deferred by this batch policy: 0 rows.
+- Approved for Phase 2 build: 0 rows.
+- `git status --short -- data`: empty before edits.
+
+Remaining work
+- The 35 roll-maturity rows are explicit and reviewable, but not approved for Phase 2 build.
+- Synthetic-threshold policy evidence is pushed at `b721186`.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: approve force-adding only `reports/phase_restart/batch_phase2_roll_maturity_policy.md/json` and staging `CODEX_HANDOFF.md`, then commit/push reports only. Stop before Phase 2 build execution.
+
 ## Batch Phase 2 synthetic-threshold policy
 - Updated at UTC: 2026-06-22T17:17:31Z
 - Scope: created a report-only batch policy for the 31 Phase 2 readiness rows whose top blocker is `synthetic threshold breached`. No Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, source acquisition, policy threshold change, or DBN source modification was run.
