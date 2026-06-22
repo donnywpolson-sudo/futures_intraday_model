@@ -1,5 +1,36 @@
 # Codex Handoff
 
+## Batch Phase 2 synthetic-threshold policy
+- Updated at UTC: 2026-06-22T17:17:31Z
+- Scope: created a report-only batch policy for the 31 Phase 2 readiness rows whose top blocker is `synthetic threshold breached`. No Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, source acquisition, policy threshold change, or DBN source modification was run.
+
+Files changed/generated
+- `reports/phase_restart/batch_phase2_synthetic_threshold_policy.md`: human-readable policy packet.
+- `reports/phase_restart/batch_phase2_synthetic_threshold_policy.json`: machine-readable policy matrix.
+- `CODEX_HANDOFF.md`: handoff update.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- PowerShell parse of `reports/phase_restart/*_phase2_readiness.json` to isolate rows with `synthetic threshold breached`.
+- No Phase 2 build or cleanup commands were run.
+
+Validation results
+- Synthetic-threshold blockers found: 31.
+- `SOURCE_STATUS_REVIEWABLE`: 21 rows.
+- `POLICY_EXCEPTION_REVIEWABLE`: 10 rows.
+- Explicitly deferred by this batch policy: 0 rows.
+- Approved for Phase 2 build: 0 rows.
+- `git status --short -- data`: empty before edits.
+
+Remaining work
+- The 31 synthetic-threshold rows are explicit and reviewable, but not approved for Phase 2 build.
+- The 35 roll-maturity rows still need a separate batch policy.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: batch-policy the 35 roll-maturity blockers into explicit deferral/review classes. Stop before Phase 2 build execution.
+
 ## Batch Phase 2 readiness automation completed
 - Updated at UTC: 2026-06-22T16:29:31Z
 - Scope: completed the approved batch automation for all 66 Phase 2 causal rows, readiness-only and report-only. For source-hash-only alignment blockers, ran the same bounded Phase 1B raw repair from canonical DBN before readiness-only. No Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, source acquisition, policy threshold change, or DBN source modification was run.
