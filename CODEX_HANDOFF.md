@@ -1,5 +1,45 @@
 # Codex Handoff
 
+## Phase/data reorg blocker resolution
+- Updated at UTC: 2026-06-22T04:37:24Z
+- Read objective attachment `C:\Users\donny\.codex\attachments\2de8e284-f885-4179-85d3-364e11187715\goal-objective.md`.
+- Scope: resolve resume-audit verification blockers only. No data was deleted, moved, quarantined, redownloaded, rebuilt, or DBN source-modified. No phase after Phase 2 was run. Unowned live-ops changes in `live_ops/audit.py`, `live_ops/broker.py`, `live_ops/reconciliation.py`, and `tests/test_live_ops.py` were preserved.
+
+Changed
+- `scripts/phase2_causal_base/build_higher_timeframe_bars.py`: restored the missing higher-timeframe import path with the tested aggregation/report helper surface.
+- `reports/phase_restart/INTERRUPTED_GOAL_RESUME_AUDIT.md`: updated verdict to COMPLETE, recorded broad collect-only PASS, and classified `phase_2_smoke.md` as stale/superseded by Step 6 / FINAL PASS evidence.
+- `CODEX_HANDOFF.md`: recorded this blocker-resolution pass.
+- Commands run: objective/report/handoff reads; `rg` reference search; `python -m pytest tests\phase2_causal_base\test_build_higher_timeframe_bars.py -q`; `python -m pytest tests -q --collect-only -p no:cacheprovider`; focused phase audit collect-only.
+- Verification results: higher-timeframe focused tests PASS, 7 passed; broad collect-only PASS, 706 tests collected; focused phase audit collect-only PASS, 191 tests collected.
+
+Blockers
+Low
+None
+
+Medium
+None
+
+Severe
+None
+
+Proceed status: yes
+
+Next
+1. Review `reports/phase_restart/INTERRUPTED_GOAL_RESUME_AUDIT.md` -> confirm blocker resolution record is acceptable -> stop before cleanup or full rebuild unless separately approved.
+
+## Interrupted phase/data reorg resume audit
+- Updated at UTC: 2026-06-22T04:30:57Z
+- Read objective attachment `C:\Users\donny\.codex\attachments\56e91250-ba13-46c1-8382-919b82918e3d\pasted-text-1.txt`.
+- Scope was read-only audit plus report writing. No data was deleted, moved, quarantined, redownloaded, rebuilt, or DBN source-modified.
+- Wrote `reports/phase_restart/INTERRUPTED_GOAL_RESUME_AUDIT.md`.
+- Verdict: `PROBABLY COMPLETE, NEEDS VERIFICATION`.
+- Current `data/` top-level folders are exactly the six canonical folders.
+- Existing reports evidence historical Step 5 cleanup and Step 6 validation as complete, but the latest interrupted continuation stopped at Step 4 reporting/classification.
+- Medium blocker: broad `python -m pytest tests -q --collect-only -p no:cacheprovider` fails collecting `tests/phase2_causal_base/test_build_higher_timeframe_bars.py` because `scripts.phase2_causal_base.build_higher_timeframe_bars` is missing.
+- Focused phase audit collect-only passed: 191 tests collected for phase 1A, causal base, raw/DBN alignment, and phase 2 readiness.
+- Final status also showed concurrent/unowned changes in `tests/test_live_ops.py` and later Phase 1/2A handoff content; this audit did not edit or revert them.
+- Next recommended step: clear the broad pytest collection error, then decide whether to accept Step 6/FINAL reports as superseding the older `phase_2_smoke.md` `PARTIAL / WARN` status.
+
 Updated at UTC: 2026-06-22T00:23:29Z
 
 ## Current latest status
@@ -240,3 +280,166 @@ Updated at UTC: 2026-06-22T00:23:29Z
 
 ## Phase 0 recovery and baseline gate remaining work
 - Send Phase 1 audit goal only after reviewing this Phase 0 handoff; Phase 1 should map scaffold gaps without broad implementation.
+
+## Phase 1 safety scaffold gap audit
+- Updated at UTC: 2026-06-22T04:24:26Z
+- Scope: audit-only gap map against Parts A-S. No scaffold implementation, broker path, broad pytest, `--no-timeout`, GUI/chart launch, generated artifact change, or Phase 2 work was run.
+- Current repo state before audit edits: clean by `git status --short`; `git diff --stat` empty.
+- Current safety-critical result: no Severe blockers found in the audited live-ops scaffold surface. The remaining gaps are Medium because they are incomplete/deferred scaffold depth, not unsafe defaults or real broker execution.
+
+## Phase 1 requirement map
+- Part A - console output: partially implemented. Owner: `live_ops/operator.py`, `live_chart_feed.py`. Evidence: `render_operator_status`, `print_operator_status`, `emit_status_line`, `tests\test_live_ops.py::test_operator_status_rendering_width`. Missing: explicit debug/verbose log flag is not fully developed. Recommended Phase 2: add a narrow debug/log path only if needed.
+- Part B - timeout/run control: implemented. Owner: `live_chart_feed.py`, `tests\test_live_ops.py`, `tests\test_live_chart_feed.py`. Evidence: `--timeout-seconds`, `--no-timeout`, default `DEFAULT_TIMEOUT_SECONDS=None`, finite test `--timeout-seconds`, advancing clock fix. Missing: none for scaffold audit. Recommended Phase 2: preserve behavior.
+- Part C - historical/live feed parity: partially implemented. Owner: `live_ops/bar_builder.py`, `tests\test_live_ops.py`. Evidence: `LiveBarBuilder`, `check_bar_parity`, synthetic L1-like tests. Missing: full standalone data contract coverage for sessions, rollover policy, no-trade intervals, and model feature exclusion policy is minimal. Recommended Phase 2: expand contract documentation/tests before model integration.
+- Part D - live data-quality gate: partially implemented. Owner: `live_ops/quality.py`, `tests\test_live_ops.py`. Evidence: timezone, monotonicity, duplicate policy, OHLC, volume, tick grid, symbol/contract, stale, heartbeat, gap, session, and contract-mix checks. Missing: heartbeat/reconnect inputs are caller-supplied; no automated rollover calendar. Recommended Phase 2: add targeted tests/config plumbing for caller-supplied heartbeat/reconnect/rollover paths.
+- Part E - signal state: implemented. Owner: `live_ops/model.py`, `live_ops/schemas.py`, `tests\test_live_ops.py`. Evidence: `SignalState`, `build_signal_state`, model unavailable and partial-bar tests. Missing: no production model adapter, intentionally deferred. Recommended Phase 2: keep stub behavior until model artifact contract exists.
+- Part F - feature/model readiness: partially implemented. Owner: `live_ops/model.py`. Evidence: model path, expected features/order, scaler flag, warmup, supported symbols, finite feature checks, version fields. Missing: imputer/scaler object integration is only represented by flags. Recommended Phase 2: add concrete adapter checks when model artifacts exist.
+- Part G - risk manager: partially implemented. Owner: `live_ops/risk.py`, `tests\test_live_ops.py`. Evidence: fail-closed defaults, paper-only gate, live-broker block, symbol/contract/session/data/model/signal/order size/loss/trade count/rate/spread/slippage/reconnect/reconciliation checks. Missing: flatten-before-close action and configured session parsing are minimal. Recommended Phase 2: fill only the highest-priority safety gaps.
+- Part H - kill switch/operator controls: partially implemented. Owner: `live_ops/risk.py`, `scripts\kill_switch_on.py`, `scripts\kill_switch_off.py`, `scripts\paper_cancel_all.py`, `scripts\paper_flatten_all.py`. Evidence: file/config kill switch, scripts affect paper/sim state, tests block orders. Missing: optional cancel/flatten-on-kill behavior is not wired as a config action. Recommended Phase 2: add targeted paper-only behavior if required.
+- Part I - PaperBroker/SimBroker only: partially implemented. Owner: `live_ops/broker.py`, `tests\test_live_ops.py`. Evidence: deterministic paper fills, positions, open orders, duplicate rejection, cancel_all, flatten_all, state load/save, `LiveBroker.place_order` raises `NotImplementedError`. Missing: next-bar-open fill policy and direct audit-log append from broker are not implemented. Recommended Phase 2: add only if smoke requirements need it.
+- Part J - reconciliation: partially implemented. Owner: `live_ops/reconciliation.py`, `live_ops/risk.py`. Evidence: strategy vs broker position mismatch, duplicate fill, stale open order warning, risk blocks reconciliation failure. Missing: audit-state reconciliation is minimal. Recommended Phase 2: extend reconciliation only around paper audit state.
+- Part K - audit logging: partially implemented. Owner: `live_ops/audit.py`, `live_ops/smoke.py`, `tests\test_live_ops.py`. Evidence: append-only JSONL writer, one-row-per-cycle smoke accounting, error row scenario. Missing: no fsync/atomic durability hardening and no full runtime audit integration outside smoke. Recommended Phase 2: integrate with selected decision loop only.
+- Part L - connectivity/process failure handling: partially implemented. Owner: `live_chart_feed.py`, `live_ops/quality.py`, `live_ops/risk.py`, `live_ops/smoke.py`. Evidence: stale data, heartbeat timeout if supplied, timestamp gaps, configured timeout, chart close handling, SDK error handling, reconnect reconciliation risk input. Missing: system clock drift and low disk warnings are not implemented; reconnect/backfill policy is not a full live ops loop. Recommended Phase 2: keep best-effort warnings as Medium unless safety behavior depends on them.
+- Part M - contract rollover/symbol safety: partially implemented. Owner: `live_ops/bar_builder.py`, `live_ops/quality.py`, `live_chart_feed.py`, `docs\live_trading_readiness.md`. Evidence: active symbol/contract fields, no mix in bar builder, active contract mismatch and contract-mix blocks, chart instrument resolution. Missing: no rollover calendar automation/interface beyond explicit active-contract checks. Recommended Phase 2: add placeholder rollover policy only if needed by safety tests.
+- Part N - session/calendar safety: partially implemented. Owner: `live_ops/risk.py`, `live_ops/quality.py`, `tests\test_live_ops.py`. Evidence: `SessionGuard`, outside-session risk rejection, missing session returns closed. Missing: monitor-only outside session and flatten-before-close behavior are not wired. Recommended Phase 2: add focused behavior if selected as high priority.
+- Part O - operator console and chart status: partially implemented. Owner: `live_ops/operator.py`, `live_chart_feed.py`, `tests\test_live_chart_feed.py`. Evidence: operator line fields, chart topbar model unavailable/stale status, model overlay placeholder tests. Missing: live chart status uses fixed scaffold values for kill/risk/reconciliation rather than a real live decision loop. Recommended Phase 2: wire status from scaffold state only after decision loop scope is chosen.
+- Part P - smoke-test CLI: implemented. Owner: `scripts\smoke_live_trading.py`, `live_ops/smoke.py`, `tests\test_live_ops.py`. Evidence: deterministic no-live-data smoke, paper override, bad OHLC, stale, duplicate timestamp, kill switch, oversize, max position, duplicate order, reconciliation, reconnect gap, contract mismatch, outside session, audit rows, status width. Missing: none for scaffold audit. Recommended Phase 2: keep smoke deterministic.
+- Part Q - unit tests: partially implemented. Owner: `tests\test_live_ops.py`, `tests\test_live_chart_feed.py`, `tests\live\*`. Evidence: focused 47-test collect-only covers operator, timeout, bar builder, data quality, model/signal, risk, paper broker, reconciliation, audit, live broker placeholder, chart queue/timeframe/market behavior. Missing: no direct script-level tests for kill/cancel/flatten and no best-effort system-check tests. Recommended Phase 2: add only targeted tests for selected gaps.
+- Part R - config: implemented. Owner: `configs\live_trading_safe.yaml`, `live_ops/schemas.py`. Evidence: `mode: disabled`, `allow_trading: false`, `allow_paper_trading: false`, `allow_live_broker: false`, low limits, stale/heartbeat thresholds, duplicate policy `block`, audit dir, kill switch file. Missing: none for safe defaults. Recommended Phase 2: preserve fail-closed defaults.
+- Part S - documentation: implemented. Owner: `docs\live_trading_readiness.md`. Evidence: paper/smoke-only status, no real broker execution, smoke command, kill switch commands, paper scripts, go-live checklist, known limitations. Missing: doc is concise; system clock/disk and rollover automation remain known limitations. Recommended Phase 2: update docs only when implementation changes.
+
+## Phase 1 safety-critical invariant check
+- Chart UI does not submit orders: PASS by targeted search. `live_chart_feed.py` imports only `OperatorStatusState`/`print_operator_status` from `live_ops` and has no `PaperBroker`, `LiveBroker`, `OrderIntent`, or `place_order` path.
+- No real broker SDK imports in audited live-ops scaffold: PASS by targeted search for IBKR/TWS/CQG/Rithmic/Tradovade/NinjaTrader tokens in the audit scope. One unrelated research cost config mentions Interactive Brokers fees, not live execution.
+- No broker credentials/account IDs/broker env vars in audited scaffold: PASS by targeted search. Databento market-data auth exists and is not a broker execution credential.
+- PaperBroker/SimBroker only: PASS. `live_ops\broker.py` implements `PaperBroker`; `LiveBroker.place_order` raises `NotImplementedError`; test proves it.
+- Fail-closed defaults: PASS. `live_ops\schemas.py` and `configs\live_trading_safe.yaml` default `allow_trading=false`, `allow_paper_trading=false`, `allow_live_broker=false`, and `duplicate_timestamp_policy=block`.
+- Tests/smoke finite or deterministic: PASS for focused audit surface. `tests\test_live_chart_feed.py` uses fake Databento/chart objects and finite `--timeout-seconds`; the prior deterministic clock hang fix is present.
+- No validation path requires `--no-timeout`: PASS for audited focused validation. `--no-timeout` is only parsed/tested for CLI behavior and was not run.
+
+## Phase 1 audit commands run
+- `Get-Content -Raw -LiteralPath 'C:\Users\donny\.codex\attachments\18a72a94-bdc2-4796-bdfa-138e02f19daf\goal-objective.md'`
+- `Get-Content -Raw -LiteralPath 'C:\Users\donny\Desktop\futures_intraday_model\CODEX_HANDOFF.md'`
+- `git status --short`
+- `git diff --stat`
+- `rg -n "live ops|live_chart|futures_intraday_model|CODEX_HANDOFF|Phase 0|Phase 1|safety scaffold|broker|pytest hang" 'C:\Users\donny\.codex\memories\MEMORY.md'`
+- `rg --files live_ops scripts configs docs tests | rg "(live_ops|live_chart|live_trading|smoke_live_trading|kill_switch|paper_cancel|paper_flatten|alpha_tiered|test_live)"`
+- Targeted `rg` inspections of audit-scope files for classes/functions/defaults/timeouts/broker paths.
+- `Get-Content -Raw` for `live_ops\schemas.py`, `live_ops\quality.py`, `live_ops\risk.py`, `live_ops\broker.py`, `live_ops\bar_builder.py`, `live_ops\model.py`, `live_ops\reconciliation.py`, `live_ops\audit.py`, `live_ops\operator.py`, `live_ops\smoke.py`, scripts, config, and doc.
+- Safety search for broker SDKs, broker credentials, order paths, timeouts, subprocess/chart blocking patterns.
+- `python -m pytest tests\test_live_ops.py tests\test_live_chart_feed.py --collect-only -q`
+- `(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')`
+
+## Phase 1 audit validation result
+- Focused collect-only: PASS, 47 tests collected in 0.12s.
+- Broad pytest was not run, per Phase 1 rules.
+
+## Phase 1 recommended Phase 2 scope
+- Highest priority: close Medium safety gaps that affect operator trust but do not add live execution: status wiring, selected data-quality/reconnect/rollover/session gaps, and direct tests for paper-only control scripts.
+- Keep Phase 2 focused: no broker SDKs, no credentials, no real order path, no broad Parts A-S expansion, no generated artifact work.
+- Stop Phase 2 when touched tests and focused live ops/chart tests pass under hard timeouts.
+
+## Phase 2A core fail-closed safety gates
+- Updated at UTC: 2026-06-22T04:29:53Z
+- Scope: core fail-closed gates only. No real broker SDKs, broker credentials, account IDs, broker env vars, live order paths, production live trading, GUI/chart launch, broad pytest, generated artifact changes, or broad scaffold implementation were added.
+- Read Phase 1 map in this handoff before editing. Starting repo state showed only `CODEX_HANDOFF.md` modified from the Phase 1 audit.
+- Runtime behavior modules already enforced the Phase 2A defaults, so code changes were test-only.
+
+## Phase 2A files changed
+- `tests/test_live_ops.py`: added focused evidence for stale-bar blocking, safe-default fields, unsafe live mode / `allow_live_broker` blocking, and AST-based real broker SDK import absence across the live scaffold surface.
+- `CODEX_HANDOFF.md`: recorded Phase 2A commands, results, remaining blockers, and recommended Phase 2B scope.
+
+## Phase 2A commands run
+- `Get-Content -Raw -LiteralPath 'C:\Users\donny\.codex\attachments\fb6ffde8-0c13-4e32-bdc5-fe307f86532a\pasted-text-1.txt'`
+- `Get-Content -Raw -LiteralPath 'C:\Users\donny\Desktop\futures_intraday_model\CODEX_HANDOFF.md'`
+- `git status --short`
+- `git diff --stat`
+- Targeted `rg` inspections of `tests\test_live_ops.py`, `live_ops\schemas.py`, `live_ops\quality.py`, `live_ops\model.py`, `live_ops\risk.py`, `live_ops\broker.py`, and `configs\live_trading_safe.yaml`.
+- `Get-Content -Raw -LiteralPath 'tests\test_live_ops.py'`
+- `python -m pytest --help | Select-String -Pattern '--timeout'`
+- PowerShell job wrapper: `python -X faulthandler -m pytest tests\test_live_ops.py -vv -s --tb=short --durations=20`
+- PowerShell job wrapper: `python -X faulthandler -m pytest tests\test_live_ops.py tests\test_live_chart_feed.py -vv -s --tb=short --durations=20`
+- `git status --short`
+- `git diff --stat`
+- `git diff -- tests\test_live_ops.py`
+- `(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')`
+
+## Phase 2A validation results
+- `pytest-timeout` was not available from `python -m pytest --help`; all pytest validation used the 120s PowerShell `Start-Job` / `Wait-Job` / `Stop-Job` wrapper.
+- Touched tests: PASS, `tests\test_live_ops.py` collected 20 tests and passed in 0.33s.
+- Focused live ops/chart gate: PASS, `tests\test_live_ops.py tests\test_live_chart_feed.py` collected 49 tests and passed in 1.20s.
+
+## Phase 2A fail-closed evidence added
+- Duplicate timestamp default remains BLOCK: existing test preserved in `tests\test_live_ops.py::test_data_quality_gate_blocks_bad_ohlc_and_duplicate_timestamp`.
+- Bad OHLC blocks: existing test preserved in `tests\test_live_ops.py::test_data_quality_gate_blocks_bad_ohlc_and_duplicate_timestamp`.
+- Stale bar blocks: added direct assertion for `DATA_STALE`.
+- Model unavailable and missing features emit `NO_SIGNAL`: existing test preserved in `tests\test_live_ops.py::test_model_unavailable_and_feature_missing_emit_no_signal`.
+- Partial bar is non-tradable by default: existing test preserved in `tests\test_live_ops.py::test_partial_bar_signal_is_non_tradable`.
+- Default risk config rejects order intent and safe defaults are explicit: expanded `tests\test_live_ops.py::test_risk_blocks_by_default_and_paper_override_does_not_weaken_defaults`.
+- Unsafe live mode and `allow_live_broker=true` are blocked: added `tests\test_live_ops.py::test_risk_blocks_live_mode_and_live_broker_flag`.
+- No real broker SDK imports exist in the live scaffold surface: added `tests\test_live_ops.py::test_live_scaffold_has_no_real_broker_sdk_imports`.
+
+## Phase 2A remaining Medium blockers
+- Remaining deferred scaffold gaps by Part ID: A, C, D, F, G, H, I, J, K, L, M, N, O, Q.
+- Phase 2A removed no Severe blockers because none were present; it strengthened focused evidence for the core fail-closed gates.
+
+## Phase 2A recommended Phase 2B scope
+- Send Phase 2B goal for paper broker, kill switch, reconciliation, and audit logging.
+- Keep Phase 2B focused on the next safety layer: paper-only controls, reconciliation/audit state coverage, and touched tests under hard timeouts.
+- Continue to avoid broker SDKs, credentials, real order paths, GUI/chart validation, broad scaffold completion, and generated artifact changes.
+
+## Phase 2B paper broker, kill switch, reconciliation, audit logging
+- Updated at UTC: 2026-06-22T04:37:23Z
+- Scope: paper broker / sim behavior, paper-only control scripts, reconciliation, append-only audit logging, and focused tests only.
+- No real broker SDKs, broker credentials, account IDs, broker env vars, live order paths, production live trading, chart/UI order path, GUI/chart launch, `--no-timeout`, broad pytest, or generated report/log/data modifications were added.
+- Starting repo state had uncommitted `CODEX_HANDOFF.md` and `tests/test_live_ops.py` from prior Phase 1/2A work. Final status also showed an untracked `scripts/phase2_causal_base/build_higher_timeframe_bars.py`; this Phase 2B run did not create, edit, or remove it.
+- The default smoke CLI was not run because `python scripts\smoke_live_trading.py` writes under `reports/live_trading_smoke/`; the smoke path is still covered through `run_smoke(..., audit_dir=tmp_path)` in the focused tests.
+
+## Phase 2B files changed
+- `live_ops/broker.py`: persisted paper open orders and fills in `PaperBroker.save/load` so paper-only scripts can operate on saved simulated state.
+- `live_ops/reconciliation.py`: added optional represented open-order comparison and `OPEN_ORDER_MISMATCH` failure.
+- `live_ops/audit.py`: added recursive redaction for sensitive audit field names before JSONL write.
+- `tests/test_live_ops.py`: added/expanded focused coverage for safe-default broker rejection, persisted paper fills, paper control scripts, open-order reconciliation mismatch blocking risk, audit redaction, and existing no-real-broker/import/live-broker checks.
+- `CODEX_HANDOFF.md`: recorded Phase 2B commands, results, remaining Medium blockers, and recommended Phase 2C scope.
+
+## Phase 2B commands run
+- `Get-Content -Raw -LiteralPath 'C:\Users\donny\.codex\attachments\aa0230bd-95bd-445f-bd0f-9e154aa9eccb\pasted-text-1.txt'`
+- `Get-Content -Raw -LiteralPath 'C:\Users\donny\Desktop\futures_intraday_model\CODEX_HANDOFF.md'`
+- `git status --short`
+- `git diff --stat`
+- `Get-Content -Raw` for `live_ops\broker.py`, `live_ops\reconciliation.py`, `live_ops\audit.py`, and paper-control scripts.
+- Targeted `rg` inspection of `tests\test_live_ops.py`.
+- `python -m pytest --help | Select-String -Pattern '--timeout'`
+- PowerShell job wrapper: `python -X faulthandler -m pytest tests\test_live_ops.py -vv -s --tb=short --durations=20`
+- PowerShell job wrapper: `python -X faulthandler -m pytest tests\test_live_ops.py tests\test_live_chart_feed.py -vv -s --tb=short --durations=20`
+- `git status --short`
+- `git diff --stat`
+- `git diff -- live_ops\broker.py live_ops\reconciliation.py live_ops\audit.py tests\test_live_ops.py`
+- `git diff --check -- live_ops\audit.py live_ops\broker.py live_ops\reconciliation.py tests\test_live_ops.py CODEX_HANDOFF.md`
+- `(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')`
+
+## Phase 2B validation results
+- `pytest-timeout` was not available from `python -m pytest --help`; all pytest validation used the 120s PowerShell `Start-Job` / `Wait-Job` / `Stop-Job` wrapper.
+- Touched tests: PASS, `tests\test_live_ops.py` collected 21 tests and passed in 0.37s.
+- Focused live ops/chart gate: PASS, `tests\test_live_ops.py tests\test_live_chart_feed.py` collected 50 tests and passed in 1.42s.
+- Touched-file whitespace check: PASS; only line-ending warnings were reported.
+
+## Phase 2B safety evidence added
+- Paper broker fill works only with approved paper risk: `PaperBroker.place_order` rejects safe-default/unapproved risk and fills approved paper order.
+- Paper state persistence now includes positions, accepted order IDs, open orders, and fills; reload tests prove persisted fill/open-order behavior.
+- Duplicate order ID rejection remains covered.
+- Kill switch scripts affect a monkeypatched configured temp kill-switch file only.
+- `paper_cancel_all.py` cancels persisted paper open orders in a temp state file.
+- `paper_flatten_all.py` flattens persisted paper positions in a temp state file.
+- Clean reconciliation passes; position mismatch fails; represented open-order mismatch fails and blocks RiskManager; stale open order warning remains `OK / STALE_OPEN_ORDER`.
+- Audit logger writes newline-delimited JSON rows, preserves exception fields, and redacts sensitive fields such as `api_key` and nested `password`.
+- Real broker SDK import absence and `LiveBroker.place_order` `NotImplementedError` checks remain covered.
+
+## Phase 2B remaining Medium blockers
+- Remaining deferred scaffold gaps by Part ID: A, C, D, F, G, H, I, J, K, L, M, N, O, Q.
+- Phase 2B improved H, I, J, K, and Q, but broader optional behavior remains deferred: cancel/flatten-on-kill config action, next-bar fill policy, full runtime audit integration, audit-state reconciliation, best-effort system checks, session/contract/reconnect expansion, and operator status wiring.
+
+## Phase 2B recommended Phase 2C scope
+- Send Phase 2C goal for remaining safety gaps in session/calendar behavior, contract/rollover safety, reconnect/backfill handling, and operator status wiring.
+- Keep Phase 2C focused, paper/sim only, and stop when touched tests and the focused live ops/chart gate pass under hard timeouts.
+- Continue to avoid broker SDKs, credentials, real order paths, GUI/chart validation, generated artifact changes, and broad scaffold completion.
