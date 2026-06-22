@@ -1,5 +1,34 @@
 # Codex Handoff
 
+## Phase 2 causal repair decision recorded
+- Updated at UTC: 2026-06-22T14:22:47Z
+- Scope: recorded the user decision to approve all 66 Phase 2 causal repair rows for later bounded one-market/year repair runs. No Phase 2 command, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, or DBN source modification was run.
+
+Files changed
+- `reports/data_manifest/final_repair_duplicate_decision_packet.md`: Phase 2 causal decision counts updated.
+- `reports/data_manifest/final_repair_duplicate_decision_matrix.csv`: 66 `phase2_causal_base_parquet` rows changed from `USER_DECISION_REQUIRED` to `APPROVE_BOUNDED_REPAIR_LATER` with readiness-first bounded command patterns.
+- `reports/data_manifest/remaining_cleanup_blockers.md`: cleanup gate status updated.
+- `CODEX_HANDOFF.md`: recorded this decision step.
+
+Commands run
+- Preflight: `git status --short`; `git status --short -- data`; `git diff --stat`; `git diff --check`.
+- Report-only matrix update for 66 Phase 2 causal rows.
+- Count checks for raw missing rows, causal missing rows, and UNKNOWN rows.
+
+Validation results
+- Raw missing rows: 0.
+- Phase 2 causal missing rows: 66.
+- UNKNOWN rows: 0.
+- Matrix counts: `APPROVE_BOUNDED_REPAIR_LATER` 76; `KEEP_BOTH_DO_NOT_TOUCH` 12; `USER_DECISION_REQUIRED` 0.
+- `git status --short -- data`: empty.
+
+Remaining work
+- Phase 2 causal repairs approved for later bounded execution: 66.
+- Cleanup remains blocked and disabled until Phase 2 causal rows are executed or explicitly deferred, blockers are zero, and cleanup is explicitly approved.
+
+Next recommended step
+- Run a separate bounded Phase 2 causal readiness-only goal for one market/year, likely `KE:2013`, then stop before Phase 2 build execution unless separately approved.
+
 ## ZM 2026 bounded Phase 1B raw repair
 - Updated at UTC: 2026-06-22T14:12:07Z
 - Scope: committed and pushed ZM 2025 evidence, then ran exactly one additional bounded Phase 1B raw repair for ZM 2026 and bounded Phase 1C alignment validation. No Phase 2, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, or DBN source modification was run.

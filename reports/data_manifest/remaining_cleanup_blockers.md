@@ -1,6 +1,6 @@
 # Remaining Cleanup Blockers
 
-Generated at UTC: 2026-06-22T14:12:07Z
+Generated at UTC: 2026-06-22T14:22:47Z
 
 ## Summary
 
@@ -8,7 +8,7 @@ Generated at UTC: 2026-06-22T14:12:07Z
 - User decision recorded: keep both for all 12 duplicate rows; no duplicate merge/quarantine/move/delete is approved.
 - Ten bounded Phase 1B raw repairs have been run and validated: `data/raw/KE/2025.parquet`, `data/raw/KE/2026.parquet`, `data/raw/SR1/2025.parquet`, `data/raw/SR1/2026.parquet`, `data/raw/TN/2025.parquet`, `data/raw/TN/2026.parquet`, `data/raw/ZL/2025.parquet`, `data/raw/ZL/2026.parquet`, `data/raw/ZM/2025.parquet`, and `data/raw/ZM/2026.parquet`.
 - Remaining approved Phase 1B raw parquet repairs: 0.
-- User decision recorded: the 66 Phase 2 causal repair rows remain `USER_DECISION_REQUIRED` now that all raw repair evidence exists.
+- User decision recorded: the 66 Phase 2 causal repair rows are approved for later bounded one-market/year repair runs; stop before Phase 2 execution.
 - Cleanup remains disabled in `configs/data_manifest.yaml`.
 - No cleanup, merge, quarantine, data move, data delete, redownload, rebuild, phase 2, phase 3+ command, or DBN source modification was run.
 
@@ -17,10 +17,10 @@ Generated at UTC: 2026-06-22T14:12:07Z
 - Packet: `reports/data_manifest/final_repair_duplicate_decision_packet.md`.
 - Matrix: `reports/data_manifest/final_repair_duplicate_decision_matrix.csv`.
 - Current manifest audit: `manifest_check issues=169 failures=0`.
-- Decision/evidence counts: 10 raw repairs completed and validated; `APPROVE_BOUNDED_REPAIR_LATER` raw rows remaining 0; `KEEP_BOTH_DO_NOT_TOUCH` duplicate rows 12; `USER_DECISION_REQUIRED` causal rows 66; `UNKNOWN_BLOCKING_CLEANUP` 0.
+- Decision/evidence counts: 10 raw repairs completed and validated; `APPROVE_BOUNDED_REPAIR_LATER` causal rows 66; `KEEP_BOTH_DO_NOT_TOUCH` duplicate rows 12; `USER_DECISION_REQUIRED` rows 0; `UNKNOWN_BLOCKING_CLEANUP` 0.
 - Explicitly deferred rows: 0.
 - Duplicate rows still requiring user decision: 0.
-- Phase 2 causal rows still requiring later user decision: 66.
+- Phase 2 causal rows still requiring later user decision: 0.
 
 ## Repair Decisions
 
@@ -28,7 +28,7 @@ Generated at UTC: 2026-06-22T14:12:07Z
 |---|---:|---|---|---|
 | Raw parquet repair completed | 10 | validated evidence | KE 2025-2026; SR1 2025-2026; TN 2025-2026; ZL 2025-2026; ZM 2025-2026 | no raw repair rows remain |
 | Raw parquet repair remaining | 0 | complete | none | no |
-| Causal parquet repair with raw present | 66 | `USER_DECISION_REQUIRED` | KE 2013-2026; SR1 2018-2026; TN 2016-2026; ZL 2011-2026; ZM 2011-2026 | yes; decide after raw repair evidence |
+| Causal parquet repair with raw present | 66 | `APPROVE_BOUNDED_REPAIR_LATER` | KE 2013-2026; SR1 2018-2026; TN 2016-2026; ZL 2011-2026; ZM 2011-2026 | yes; approved for later bounded one-market/year repair only |
 | Causal parquet repair dependent on raw repair | 0 | complete | none | no |
 
 ## Duplicate Decisions
@@ -40,7 +40,7 @@ Generated at UTC: 2026-06-22T14:12:07Z
 ## Cleanup Gate
 
 - Cleanup remains disabled.
-- Cleanup remains blocked until raw repairs are executed and validated, Phase 2 causal rows are decided/executed/deferred, blockers are zero, and cleanup is separately approved.
+- Cleanup remains blocked until approved Phase 2 causal rows are executed or explicitly deferred, blockers are zero, and cleanup is separately approved.
 - `UNKNOWN_BLOCKING_CLEANUP`: 0.
 
 ## Latest Raw Repair Evidence
@@ -49,3 +49,10 @@ Generated at UTC: 2026-06-22T14:12:07Z
 - Progress report: `reports/phase_restart/phase1b_raw_repair_progress.md`.
 - Phase 1C alignment: PASS for KE 2025, KE 2026, SR1 2025, SR1 2026, TN 2025, TN 2026, ZL 2025, ZL 2026, ZM 2025, and ZM 2026.
 - Manifest raw missing pairs after latest repair: 0.
+
+## Latest Phase 2 Causal Decision
+
+- All 66 Phase 2 causal rows are now `APPROVE_BOUNDED_REPAIR_LATER`.
+- No Phase 2 command was run in this decision step.
+- Smallest later execution unit: one market/year readiness-only check, then one separately approved bounded Phase 2 build for that same market/year.
+- Suggested first row for a later execution goal: `KE:2013`.
