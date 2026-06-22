@@ -1,5 +1,55 @@
 # Codex Handoff
 
+## Bounded phase smoke-validation conflict resolution
+- Updated at UTC: 2026-06-22T10:24:23Z
+- Scope: resolved the active objective conflict by continuing the bounded smoke-validation track. The worktree was clean at preflight, so the four referenced code/test changes were already committed in HEAD; they were reviewed as current smoke-validation implementation rather than reverted or discarded. No cleanup, quarantine, data move, data delete, DBN redownload, DBN source modification, full rebuild, expensive job, phase 3+ command, or generated data staging was run.
+
+Files changed
+- `reports/phase_restart/manifest_phase_1c_raw_dbn_alignment.json`: refreshed Phase 1C generated timestamp from the rerun.
+- `reports/phase_restart/phase_1c_smoke.md`: recorded targeted test and refreshed smoke safety evidence.
+- `reports/phase_restart/phase_2_smoke.md`: recorded targeted test and refreshed readiness-only evidence.
+- `reports/phase_restart/phase_restart_summary.md`: recorded test results, change classification, and refreshed safety checks.
+- `CODEX_HANDOFF.md`: recorded this conflict-resolution pass.
+
+Change classification
+- `scripts/phase1C_validate/audit_raw_dbn_alignment.py`: smoke flag/path validation; default-off `--expected-only`, production default unchanged.
+- `scripts/phase2_causal_base/build_causal_base_data.py`: smoke flag/path validation; default-off `--readiness-only`, production default unchanged.
+- `tests/validation/test_audit_raw_dbn_alignment.py`: test coverage.
+- `tests/phase2_causal_base/test_build_causal_base_data.py`: test coverage.
+- Production behavior changed: no unsafe production default change found in the current committed implementation.
+
+Commands run
+- `git status --short`
+- `git diff --stat`
+- `git diff -- scripts\phase1C_validate\audit_raw_dbn_alignment.py scripts\phase2_causal_base\build_causal_base_data.py tests\phase2_causal_base\test_build_causal_base_data.py tests\validation\test_audit_raw_dbn_alignment.py`
+- `git status --short -- data`
+- Targeted reads of the current smoke-validation code/test hunks, phase smoke reports, phase restart summary, and `CODEX_HANDOFF.md`.
+- `python -m pytest tests\validation\test_audit_raw_dbn_alignment.py -q`
+- `python -m pytest tests\phase2_causal_base\test_build_causal_base_data.py -q`
+- `python -m scripts.phase1C_validate.audit_raw_dbn_alignment --config reports/phase_restart/manifest_smoke_alpha_tiered.yaml --profile manifest_smoke --dbn-root data/dbn --raw-root data/raw --expected-only --json-out reports/phase_restart/manifest_phase_1c_raw_dbn_alignment.json --md-out reports/phase_restart/manifest_phase_1c_raw_dbn_alignment.md`
+- `python -m scripts.phase2_causal_base.build_causal_base_data --profile manifest_smoke --raw-root data/raw --output-root reports/phase_restart/manifest_phase_2_output --reports-root reports/phase_restart/manifest_phase_2_smoke --profile-config reports/phase_restart/manifest_smoke_alpha_tiered.yaml --raw-alignment-report reports/phase_restart/manifest_phase_1c_raw_dbn_alignment.json --readiness-only --readiness-json-out reports/phase_restart/manifest_phase_2_readiness_summary.json --readiness-md-out reports/phase_restart/manifest_phase_2_readiness_summary.md`
+- Safety probes for canonical manifest paths, readiness-only output root, deprecated top-level data folders, recent DBN source writes, and ZN 2023 synthetic-row diagnostics.
+
+Test results
+- PASS: `tests/validation/test_audit_raw_dbn_alignment.py`, 25 passed in 3.44s.
+- PASS: `tests/phase2_causal_base/test_build_causal_base_data.py`, 65 passed in 11.98s.
+
+Smoke results
+- Phase 1C: PASS, `expected=1 raw=1 needs_phase1b=0 raw_only=0 invalid_manifests=0 source_hash_mismatches=0 definition_join_status=checked definition_join_mismatches=0`.
+- Phase 2 readiness-only: PASS, `checked=1 blockers=0`.
+- ZN 2023 causal parquet diagnostic: 353549 rows, 17838 synthetic rows, 5.045411% synthetic rows, 0 synthetic rows with nonzero volume, 0 synthetic rows with `causal_valid=true`, and 0 synthetic rows with `raw_row_present=true`.
+
+Safety results
+- Canonical paths remain from `configs/data_manifest.yaml`: `data/dbn`, `data/raw/{market}/{year}.parquet`, and `data/causally_gated_normalized/{market}/{year}.parquet`.
+- `git status --short -- data` returned no output after smoke commands.
+- `reports/phase_restart/manifest_phase_2_output` remained absent after readiness-only mode; no causal parquet output was written.
+- No recent DBN source file writes were found by the scoped 10-minute probe.
+- Deprecated top-level data folders probed in this pass were absent.
+- Cleanup gate remains blocked by the manifest cleanup blockers documented in the manifest reports; cleanup was not run.
+
+Next recommended step
+- Review the smoke-validation commit, then resume manifest/read-only lineage decisions only with cleanup still blocked and no data mutation.
+
 ## Manifest policy decision point
 - Updated at UTC: 2026-06-22T10:16:53Z
 - Scope: recorded the next manifest policy decision after committing the approval packet. No cleanup, quarantine, merge, data move, data delete, DBN redownload, DBN source modification, rebuild, conversion, data generation, expensive job, phase 3+ command, or `configs/data_manifest.yaml` edit was run.

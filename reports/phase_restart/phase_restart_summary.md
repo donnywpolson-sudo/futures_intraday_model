@@ -1,13 +1,13 @@
 # Phase Restart Summary
 
-Generated at UTC: 2026-06-22T09:48:29Z
+Generated at UTC: 2026-06-22T10:24:23Z
 
 ## Scope
 
 - Contract: `configs/data_manifest.yaml`.
 - Smoke subset: ZN 2023, selected because it is present in canonical DBN/raw/causal roots and was not avoided despite synthetic rows around 5%.
 - Report-local smoke profile: `reports/phase_restart/manifest_smoke_alpha_tiered.yaml`.
-- Phases run: 1A dry-run and 1B existing-output conversion check from prior committed evidence; 1C expected-only alignment audit and phase 2 readiness-only preflight refreshed at 2026-06-22T09:48:29Z.
+- Phases run: 1A dry-run and 1B existing-output conversion check from prior committed evidence; 1C expected-only alignment audit and phase 2 readiness-only preflight refreshed at 2026-06-22T10:24:23Z.
 - Phases after phase 2: not run.
 - Cleanup/quarantine/redownload/full rebuild: not run.
 
@@ -19,6 +19,19 @@ Generated at UTC: 2026-06-22T09:48:29Z
 | 1B | PASS | `reports/phase_restart/manifest_phase_1b_smoke/databento_convert_results.json` |
 | 1C | PASS | `reports/phase_restart/manifest_phase_1c_raw_dbn_alignment.json` |
 | 2 | PASS | `reports/phase_restart/manifest_phase_2_readiness_summary.json` |
+
+## Targeted Tests
+
+- `python -m pytest tests\validation\test_audit_raw_dbn_alignment.py -q`: PASS, 25 passed in 3.44s.
+- `python -m pytest tests\phase2_causal_base\test_build_causal_base_data.py -q`: PASS, 65 passed in 11.98s.
+
+## Change Classification
+
+- `scripts\phase1C_validate\audit_raw_dbn_alignment.py`: smoke flag/path validation. Current committed change adds default-off `--expected-only`; production default remains all-root audit.
+- `scripts\phase2_causal_base\build_causal_base_data.py`: smoke flag/path validation. Current committed change adds default-off `--readiness-only`; production default still writes causal outputs only after readiness passes.
+- `tests\validation\test_audit_raw_dbn_alignment.py`: test coverage for expected-only filtering.
+- `tests\phase2_causal_base\test_build_causal_base_data.py`: test coverage for readiness-only reports and no causal output writes.
+- Unsafe or ambiguous current code change: none found in the clean worktree review.
 
 ## Refreshed Smoke Commands
 
@@ -48,8 +61,8 @@ Rerun results:
 ## Safety
 
 - `data/` status after smoke commands: `git status --short -- data` returned no output.
-- DBN source modification: no evidence.
-- Deprecated top-level data folders created: no evidence.
+- DBN source modification: no recent DBN source file writes were found by the scoped 10-minute probe.
+- Deprecated top-level data folders created: none found for `data/raw_repair_candidates`, `data/causally_gated_normalized_repair_candidates`, `data/raw_repair`, `data/causal_repair`, or `data/phase2_smoke_output`.
 - Generated smoke evidence stayed under `reports/phase_restart`.
 - Generated data artifacts staged: none.
 - Cleanup/quarantine/move actions: not run.

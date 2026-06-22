@@ -2,7 +2,7 @@
 
 Status: PASS
 
-Refreshed at UTC: 2026-06-22T09:48:29Z
+Refreshed at UTC: 2026-06-22T10:24:23Z
 
 Scope: manifest-bounded ZN 2023 raw/DBN alignment audit against canonical DBN and raw parquet roots. The smoke profile is report-local and resolves to `manifest_smoke_zn_2023`.
 
@@ -27,8 +27,11 @@ Result:
 - Evidence: `reports/phase_restart/manifest_phase_1c_raw_dbn_alignment.json`.
 - Summary: `reports/phase_restart/manifest_phase_1c_raw_dbn_alignment.md`.
 
+Targeted test:
+- `python -m pytest tests\validation\test_audit_raw_dbn_alignment.py -q`: PASS, 25 passed in 3.44s.
+
 Safety checks:
 - `--expected-only` bounded the audit to the profile/discovery expected market-years instead of all files under the roots.
 - Phase 1C did not generate synthetic rows; synthetic-row diagnostics are checked in the phase 2 smoke report.
 - Data mutation check after run: `git status --short -- data` returned no output.
-- Recent DBN source modification check after rerun found no DBN files modified in the last 15 minutes.
+- Recent DBN source modification check after rerun found no DBN files modified in the last 10 minutes.

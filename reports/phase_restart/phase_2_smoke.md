@@ -2,7 +2,7 @@
 
 Status: PASS
 
-Refreshed at UTC: 2026-06-22T09:48:29Z
+Refreshed at UTC: 2026-06-22T10:24:23Z
 
 Scope: manifest-bounded ZN 2023 phase 2 readiness-only preflight. No causal parquet output was written.
 
@@ -22,6 +22,9 @@ Result:
 - Failures: 0.
 - Evidence: `reports/phase_restart/manifest_phase_2_readiness_summary.json`.
 - Summary: `reports/phase_restart/manifest_phase_2_readiness_summary.md`.
+
+Targeted test:
+- `python -m pytest tests\phase2_causal_base\test_build_causal_base_data.py -q`: PASS, 65 passed in 11.98s.
 
 Canonical path resolution:
 - Raw input root: `data/raw`.
