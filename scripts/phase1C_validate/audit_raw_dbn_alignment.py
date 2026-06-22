@@ -31,7 +31,11 @@ from scripts.phase1A_download.download_databento_raw import (  # noqa: E402
     schema_path_name,
     validate_raw_file_manifest,
 )
-from scripts.validation.check_dbn_archive_coverage import _profile_markets_and_years  # noqa: E402
+from scripts.validation.check_dbn_archive_coverage import (  # noqa: E402
+    _profile_markets_and_years,
+    load_yaml,
+    resolve_profile_name,
+)
 
 
 RAW_REQUIRED_COLUMNS = [
@@ -161,6 +165,21 @@ def _expected_market_years(
             }
         )
     return expected, exemptions
+
+
+def _discovery_profile_name(config_path: Path, profile_name: str) -> str | None:
+    config = load_yaml(config_path)
+    profiles = config.get("profiles", {})
+    aliases = config.get("aliases", {})
+    if not isinstance(profiles, dict):
+        return None
+    if not isinstance(aliases, dict):
+        aliases = {}
+    resolved = resolve_profile_name(profile_name, {str(key): str(value) for key, value in aliases.items()})
+    profile = profiles.get(resolved)
+    if isinstance(profile, dict) and bool(profile.get("discovery", False)):
+        return resolved
+    return None
 
 
 def _parquet_columns(path: Path) -> list[str]:
@@ -524,15 +543,23 @@ def build_report(
     skip_definition_join: bool = False,
     repair_manifest_path: Path | None = None,
 ) -> dict[str, Any]:
-    resolved_profile, markets, years = _profile_markets_and_years(config_path, profile)
-    expected, pre_availability_exemptions = _expected_market_years(
-        markets=markets,
-        years=years,
-        dbn_root=dbn_root,
-    )
     ohlcv_index = _index_schema_dbns(dbn_root, SCHEMA)
     definition_index = _index_schema_dbns(dbn_root, "definition")
     raw_index = _index_raw_files(raw_root)
+    discovery_profile = _discovery_profile_name(config_path, profile)
+    if discovery_profile is None:
+        resolved_profile, markets, years = _profile_markets_and_years(config_path, profile)
+        expected, pre_availability_exemptions = _expected_market_years(
+            markets=markets,
+            years=years,
+            dbn_root=dbn_root,
+        )
+    else:
+        resolved_profile = discovery_profile
+        expected = set(raw_index)
+        markets = sorted({market for market, _ in expected})
+        years = sorted({year for _, year in expected})
+        pre_availability_exemptions = []
     file_hashes = _build_file_hash_cache(ohlcv_index, definition_index)
     repair_manifest, repair_lookup, repair_manifest_failures = _load_repair_manifest(
         repair_manifest_path,

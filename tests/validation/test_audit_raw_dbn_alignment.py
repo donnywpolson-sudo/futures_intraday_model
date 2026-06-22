@@ -160,6 +160,40 @@ def test_raw_dbn_alignment_passes_clean_market_year(tmp_path: Path, monkeypatch)
     assert report["definition_join_mismatch_count"] == 0
 
 
+def test_raw_dbn_alignment_discovery_profile_uses_raw_market_years(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = tmp_path / "alpha_tiered.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "profiles": {
+                    "all_raw": {
+                        "discovery": True,
+                        "settings_profile": "smoke",
+                    }
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    dbn_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m")
+    definition = _write_dbn_with_manifest(dbn_root, "definition")
+    _write_raw(raw_root, ohlcv)
+    _install_fake_databento(monkeypatch, {definition: _definition_frame()})
+
+    report = build_report(config_path=config, profile="all_raw", dbn_root=dbn_root, raw_root=raw_root)
+
+    assert report["status"] == "PASS"
+    assert report["expected_market_year_count"] == 1
+    assert report["raw_market_year_count"] == 1
+    assert report["resolved_profile"] == "all_raw"
+
+
 def test_raw_dbn_alignment_reports_dbn_only_market_year_as_phase1b_gap(tmp_path: Path, monkeypatch) -> None:
     config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2024])
     dbn_root = tmp_path / "data" / "dbn"
