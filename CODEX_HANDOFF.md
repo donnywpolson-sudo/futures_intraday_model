@@ -1,5 +1,43 @@
 # Codex Handoff
 
+## Canonical data manifest draft and bounded checker
+- Updated at UTC: 2026-06-22T09:20:36Z
+- Scope: preserved the completed lineage audit in commit `0291e58 Map canonical data lineage`, then added a manifest draft and bounded filename-only checker. No data files were moved, deleted, quarantined, regenerated, converted, rebuilt, overwritten, staged, or committed. No phase 1A/1B/1C/2 rebuilds and no post-phase-2 jobs were run.
+
+Changed
+- `configs/data_manifest.yaml`: canonical root/pattern policy, tier-3 market universe, per-market year starts, expected DBN/trades schemas, allowed extras, duplicate policy, missing-pair policy, cleanup exclusions, and UNKNOWN/policy-deferred cleanup gate.
+- `scripts/audit_data_manifest.py`: bounded checker that reads the manifest, `reports/data_lineage/expected_vs_actual_coverage.csv`, and `configs/alpha_tiered.yaml`, then derives exact market-year coverage from filenames only.
+- `reports/data_manifest/manifest_coverage_check.csv`: exact pair-level missing/extra/duplicate policy rows.
+- `reports/data_manifest/manifest_coverage_summary.md`: human summary and cleanup gate result.
+- `CODEX_HANDOFF.md`: recorded this manifest/checker pass.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- `git diff --stat`
+- `git log -5 --oneline`
+- `git status --short --ignored -- reports\data_lineage`
+- `git add -f CODEX_HANDOFF.md reports\data_lineage`
+- `git diff --cached --name-status`
+- `git commit -m "Map canonical data lineage"`
+- Targeted reads of `configs/alpha_tiered.yaml`, `reports/data_lineage/expected_vs_actual_coverage.csv`, and generated manifest/checker outputs.
+- `python scripts\audit_data_manifest.py`
+
+Manifest result
+- Manifest market cross-check against `configs/alpha_tiered.yaml::profiles.tier_3_research`: PASS.
+- Cleanup/quarantine allowed: false.
+- Pair-level issue rows: 179.
+- Missing pairs: raw parquet 10 unexpected; causal parquet 66 unexpected; DBN status 68 unexpected.
+- Extras: all current DBN extra pairs encoded as allowed extras.
+- Duplicates: current duplicate market-years encoded as policy-deferred, review-before-cleanup.
+- Explicit cleanup exclusions: `data/dbn/ohlcv_1m_parent`, `data/dbn/statistics_parent`, `data/dbn/status_parent`, `data/raw/_repair_candidates`, `data/causally_gated_normalized/_repair_candidates`.
+
+Remaining work
+- Run final bounded validation and commit the manifest/checker/report files if `git diff --check`, repo status, and `git status --short -- data` stay safe.
+
+Next recommended step
+- After commit, run bounded phase 1A/1B/1C/2 smoke validation using the manifest to prove scripts resolve canonical paths; stop before cleanup or full rebuild.
+
 ## Phase 1A/1B/1C/2 canonical data lineage audit
 - Updated at UTC: 2026-06-22T09:09:38Z
 - Scope: read-only lineage audit of `scripts/phase1A_download`, `scripts/phase1B_convert`, `scripts/phase1C_validate`, `scripts/phase2_causal_base`, configs, reports, and filesystem metadata. No Databento download, DBN conversion, validation/normalization pipeline job, data move, data delete, data rename, data quarantine, or data overwrite was run.

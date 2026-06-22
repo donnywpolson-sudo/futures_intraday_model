@@ -1,0 +1,180 @@
+artifact,schema,pair,issue_type,policy_status,cleanup_allowed,evidence
+data/dbn/ohlcv_1m,ohlcv-1m,TN:2010,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/ohlcv_1m,ohlcv-1m,TN:2011,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/ohlcv_1m,ohlcv-1m,TN:2012,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/ohlcv_1m,ohlcv-1m,ZL:2010,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/ohlcv_1m,ohlcv-1m,ZM:2010,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/ohlcv_1m,ohlcv-1m,6M:2026,duplicate_pair,known_duplicate_policy_deferred,false,data/dbn/ohlcv_1m/6M/2026/2026-01-01_2026-06-13.dbn.zst;data/dbn/ohlcv_1m/6M/2026/2026-06-12_2026-06-13.dbn.zst
+data/dbn/ohlcv_1s,ohlcv-1s,TN:2010,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/ohlcv_1s,ohlcv-1s,TN:2011,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/ohlcv_1s,ohlcv-1s,TN:2012,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/ohlcv_1s,ohlcv-1s,ZL:2010,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/ohlcv_1s,ohlcv-1s,ZM:2010,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/ohlcv_1s,ohlcv-1s,6M:2026,duplicate_pair,known_duplicate_policy_deferred,false,data/dbn/ohlcv_1s/6M/2026/2026-01-01_2026-06-13.dbn.zst;data/dbn/ohlcv_1s/6M/2026/2026-06-12_2026-06-13.dbn.zst
+data/dbn/ohlcv_1h,ohlcv-1h,6M:2026,duplicate_pair,known_duplicate_policy_deferred,false,data/dbn/ohlcv_1h/6M/2026/2026-01-01_2026-06-13.dbn.zst;data/dbn/ohlcv_1h/6M/2026/2026-06-12_2026-06-13.dbn.zst
+data/dbn/ohlcv_1d,ohlcv-1d,6M:2026,duplicate_pair,known_duplicate_policy_deferred,false,data/dbn/ohlcv_1d/6M/2026/2026-01-01_2026-06-13.dbn.zst;data/dbn/ohlcv_1d/6M/2026/2026-06-12_2026-06-13.dbn.zst
+data/dbn/statistics,statistics,TN:2010,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/statistics,statistics,TN:2011,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/statistics,statistics,TN:2012,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/statistics,statistics,ZL:2010,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/statistics,statistics,ZM:2010,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/statistics,statistics,6M:2026,duplicate_pair,known_duplicate_policy_deferred,false,data/dbn/statistics/6M/2026/2026-01-01_2026-06-13.dbn.zst;data/dbn/statistics/6M/2026/2026-06-12_2026-06-13.dbn.zst
+data/dbn/statistics,statistics,RTY:2017,duplicate_pair,known_duplicate_policy_deferred,false,data/dbn/statistics/RTY/2017/2017-01-01_2018-01-01.dbn.zst;data/dbn/statistics/RTY/2017/2017-06-05_2018-01-01.dbn.zst
+data/dbn/statistics,statistics,SR3:2018,duplicate_pair,known_duplicate_policy_deferred,false,data/dbn/statistics/SR3/2018/2018-01-01_2019-01-01.dbn.zst;data/dbn/statistics/SR3/2018/2018-04-23_2019-01-01.dbn.zst
+data/dbn/status,status,6A:2014,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,6B:2014,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,6C:2010,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,6C:2011,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,6C:2014,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,6E:2012,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,6E:2013,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,6E:2014,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,6J:2010,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,6J:2014,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,6M:2013,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,6M:2014,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ES:2014,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,GC:2010,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,GC:2014,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,HE:2013,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,HG:2011,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,HG:2014,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,HO:2010,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,HO:2011,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,HO:2012,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,HO:2013,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,KE:2013,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,KE:2014,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,LE:2010,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,LE:2011,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,LE:2012,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,LE:2013,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,NQ:2012,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,NQ:2014,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,RB:2010,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,RB:2011,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,RB:2012,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,RB:2013,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,RB:2014,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,SI:2014,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,UB:2010,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,UB:2011,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,UB:2012,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,YM:2011,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,YM:2012,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,YM:2013,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,YM:2014,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZB:2010,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZB:2011,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZB:2012,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZC:2010,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZC:2014,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZF:2010,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZF:2011,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZF:2012,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZL:2012,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZL:2013,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZM:2011,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZM:2012,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZM:2013,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZM:2014,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZN:2010,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZN:2011,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZN:2012,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZS:2011,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZS:2013,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZT:2010,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZT:2011,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZT:2012,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZT:2013,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZT:2014,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,ZW:2013,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/dbn/status,status,TN:2010,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/status,status,TN:2011,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/status,status,TN:2012,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/status,status,6M:2026,duplicate_pair,known_duplicate_policy_deferred,false,data/dbn/status/6M/2026/2026-01-01_2026-06-13.dbn.zst;data/dbn/status/6M/2026/2026-06-12_2026-06-13.dbn.zst
+data/dbn/status,status,RTY:2017,duplicate_pair,known_duplicate_policy_deferred,false,data/dbn/status/RTY/2017/2017-01-01_2018-01-01.dbn.zst;data/dbn/status/RTY/2017/2017-06-05_2018-01-01.dbn.zst
+data/dbn/status,status,SR3:2018,duplicate_pair,known_duplicate_policy_deferred,false,data/dbn/status/SR3/2018/2018-01-01_2019-01-01.dbn.zst;data/dbn/status/SR3/2018/2018-04-23_2019-01-01.dbn.zst
+data/dbn/definition,definition,TN:2010,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/definition,definition,TN:2011,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/definition,definition,TN:2012,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/definition,definition,ZL:2010,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/definition,definition,ZM:2010,extra_pair,allowed_extra,false,present in filename inventory but outside manifest expected range
+data/dbn/definition,definition,6M:2026,duplicate_pair,known_duplicate_policy_deferred,false,data/dbn/definition/6M/2026/2026-01-01_2026-06-13.dbn.zst;data/dbn/definition/6M/2026/2026-06-12_2026-06-13.dbn.zst
+data/dbn/trades,trades,6M:2026,duplicate_pair,known_duplicate_policy_deferred,false,data/dbn/trades/6M/2026/2026-01-01_2026-06-13.dbn.zst;data/dbn/trades/6M/2026/2026-06-12_2026-06-13.dbn.zst
+data/raw/{market}/{year}.parquet,phase1b_raw_parquet,KE:2025,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/raw/{market}/{year}.parquet,phase1b_raw_parquet,KE:2026,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/raw/{market}/{year}.parquet,phase1b_raw_parquet,SR1:2025,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/raw/{market}/{year}.parquet,phase1b_raw_parquet,SR1:2026,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/raw/{market}/{year}.parquet,phase1b_raw_parquet,TN:2025,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/raw/{market}/{year}.parquet,phase1b_raw_parquet,TN:2026,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/raw/{market}/{year}.parquet,phase1b_raw_parquet,ZL:2025,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/raw/{market}/{year}.parquet,phase1b_raw_parquet,ZL:2026,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/raw/{market}/{year}.parquet,phase1b_raw_parquet,ZM:2025,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/raw/{market}/{year}.parquet,phase1b_raw_parquet,ZM:2026,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,KE:2013,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,KE:2014,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,KE:2015,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,KE:2016,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,KE:2017,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,KE:2018,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,KE:2019,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,KE:2020,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,KE:2021,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,KE:2022,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,KE:2023,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,KE:2024,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,KE:2025,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,KE:2026,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,SR1:2018,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,SR1:2019,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,SR1:2020,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,SR1:2021,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,SR1:2022,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,SR1:2023,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,SR1:2024,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,SR1:2025,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,SR1:2026,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,TN:2016,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,TN:2017,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,TN:2018,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,TN:2019,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,TN:2020,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,TN:2021,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,TN:2022,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,TN:2023,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,TN:2024,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,TN:2025,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,TN:2026,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZL:2011,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZL:2012,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZL:2013,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZL:2014,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZL:2015,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZL:2016,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZL:2017,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZL:2018,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZL:2019,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZL:2020,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZL:2021,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZL:2022,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZL:2023,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZL:2024,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZL:2025,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZL:2026,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZM:2011,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZM:2012,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZM:2013,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZM:2014,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZM:2015,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZM:2016,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZM:2017,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZM:2018,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZM:2019,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZM:2020,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZM:2021,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZM:2022,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZM:2023,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZM:2024,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZM:2025,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
+data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,ZM:2026,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory

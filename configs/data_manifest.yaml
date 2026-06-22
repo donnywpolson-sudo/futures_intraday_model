@@ -1,0 +1,154 @@
+# Canonical data manifest draft for Phase 1A/1B/1C/2 lineage.
+# This file is policy, not cleanup approval. Data mutation stays disabled until
+# UNKNOWN and policy-deferred items are reviewed.
+
+version: 1
+source_profile: configs/alpha_tiered.yaml::profiles.tier_3_research
+
+canonical_paths:
+  dbn_root: data/dbn
+  raw_parquet_pattern: data/raw/{market}/{year}.parquet
+  causal_parquet_pattern: data/causally_gated_normalized/{market}/{year}.parquet
+
+expected_markets:
+  - ES
+  - NQ
+  - RTY
+  - YM
+  - CL
+  - NG
+  - RB
+  - HO
+  - GC
+  - SI
+  - HG
+  - SR3
+  - SR1
+  - TN
+  - ZT
+  - ZF
+  - ZN
+  - ZB
+  - UB
+  - 6A
+  - 6B
+  - 6C
+  - 6E
+  - 6J
+  - 6M
+  - ZC
+  - ZS
+  - ZL
+  - ZM
+  - ZW
+  - KE
+  - LE
+  - HE
+
+expected_years:
+  default_start_year: 2010
+  end_year: 2026
+  market_start_year_overrides:
+    KE: 2013
+    RTY: 2017
+    SR1: 2018
+    SR3: 2018
+    TN: 2016
+    ZL: 2011
+    ZM: 2011
+
+schemas:
+  dbn:
+    - name: ohlcv-1m
+      path_name: ohlcv_1m
+    - name: ohlcv-1s
+      aliases: [1s]
+      path_name: ohlcv_1s
+    - name: ohlcv-1h
+      aliases: [1h]
+      path_name: ohlcv_1h
+    - name: ohlcv-1d
+      aliases: [1d]
+      path_name: ohlcv_1d
+    - name: statistics
+      path_name: statistics
+    - name: status
+      path_name: status
+    - name: definition
+      path_name: definition
+  trades:
+    name: trades
+    path_name: trades
+    expected_years: [2025, 2026]
+    observed_coverage_note: "Current lineage inventory shows 2025-06-18 through 2026-06-13 style DBN chunks."
+
+coverage_policy:
+  missing_pairs:
+    default: unexpected_requires_review
+    allowed_missing_pairs: {}
+  extra_pairs:
+    default: unexpected_requires_review
+    allowed_extra_pairs:
+      ohlcv-1m:
+        - TN:2010
+        - TN:2011
+        - TN:2012
+        - ZL:2010
+        - ZM:2010
+      ohlcv-1s:
+        - TN:2010
+        - TN:2011
+        - TN:2012
+        - ZL:2010
+        - ZM:2010
+      statistics:
+        - TN:2010
+        - TN:2011
+        - TN:2012
+        - ZL:2010
+        - ZM:2010
+      status:
+        - TN:2010
+        - TN:2011
+        - TN:2012
+      definition:
+        - TN:2010
+        - TN:2011
+        - TN:2012
+        - ZL:2010
+        - ZM:2010
+  duplicates:
+    default: policy_deferred_review_before_cleanup
+    known_duplicate_pairs:
+      ohlcv-1m: [6M:2026]
+      ohlcv-1s: [6M:2026]
+      ohlcv-1h: [6M:2026]
+      ohlcv-1d: [6M:2026]
+      statistics: [6M:2026, RTY:2017, SR3:2018]
+      status: [6M:2026, RTY:2017, SR3:2018]
+      definition: [6M:2026]
+      trades: [6M:2026]
+
+artifact_policy:
+  cleanup_allowed: false
+  cleanup_gate: "No cleanup/quarantine until UNKNOWN and policy-deferred paths are reviewed."
+  exclusions:
+    - path: data/dbn/ohlcv_1m_parent
+      classification: DO_NOT_TOUCH
+      reason: "Source-like parent DBN folder; redundancy not proven."
+    - path: data/dbn/statistics_parent
+      classification: DO_NOT_TOUCH
+      reason: "Source-like parent DBN folder; redundancy not proven."
+    - path: data/dbn/status_parent
+      classification: DO_NOT_TOUCH
+      reason: "Source-like parent DBN folder; redundancy not proven."
+    - path: data/raw/_repair_candidates
+      classification: STALE_OR_UNKNOWN
+      reason: "Repair candidate parquet folder needs explicit review."
+    - path: data/causally_gated_normalized/_repair_candidates
+      classification: STALE_OR_UNKNOWN
+      reason: "Repair candidate parquet folder needs explicit review."
+  audit_artifact_prefixes:
+    - data/raw/_
+    - data/causally_gated_normalized/_
+  unknown_path_policy: policy_deferred
