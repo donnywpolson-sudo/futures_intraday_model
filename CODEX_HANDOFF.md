@@ -699,6 +699,16 @@ Updated at UTC: 2026-06-22T00:23:29Z
 - Remaining work: no broker SDKs, credentials, GUI/chart launch, live order paths, generated artifact staging, or production live trading behavior were added.
 - Next recommended step: choose the next remaining live-ops part, likely Part A/O operator console polish or Part H/I/J/K operational controls depth.
 
+## Operator console and chart status polish
+- Updated at UTC: 2026-06-22T08:20:49Z
+- Scope: Part A/O operator console/status display and chart status line polish; display-only, no broker execution.
+- What changed: status rendering now sanitizes embedded newlines, safely truncates/pads at terminal width, handles missing/non-finite optional fields, prints warning/error messages on separate lines, reports chart status with root/contract split and unknown risk/reconciliation, and maps smoke operator status to compact display states.
+- Files changed by this slice: `CODEX_HANDOFF.md`, `live_chart_feed.py`, `live_ops/operator.py`, `live_ops/smoke.py`, `tests/test_live_chart_feed.py`, `tests/test_live_ops.py`.
+- Commands run: read goal objective file; `git status --short --untracked-files=all`; `git log -4 --oneline`; `git diff --stat`; `python -m py_compile live_ops\operator.py live_ops\schemas.py live_ops\smoke.py live_chart_feed.py tests\test_live_ops.py tests\test_live_chart_feed.py`; PowerShell job wrapper for `python -X faulthandler -m pytest tests\test_live_ops.py tests\test_live_chart_feed.py -vv -s --tb=short --durations=20`; PowerShell job wrapper for `python scripts\smoke_live_trading.py`; PowerShell job wrapper for `python -X faulthandler -m pytest tests -q --tb=short --durations=20`; `git diff --check`; `git status --short --untracked-files=all`.
+- Test results: PASS, compile; PASS, focused live ops/chart `71 passed`; PASS, smoke CLI `PASS live trading smoke scenarios=34 decision_cycles=34 audit_rows=34`; PASS, broad bounded pytest `727 passed, 58 warnings`; PASS, `git diff --check` with CRLF warnings only.
+- Remaining work: no chart GUI was opened, no `--no-timeout` run was used, and no broker SDKs, credentials, live order paths, or generated artifacts were added.
+- Next recommended step: start Part H/I/J/K operational controls depth to harden kill switch, paper broker, reconciliation, and audit controls.
+
 ## Order-intent safety gate
 - Updated at UTC: 2026-06-22T08:14:15Z
 - Scope: paper/smoke-only decision/order-intent scaffold gate before broker submission.

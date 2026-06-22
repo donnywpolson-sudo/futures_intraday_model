@@ -363,6 +363,30 @@ def test_status_text_reports_model_placeholder_and_stale_data() -> None:
     assert "stale" in text
 
 
+def test_emit_status_line_is_display_only_and_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    stdout = StringIO()
+    status = chart.ChartStatus(
+        records_updated=3,
+        latest_time=datetime(2026, 6, 22, 14, 30, tzinfo=timezone.utc),
+        last_close=7552.25,
+    )
+    monkeypatch.setattr(chart.shutil, "get_terminal_size", lambda fallback: SimpleNamespace(columns=220))
+
+    chart.emit_status_line(status, stdout, symbols="ESU6", timeframe="1m")
+    line = stdout.getvalue()
+
+    assert line.startswith("\r")
+    assert "\n" not in line
+    assert len(line.removeprefix("\r")) <= 220
+    assert "ES/ESU6 1m" in line
+    assert "model=OFF" in line
+    assert "sig=NO_SIGNAL" in line
+    assert "mode=DISABLED" in line
+    assert "kill=OFF" in line
+    assert "risk=UNKNOWN" in line
+    assert "recon=UNKNOWN" in line
+
+
 def test_model_overlay_status_formats_available_fields() -> None:
     state = chart.ModelOverlayState(
         available=True,

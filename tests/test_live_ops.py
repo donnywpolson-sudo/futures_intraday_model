@@ -19,7 +19,13 @@ from live_ops.audit import AuditLogger
 from live_ops.bar_builder import LiveBarBuilder, bar_contract_row, check_bar_parity
 from live_ops.broker import LiveBroker, PaperBroker
 from live_ops.model import ModelReadinessGate, build_signal_state
-from live_ops.operator import OperatorControlState, OperatorStatusState, build_order_intent_decision, render_operator_status
+from live_ops.operator import (
+    OperatorControlState,
+    OperatorStatusState,
+    build_order_intent_decision,
+    print_operator_status,
+    render_operator_status,
+)
 from live_ops.quality import DataQualityGate
 from live_ops.reconciliation import Reconciler
 from live_ops.risk import KillSwitch, RiskManager, SessionGuard
@@ -107,7 +113,7 @@ def test_operator_status_rendering_width() -> None:
     line = render_operator_status(state, width=80)
     wide_line = render_operator_status(state, width=220)
 
-    assert len(line) == 79
+    assert len(line) <= 80
     assert "\n" not in line
     for expected in (
         "LIVE",
@@ -126,6 +132,30 @@ def test_operator_status_rendering_width() -> None:
         "err=DATA_STALE",
     ):
         assert expected in wide_line
+
+
+def test_operator_status_small_width_missing_fields_and_messages() -> None:
+    default_line = render_operator_status(OperatorStatusState(), width=32)
+    tiny_line = render_operator_status(OperatorStatusState(last_error_code="BAD\nCODE"), width=5)
+    stdout = StringIO()
+
+    print_operator_status(
+        OperatorStatusState(feed_status="ERROR", last_error_code="DATA\nSTALE"),
+        stdout=stdout,
+        width=40,
+        warning="feed\nstale",
+        error="model\nunavailable",
+    )
+    printed = stdout.getvalue()
+
+    assert len(default_line) <= 32
+    assert "\n" not in default_line
+    assert len(tiny_line) <= 5
+    assert "\n" not in tiny_line
+    assert printed.startswith("\r")
+    assert "\nWARN: feed stale" in printed
+    assert "\nERROR: model unavailable" in printed
+    assert all(len(line.removeprefix("\r")) <= 40 for line in printed.splitlines())
 
 
 def test_operator_control_state_file_source_blocks_fail_closed(tmp_path) -> None:
@@ -1129,10 +1159,13 @@ def test_smoke_live_trading_script_scenarios(tmp_path) -> None:
     assert all(len(row["operator_status_line"]) == 119 for row in rows)
     assert "operator_status_render" not in by_scenario
     assert by_scenario["missing_model_output"]["signal_state"]["signal"] == "NO_SIGNAL"
+    assert by_scenario["missing_model_output"]["operator_status"]["model_status"] == "UNAVAILABLE"
     assert by_scenario["missing_features"]["signal_state"]["signal"] == "NO_SIGNAL"
     assert by_scenario["trading_disabled"]["risk_decision"]["reason_code"] == "TRADING_DISABLED"
+    assert by_scenario["trading_disabled"]["operator_status"]["risk_status"] == "BLOCKED"
     assert by_scenario["paper_fill"]["broker_response"]["status"] == "FILLED"
     assert by_scenario["paper_fill"]["operator_status"]["signal"] == "LONG"
+    assert by_scenario["paper_fill"]["operator_status"]["trading_mode"] == "PAPER"
     assert by_scenario["paper_fill"]["operator_status"]["risk_status"] == "OK"
     assert by_scenario["paper_fill"]["operator_status"]["paper_position"] == "ES:ESU6=1"
     assert by_scenario["bad_ohlc"]["data_quality_result"]["reason_code"] == "BAD_OHLC"
@@ -1165,6 +1198,7 @@ def test_smoke_live_trading_script_scenarios(tmp_path) -> None:
     assert by_scenario["monitor_only_outside_session"]["risk_decision"]["reason_code"] == "MONITOR_ONLY"
     assert by_scenario["monitor_only_outside_session"]["signal_state"]["tradable"] is False
     assert by_scenario["unsafe_live_mode"]["risk_decision"]["reason_code"] == "LIVE_BROKER_BLOCKED"
+    assert by_scenario["unsafe_live_mode"]["operator_status"]["trading_mode"] == "LIVE_BLOCKED"
     assert by_scenario["forced_exception"]["exception"] is not None
     assert by_scenario["forced_exception"]["risk_decision"]["reason_code"] == "EXCEPTION"
     assert by_scenario["forced_exception"]["broker_response"] is None

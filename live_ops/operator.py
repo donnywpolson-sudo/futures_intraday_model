@@ -391,33 +391,47 @@ def render_operator_status(state: OperatorStatusState, width: int | None = None)
         return ""
     latest = _format_latest(state.latest_bar_time)
     age = _format_age(state.latest_bar_age_seconds)
-    close = "n/a" if state.last_close is None else f"{state.last_close:.2f}"
+    close = _format_close(state.last_close)
     symbol_contract = _format_symbol_contract(state.active_symbol, state.active_contract)
     parts = [
-        state.feed_status,
-        f"{symbol_contract} {state.timeframe}",
+        _status_text(state.feed_status),
+        f"{symbol_contract} {_status_text(state.timeframe)}",
         f"rows={state.records_count}",
         f"latest={latest}",
         f"age={age}",
         f"close={close}",
-        f"model={state.model_status}",
-        f"sig={state.signal}",
-        f"mode={state.trading_mode}",
-        f"kill={state.kill_switch}",
-        f"risk={state.risk_status}",
-        f"recon={state.reconciliation_status}",
+        f"model={_status_text(state.model_status)}",
+        f"sig={_status_text(state.signal)}",
+        f"mode={_status_text(state.trading_mode)}",
+        f"kill={_status_text(state.kill_switch)}",
+        f"risk={_status_text(state.risk_status)}",
+        f"recon={_status_text(state.reconciliation_status)}",
     ]
     if state.paper_position:
-        parts.append(f"pos={state.paper_position}")
+        parts.append(f"pos={_status_text(state.paper_position)}")
     if state.last_error_code:
-        parts.append(f"err={state.last_error_code}")
+        parts.append(f"err={_status_text(state.last_error_code)}")
     line = " | ".join(parts)
     max_len = width - 1
     return line[:max_len].ljust(max_len)
 
 
-def print_operator_status(state: OperatorStatusState, *, stdout: TextIO, width: int | None = None) -> None:
+def print_operator_status(
+    state: OperatorStatusState,
+    *,
+    stdout: TextIO,
+    width: int | None = None,
+    warning: str | None = None,
+    error: str | None = None,
+) -> None:
+    if width is None:
+        width = shutil.get_terminal_size((140, 20)).columns
     stdout.write("\r" + render_operator_status(state, width=width))
+    for level, message in (("WARN", warning), ("ERROR", error)):
+        if message:
+            formatted = _format_operator_message(level, message, width=width)
+            if formatted:
+                stdout.write("\n" + formatted)
     stdout.flush()
 
 
@@ -428,9 +442,11 @@ def _format_latest(value: datetime | None) -> str:
 
 
 def _format_symbol_contract(symbol: str, contract: str) -> str:
-    if symbol and symbol != "n/a" and contract and contract != "n/a" and symbol != contract:
-        return f"{symbol}/{contract}"
-    return contract or symbol
+    clean_symbol = _status_text(symbol)
+    clean_contract = _status_text(contract)
+    if clean_symbol != "n/a" and clean_contract != "n/a" and clean_symbol != clean_contract:
+        return f"{clean_symbol}/{clean_contract}"
+    return clean_contract if clean_contract != "n/a" else clean_symbol
 
 
 def _format_age(value: float | None) -> str:
@@ -443,3 +459,30 @@ def _format_age(value: float | None) -> str:
     if minutes < 60:
         return f"{minutes}m"
     return f"{minutes // 60}h"
+
+
+def _format_close(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "n/a"
+    if not isfinite(number):
+        return "n/a"
+    return f"{number:.2f}"
+
+
+def _status_text(value: object, default: str = "n/a") -> str:
+    if value is None:
+        return default
+    text = " ".join(str(value).split())
+    return text or default
+
+
+def _format_operator_message(level: str, message: str, *, width: int) -> str:
+    if width <= 1:
+        return ""
+    line = f"{_status_text(level, 'INFO')}: {_status_text(message, '')}"
+    max_len = width - 1
+    return line[:max_len]

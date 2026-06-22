@@ -73,6 +73,7 @@ TRADE_PAYLOAD_FIELDS = ("price", "size")
 ALWAYS_REPORTED_RECORD_TYPE_MARKERS = ("Error",)
 TIMEFRAME_PATTERN = re.compile(r"^(\d+)([smhd])$")
 MARKET_SYMBOL_PATTERN = re.compile(r"^[A-Z0-9]{1,4}$")
+FUTURES_CONTRACT_PATTERN = re.compile(r"^([A-Z0-9]{1,4})([FGHJKMNQUVXZ])([0-9]{1,2})$")
 TIER3_RESEARCH_PROFILE_CANDIDATES = (
     "tier_3_research",
     "tier3_research",
@@ -317,6 +318,14 @@ def normalize_market(value: str) -> str:
 
 def is_market_symbol(value: object) -> bool:
     return isinstance(value, str) and MARKET_SYMBOL_PATTERN.fullmatch(value.strip().upper()) is not None
+
+
+def infer_root_symbol(value: str) -> str:
+    text = value.strip().upper()
+    match = FUTURES_CONTRACT_PATTERN.fullmatch(text)
+    if match is not None:
+        return match.group(1)
+    return text or "n/a"
 
 
 def add_market(
@@ -1899,7 +1908,7 @@ def emit_status_line(
     print_operator_status(
         OperatorStatusState(
             feed_status=feed_status,
-            active_symbol=symbols,
+            active_symbol=infer_root_symbol(symbols),
             active_contract=symbols,
             timeframe=timeframe,
             records_count=status.records_updated,
@@ -1910,8 +1919,8 @@ def emit_status_line(
             signal="NO_SIGNAL",
             trading_mode="DISABLED",
             kill_switch="OFF",
-            risk_status="OK",
-            reconciliation_status="OK",
+            risk_status="UNKNOWN",
+            reconciliation_status="UNKNOWN",
         ),
         stdout=stdout,
         width=shutil.get_terminal_size((140, 20)).columns,

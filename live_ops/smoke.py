@@ -763,7 +763,7 @@ def _operator_status(
     elif data_quality.passed:
         feed_status = "LIVE"
     else:
-        feed_status = "BLOCKED"
+        feed_status = "ERROR"
     error_code = _last_error_code(data_quality, model, risk, broker, exception)
     return OperatorStatusState(
         feed_status=feed_status,
@@ -774,12 +774,12 @@ def _operator_status(
         latest_bar_time=bar.timestamp_utc,
         latest_bar_age_seconds=data_quality.latest_bar_age_seconds,
         last_close=bar.close,
-        model_status=model.reason_code,
+        model_status=_display_model_status(model),
         signal=signal.signal,
-        trading_mode=config.mode.upper(),
+        trading_mode=_display_trading_mode(config),
         kill_switch="ON" if kill_switch_on or operator_control.kill_switch_active else "OFF",
-        risk_status=risk.reason_code,
-        reconciliation_status=reconciliation.reason_code,
+        risk_status=_display_risk_status(risk),
+        reconciliation_status=_display_reconciliation_status(reconciliation),
         paper_position=_format_positions(broker.positions),
         last_error_code=error_code,
     )
@@ -819,6 +819,38 @@ def _last_error_code(
 def _format_positions(positions: Mapping[str, int]) -> str | None:
     active = [f"{key}={quantity}" for key, quantity in sorted(positions.items()) if quantity != 0]
     return ",".join(active) if active else None
+
+
+def _display_model_status(model: ModelReadinessResult) -> str:
+    if model.status == "READY":
+        return "READY"
+    if model.status in {"UNAVAILABLE", "BLOCKED"}:
+        return "UNAVAILABLE"
+    return "OFF"
+
+
+def _display_trading_mode(config: LiveTradingConfig) -> str:
+    if config.allow_live_broker or config.mode == "live":
+        return "LIVE_BLOCKED"
+    if config.mode == "paper" and config.allow_paper_trading:
+        return "PAPER"
+    return "DISABLED"
+
+
+def _display_risk_status(risk: RiskDecision) -> str:
+    if risk.approved or risk.reason_code == "OK":
+        return "OK"
+    if risk.reason_code == "NOT_RUN":
+        return "UNKNOWN"
+    return "BLOCKED"
+
+
+def _display_reconciliation_status(reconciliation: ReconciliationResult) -> str:
+    if reconciliation.status == "OK":
+        return "OK"
+    if reconciliation.status == "FAIL":
+        return "FAIL"
+    return "UNKNOWN"
 
 
 def _exception_data_quality(
