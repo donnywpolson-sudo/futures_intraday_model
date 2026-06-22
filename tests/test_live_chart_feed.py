@@ -636,6 +636,7 @@ def test_run_live_chart_switches_backfill_and_subscription_to_selected_market(
 def test_run_live_chart_uses_persisted_market_and_timeframe(tmp_path: Path) -> None:
     state = SimpleNamespace(historical_requests=[], live_subscriptions=[], lives=[])
     state_path = tmp_path / "live_chart_feed_state.json"
+    monotonic_values = iter([103.0, 103.0, 103.02])
     chart.write_selection_state(
         state_path,
         market="NQ",
@@ -662,7 +663,7 @@ def test_run_live_chart_uses_persisted_market_and_timeframe(tmp_path: Path) -> N
         stdout=StringIO(),
         stderr=StringIO(),
         now=datetime(2026, 6, 21, 23, 0, tzinfo=timezone.utc),
-        clock=lambda: 103.0,
+        clock=lambda: next(monotonic_values, 103.02),
     )
 
     assert result == 0

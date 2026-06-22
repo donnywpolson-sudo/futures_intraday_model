@@ -165,3 +165,78 @@ Updated at UTC: 2026-06-22T00:23:29Z
 
 ## Live chart market switching bug fix next recommended step
 - Run the bounded live chart command interactively, switch the market selector from ES to NQ, and confirm the same chart window clears, backfills, and streams NQ.
+
+## Focused pytest hang isolation update
+- Updated at UTC: 2026-06-22T04:04:15Z
+- Read goal objective attachment `C:\Users\donny\.codex\attachments\10b205c7-cc5c-419c-a58c-81e00f2e6c12\goal-objective.md`.
+- Current repo state before patch: `git status --short` empty; `git diff --stat` empty.
+- Interrupted goal changed files identified from this handoff history: `live_chart_feed.py`, `tests/test_live_chart_feed.py`, and `CODEX_HANDOFF.md`; no uncommitted interrupted-goal changes were present at the start of this run.
+- Isolated the focused pytest hang to `tests\test_live_chart_feed.py::test_run_live_chart_uses_persisted_market_and_timeframe`.
+- Root cause: the test passed `--timeout-seconds 0.01` but injected `clock=lambda: 103.0`, so `drain_chart_queue` could never observe the finite timeout deadline after queued fake data was exhausted.
+- Patched only the test clock to use a deterministic advancing monotonic iterator.
+
+## Focused pytest hang isolation files changed
+- `tests/test_live_chart_feed.py`
+- `CODEX_HANDOFF.md`
+
+## Focused pytest hang isolation commands run
+- `Get-Content -Raw -LiteralPath 'C:\Users\donny\.codex\attachments\10b205c7-cc5c-419c-a58c-81e00f2e6c12\goal-objective.md'`
+- `Test-Path -LiteralPath 'C:\Users\donny\Desktop\futures_intraday_model\CODEX_HANDOFF.md'`
+- `Get-Content -Raw -LiteralPath 'C:\Users\donny\Desktop\futures_intraday_model\CODEX_HANDOFF.md'`
+- `git status --short`
+- `git diff --stat`
+- Targeted `rg` inspection of `tests\test_live_ops.py`, `tests\test_live_chart_feed.py`, and `live_chart_feed.py`.
+- `python -m pytest tests\test_live_ops.py tests\test_live_chart_feed.py --collect-only -q`
+- `python -m pytest --help | Select-String -Pattern '--timeout'`
+- PowerShell job wrapper: `python -X faulthandler -m pytest tests\test_live_ops.py -vv -s --tb=short --durations=20`
+- PowerShell job wrapper: `python -X faulthandler -m pytest tests\test_live_chart_feed.py -vv -s --tb=short --durations=20`
+- PowerShell job wrapper: `python -X faulthandler -m pytest tests\test_live_chart_feed.py::test_run_live_chart_uses_persisted_market_and_timeframe -vv -s --tb=short --durations=20`
+- PowerShell job wrapper after patch: `python -X faulthandler -m pytest tests\test_live_chart_feed.py::test_run_live_chart_uses_persisted_market_and_timeframe -vv -s --tb=short --durations=20`
+- PowerShell job wrapper after patch: `python -X faulthandler -m pytest tests\test_live_ops.py tests\test_live_chart_feed.py -vv -s --tb=short --durations=20`
+- `(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')`
+
+## Focused pytest hang isolation validation results
+- Collection: PASS, 47 tests collected.
+- `tests\test_live_ops.py`: PASS, 18 passed in 0.19s under the 120s job wrapper.
+- Pre-patch `tests\test_live_chart_feed.py`: HUNG under the 120s job wrapper after `test_run_live_chart_switches_backfill_and_subscription_to_selected_market` passed.
+- Pre-patch isolated test: HUNG under the 30s job wrapper.
+- Post-patch isolated test: PASS, 1 passed in 0.84s under the 30s job wrapper.
+- Post-patch focused combined run: PASS, 47 passed in 1.11s under the 120s job wrapper.
+
+## Focused pytest hang isolation remaining work
+- No remaining focused pytest hang is known.
+- Broad test suites were not run, per the goal objective.
+
+## Focused pytest hang isolation next recommended step
+- Resume the larger scaffold only after reviewing this focused fix; stop before broad validation unless explicitly approved.
+
+## Phase 0 recovery and baseline gate verification
+- Updated at UTC: 2026-06-22T04:18:41Z
+- Scope: recovery, current repo state inspection, known hang-fix confirmation, focused hang-safe validation only. No Phase 1 scaffold audit or broader implementation was run.
+- Current repo state at start and end: `CODEX_HANDOFF.md` and `tests/test_live_chart_feed.py` modified.
+- Current diff stat at start and end: 2 files changed, 46 insertions(+), 1 deletion(-).
+- Changed files from interrupted/focused recovery work remain `tests/test_live_chart_feed.py` and `CODEX_HANDOFF.md`; nothing was reverted.
+- Confirmed the known hang fix is present in `tests\test_live_chart_feed.py::test_run_live_chart_uses_persisted_market_and_timeframe`: the test uses an advancing `monotonic_values` iterator for the injected `clock`.
+- Targeted inspection found no repo fixtures, subprocess test launches, blocking GUI launches, or tests invoking `--no-timeout` in the focused files. The focused `run_live_chart` tests use fake chart/Databento objects and finite `--timeout-seconds` args.
+- `pytest-timeout` was not available from `python -m pytest --help`, so focused validation used the PowerShell `Start-Job` / `Wait-Job` / `Stop-Job` wrapper.
+
+## Phase 0 recovery and baseline gate commands run
+- `Get-Content -Raw -LiteralPath 'C:\Users\donny\Desktop\futures_intraday_model\CODEX_HANDOFF.md'`
+- `git status --short`
+- `git diff --stat`
+- `rg -n -C 18 "def test_run_live_chart_uses_persisted_market_and_timeframe|monotonic_values|clock=lambda" tests\test_live_chart_feed.py`
+- Targeted `rg` inspection of `tests\test_live_ops.py`, `tests\test_live_chart_feed.py`, `live_chart_feed.py`, and imported `live_ops` modules used by those tests.
+- `git diff -- tests\test_live_chart_feed.py`
+- `python -m pytest --help | Select-String -Pattern '--timeout'`
+- `python -m pytest tests\test_live_ops.py tests\test_live_chart_feed.py --collect-only -q`
+- PowerShell job wrapper: `python -X faulthandler -m pytest tests\test_live_ops.py tests\test_live_chart_feed.py -vv -s --tb=short --durations=20`
+- Final `git status --short`
+- Final `git diff --stat`
+- `(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')`
+
+## Phase 0 recovery and baseline gate validation results
+- Collection: PASS, 47 tests collected in 0.13s.
+- Focused test command: PASS, 47 passed in 1.03s under the 120s PowerShell job wrapper.
+
+## Phase 0 recovery and baseline gate remaining work
+- Send Phase 1 audit goal only after reviewing this Phase 0 handoff; Phase 1 should map scaffold gaps without broad implementation.
