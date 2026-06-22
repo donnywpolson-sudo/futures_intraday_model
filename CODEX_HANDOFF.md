@@ -1,5 +1,39 @@
 # Codex Handoff
 
+## TN 2026 bounded Phase 1B raw repair
+- Updated at UTC: 2026-06-22T13:28:32Z
+- Scope: ran exactly one additional bounded Phase 1B raw repair for TN 2026 and bounded Phase 1C alignment validation. No Phase 2, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, or DBN source modification was run.
+
+Files changed/generated
+- `data/raw/TN/2026.parquet`: generated raw parquet repair output, 131674 rows, 3062842 bytes, SHA256 `7C4AEB049C8AA9183B5DEE1CDC4474A36E62261AD03B82DDB3EA9B1438348C86`.
+- `reports/phase_restart/tn_2026_raw_repair_alpha_tiered.yaml`: bounded validation profile for TN 2026.
+- `reports/phase_restart/tn_2026_phase1c_raw_repair_alignment.json`: bounded Phase 1C validation JSON.
+- `reports/phase_restart/tn_2026_phase1c_raw_repair_alignment.md`: bounded Phase 1C validation markdown.
+- `reports/phase_restart/tn_2026_phase1b_raw_repair.md`: repair evidence summary.
+- `reports/phase_restart/phase1b_raw_repair_progress.md`: cumulative Phase 1B raw repair progress.
+- `reports/data_manifest/manifest_coverage_check.csv` and `reports/data_manifest/manifest_coverage_summary.md`: refreshed manifest audit, raw missing reduced from 5 to 4.
+- `reports/data_manifest/remaining_cleanup_blockers.md`: updated current blocker counts.
+- `CODEX_HANDOFF.md`: recorded this run.
+
+Commands run
+- `python -m scripts.phase1B_convert.convert_databento_raw --symbols TN --start 2026-01-01 --end 2026-06-13 --dbn-root data/dbn/ohlcv_1m --raw-root data/raw --reports-root reports/raw_ingest --workers 1 --resume --offline-local-conditions`
+- `python -m scripts.phase1C_validate.audit_raw_dbn_alignment --config reports/phase_restart/tn_2026_raw_repair_alpha_tiered.yaml --profile raw_repair --dbn-root data/dbn --raw-root data/raw --expected-only --json-out reports/phase_restart/tn_2026_phase1c_raw_repair_alignment.json --md-out reports/phase_restart/tn_2026_phase1c_raw_repair_alignment.md`
+- `python scripts\audit_data_manifest.py`
+
+Validation results
+- Phase 1B conversion: PASS, `CONVERT_OK market=TN year=2026 inputs=1 output=data/raw/TN/2026.parquet rows=131674`.
+- Phase 1C alignment: PASS, `expected=1 raw=1 needs_phase1b=0 raw_only=0 invalid_manifests=0 source_hash_mismatches=0 definition_join_status=checked definition_join_mismatches=0`.
+- Manifest audit: PASS, `manifest_check issues=173 failures=0`; raw missing pairs decreased exactly 5 -> 4; `TN:2026` no longer appears as missing raw.
+- DBN source hashes before/after matched for TN 2026 `ohlcv_1m` and `definition`.
+
+Remaining work
+- Phase 1B raw repairs remaining: 4.
+- Phase 2 causal repair rows still require later user decision: 66.
+- Cleanup remains blocked and disabled until blockers are zero and cleanup is explicitly approved.
+
+Next recommended step
+- Review `reports/phase_restart/tn_2026_phase1b_raw_repair.md`; if accepted, approve force-adding only that ignored evidence report before commit, or run the next single bounded Phase 1B raw repair, likely ZL 2025, and stop before Phase 2 or cleanup.
+
 ## TN 2025 bounded Phase 1B raw repair
 - Updated at UTC: 2026-06-22T11:40:23Z
 - Scope: committed SR1 2026 evidence, then ran exactly one additional bounded Phase 1B raw repair for TN 2025 and bounded Phase 1C alignment validation. No Phase 2, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, or DBN source modification was run.
