@@ -1,0 +1,83 @@
+# Batch Phase 2 Build/Exclusion Plan
+
+- Updated at UTC: 2026-06-22T19:37:29Z
+- Scope: bounded report-only build/exclusion plan using the recorded Phase 2 decisions.
+- Decision state: PHASE2_BUILD_EXCLUSION_PLAN_APPROVED_REPORT_ONLY
+
+## Summary
+
+- Total Phase 2 decision rows: 66.
+- Accepted rows made executable for future bounded Phase 2 build approval: 58.
+- Deferred rows excluded from future bounded Phase 2 build batches: 8.
+- Phase 2 build commands run in this step: 0.
+- Cleanup commands run in this step: 0.
+
+This plan does not run Phase 2. It converts recorded decisions into an execution map: accepted rows can be run later in bounded one-row or market batches, and deferred rows remain excluded unless separately approved for recovery or override.
+
+## Deferred Exclusions
+
+These rows stay excluded from Phase 2 build batches:
+
+| Row | Exclusion reason |
+| --- | --- |
+| KE:2013 | Explicitly deferred because canonical status source is absent. |
+| KE:2014 | Explicitly deferred because canonical status source is absent. |
+| ZL:2012 | Explicitly deferred because canonical status source is absent. |
+| ZL:2013 | Explicitly deferred because canonical status source is absent. |
+| ZM:2011 | Explicitly deferred because canonical status source is absent. |
+| ZM:2012 | Explicitly deferred because canonical status source is absent. |
+| ZM:2013 | Explicitly deferred because canonical status source is absent. |
+| ZM:2014 | Explicitly deferred because canonical status source is absent. |
+
+## Executable Batches
+
+Run later only with explicit Phase 2 build approval. The safest execution shape is one market/year per command, using the existing one-row profile YAML and stopping after each market batch for validation.
+
+| Batch | Accepted rows | Count |
+| --- | --- | ---: |
+| KE | KE:2015, KE:2016, KE:2017, KE:2018, KE:2019, KE:2020, KE:2021, KE:2022, KE:2023, KE:2024, KE:2025, KE:2026 | 12 |
+| SR1 | SR1:2018, SR1:2019, SR1:2020, SR1:2021, SR1:2022, SR1:2023, SR1:2024, SR1:2025, SR1:2026 | 9 |
+| TN | TN:2016, TN:2017, TN:2018, TN:2019, TN:2020, TN:2021, TN:2022, TN:2023, TN:2024, TN:2025, TN:2026 | 11 |
+| ZL | ZL:2011, ZL:2014, ZL:2015, ZL:2016, ZL:2017, ZL:2018, ZL:2019, ZL:2020, ZL:2021, ZL:2022, ZL:2023, ZL:2024, ZL:2025, ZL:2026 | 14 |
+| ZM | ZM:2015, ZM:2016, ZM:2017, ZM:2018, ZM:2019, ZM:2020, ZM:2021, ZM:2022, ZM:2023, ZM:2024, ZM:2025, ZM:2026 | 12 |
+
+## Later Command Pattern
+
+For a later explicitly approved one-row Phase 2 build, use this pattern and replace `<slug>` with lowercase `<market>_<year>`:
+
+```powershell
+python -m scripts.phase2_causal_base.build_causal_base_data --profile phase2_repair --profile-config reports\phase_restart\<slug>_phase2_causal_repair.yaml --raw-root data\raw --output-root data\causally_gated_normalized --reports-root reports\phase_restart --raw-alignment-report reports\phase_restart\<slug>_phase2_raw_alignment.json
+```
+
+Stop conditions for any future build approval:
+
+- `git status --short -- data` is non-empty before the run.
+- The selected row is not in the accepted executable set.
+- A deferred row is selected.
+- More than the approved row or market batch would run.
+- Phase 2 validation fails.
+- Cleanup would be required.
+
+## Validation Required After Future Build
+
+After any later explicitly approved build batch:
+
+```powershell
+python scripts\audit_data_manifest.py
+git status --short -- data
+```
+
+Expected future build outputs are canonical causal parquet files under `data\causally_gated_normalized`. They are generated data artifacts and must remain untracked unless a separate data-artifact policy changes.
+
+## Safety
+
+- No Phase 2 build was run.
+- No cleanup was run.
+- No phase 3+ command was run.
+- No move, merge, quarantine, delete, rebuild, or redownload occurred.
+- DBN source files were not modified.
+- No source/status acquisition or reconstruction was run.
+- No policy threshold was changed.
+- No canonical causal parquet was written in this step.
+- No data artifact was staged.
+- Cleanup remains disabled.

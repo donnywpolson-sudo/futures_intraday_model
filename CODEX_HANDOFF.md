@@ -1,5 +1,39 @@
 # Codex Handoff
 
+## Batch Phase 2 build/exclusion plan
+- Updated at UTC: 2026-06-22T19:37:29Z
+- Scope: created the user-approved bounded report-only Phase 2 build/exclusion plan from the recorded decisions. Accepted rows are mapped to future executable one-row/market batches; deferred rows remain excluded. No Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, source acquisition, source reconstruction, policy threshold change, or DBN source modification was run.
+
+Files changed/generated
+- `reports/phase_restart/batch_phase2_build_exclusion_plan.md`: human-readable build/exclusion plan.
+- `reports/phase_restart/batch_phase2_build_exclusion_plan.json`: machine-readable build/exclusion plan.
+- `CODEX_HANDOFF.md`: handoff update.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- `git diff --check`
+- PowerShell reads of `reports/phase_restart/batch_phase2_policy_roll_acceptance.json` and `reports/phase_restart/batch_phase2_source_status_final_decisions.json`.
+- Read Phase 2 CLI arguments from `scripts/phase2_causal_base/build_causal_base_data.py`.
+- No Phase 2 build or cleanup commands were run.
+
+Validation results
+- Total Phase 2 decision rows: 66.
+- Accepted executable rows for later explicit build approval: 58.
+- Deferred excluded rows: 8.
+- Future batches: KE 12, SR1 9, TN 11, ZL 14, ZM 12.
+- Approved/ran Phase 2 build commands in this step: 0.
+- Approved/ran cleanup commands in this step: 0.
+- `git status --short -- data`: empty before edits.
+
+Remaining work
+- The build/exclusion plan is report-only and not yet committed.
+- A separate explicit approval is still required before running any Phase 2 build batch.
+- Cleanup remains blocked and disabled.
+
+Next recommended step
+- User decision needed: approve force-adding only `reports/phase_restart/batch_phase2_build_exclusion_plan.md/json` and staging `CODEX_HANDOFF.md`, then commit/push reports only. Stop before Phase 2 build execution.
+
 ## Batch Phase 2 source/status final decisions
 - Updated at UTC: 2026-06-22T18:38:32Z
 - Scope: recorded conservative batch decisions for the 34 Phase 2 source/status rows. Deferred 8 rows with absent canonical status source files; accepted exception handling for 26 rows with canonical sources present but status/statistics edge gaps. No Phase 2 build, Phase 3+, cleanup, quarantine, merge, move, delete, DBN redownload, rebuild, source acquisition, source reconstruction, policy threshold change, or DBN source modification was run.
