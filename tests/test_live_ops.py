@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import ast
+import json
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from io import StringIO
+from pathlib import Path
 
 import pytest
 
 import live_chart_feed as chart
+import scripts.kill_switch_off as kill_switch_off_script
+import scripts.kill_switch_on as kill_switch_on_script
+import scripts.paper_cancel_all as paper_cancel_all_script
+import scripts.paper_flatten_all as paper_flatten_all_script
 from live_ops.audit import AuditLogger
 from live_ops.bar_builder import LiveBarBuilder, bar_contract_row, check_bar_parity
 from live_ops.broker import LiveBroker, PaperBroker
@@ -146,6 +154,10 @@ def test_data_quality_gate_blocks_bad_ohlc_and_duplicate_timestamp() -> None:
     gate = DataQualityGate(config)
 
     assert gate.validate(bar(high=98.0), now=BASE).reason_code == "BAD_OHLC"
+    assert DataQualityGate(config).validate(
+        bar(timestamp_utc=BASE - timedelta(minutes=10)),
+        now=BASE,
+    ).reason_code == "DATA_STALE"
     assert gate.validate(bar(), now=BASE + timedelta(seconds=1)).passed
     duplicate = gate.validate(bar(), now=BASE + timedelta(seconds=2))
 
@@ -205,8 +217,32 @@ def test_risk_blocks_by_default_and_paper_override_does_not_weaken_defaults() ->
 
     assert default_risk.reason_code == "TRADING_DISABLED"
     assert safe.allow_trading is False
+    assert safe.allow_paper_trading is False
+    assert safe.allow_live_broker is False
+    assert safe.duplicate_timestamp_policy == "block"
     assert paper.allow_trading is True
     assert paper.allow_live_broker is False
+
+
+def test_risk_blocks_live_mode_and_live_broker_flag() -> None:
+    dq, model, signal = ready_signal()
+
+    for config in (
+        replace(paper_smoke_config(), allow_live_broker=True),
+        replace(paper_smoke_config(), mode="live"),
+    ):
+        decision = RiskManager(config).evaluate(
+            order=order(),
+            signal=signal,
+            data_quality=dq,
+            model_status=model,
+            reconciliation=ReconciliationResult("OK", "OK", {}),
+            positions={},
+            now=BASE,
+            session_ok=True,
+        )
+
+        assert decision.reason_code == "LIVE_BROKER_BLOCKED"
 
 
 def test_risk_blocks_kill_switch_and_session_guard() -> None:
@@ -249,6 +285,16 @@ def test_session_guard_missing_or_closed_session_is_false() -> None:
 def test_paper_broker_fill_cancel_flatten_and_duplicate_reject(tmp_path) -> None:
     dq, model, signal = ready_signal()
     config = paper_smoke_config()
+    safe_risk = RiskManager(safe_default_config()).evaluate(
+        order=order(order_id="SAFE"),
+        signal=signal,
+        data_quality=dq,
+        model_status=model,
+        reconciliation=ReconciliationResult("OK", "OK", {}),
+        positions={},
+        now=BASE,
+        session_ok=True,
+    )
     risk = RiskManager(config).evaluate(
         order=order(),
         signal=signal,
@@ -259,12 +305,18 @@ def test_paper_broker_fill_cancel_flatten_and_duplicate_reject(tmp_path) -> None
         now=BASE,
         session_ok=True,
     )
+    safe_response = PaperBroker().place_order(order(order_id="SAFE"), risk_decision=safe_risk, bar=bar())
     broker = PaperBroker(state_path=tmp_path / "paper.json", tick_sizes={"ES": 0.25})
     response = broker.place_order(order(), risk_decision=risk, bar=bar())
     duplicate = broker.place_order(order(), risk_decision=RiskDecision(True, "OK", "approved", order(), None, {}), bar=bar())
 
+    assert safe_response.reason_code == "RISK_REJECTED"
+    assert safe_response.accepted is False
     assert response.status == "FILLED"
     assert broker.positions[position_key("ES", "ESU6")] == 1
+    loaded = PaperBroker.load(tmp_path / "paper.json")
+    assert loaded.positions[position_key("ES", "ESU6")] == 1
+    assert loaded.fills[0].order_id == "ORD-1"
     assert duplicate.reason_code == "DUPLICATE_ORDER_ID"
 
     open_broker = PaperBroker(fill_policy="leave_open")
@@ -278,33 +330,153 @@ def test_paper_broker_fill_cancel_flatten_and_duplicate_reject(tmp_path) -> None
 
 
 def test_reconciliation_mismatch_and_stale_open_order_warning() -> None:
+    assert Reconciler().reconcile(strategy_positions={}, broker=PaperBroker(), now=BASE).status == "OK"
+
     broker = PaperBroker()
     broker.positions[position_key("ES", "ESU6")] = 1
     mismatch = Reconciler().reconcile(strategy_positions={}, broker=broker, now=BASE)
 
+    open_mismatch_broker = PaperBroker()
+    open_mismatch_broker.open_orders["OPEN"] = order(order_id="OPEN")
+    open_mismatch = Reconciler().reconcile(
+        strategy_positions={},
+        strategy_open_orders=set(),
+        broker=open_mismatch_broker,
+        now=BASE,
+    )
     open_broker = PaperBroker(fill_policy="leave_open")
     open_broker.open_orders["OLD"] = order(order_id="OLD", created_timestamp=BASE - timedelta(minutes=10))
-    stale = Reconciler(stale_order_seconds=60).reconcile(strategy_positions={}, broker=open_broker, now=BASE)
+    stale = Reconciler(stale_order_seconds=60).reconcile(
+        strategy_positions={},
+        strategy_open_orders={"OLD"},
+        broker=open_broker,
+        now=BASE,
+    )
+    dq, model, signal = ready_signal()
+    blocked = RiskManager(paper_smoke_config()).evaluate(
+        order=order(order_id="RECON"),
+        signal=signal,
+        data_quality=dq,
+        model_status=model,
+        reconciliation=open_mismatch,
+        positions={},
+        now=BASE,
+        session_ok=True,
+    )
 
     assert mismatch.status == "FAIL"
+    assert open_mismatch.status == "FAIL"
+    assert open_mismatch.reason_code == "OPEN_ORDER_MISMATCH"
     assert stale.status == "OK"
     assert stale.reason_code == "STALE_OPEN_ORDER"
+    assert blocked.reason_code == "RECONCILIATION_FAILED"
 
 
 def test_audit_logging_one_row_per_decision_and_exception(tmp_path) -> None:
     path = tmp_path / "audit.jsonl"
     logger = AuditLogger(path)
-    logger.write_decision({"run_id": "r1", "exception": None})
+    logger.write_decision(
+        {
+            "run_id": "r1",
+            "exception": None,
+            "api_key": "db-secret",
+            "nested": {"password": "pw-secret"},
+        }
+    )
     logger.write_decision({"run_id": "r1", "exception": "simulated"})
 
     lines = path.read_text(encoding="utf-8").splitlines()
+    rows = [json.loads(line) for line in lines]
     assert len(lines) == 2
-    assert "simulated" in lines[1]
+    assert rows[1]["exception"] == "simulated"
+    assert rows[0]["api_key"] == "[REDACTED]"
+    assert rows[0]["nested"]["password"] == "[REDACTED]"
+    assert "db-secret" not in path.read_text(encoding="utf-8")
+
+
+def test_paper_control_scripts_use_configured_paper_state_only(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    kill_file = tmp_path / "runtime" / "KILL_SWITCH_ON"
+    config = replace(safe_default_config(), kill_switch_file=str(kill_file))
+    monkeypatch.setattr(kill_switch_on_script, "safe_default_config", lambda: config)
+    monkeypatch.setattr(kill_switch_off_script, "safe_default_config", lambda: config)
+
+    assert kill_switch_on_script.main() == 0
+    assert kill_file.exists()
+    assert kill_switch_off_script.main() == 0
+    assert not kill_file.exists()
+
+    dq, model, signal = ready_signal()
+    risk = RiskManager(paper_smoke_config()).evaluate(
+        order=order(order_id="OPEN"),
+        signal=signal,
+        data_quality=dq,
+        model_status=model,
+        reconciliation=ReconciliationResult("OK", "OK", {}),
+        positions={},
+        now=BASE,
+        session_ok=True,
+    )
+    state_path = tmp_path / "paper_state.json"
+    broker = PaperBroker(state_path=state_path, fill_policy="leave_open")
+    assert broker.place_order(order(order_id="OPEN"), risk_decision=risk, bar=bar()).status == "OPEN"
+    assert PaperBroker.load(state_path).open_orders.keys() == {"OPEN"}
+
+    monkeypatch.setattr(paper_cancel_all_script, "STATE_PATH", state_path)
+    assert paper_cancel_all_script.main() == 0
+    assert PaperBroker.load(state_path).open_orders == {}
+
+    broker = PaperBroker(state_path=state_path)
+    broker.positions[position_key("ES", "ESU6")] = 2
+    broker.save()
+    monkeypatch.setattr(paper_flatten_all_script, "STATE_PATH", state_path)
+    assert paper_flatten_all_script.main() == 0
+    flattened = PaperBroker.load(state_path)
+    assert flattened.positions[position_key("ES", "ESU6")] == 0
+    assert flattened.fills[0].order_id == "FLATTEN-ES:ESU6"
 
 
 def test_live_broker_placeholder_cannot_place_orders() -> None:
     with pytest.raises(NotImplementedError):
         LiveBroker().place_order(order())
+
+
+def test_live_scaffold_has_no_real_broker_sdk_imports() -> None:
+    blocked_roots = {
+        "ibapi",
+        "ib_insync",
+        "ibkr",
+        "tws",
+        "cqg",
+        "rithmic",
+        "tradovate",
+        "ninjatrader",
+    }
+    paths = [
+        Path("live_chart_feed.py"),
+        *Path("live_ops").glob("*.py"),
+        Path("scripts/smoke_live_trading.py"),
+        Path("scripts/kill_switch_on.py"),
+        Path("scripts/kill_switch_off.py"),
+        Path("scripts/paper_cancel_all.py"),
+        Path("scripts/paper_flatten_all.py"),
+    ]
+
+    found: list[str] = []
+    for path in paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                modules = [node.module or ""]
+            else:
+                continue
+            for module in modules:
+                root = module.split(".", 1)[0].lower().replace("-", "_")
+                if root in blocked_roots:
+                    found.append(f"{path}:{module}")
+
+    assert found == []
 
 
 def test_kill_switch_file_blocks_orders(tmp_path) -> None:
