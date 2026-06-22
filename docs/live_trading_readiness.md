@@ -115,7 +115,7 @@ Remaining Medium production-depth blockers by Part ID:
 * H: optional cancel/flatten-on-kill config action is not wired as runtime behavior.
 * I: next-bar-open paper fill policy and direct broker-owned audit append remain deferred.
 * J: audit-state reconciliation remains minimal.
-* K: finite smoke audit integration exists, but fsync/atomic durability hardening and broader runtime durability remain deferred.
+* K: finite smoke audit integration fsyncs JSONL appends and restores paper state if audit append fails; atomic multi-system durability and broader runtime durability remain deferred.
 * L: system clock drift, low disk warnings, and full reconnect/backfill policy remain deferred.
 * M: rollover calendar automation/interface remains deferred beyond explicit active-contract checks.
 * N: monitor-only outside session and flatten-before-close runtime behavior remain deferred.

@@ -563,6 +563,7 @@ def _run_decision_cycle(
     reconciliation = pre_reconciliation or ReconciliationResult("OK", "OK", {})
     broker_response = None
     exception: str | None = None
+    broker_snapshot: dict[str, Any] | None = None
 
     try:
         data_quality = data_gate.validate(
@@ -621,12 +622,15 @@ def _run_decision_cycle(
                 logger.ensure_writable()
             except OSError as exc:
                 raise RuntimeError(f"audit log write preflight failed: {exc}") from exc
+            broker_snapshot = _snapshot_broker(broker)
             if raise_broker_exception:
                 raise RuntimeError("forced smoke broker exception")
             broker_response = broker.place_order(order, risk_decision=risk, bar=bar)
             if broker_response.accepted:
                 reconciliation = Reconciler().reconcile(strategy_positions=dict(broker.positions), broker=broker, now=now)
     except Exception as exc:  # noqa: BLE001 - smoke runner must log and fail closed.
+        if broker_snapshot is not None:
+            _restore_broker(broker, broker_snapshot)
         exception = f"{type(exc).__name__}: {exc}"
         data_quality = _exception_data_quality(bar, config, "EXCEPTION", exception)
         model = ModelReadinessResult("UNAVAILABLE", "EXCEPTION")
@@ -671,26 +675,90 @@ def _run_decision_cycle(
         status_line=status_line,
         exception=exception,
     )
-    logger.write_decision(
-        _event(
-            name=name,
+    try:
+        logger.write_decision(
+            _event(
+                name=name,
+                bar=bar,
+                data_quality=data_quality,
+                model=model,
+                signal=signal,
+                risk=risk,
+                operator_control=operator_control_state,
+                operator_control_decision=operator_control_decision,
+                order=order,
+                broker_response=broker_response,
+                reconciliation=reconciliation,
+                operator_status=operator_status,
+                status_line=status_line,
+                broker=broker,
+                exception=exception,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - audit append failure must fail closed.
+        if broker_snapshot is not None:
+            _restore_broker(broker, broker_snapshot)
+        exception = f"{type(exc).__name__}: audit log append failed: {exc}"
+        data_quality = _exception_data_quality(bar, config, "EXCEPTION", exception)
+        model = ModelReadinessResult("UNAVAILABLE", "EXCEPTION")
+        signal = build_signal_state(bar=bar, data_quality=data_quality, model_status=model, now=now, signal=None)
+        risk = RiskDecision(
+            False,
+            "EXCEPTION",
+            "decision cycle exception; no order can be submitted",
+            None,
+            order,
+            {"mode": config.mode, "allow_trading": config.allow_trading},
+        )
+        reconciliation = ReconciliationResult("FAIL", "EXCEPTION", {"exception": exception})
+        broker_response = None
+        operator_status = _operator_status(
+            config=config,
             bar=bar,
+            data_quality=data_quality,
+            model=model,
+            signal=signal,
+            risk=risk,
+            broker=broker,
+            reconciliation=reconciliation,
+            kill_switch_on=kill_switch_on,
+            operator_control=operator_control_state,
+            exception=exception,
+            cycle_number=cycle_number,
+        )
+        status_line = render_operator_status(operator_status, width=120)
+        result = DecisionCycleResult(
+            name=name,
             data_quality=data_quality,
             model=model,
             signal=signal,
             risk=risk,
             operator_control=operator_control_state,
             operator_control_decision=operator_control_decision,
-            order=order,
             broker_response=broker_response,
             reconciliation=reconciliation,
             operator_status=operator_status,
             status_line=status_line,
-            broker=broker,
             exception=exception,
         )
-    )
     return result
+
+
+def _snapshot_broker(broker: PaperBroker) -> dict[str, Any]:
+    return {
+        "positions": dict(broker.positions),
+        "open_orders": dict(broker.open_orders),
+        "accepted_order_ids": set(broker._accepted_order_ids),
+        "fills": list(broker.fills),
+    }
+
+
+def _restore_broker(broker: PaperBroker, snapshot: Mapping[str, Any]) -> None:
+    broker.positions = dict(snapshot["positions"])
+    broker.open_orders = dict(snapshot["open_orders"])
+    broker._accepted_order_ids = set(snapshot["accepted_order_ids"])
+    broker.fills = list(snapshot["fills"])
+    broker.save()
 
 
 def _event(

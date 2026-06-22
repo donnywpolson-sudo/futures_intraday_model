@@ -953,6 +953,16 @@ def test_reconciliation_mismatch_and_stale_open_order_warning() -> None:
         now=BASE,
         session_ok=True,
     )
+    position_blocked = RiskManager(paper_smoke_config()).evaluate(
+        order=order(order_id="RECON-POSITION"),
+        signal=signal,
+        data_quality=dq,
+        model_status=model,
+        reconciliation=mismatch,
+        positions={},
+        now=BASE,
+        session_ok=True,
+    )
 
     assert mismatch.status == "FAIL"
     assert open_mismatch.status == "FAIL"
@@ -960,6 +970,7 @@ def test_reconciliation_mismatch_and_stale_open_order_warning() -> None:
     assert stale.status == "OK"
     assert stale.reason_code == "STALE_OPEN_ORDER"
     assert blocked.reason_code == "RECONCILIATION_FAILED"
+    assert position_blocked.reason_code == "RECONCILIATION_FAILED"
 
 
 def test_audit_logging_one_row_per_decision_and_exception(tmp_path) -> None:
@@ -970,10 +981,10 @@ def test_audit_logging_one_row_per_decision_and_exception(tmp_path) -> None:
             "run_id": "r1",
             "exception": None,
             "api_key": "db-secret",
-            "nested": {"password": "pw-secret"},
+            "nested": {"password": "pw-secret", "items": [{"account_number": "acct-secret"}]},
         }
     )
-    logger.write_decision({"run_id": "r1", "exception": "simulated"})
+    AuditLogger(path).write_decision({"run_id": "r1", "exception": "simulated"})
 
     lines = path.read_text(encoding="utf-8").splitlines()
     rows = [json.loads(line) for line in lines]
@@ -981,13 +992,19 @@ def test_audit_logging_one_row_per_decision_and_exception(tmp_path) -> None:
     assert rows[1]["exception"] == "simulated"
     assert rows[0]["api_key"] == "[REDACTED]"
     assert rows[0]["nested"]["password"] == "[REDACTED]"
+    assert rows[0]["nested"]["items"][0]["account_number"] == "[REDACTED]"
     assert "db-secret" not in path.read_text(encoding="utf-8")
+    assert "acct-secret" not in path.read_text(encoding="utf-8")
 
 
 def test_decision_cycle_feature_broker_and_audit_failures_fail_closed(tmp_path) -> None:
     class FailingPreflightAuditLogger(AuditLogger):
         def ensure_writable(self) -> None:
             raise OSError("simulated audit write failure")
+
+    class FailingAppendAuditLogger(AuditLogger):
+        def write_decision(self, event: object) -> None:
+            raise OSError("simulated audit append failure")
 
     config = paper_smoke_config()
     feature = _run_decision_cycle(
@@ -1016,6 +1033,16 @@ def test_decision_cycle_feature_broker_and_audit_failures_fail_closed(tmp_path) 
         bar=smoke_bar(),
         order=smoke_order(order_id="ORD-AUDIT-TEST"),
     )
+    append_broker = PaperBroker()
+    append_audit = _run_decision_cycle(
+        name="audit_append_exception_test",
+        logger=FailingAppendAuditLogger(tmp_path / "audit-append.jsonl"),
+        cycle_number=4,
+        config=config,
+        bar=smoke_bar(),
+        broker=append_broker,
+        order=smoke_order(order_id="ORD-AUDIT-APPEND-TEST"),
+    )
 
     assert feature.signal.signal == "NO_SIGNAL"
     assert feature.risk.reason_code == "EXCEPTION"
@@ -1027,6 +1054,12 @@ def test_decision_cycle_feature_broker_and_audit_failures_fail_closed(tmp_path) 
     assert audit.risk.reason_code == "EXCEPTION"
     assert audit.broker_response is None
     assert "audit log" in str(audit.exception)
+    assert append_audit.risk.reason_code == "EXCEPTION"
+    assert append_audit.broker_response is None
+    assert "audit log append" in str(append_audit.exception)
+    assert append_broker.positions == {}
+    assert append_broker.open_orders == {}
+    assert append_broker.fills == []
 
 
 def test_paper_control_scripts_use_configured_paper_state_only(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1036,7 +1069,9 @@ def test_paper_control_scripts_use_configured_paper_state_only(tmp_path, monkeyp
     monkeypatch.setattr(kill_switch_off_script, "safe_default_config", lambda: config)
 
     assert kill_switch_on_script.main() == 0
+    assert kill_switch_on_script.main() == 0
     assert kill_file.exists()
+    assert kill_switch_off_script.main() == 0
     assert kill_switch_off_script.main() == 0
     assert not kill_file.exists()
 
@@ -1058,6 +1093,7 @@ def test_paper_control_scripts_use_configured_paper_state_only(tmp_path, monkeyp
 
     monkeypatch.setattr(paper_cancel_all_script, "STATE_PATH", state_path)
     assert paper_cancel_all_script.main() == 0
+    assert paper_cancel_all_script.main() == 0
     assert PaperBroker.load(state_path).open_orders == {}
 
     broker = PaperBroker(state_path=state_path)
@@ -1065,9 +1101,11 @@ def test_paper_control_scripts_use_configured_paper_state_only(tmp_path, monkeyp
     broker.save()
     monkeypatch.setattr(paper_flatten_all_script, "STATE_PATH", state_path)
     assert paper_flatten_all_script.main() == 0
+    assert paper_flatten_all_script.main() == 0
     flattened = PaperBroker.load(state_path)
     assert flattened.positions[position_key("ES", "ESU6")] == 0
     assert flattened.fills[0].order_id == "FLATTEN-ES:ESU6"
+    assert len(flattened.fills) == 1
 
 
 def test_live_broker_placeholder_cannot_place_orders() -> None:

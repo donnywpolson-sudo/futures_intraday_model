@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -27,8 +28,9 @@ class AuditLogger:
 
     def ensure_writable(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8"):
-            pass
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.flush()
+            os.fsync(handle.fileno())
 
     def write_decision(self, event: Mapping[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -38,6 +40,8 @@ class AuditLogger:
         }
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(plain_data(payload), sort_keys=True, separators=(",", ":")) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
 
 
 def _redact_sensitive(value: Any) -> Any:
