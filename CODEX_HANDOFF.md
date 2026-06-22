@@ -1,5 +1,28 @@
 # Codex Handoff
 
+## Final repair/duplicate decision packet
+- Updated at UTC: 2026-06-22T10:56:58Z
+- Scope: reviewed the remaining repair and duplicate blockers into explicit decision classes. No repair, cleanup, quarantine, merge, move, delete, rebuild, redownload, conversion, data generation, expensive job, phase 3+ command, or DBN source modification was run.
+
+Report locations
+- `reports/data_manifest/final_repair_duplicate_decision_packet.md`.
+- `reports/data_manifest/final_repair_duplicate_decision_matrix.csv`.
+- `reports/data_manifest/remaining_cleanup_blockers.md`.
+
+Decision counts
+- Repair rows: 76 `APPROVE_BOUNDED_REPAIR_LATER`, 0 explicit deferrals, 0 `UNKNOWN_BLOCKING_CLEANUP`.
+- Duplicate rows: 8 `KEEP_BOTH_DO_NOT_TOUCH`, 4 `USER_DECISION_REQUIRED`, 0 explicit deferrals, 0 `UNKNOWN_BLOCKING_CLEANUP`.
+- Remaining execution approvals required before any repair or duplicate mutation: 80.
+- Cleanup-gate policy acceptance rows before blockers are zero: 88.
+
+Cleanup gate status
+- Cleanup remains blocked and disabled until blockers are zero and cleanup is explicitly approved.
+- No data files were deleted.
+- No DBN source files were modified.
+- Cleanup was not run.
+
+Next recommended step
+- User decision needed: approve bounded repair groups or explicitly defer repairs, then decide keep/merge/quarantine/defer policy for duplicate rows; stop before running repair or moving data.
 ## Remaining cleanup blockers
 - Updated at UTC: 2026-06-22T10:44:37Z
 - Scope: documented the remaining repair and duplicate decision paths after committing the approved status manifest policy. No cleanup, quarantine, merge, data move, data delete, DBN redownload, DBN source modification, rebuild, conversion, data generation, expensive job, phase 3+ command, or missing-data repair was run.
