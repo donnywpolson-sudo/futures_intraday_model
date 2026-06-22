@@ -1,5 +1,28 @@
 # Codex Handoff
 
+## Status manifest policy decision point
+- Updated at UTC: 2026-06-22T10:36:00Z
+- Scope: reviewed and accepted the bounded smoke-validation evidence commit `ead39bc`, then wrote a report-only `data/dbn/status` manifest policy decision point. No cleanup, quarantine, merge, data move, data delete, DBN redownload, DBN source modification, rebuild, conversion, data generation, expensive job, phase 3+ command, or `configs/data_manifest.yaml` edit was run.
+
+Smoke commit review status
+- `ead39bc Add bounded phase smoke validation` was accepted as smoke evidence.
+- The commit touches only `CODEX_HANDOFF.md` and `reports/phase_restart/*`; it does not modify scripts, tests, data, DBN source files, cleanup code, or phase 3+ behavior.
+- Smoke reports record PASS for Phase 1C expected-only alignment and Phase 2 readiness-only, with no `data/` status changes.
+
+Status manifest policy decision report
+- Report: `reports/data_manifest/status_manifest_policy_decision.md`.
+- Current status-policy blocker: 68 missing `data/dbn/status` pairs classified as `MANIFEST_FIX_RECOMMENDED`.
+- Recommended user decision: approve explicit deferral of exactly those 68 status pairs under a later scoped `configs/data_manifest.yaml` edit, preserving cleanup disabled.
+- If approved and later implemented, expected blocker change is 68 `MANIFEST_FIX_RECOMMENDED` rows to 0; cleanup still remains blocked by repair and duplicate/user-decision rows.
+- If rejected, the 68 status rows remain repair/redownload-required before cleanup evaluation.
+
+Cleanup gate status
+- Cleanup remains blocked and disabled.
+- No cleanup, move, quarantine, merge, delete, rebuild, redownload, DBN source modification, or config edit occurred.
+
+Next recommended step
+- User decision needed: approve or reject the `data/dbn/status` manifest policy recommendation in `reports/data_manifest/status_manifest_policy_decision.md`.
+
 ## Bounded phase smoke-validation conflict resolution
 - Updated at UTC: 2026-06-22T10:24:23Z
 - Scope: resolved the active objective conflict by continuing the bounded smoke-validation track. The worktree was clean at preflight, so the four referenced code/test changes were already committed in HEAD; they were reviewed as current smoke-validation implementation rather than reverted or discarded. No cleanup, quarantine, data move, data delete, DBN redownload, DBN source modification, full rebuild, expensive job, phase 3+ command, or generated data staging was run.
