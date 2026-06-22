@@ -678,3 +678,23 @@ Updated at UTC: 2026-06-22T00:23:29Z
 - Test results: PASS, `tests\test_live_ops.py` collected 30 tests; PASS, `tests\test_live_ops.py tests\test_live_chart_feed.py` collected 59 tests; `git diff --check` reported only CRLF warnings.
 - Remaining work: no broker cancel-all, flatten-all, live broker integration, or real order path was added.
 - Next recommended step: included in the commit gate after reviewing the expected Phase 0-4 scaffold files and rerunning focused validation.
+
+## Live/OHLCV parity and model readiness hardening
+- Updated at UTC: 2026-06-22T05:52:48Z
+- Scope: Part C historical/live OHLCV parity and Part F model readiness, paper/smoke-only.
+- What changed: parity results now expose missing/extra columns, dtype mismatches, UTC timezone status, final/partial-bar status, ordered expected columns, and default mixed-contract-window blocking; model readiness results now expose observed feature order.
+- Files changed by this slice: `live_ops/bar_builder.py`, `live_ops/model.py`, `live_ops/schemas.py`, `tests/test_live_ops.py`, `CODEX_HANDOFF.md`.
+- Commands run: read goal objective file; `git status --short --untracked-files=all`; `git log -2 --oneline`; `git diff --stat`; `python -m py_compile live_ops\schemas.py live_ops\bar_builder.py live_ops\model.py tests\test_live_ops.py`; PowerShell job wrapper for `python -X faulthandler -m pytest tests\test_live_ops.py -vv -s --tb=short --durations=20`; PowerShell job wrapper for `python -X faulthandler -m pytest tests\test_live_ops.py tests\test_live_chart_feed.py -q`; PowerShell job wrapper for `python scripts\smoke_live_trading.py`; PowerShell job wrapper for `python -X faulthandler -m pytest tests -q --tb=short --durations=20`; `git diff --check`; `git status --short --untracked-files=all`.
+- Test results: PASS, compile; PASS, focused live ops `33 passed`; PASS, live-ops sanity `62 passed`; PASS, smoke CLI `PASS live trading smoke scenarios=26 decision_cycles=26 audit_rows=26`; PASS, broad bounded pytest `718 passed, 58 warnings`; PASS, `git diff --check` with CRLF warnings only.
+- Remaining work: no broker SDKs, credentials, GUI/chart launch, live order paths, generated artifact staging, or model research output changes were added.
+- Next recommended step: select the next scoped live-ops production-depth part, likely Part A/O operator console polish or Part L/M/N runtime failure guards.
+
+## Runtime failure, contract, and session safety guards
+- Updated at UTC: 2026-06-22T06:35:22Z
+- Scope: Part L runtime/connectivity/process guards, Part M contract/symbol safety, and Part N session/calendar safety; paper/smoke-only.
+- What changed: added audit preflight, structured session check results, explicit feed/heartbeat/reconnect-backfill/root-symbol runtime data-quality guards, risk blocks for active symbol/contract and monitor-only state, and smoke coverage for disconnect, no heartbeat, reconnect backfill, closed/missing sessions, root/contract mismatch, feature/model/broker exceptions, and audit preflight failure.
+- Files changed by this slice: `live_ops/audit.py`, `live_ops/quality.py`, `live_ops/risk.py`, `live_ops/smoke.py`, `tests/test_live_ops.py`, `CODEX_HANDOFF.md`.
+- Commands run: read goal objective file; `git status --short --untracked-files=all`; `git log -3 --oneline`; `git diff --stat`; `python -m py_compile live_ops\audit.py live_ops\quality.py live_ops\risk.py live_ops\smoke.py tests\test_live_ops.py`; PowerShell job wrapper for `python -X faulthandler -m pytest tests\test_live_ops.py -vv -s --tb=short --durations=20`; PowerShell job wrapper for `python -X faulthandler -m pytest tests\test_live_ops.py tests\test_live_chart_feed.py -q`; PowerShell job wrapper for `python scripts\smoke_live_trading.py`; PowerShell job wrapper for `python -X faulthandler -m pytest tests -q --tb=short --durations=20`; `git diff --check`; `git status --short --untracked-files=all`.
+- Test results: PASS, compile; PASS, focused live ops `36 passed`; PASS, live-ops sanity `65 passed`; PASS, smoke CLI `PASS live trading smoke scenarios=34 decision_cycles=34 audit_rows=34`; PASS, broad bounded pytest `721 passed, 58 warnings`; PASS, `git diff --check` with CRLF warnings only.
+- Remaining work: no broker SDKs, credentials, GUI/chart launch, live order paths, generated artifact staging, or production live trading behavior were added.
+- Next recommended step: choose the next remaining live-ops part, likely Part A/O operator console polish or Part H/I/J/K operational controls depth.

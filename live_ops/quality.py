@@ -32,6 +32,10 @@ class DataQualityGate:
         *,
         now: datetime | None = None,
         heartbeat_timestamp_utc: datetime | None = None,
+        heartbeat_required: bool = False,
+        feed_connected: bool = True,
+        reconnect_backfill_required: bool = False,
+        active_symbol: str | None = None,
         active_contract: str | None = None,
     ) -> DataQualityResult:
         try:
@@ -42,6 +46,13 @@ class DataQualityGate:
         age_seconds = None
         if now is not None:
             age_seconds = max(0.0, (utc_datetime(now) - ts).total_seconds())
+
+        if not feed_connected:
+            return self._block(bar, "FEED_DISCONNECTED", "market data feed is disconnected", ts, age_seconds)
+        if heartbeat_required and heartbeat_timestamp_utc is None:
+            return self._block(bar, "NO_HEARTBEAT", "feed heartbeat is required but missing", ts, age_seconds)
+        if reconnect_backfill_required:
+            return self._block(bar, "RECONNECT_BACKFILL_REQUIRED", "reconnect requires replay/backfill before trading", ts, age_seconds)
 
         key = (bar.symbol, bar.contract, bar.timeframe)
         timestamp_key = (*key, ts)
@@ -87,6 +98,8 @@ class DataQualityGate:
             return self._block(bar, "UNKNOWN_SYMBOL", "symbol is not explicitly allowed", ts, age_seconds)
         if self.config.allowed_contracts and bar.contract not in self.config.allowed_contracts:
             return self._block(bar, "UNKNOWN_CONTRACT", "contract is not explicitly allowed", ts, age_seconds)
+        if active_symbol is not None and bar.symbol != active_symbol:
+            return self._block(bar, "ROOT_SYMBOL_MISMATCH", "bar symbol does not match active root symbol", ts, age_seconds)
         if active_contract is not None and bar.contract != active_contract:
             return self._block(bar, "CONTRACT_MISMATCH", "bar contract does not match active contract", ts, age_seconds)
 
@@ -106,8 +119,10 @@ class DataQualityGate:
             if heartbeat_age > self.config.heartbeat_timeout_seconds:
                 return self._block(bar, "HEARTBEAT_STALE", "feed heartbeat is stale", ts, age_seconds)
 
-        if self.session_guard is not None and not self.session_guard.is_session_open(ts, bar.symbol):
-            return self._block(bar, "SESSION_CLOSED", "session guard reports market closed", ts, age_seconds)
+        if self.session_guard is not None:
+            session_check = self.session_guard.check(ts, bar.symbol)
+            if not session_check.allowed:
+                return self._block(bar, session_check.reason_code, "session guard blocks trading", ts, age_seconds)
 
         self._seen_timestamps.add(timestamp_key)
         self._last_timestamp[key] = ts

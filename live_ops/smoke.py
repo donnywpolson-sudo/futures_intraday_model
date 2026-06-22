@@ -242,6 +242,25 @@ def run_smoke(
     )
     add("stale feed heartbeat -> blocked", result.data_quality.reason_code == "HEARTBEAT_STALE")
 
+    result = cycle(
+        "feed_disconnected",
+        config=paper_config,
+        bar=bar,
+        feed_connected=False,
+        order=sample_order(order_id="ORD-DISCONNECT"),
+    )
+    add("market data disconnect -> blocked", result.data_quality.reason_code == "FEED_DISCONNECTED")
+
+    result = cycle(
+        "no_heartbeat",
+        config=paper_config,
+        bar=bar,
+        heartbeat_required=True,
+        heartbeat_timestamp_utc=None,
+        order=sample_order(order_id="ORD-NO-HEARTBEAT"),
+    )
+    add("missing heartbeat -> blocked", result.data_quality.reason_code == "NO_HEARTBEAT")
+
     duplicate_gate = DataQualityGate(paper_config)
     first_duplicate = cycle(
         "duplicate_timestamp_seed",
@@ -326,6 +345,15 @@ def run_smoke(
     )
     add("reconnect/gap simulation -> blocks", result.data_quality.reason_code == "TIMESTAMP_GAP")
 
+    result = cycle(
+        "reconnect_backfill_required",
+        config=paper_config,
+        bar=bar,
+        reconnect_backfill_required=True,
+        order=sample_order(order_id="ORD-BACKFILL"),
+    )
+    add("reconnect backfill required -> blocked", result.data_quality.reason_code == "RECONNECT_BACKFILL_REQUIRED")
+
     pending_reconnect = cycle(
         "reconnect_pending",
         config=paper_config,
@@ -359,6 +387,15 @@ def run_smoke(
     add("contract mismatch -> blocked", result.data_quality.reason_code == "CONTRACT_MISMATCH")
 
     result = cycle(
+        "root_symbol_mismatch",
+        config=paper_config,
+        bar=bar,
+        active_symbol="NQ",
+        order=sample_order(order_id="ORD-ROOT"),
+    )
+    add("root symbol mismatch -> blocked", result.data_quality.reason_code == "ROOT_SYMBOL_MISMATCH")
+
+    result = cycle(
         "outside_session",
         config=paper_config,
         bar=bar,
@@ -378,6 +415,30 @@ def run_smoke(
     )
     add("missing session config -> blocked", result.risk.reason_code == "OUTSIDE_SESSION")
 
+    closed_session_guard = SessionGuard.from_strings({"ES": ("15:00", "16:00", "UTC")})
+    result = cycle(
+        "known_closed_period",
+        config=paper_config,
+        bar=bar,
+        order=sample_order(order_id="ORD-CLOSED-SESSION"),
+        session_ok=None,
+        session_guard=closed_session_guard,
+    )
+    add("known closed session period -> blocked", result.data_quality.reason_code == "SESSION_CLOSED")
+
+    result = cycle(
+        "monitor_only_outside_session",
+        config=paper_config,
+        bar=bar,
+        order=sample_order(order_id="ORD-MONITOR-ONLY"),
+        session_ok=False,
+        monitor_only=True,
+    )
+    add(
+        "monitor-only outside session -> non-tradable",
+        result.risk.reason_code == "MONITOR_ONLY" and not result.signal.tradable and result.broker_response is None,
+    )
+
     result = cycle(
         "unsafe_live_mode",
         config=replace(paper_config, mode="live"),
@@ -396,6 +457,30 @@ def run_smoke(
     add(
         "exception during decision cycle -> audit row and fail closed",
         result.exception is not None and result.risk.reason_code == "EXCEPTION" and not result.risk.approved,
+    )
+
+    result = cycle(
+        "feature_exception",
+        config=paper_config,
+        bar=bar,
+        order=sample_order(order_id="ORD-FEATURE-EXCEPTION"),
+        raise_feature_exception=True,
+    )
+    add(
+        "feature exception -> no signal and no broker submit",
+        result.exception is not None and result.signal.signal == "NO_SIGNAL" and result.broker_response is None,
+    )
+
+    result = cycle(
+        "broker_exception",
+        config=paper_config,
+        bar=bar,
+        order=sample_order(order_id="ORD-BROKER-EXCEPTION"),
+        raise_broker_exception=True,
+    )
+    add(
+        "broker sim exception -> blocked and audited",
+        result.exception is not None and result.risk.reason_code == "EXCEPTION" and result.broker_response is None,
     )
 
     add(
@@ -453,9 +538,16 @@ def _run_decision_cycle(
     session_guard: SessionGuard | None = None,
     pre_reconciliation: ReconciliationResult | None = None,
     reconnect_reconciled: bool = True,
-    heartbeat_timestamp_utc: datetime | None = BASE_TIME,
+    heartbeat_timestamp_utc: datetime | None = None,
+    heartbeat_required: bool = False,
+    feed_connected: bool = True,
+    reconnect_backfill_required: bool = False,
+    active_symbol: str | None = None,
     active_contract: str | None = None,
+    monitor_only: bool = False,
+    raise_feature_exception: bool = False,
     raise_model_exception: bool = False,
+    raise_broker_exception: bool = False,
 ) -> DecisionCycleResult:
     now = BASE_TIME + timedelta(seconds=10 + cycle_number)
     broker = broker or PaperBroker()
@@ -477,8 +569,14 @@ def _run_decision_cycle(
             bar,
             now=now,
             heartbeat_timestamp_utc=heartbeat_timestamp_utc,
+            heartbeat_required=heartbeat_required,
+            feed_connected=feed_connected,
+            reconnect_backfill_required=reconnect_backfill_required,
+            active_symbol=active_symbol,
             active_contract=active_contract,
         )
+        if raise_feature_exception:
+            raise RuntimeError("forced smoke feature exception")
         if raise_model_exception:
             raise RuntimeError("forced smoke model exception")
         model = model_gate.evaluate(
@@ -495,6 +593,8 @@ def _run_decision_cycle(
             score=0.8 if explicit_signal in {"LONG", "SHORT"} else None,
             signal=explicit_signal,
         )
+        if monitor_only:
+            signal = replace(signal, tradable=False, skip_reason="MONITOR_ONLY")
         if pre_reconciliation is None:
             reconciliation = Reconciler().reconcile(strategy_positions=positions, broker=broker, now=now)
         risk = RiskManager(config, session_guard=session_guard).evaluate(
@@ -508,12 +608,21 @@ def _run_decision_cycle(
             kill_switch_on=kill_switch_on,
             session_ok=session_ok,
             reconnect_reconciled=reconnect_reconciled,
+            active_symbol=active_symbol,
+            active_contract=active_contract,
+            monitor_only=monitor_only,
         )
         if order is not None and risk.approved:
             operator_control_decision = evaluate_operator_controls(operator_control_state, is_new_entry=True)
             if not operator_control_decision.allowed:
                 risk = _operator_blocked_risk(risk, order, operator_control_decision)
         if order is not None and risk.approved:
+            try:
+                logger.ensure_writable()
+            except OSError as exc:
+                raise RuntimeError(f"audit log write preflight failed: {exc}") from exc
+            if raise_broker_exception:
+                raise RuntimeError("forced smoke broker exception")
             broker_response = broker.place_order(order, risk_decision=risk, bar=bar)
             if broker_response.accepted:
                 reconciliation = Reconciler().reconcile(strategy_positions=dict(broker.positions), broker=broker, now=now)

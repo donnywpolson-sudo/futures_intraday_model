@@ -25,6 +25,11 @@ class AuditLogger:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
 
+    def ensure_writable(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8"):
+            pass
+
     def write_decision(self, event: Mapping[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {

@@ -33,7 +33,7 @@ from live_ops.schemas import (
     position_key,
     safe_default_config,
 )
-from live_ops.smoke import run_smoke
+from live_ops.smoke import _run_decision_cycle, run_smoke, sample_bar as smoke_bar, sample_order as smoke_order
 
 BASE = datetime(2026, 6, 22, 14, 30, tzinfo=timezone.utc)
 
@@ -309,6 +309,25 @@ def test_data_quality_gate_blocks_contract_mismatch_and_reconnect_gap() -> None:
     assert mismatch.reason_code == "CONTRACT_MISMATCH"
 
 
+def test_data_quality_runtime_state_blocks_disconnect_heartbeat_and_backfill() -> None:
+    config = paper_smoke_config()
+
+    disconnected = DataQualityGate(config).validate(bar(), now=BASE, feed_connected=False)
+    no_heartbeat = DataQualityGate(config).validate(
+        bar(),
+        now=BASE,
+        heartbeat_required=True,
+        heartbeat_timestamp_utc=None,
+    )
+    backfill = DataQualityGate(config).validate(bar(), now=BASE, reconnect_backfill_required=True)
+    root_mismatch = DataQualityGate(config).validate(bar(), now=BASE, active_symbol="NQ")
+
+    assert disconnected.reason_code == "FEED_DISCONNECTED"
+    assert no_heartbeat.reason_code == "NO_HEARTBEAT"
+    assert backfill.reason_code == "RECONNECT_BACKFILL_REQUIRED"
+    assert root_mismatch.reason_code == "ROOT_SYMBOL_MISMATCH"
+
+
 def test_data_quality_stale_heartbeat_blocks_risk() -> None:
     config = paper_smoke_config()
     dq = DataQualityGate(config).validate(
@@ -531,11 +550,57 @@ def test_risk_blocks_kill_switch_and_session_guard() -> None:
     assert session.reason_code == "OUTSIDE_SESSION"
 
 
+def test_risk_blocks_runtime_root_contract_and_monitor_only() -> None:
+    dq, model, signal = ready_signal()
+    config = paper_smoke_config()
+
+    root = RiskManager(config).evaluate(
+        order=order(order_id="ROOT"),
+        signal=signal,
+        data_quality=dq,
+        model_status=model,
+        reconciliation=ReconciliationResult("OK", "OK", {}),
+        positions={},
+        now=BASE,
+        session_ok=True,
+        active_symbol="NQ",
+    )
+    contract = RiskManager(config).evaluate(
+        order=order(order_id="CONTRACT"),
+        signal=signal,
+        data_quality=dq,
+        model_status=model,
+        reconciliation=ReconciliationResult("OK", "OK", {}),
+        positions={},
+        now=BASE,
+        session_ok=True,
+        active_contract="ESZ6",
+    )
+    monitor = RiskManager(config).evaluate(
+        order=order(order_id="MONITOR"),
+        signal=replace(signal, tradable=False, skip_reason="MONITOR_ONLY"),
+        data_quality=dq,
+        model_status=model,
+        reconciliation=ReconciliationResult("OK", "OK", {}),
+        positions={},
+        now=BASE,
+        session_ok=False,
+        monitor_only=True,
+    )
+
+    assert root.reason_code == "ROOT_SYMBOL_MISMATCH"
+    assert contract.reason_code == "CONTRACT_MISMATCH"
+    assert monitor.reason_code == "MONITOR_ONLY"
+
+
 def test_session_guard_missing_or_closed_session_is_false() -> None:
     guard = SessionGuard.from_strings({"ES": ("15:00", "16:00", "UTC")})
 
     assert guard.is_session_open(BASE, "ES") is False
     assert guard.is_session_open(BASE, "NQ") is False
+    assert guard.check(BASE, "ES").reason_code == "SESSION_CLOSED"
+    assert guard.check(BASE, "NQ").reason_code == "SESSION_MISSING"
+    assert guard.check(BASE + timedelta(hours=1), "ES").reason_code == "SESSION_OPEN"
 
 
 def test_missing_session_config_rejects_risk_approval() -> None:
@@ -555,7 +620,7 @@ def test_missing_session_config_rejects_risk_approval() -> None:
     dq_session = DataQualityGate(paper_smoke_config(), session_guard=guard).validate(bar(), now=BASE)
 
     assert decision.reason_code == "OUTSIDE_SESSION"
-    assert dq_session.reason_code == "SESSION_CLOSED"
+    assert dq_session.reason_code == "SESSION_MISSING"
 
 
 def test_contract_mismatch_blocks_risk_approval() -> None:
@@ -735,6 +800,51 @@ def test_audit_logging_one_row_per_decision_and_exception(tmp_path) -> None:
     assert "db-secret" not in path.read_text(encoding="utf-8")
 
 
+def test_decision_cycle_feature_broker_and_audit_failures_fail_closed(tmp_path) -> None:
+    class FailingPreflightAuditLogger(AuditLogger):
+        def ensure_writable(self) -> None:
+            raise OSError("simulated audit write failure")
+
+    config = paper_smoke_config()
+    feature = _run_decision_cycle(
+        name="feature_exception_test",
+        logger=AuditLogger(tmp_path / "feature.jsonl"),
+        cycle_number=1,
+        config=config,
+        bar=smoke_bar(),
+        order=smoke_order(order_id="ORD-FEATURE-TEST"),
+        raise_feature_exception=True,
+    )
+    broker = _run_decision_cycle(
+        name="broker_exception_test",
+        logger=AuditLogger(tmp_path / "broker.jsonl"),
+        cycle_number=2,
+        config=config,
+        bar=smoke_bar(),
+        order=smoke_order(order_id="ORD-BROKER-TEST"),
+        raise_broker_exception=True,
+    )
+    audit = _run_decision_cycle(
+        name="audit_exception_test",
+        logger=FailingPreflightAuditLogger(tmp_path / "audit.jsonl"),
+        cycle_number=3,
+        config=config,
+        bar=smoke_bar(),
+        order=smoke_order(order_id="ORD-AUDIT-TEST"),
+    )
+
+    assert feature.signal.signal == "NO_SIGNAL"
+    assert feature.risk.reason_code == "EXCEPTION"
+    assert feature.broker_response is None
+    assert "feature" in str(feature.exception)
+    assert broker.risk.reason_code == "EXCEPTION"
+    assert broker.broker_response is None
+    assert "broker" in str(broker.exception)
+    assert audit.risk.reason_code == "EXCEPTION"
+    assert audit.broker_response is None
+    assert "audit log" in str(audit.exception)
+
+
 def test_paper_control_scripts_use_configured_paper_state_only(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     kill_file = tmp_path / "runtime" / "KILL_SWITCH_ON"
     config = replace(safe_default_config(), kill_switch_file=str(kill_file))
@@ -874,6 +984,8 @@ def test_smoke_live_trading_script_scenarios(tmp_path) -> None:
     assert by_scenario["bad_ohlc"]["data_quality_result"]["reason_code"] == "BAD_OHLC"
     assert by_scenario["stale_bar"]["data_quality_result"]["reason_code"] == "DATA_STALE"
     assert by_scenario["stale_heartbeat"]["data_quality_result"]["reason_code"] == "HEARTBEAT_STALE"
+    assert by_scenario["feed_disconnected"]["data_quality_result"]["reason_code"] == "FEED_DISCONNECTED"
+    assert by_scenario["no_heartbeat"]["data_quality_result"]["reason_code"] == "NO_HEARTBEAT"
     assert by_scenario["duplicate_timestamp"]["data_quality_result"]["reason_code"] == "DUPLICATE_TIMESTAMP"
     assert by_scenario["kill_switch"]["risk_decision"]["reason_code"] == "KILL_SWITCH_ON"
     assert by_scenario["operator_kill_switch"]["risk_decision"]["reason_code"] == "OPERATOR_KILL_SWITCH"
@@ -888,15 +1000,24 @@ def test_smoke_live_trading_script_scenarios(tmp_path) -> None:
     assert by_scenario["duplicate_order_id"]["broker_response"]["reason_code"] == "DUPLICATE_ORDER_ID"
     assert by_scenario["reconciliation_mismatch"]["risk_decision"]["reason_code"] == "RECONCILIATION_FAILED"
     assert by_scenario["reconnect_gap"]["data_quality_result"]["reason_code"] == "TIMESTAMP_GAP"
+    assert by_scenario["reconnect_backfill_required"]["data_quality_result"]["reason_code"] == "RECONNECT_BACKFILL_REQUIRED"
     assert by_scenario["reconnect_pending"]["risk_decision"]["reason_code"] == "RECONNECT_RECONCILIATION_PENDING"
     assert by_scenario["reconnect_cleared"]["risk_decision"]["approved"] is True
     assert by_scenario["contract_mismatch"]["data_quality_result"]["reason_code"] == "CONTRACT_MISMATCH"
+    assert by_scenario["root_symbol_mismatch"]["data_quality_result"]["reason_code"] == "ROOT_SYMBOL_MISMATCH"
     assert by_scenario["outside_session"]["risk_decision"]["reason_code"] == "OUTSIDE_SESSION"
     assert by_scenario["missing_session_config"]["risk_decision"]["reason_code"] == "OUTSIDE_SESSION"
+    assert by_scenario["known_closed_period"]["data_quality_result"]["reason_code"] == "SESSION_CLOSED"
+    assert by_scenario["monitor_only_outside_session"]["risk_decision"]["reason_code"] == "MONITOR_ONLY"
+    assert by_scenario["monitor_only_outside_session"]["signal_state"]["tradable"] is False
     assert by_scenario["unsafe_live_mode"]["risk_decision"]["reason_code"] == "LIVE_BROKER_BLOCKED"
     assert by_scenario["forced_exception"]["exception"] is not None
     assert by_scenario["forced_exception"]["risk_decision"]["reason_code"] == "EXCEPTION"
     assert by_scenario["forced_exception"]["broker_response"] is None
+    assert by_scenario["feature_exception"]["exception"] is not None
+    assert by_scenario["feature_exception"]["broker_response"] is None
+    assert by_scenario["broker_exception"]["exception"] is not None
+    assert by_scenario["broker_exception"]["broker_response"] is None
 
 
 def test_smoke_live_trading_cli_returns_zero_and_forced_failure_nonzero(tmp_path) -> None:

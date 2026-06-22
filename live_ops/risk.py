@@ -26,6 +26,14 @@ class SessionWindow:
     timezone_name: str = "UTC"
 
 
+@dataclass(frozen=True)
+class SessionCheckResult:
+    allowed: bool
+    reason_code: str
+    symbol: str
+    session_state: str
+
+
 class SessionGuard:
     def __init__(self, windows: dict[str, SessionWindow]) -> None:
         self.windows = windows
@@ -43,14 +51,21 @@ class SessionGuard:
             }
         )
 
-    def is_session_open(self, timestamp_utc: datetime, symbol: str) -> bool:
+    def check(self, timestamp_utc: datetime, symbol: str) -> SessionCheckResult:
         window = self.windows.get(symbol)
         if window is None:
-            return False
+            return SessionCheckResult(False, "SESSION_MISSING", symbol, "MISSING")
         local_time = utc_datetime(timestamp_utc).astimezone(ZoneInfo(window.timezone_name)).time()
         if window.open_time <= window.close_time:
-            return window.open_time <= local_time < window.close_time
-        return local_time >= window.open_time or local_time < window.close_time
+            is_open = window.open_time <= local_time < window.close_time
+        else:
+            is_open = local_time >= window.open_time or local_time < window.close_time
+        if is_open:
+            return SessionCheckResult(True, "SESSION_OPEN", symbol, "OPEN")
+        return SessionCheckResult(False, "SESSION_CLOSED", symbol, "CLOSED")
+
+    def is_session_open(self, timestamp_utc: datetime, symbol: str) -> bool:
+        return self.check(timestamp_utc, symbol).allowed
 
 
 def _parse_time(value: str) -> day_time:
@@ -105,6 +120,9 @@ class RiskManager:
         session_ok: bool | None = None,
         startup_warmup_complete: bool = True,
         reconnect_reconciled: bool = True,
+        active_symbol: str | None = None,
+        active_contract: str | None = None,
+        monitor_only: bool = False,
     ) -> RiskDecision:
         ts = utc_datetime(now or datetime.now(timezone.utc))
         snapshot = {
@@ -112,6 +130,9 @@ class RiskManager:
             "allow_trading": self.config.allow_trading,
             "allow_paper_trading": self.config.allow_paper_trading,
             "kill_switch_on": kill_switch_on,
+            "active_symbol": active_symbol,
+            "active_contract": active_contract,
+            "monitor_only": monitor_only,
             "positions": dict(positions),
             "daily_loss": daily_loss,
             "trades_today": self.trades_today,
@@ -127,12 +148,23 @@ class RiskManager:
             return self._reject(order, "LIVE_BROKER_BLOCKED", "live broker path is blocked", snapshot)
         if self.config.mode != "paper" or not self.config.allow_paper_trading:
             return self._reject(order, "PAPER_TRADING_DISABLED", "paper trading is not explicitly enabled", snapshot)
+        if active_symbol is not None and order.symbol != active_symbol:
+            return self._reject(order, "ROOT_SYMBOL_MISMATCH", "order symbol does not match active root symbol", snapshot)
+        if active_contract is not None and order.contract != active_contract:
+            return self._reject(order, "CONTRACT_MISMATCH", "order contract does not match active contract", snapshot)
+        if monitor_only:
+            return self._reject(order, "MONITOR_ONLY", "monitor-only runtime state blocks trading", snapshot)
         if self.config.allowed_symbols and order.symbol not in self.config.allowed_symbols:
             return self._reject(order, "SYMBOL_NOT_ALLOWED", "symbol is not explicitly allowed", snapshot)
         if self.config.allowed_contracts and order.contract not in self.config.allowed_contracts:
             return self._reject(order, "CONTRACT_NOT_ALLOWED", "contract is not explicitly allowed", snapshot)
-        if session_ok is False or (session_ok is None and self.session_guard is not None and not self.session_guard.is_session_open(ts, order.symbol)):
+        if session_ok is False:
             return self._reject(order, "OUTSIDE_SESSION", "session guard blocks trading", snapshot)
+        if session_ok is None and self.session_guard is not None:
+            session_check = self.session_guard.check(ts, order.symbol)
+            snapshot["session_check"] = session_check
+            if not session_check.allowed:
+                return self._reject(order, "OUTSIDE_SESSION", "session guard blocks trading", snapshot)
         if not data_quality.passed or data_quality.severity == "BLOCK":
             return self._reject(order, f"DATA_QUALITY_{data_quality.reason_code}", "data quality failed", snapshot)
         if model_status.status != "READY":
