@@ -698,3 +698,12 @@ Updated at UTC: 2026-06-22T00:23:29Z
 - Test results: PASS, compile; PASS, focused live ops `36 passed`; PASS, live-ops sanity `65 passed`; PASS, smoke CLI `PASS live trading smoke scenarios=34 decision_cycles=34 audit_rows=34`; PASS, broad bounded pytest `721 passed, 58 warnings`; PASS, `git diff --check` with CRLF warnings only.
 - Remaining work: no broker SDKs, credentials, GUI/chart launch, live order paths, generated artifact staging, or production live trading behavior were added.
 - Next recommended step: choose the next remaining live-ops part, likely Part A/O operator console polish or Part H/I/J/K operational controls depth.
+
+## Order-intent safety gate
+- Updated at UTC: 2026-06-22T08:14:15Z
+- Scope: paper/smoke-only decision/order-intent scaffold gate before broker submission.
+- What changed: added `OrderIntentDecision` and a broker-agnostic operator gate that returns either a validated `OrderIntent` or a blocked decision with reason code for operator controls, disabled/live mode, malformed prediction payloads, unsupported symbols/contracts, invalid quantities, stale bars, flat/no-signal, and below-threshold confidence.
+- Files changed by this slice: `live_ops/operator.py`, `live_ops/schemas.py`, `tests/test_live_ops.py`, `CODEX_HANDOFF.md`.
+- Tests run: `python -m pytest tests\test_live_ops.py -q -p no:cacheprovider`; `python -m pytest tests\test_live_ops.py tests\test_live_chart_feed.py -q -p no:cacheprovider`; `git diff --check`.
+- Test results: PASS, focused live ops `40 passed`; PASS, live-ops/chart `69 passed`; PASS, `git diff --check` with CRLF warnings only.
+- Deferred: broker submit, cancel-all, flatten-all, live account integration, production risk sizing, broker SDKs, credentials, GUI/chart launch, and generated artifact staging.

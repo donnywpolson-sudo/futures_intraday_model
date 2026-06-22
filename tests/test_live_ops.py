@@ -19,7 +19,7 @@ from live_ops.audit import AuditLogger
 from live_ops.bar_builder import LiveBarBuilder, bar_contract_row, check_bar_parity
 from live_ops.broker import LiveBroker, PaperBroker
 from live_ops.model import ModelReadinessGate, build_signal_state
-from live_ops.operator import OperatorStatusState, render_operator_status
+from live_ops.operator import OperatorControlState, OperatorStatusState, build_order_intent_decision, render_operator_status
 from live_ops.quality import DataQualityGate
 from live_ops.reconciliation import Reconciler
 from live_ops.risk import KillSwitch, RiskManager, SessionGuard
@@ -162,6 +162,160 @@ def test_operator_control_state_file_source_blocks_fail_closed(tmp_path) -> None
     assert malformed.trading_enabled is False
     assert malformed_decision.allowed is False
     assert malformed_decision.reason_code == "OPERATOR_CONTROL_MALFORMED"
+
+
+def test_order_intent_gate_creates_valid_scaffold_intent() -> None:
+    test_bar = bar()
+    _, _, signal = ready_signal(test_bar)
+    decision = build_order_intent_decision(
+        config=paper_smoke_config(),
+        bar=test_bar,
+        signal=signal,
+        quantity=1,
+        now=BASE + timedelta(seconds=5),
+    )
+
+    assert decision.approved is True
+    assert decision.reason_code == "OK"
+    assert decision.validation_status == "APPROVED"
+    assert decision.mode == "paper"
+    assert decision.symbol == "ES"
+    assert decision.side == "BUY"
+    assert decision.quantity == 1
+    assert decision.source_signal == "LONG"
+    assert decision.bar_timestamp == BASE
+    assert decision.order_intent is not None
+    assert decision.order_intent.symbol == "ES"
+    assert decision.order_intent.contract == "ESU6"
+    assert decision.order_intent.side == "BUY"
+    assert decision.order_intent.quantity == 1
+    assert decision.order_intent.limit_price == 100.5
+    assert decision.order_intent.reason == "signal:LONG"
+
+
+def test_order_intent_gate_blocks_controls_config_and_preserves_broker_state() -> None:
+    test_bar = bar()
+    _, _, signal = ready_signal(test_bar)
+    broker = PaperBroker()
+
+    kill = build_order_intent_decision(
+        config=paper_smoke_config(),
+        bar=test_bar,
+        signal=signal,
+        now=BASE,
+        kill_switch_on=True,
+    )
+    disabled = build_order_intent_decision(
+        config=safe_default_config(),
+        bar=test_bar,
+        signal=signal,
+        now=BASE,
+    )
+    paused = build_order_intent_decision(
+        config=paper_smoke_config(),
+        bar=test_bar,
+        signal=signal,
+        now=BASE,
+        operator_control=OperatorControlState(pause_new_entries=True, message="operator pause"),
+    )
+
+    assert kill.reason_code == "KILL_SWITCH_ON"
+    assert disabled.reason_code == "TRADING_DISABLED"
+    assert paused.reason_code == "OPERATOR_PAUSE_NEW_ENTRIES"
+    assert all(item.order_intent is None and item.validation_status == "BLOCKED" for item in (kill, disabled, paused))
+    assert broker.open_orders == {}
+    assert broker.fills == []
+
+
+def test_order_intent_gate_blocks_bad_prediction_quantity_symbol_and_stale_bar() -> None:
+    test_bar = bar()
+    _, _, signal = ready_signal(test_bar)
+
+    malformed = build_order_intent_decision(
+        config=paper_smoke_config(),
+        bar=test_bar,
+        signal=replace(signal, score=float("nan")),
+        now=BASE,
+    )
+    zero_quantity = build_order_intent_decision(
+        config=paper_smoke_config(),
+        bar=test_bar,
+        signal=signal,
+        quantity=0,
+        now=BASE,
+    )
+    too_large = build_order_intent_decision(
+        config=paper_smoke_config(),
+        bar=test_bar,
+        signal=signal,
+        quantity=2,
+        now=BASE,
+    )
+    unsupported = build_order_intent_decision(
+        config=paper_smoke_config(),
+        bar=bar(symbol="NQ", contract="NQU6"),
+        signal=replace(signal, symbol="NQ", contract="NQU6"),
+        now=BASE,
+    )
+    stale = build_order_intent_decision(
+        config=paper_smoke_config(),
+        bar=test_bar,
+        signal=signal,
+        now=BASE + timedelta(seconds=120),
+    )
+
+    assert malformed.reason_code == "PREDICTION_MALFORMED"
+    assert zero_quantity.reason_code == "ORDER_QUANTITY_INVALID"
+    assert too_large.reason_code == "ORDER_SIZE_LIMIT"
+    assert unsupported.reason_code == "SYMBOL_UNSUPPORTED"
+    assert stale.reason_code == "BAR_STALE"
+    assert all(item.order_intent is None and item.reason for item in (malformed, zero_quantity, too_large, unsupported, stale))
+
+
+def test_order_intent_gate_blocks_no_action_flat_and_below_threshold_without_broker_submit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_place_order(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("order intent gate must not submit to broker")
+
+    monkeypatch.setattr(PaperBroker, "place_order", fail_place_order)
+    test_bar = bar()
+    dq, model, _ = ready_signal(test_bar)
+    no_signal = build_signal_state(bar=test_bar, data_quality=dq, model_status=model, now=BASE, signal=None)
+    flat_signal = build_signal_state(bar=test_bar, data_quality=dq, model_status=model, now=BASE, signal="FLAT")
+    low_confidence = build_signal_state(
+        bar=test_bar,
+        data_quality=dq,
+        model_status=model,
+        now=BASE,
+        signal="LONG",
+        confidence=0.2,
+    )
+
+    no_action = build_order_intent_decision(
+        config=paper_smoke_config(),
+        bar=test_bar,
+        signal=no_signal,
+        now=BASE,
+    )
+    flat = build_order_intent_decision(
+        config=paper_smoke_config(),
+        bar=test_bar,
+        signal=flat_signal,
+        now=BASE,
+    )
+    below_threshold = build_order_intent_decision(
+        config=paper_smoke_config(),
+        bar=test_bar,
+        signal=low_confidence,
+        now=BASE,
+        min_confidence=0.5,
+    )
+
+    assert no_action.reason_code == "NO_ACTION_SIGNAL"
+    assert flat.reason_code == "NO_ACTION_SIGNAL"
+    assert below_threshold.reason_code == "SIGNAL_BELOW_THRESHOLD"
+    assert all(item.order_intent is None and item.validation_status == "BLOCKED" for item in (no_action, flat, below_threshold))
 
 
 def test_timeout_args_support_disabled_and_enabled() -> None:

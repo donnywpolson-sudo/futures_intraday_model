@@ -198,6 +198,23 @@ class OrderIntent:
 
 
 @dataclass(frozen=True)
+class OrderIntentDecision:
+    approved: bool
+    reason_code: str
+    reason: str
+    order_intent: OrderIntent | None
+    mode: str
+    symbol: str | None
+    side: str | None
+    quantity: int | None
+    source_signal: str | None
+    bar_timestamp: datetime | None
+    created_timestamp: datetime
+    validation_status: str
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class RiskDecision:
     approved: bool
     reason_code: str

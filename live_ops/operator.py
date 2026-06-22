@@ -6,13 +6,15 @@ import json
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from math import isfinite
 from pathlib import Path
 from typing import Any, Mapping, TextIO
 
-from .schemas import utc_datetime
+from .schemas import LiveBar, LiveTradingConfig, OrderIntent, OrderIntentDecision, SignalState, utc_datetime
 
 
 MALFORMED_OPERATOR_CONTROL = "OPERATOR_CONTROL_MALFORMED"
+DEFAULT_ORDER_STRATEGY_ID = "live-ops-scaffold"
 
 
 @dataclass(frozen=True)
@@ -100,9 +102,270 @@ def evaluate_operator_controls(
     return OperatorControlDecision(True, "OK", state.message or state.reason, state)
 
 
+def build_order_intent_decision(
+    *,
+    config: LiveTradingConfig,
+    bar: LiveBar,
+    signal: SignalState,
+    quantity: object = 1,
+    operator_control: OperatorControlState | None = None,
+    now: datetime | None = None,
+    strategy_id: str = DEFAULT_ORDER_STRATEGY_ID,
+    order_id: str | None = None,
+    order_type: str = "LIMIT",
+    limit_price: float | None = None,
+    time_in_force: str = "DAY",
+    kill_switch_on: bool = False,
+    min_confidence: float | None = None,
+) -> OrderIntentDecision:
+    created_timestamp = utc_datetime(now or datetime.now(timezone.utc))
+    mode = config.mode
+    symbol = signal.symbol or bar.symbol
+    source_signal = str(signal.signal).upper() if signal.signal is not None else None
+
+    if kill_switch_on:
+        return _blocked_order_intent(
+            "KILL_SWITCH_ON",
+            "kill switch blocks order intent creation",
+            mode=mode,
+            signal=signal,
+            source_signal=source_signal,
+            created_timestamp=created_timestamp,
+        )
+
+    control_state = operator_control or OperatorControlState()
+    control_decision = evaluate_operator_controls(control_state, is_new_entry=True)
+    if not control_decision.allowed:
+        return _blocked_order_intent(
+            control_decision.reason_code,
+            control_decision.reason,
+            mode=mode,
+            signal=signal,
+            source_signal=source_signal,
+            created_timestamp=created_timestamp,
+            details={"operator_control": control_state},
+        )
+
+    if not config.allow_trading or config.mode == "disabled":
+        return _blocked_order_intent(
+            "TRADING_DISABLED",
+            "trading is disabled by config",
+            mode=mode,
+            signal=signal,
+            source_signal=source_signal,
+            created_timestamp=created_timestamp,
+        )
+    if config.allow_live_broker or config.mode == "live":
+        return _blocked_order_intent(
+            "LIVE_BROKER_BLOCKED",
+            "live broker order intents are blocked in the scaffold",
+            mode=mode,
+            signal=signal,
+            source_signal=source_signal,
+            created_timestamp=created_timestamp,
+        )
+
+    if not symbol:
+        return _blocked_order_intent(
+            "SYMBOL_MISSING",
+            "symbol is required before order intent creation",
+            mode=mode,
+            signal=signal,
+            source_signal=source_signal,
+            created_timestamp=created_timestamp,
+        )
+    if config.allowed_symbols and symbol not in config.allowed_symbols:
+        return _blocked_order_intent(
+            "SYMBOL_UNSUPPORTED",
+            "symbol is not supported by config",
+            mode=mode,
+            signal=signal,
+            source_signal=source_signal,
+            created_timestamp=created_timestamp,
+        )
+    if not signal.contract:
+        return _blocked_order_intent(
+            "CONTRACT_MISSING",
+            "contract is required before order intent creation",
+            mode=mode,
+            signal=signal,
+            source_signal=source_signal,
+            created_timestamp=created_timestamp,
+        )
+    if config.allowed_contracts and signal.contract not in config.allowed_contracts:
+        return _blocked_order_intent(
+            "CONTRACT_UNSUPPORTED",
+            "contract is not supported by config",
+            mode=mode,
+            signal=signal,
+            source_signal=source_signal,
+            created_timestamp=created_timestamp,
+        )
+
+    payload_error = _prediction_payload_error(signal)
+    if payload_error is not None:
+        return _blocked_order_intent(
+            "PREDICTION_MALFORMED",
+            payload_error,
+            mode=mode,
+            signal=signal,
+            source_signal=source_signal,
+            created_timestamp=created_timestamp,
+        )
+    if source_signal in {"FLAT", "NO_SIGNAL"}:
+        return _blocked_order_intent(
+            "NO_ACTION_SIGNAL",
+            "model signal produced no order action",
+            mode=mode,
+            signal=signal,
+            source_signal=source_signal,
+            created_timestamp=created_timestamp,
+        )
+    if source_signal not in {"LONG", "SHORT"} or not signal.tradable:
+        return _blocked_order_intent(
+            "SIGNAL_NOT_TRADABLE",
+            signal.skip_reason or "signal is not tradable",
+            mode=mode,
+            signal=signal,
+            source_signal=source_signal,
+            created_timestamp=created_timestamp,
+        )
+    if min_confidence is not None and (signal.confidence is None or signal.confidence < min_confidence):
+        return _blocked_order_intent(
+            "SIGNAL_BELOW_THRESHOLD",
+            "signal confidence is below the scaffold threshold",
+            mode=mode,
+            signal=signal,
+            source_signal=source_signal,
+            created_timestamp=created_timestamp,
+        )
+
+    bar_timestamp = utc_datetime(signal.bar_timestamp_utc)
+    age_seconds = (created_timestamp - bar_timestamp).total_seconds()
+    if config.stale_bar_seconds >= 0 and age_seconds > config.stale_bar_seconds:
+        return _blocked_order_intent(
+            "BAR_STALE",
+            "bar timestamp is stale before order intent creation",
+            mode=mode,
+            signal=signal,
+            source_signal=source_signal,
+            created_timestamp=created_timestamp,
+            details={"bar_age_seconds": age_seconds, "stale_bar_seconds": config.stale_bar_seconds},
+        )
+
+    quantity_error = _quantity_error(quantity, config.max_order_size)
+    if quantity_error is not None:
+        reason_code, reason = quantity_error
+        return _blocked_order_intent(
+            reason_code,
+            reason,
+            mode=mode,
+            signal=signal,
+            source_signal=source_signal,
+            created_timestamp=created_timestamp,
+        )
+    quantity_int = int(quantity)
+    side = "BUY" if source_signal == "LONG" else "SELL"
+    resolved_limit_price = bar.close if limit_price is None else limit_price
+    if not isinstance(resolved_limit_price, (int, float)) or isinstance(resolved_limit_price, bool) or not isfinite(float(resolved_limit_price)):
+        return _blocked_order_intent(
+            "ORDER_PRICE_INVALID",
+            "limit price must be finite for scaffold order intent creation",
+            mode=mode,
+            signal=signal,
+            source_signal=source_signal,
+            created_timestamp=created_timestamp,
+        )
+    signal_id = f"{symbol}-{bar_timestamp.strftime('%Y%m%dT%H%M%SZ')}-{source_signal}"
+    resolved_order_id = order_id or f"{strategy_id}-{signal_id}"
+    intent = OrderIntent(
+        order_id=resolved_order_id,
+        strategy_id=strategy_id,
+        symbol=symbol,
+        contract=signal.contract,
+        side=side,
+        quantity=quantity_int,
+        order_type=order_type,
+        limit_price=float(resolved_limit_price),
+        stop_price=None,
+        time_in_force=time_in_force,
+        bar_timestamp=bar_timestamp,
+        created_timestamp=created_timestamp,
+        reason=f"signal:{source_signal}",
+        signal_id=signal_id,
+    )
+    return OrderIntentDecision(
+        True,
+        "OK",
+        "order intent created by live-ops scaffold gate",
+        intent,
+        mode,
+        symbol,
+        side,
+        quantity_int,
+        source_signal,
+        bar_timestamp,
+        created_timestamp,
+        "APPROVED",
+        {"operator_control": control_state},
+    )
+
+
 def _blocked_control(reason_code: str, state: OperatorControlState) -> OperatorControlDecision:
     reason = state.message or state.reason or reason_code
     return OperatorControlDecision(False, reason_code, reason, state)
+
+
+def _blocked_order_intent(
+    reason_code: str,
+    reason: str,
+    *,
+    mode: str,
+    signal: SignalState,
+    source_signal: str | None,
+    created_timestamp: datetime,
+    details: dict[str, Any] | None = None,
+) -> OrderIntentDecision:
+    return OrderIntentDecision(
+        False,
+        reason_code,
+        reason,
+        None,
+        mode,
+        signal.symbol,
+        None,
+        None,
+        source_signal,
+        utc_datetime(signal.bar_timestamp_utc),
+        created_timestamp,
+        "BLOCKED",
+        details or {},
+    )
+
+
+def _prediction_payload_error(signal: SignalState) -> str | None:
+    if str(signal.signal).upper() not in {"LONG", "SHORT", "FLAT", "NO_SIGNAL"}:
+        return "signal must be LONG, SHORT, FLAT, or NO_SIGNAL"
+    for name, value in (
+        ("prediction", signal.prediction),
+        ("score", signal.score),
+        ("confidence", signal.confidence),
+    ):
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(float(value)):
+            return f"{name} must be a finite number"
+    return None
+
+
+def _quantity_error(quantity: object, max_order_size: int) -> tuple[str, str] | None:
+    if isinstance(quantity, bool) or not isinstance(quantity, int):
+        return "ORDER_QUANTITY_INVALID", "quantity must be an integer"
+    if quantity <= 0:
+        return "ORDER_QUANTITY_INVALID", "quantity must be positive"
+    if max_order_size <= 0 or quantity > max_order_size:
+        return "ORDER_SIZE_LIMIT", "quantity exceeds configured scaffold max"
+    return None
 
 
 def _read_bool(payload: Mapping[str, Any], key: str, default: bool) -> bool:
