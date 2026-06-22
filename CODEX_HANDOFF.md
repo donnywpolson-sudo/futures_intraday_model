@@ -1,5 +1,59 @@
 # Codex Handoff
 
+## Refreshed phase 1C/2 smoke evidence and cleanup gate decision
+- Updated at UTC: 2026-06-22T09:51:13Z
+- Scope: reran only the exact bounded phase 1C and phase 2 smoke commands recorded in `reports/phase_restart/phase_1c_smoke.md` and `reports/phase_restart/phase_2_smoke.md`. No cleanup, quarantine, data move, data delete, DBN redownload, DBN source modification, full rebuild, or phase 3+ command was run.
+
+Changed
+- `reports/phase_restart/manifest_phase_1c_raw_dbn_alignment.json`: refreshed phase 1C generated timestamp from the rerun.
+- `reports/phase_restart/phase_1c_smoke.md`: recorded refreshed PASS output and post-rerun safety checks.
+- `reports/phase_restart/phase_2_smoke.md`: recorded refreshed PASS output and readiness-only output-root check.
+- `reports/phase_restart/phase_restart_summary.md`: recorded exact rerun commands, manifest policy-gap classification, and cleanup-gate decision.
+- `CODEX_HANDOFF.md`: recorded this refresh.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- `git diff --stat`
+- `git diff --check`
+- Read required artifacts: `reports/phase_restart/phase_1c_smoke.md`, `reports/phase_restart/phase_2_smoke.md`, `reports/phase_restart/phase_restart_summary.md`, `reports/data_manifest/manifest_coverage_summary.md`, `reports/data_manifest/manifest_coverage_check.csv`, `configs/data_manifest.yaml`, and `CODEX_HANDOFF.md`.
+- `python -m scripts.phase1C_validate.audit_raw_dbn_alignment --config reports/phase_restart/manifest_smoke_alpha_tiered.yaml --profile manifest_smoke --dbn-root data/dbn --raw-root data/raw --expected-only --json-out reports/phase_restart/manifest_phase_1c_raw_dbn_alignment.json --md-out reports/phase_restart/manifest_phase_1c_raw_dbn_alignment.md`
+- `python -m scripts.phase2_causal_base.build_causal_base_data --profile manifest_smoke --raw-root data/raw --output-root reports/phase_restart/manifest_phase_2_output --reports-root reports/phase_restart/manifest_phase_2_smoke --profile-config reports/phase_restart/manifest_smoke_alpha_tiered.yaml --raw-alignment-report reports/phase_restart/manifest_phase_1c_raw_dbn_alignment.json --readiness-only --readiness-json-out reports/phase_restart/manifest_phase_2_readiness_summary.json --readiness-md-out reports/phase_restart/manifest_phase_2_readiness_summary.md`
+- Readiness/data checks for refreshed JSON reports, canonical manifest paths, `git status --short -- data`, absent readiness-only output root, deprecated top-level data folder probes, recent DBN source modification probe, ZN 2023 causal parquet synthetic-row diagnostics, and phase 2 causal eligibility code.
+- Final validation before commit: `git status --short`, `git status --short -- data`, `git diff --stat`, and `git diff --check`.
+- Attempted `git add reports\phase_restart CODEX_HANDOFF.md`; staging was rejected by the approval reviewer because explicit staging/commit approval is required.
+
+Smoke results
+- Phase 1C rerun: PASS, `status=PASS expected=1 raw=1 needs_phase1b=0 raw_only=0 invalid_manifests=0 source_hash_mismatches=0 definition_join_status=checked definition_join_mismatches=0`.
+- Phase 2 rerun: PASS, `phase2_readiness_only status=PASS checked=1 blockers=0 json=reports/phase_restart/manifest_phase_2_readiness_summary.json`.
+
+Validation result
+- Canonical paths resolved from `configs/data_manifest.yaml`: `data/dbn`, `data/raw/{market}/{year}.parquet`, and `data/causally_gated_normalized/{market}/{year}.parquet`.
+- `git status --short -- data` returned no output after reruns.
+- No recent DBN source file modification was found by the scoped post-rerun probe.
+- Deprecated top-level data folders probed in this refresh were absent.
+- Phase 2 readiness-only output root `reports/phase_restart/manifest_phase_2_output` remained absent.
+- ZN 2023 causal parquet diagnostic: 353549 rows, 17838 synthetic rows, 5.045411% synthetic rows, 0 synthetic rows with nonzero volume, 0 synthetic rows with `causal_valid=true`, and 0 synthetic rows with `raw_row_present=true`.
+- Phase 2 causal eligibility remains `raw_row_present & ~is_synthetic` plus validity/session/data-quality/roll/boundary gates; no separate `observed_row` or `trade_entry_eligible` column exists.
+
+Manifest policy-gap classification
+- Repair required before cleanup: 144 unexpected missing pairs in `reports/data_manifest/manifest_coverage_check.csv` (10 raw parquet, 66 causal parquet, 68 DBN status).
+- Explicitly deferred policy gap: 23 allowed extra DBN pairs are encoded in `configs/data_manifest.yaml` and remain cleanup-disabled.
+- Duplicate/deprecated path deferred: 12 known duplicate DBN market-year pairs are policy-deferred review-before-cleanup.
+- UNKNOWN requiring review: `data/raw/_repair_candidates` and `data/causally_gated_normalized/_repair_candidates` remain `STALE_OR_UNKNOWN`.
+
+Cleanup gate
+- Cleanup remains blocked and cannot be evaluated for approval until missing-pair repairs or explicit deferrals, duplicate review, and `STALE_OR_UNKNOWN` review are resolved. No cleanup was attempted.
+
+Commit status
+- Pending explicit user approval to stage and commit `reports/phase_restart` and `CODEX_HANDOFF.md` with message `Refresh phase smoke evidence`.
+
+Remaining work
+- Resolve or explicitly defer the manifest missing-pair gaps, review duplicate DBN market-year groups, and review the two `STALE_OR_UNKNOWN` repair-candidate paths before any cleanup/quarantine evaluation.
+
+Next recommended step
+- Review `reports/data_manifest/manifest_coverage_check.csv` and choose repair versus explicit deferral for the 144 unexpected missing pairs; keep cleanup disabled until that decision and the `STALE_OR_UNKNOWN` reviews are complete.
+
 ## Bounded phase 1A/1B/1C/2 manifest smoke validation
 - Updated at UTC: 2026-06-22T09:32:47Z
 - Scope: ran bounded smoke validation against `configs/data_manifest.yaml` using report-local profile `reports/phase_restart/manifest_smoke_alpha_tiered.yaml` for ZN 2023. No cleanup, quarantine, redownload, full rebuild, phase 3+, DBN source modification, data move, data delete, or data overwrite was run.

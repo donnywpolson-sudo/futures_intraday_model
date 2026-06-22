@@ -1,13 +1,13 @@
 # Phase Restart Summary
 
-Generated at UTC: 2026-06-22T09:32:47Z
+Generated at UTC: 2026-06-22T09:48:29Z
 
 ## Scope
 
 - Contract: `configs/data_manifest.yaml`.
 - Smoke subset: ZN 2023, selected because it is present in canonical DBN/raw/causal roots and was not avoided despite synthetic rows around 5%.
 - Report-local smoke profile: `reports/phase_restart/manifest_smoke_alpha_tiered.yaml`.
-- Phases run: 1A dry-run, 1B existing-output conversion check, 1C expected-only alignment audit, phase 2 readiness-only preflight.
+- Phases run: 1A dry-run and 1B existing-output conversion check from prior committed evidence; 1C expected-only alignment audit and phase 2 readiness-only preflight refreshed at 2026-06-22T09:48:29Z.
 - Phases after phase 2: not run.
 - Cleanup/quarantine/redownload/full rebuild: not run.
 
@@ -20,6 +20,22 @@ Generated at UTC: 2026-06-22T09:32:47Z
 | 1C | PASS | `reports/phase_restart/manifest_phase_1c_raw_dbn_alignment.json` |
 | 2 | PASS | `reports/phase_restart/manifest_phase_2_readiness_summary.json` |
 
+## Refreshed Smoke Commands
+
+Phase 1C:
+```powershell
+python -m scripts.phase1C_validate.audit_raw_dbn_alignment --config reports/phase_restart/manifest_smoke_alpha_tiered.yaml --profile manifest_smoke --dbn-root data/dbn --raw-root data/raw --expected-only --json-out reports/phase_restart/manifest_phase_1c_raw_dbn_alignment.json --md-out reports/phase_restart/manifest_phase_1c_raw_dbn_alignment.md
+```
+
+Phase 2:
+```powershell
+python -m scripts.phase2_causal_base.build_causal_base_data --profile manifest_smoke --raw-root data/raw --output-root reports/phase_restart/manifest_phase_2_output --reports-root reports/phase_restart/manifest_phase_2_smoke --profile-config reports/phase_restart/manifest_smoke_alpha_tiered.yaml --raw-alignment-report reports/phase_restart/manifest_phase_1c_raw_dbn_alignment.json --readiness-only --readiness-json-out reports/phase_restart/manifest_phase_2_readiness_summary.json --readiness-md-out reports/phase_restart/manifest_phase_2_readiness_summary.md
+```
+
+Rerun results:
+- Phase 1C: PASS, `expected=1 raw=1 needs_phase1b=0 raw_only=0 invalid_manifests=0 source_hash_mismatches=0 definition_join_status=checked definition_join_mismatches=0`.
+- Phase 2: PASS, `checked=1 blockers=0`.
+
 ## Canonical Path Resolution
 
 - Phase 1A planned DBN archive output: `data/dbn/ohlcv_1m/ZN/2023/2023-01-01_2024-01-01.dbn.zst`.
@@ -27,6 +43,7 @@ Generated at UTC: 2026-06-22T09:32:47Z
 - Phase 1B reused canonical raw output: `data/raw/ZN/2023.parquet`.
 - Phase 1C validated canonical DBN root `data/dbn` against canonical raw root `data/raw`.
 - Phase 2 readiness consumed canonical raw root `data/raw` and did not write causal outputs.
+- Canonical paths are present in `configs/data_manifest.yaml`: `dbn_root: data/dbn`, `raw_parquet_pattern: data/raw/{market}/{year}.parquet`, and `causal_parquet_pattern: data/causally_gated_normalized/{market}/{year}.parquet`.
 
 ## Safety
 
@@ -34,7 +51,16 @@ Generated at UTC: 2026-06-22T09:32:47Z
 - DBN source modification: no evidence.
 - Deprecated top-level data folders created: no evidence.
 - Generated smoke evidence stayed under `reports/phase_restart`.
-- Cleanup gate remains blocked by manifest policy gaps from the prior manifest check; this smoke run did not attempt cleanup.
+- Generated data artifacts staged: none.
+- Cleanup/quarantine/move actions: not run.
+
+## Manifest Policy Gaps
+
+- Repair required before cleanup: 144 unexpected missing pairs in `reports/data_manifest/manifest_coverage_check.csv` (10 raw parquet pairs, 66 causal parquet pairs, 68 DBN status pairs).
+- Explicitly deferred policy gap: 23 allowed extra DBN pairs are encoded in `configs/data_manifest.yaml` with cleanup disabled.
+- Duplicate/deprecated path deferred: 12 known duplicate DBN market-year pairs are policy-deferred review-before-cleanup.
+- UNKNOWN requiring review: `data/raw/_repair_candidates` and `data/causally_gated_normalized/_repair_candidates` remain `STALE_OR_UNKNOWN` in `reports/data_manifest/manifest_coverage_summary.md`.
+- Cleanup gate decision: cleanup remains blocked and cannot be evaluated for approval until missing-pair repairs or deferrals, duplicate review, and `STALE_OR_UNKNOWN` review are resolved.
 
 ## Notes
 

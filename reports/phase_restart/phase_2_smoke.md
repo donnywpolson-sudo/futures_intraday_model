@@ -2,6 +2,8 @@
 
 Status: PASS
 
+Refreshed at UTC: 2026-06-22T09:48:29Z
+
 Scope: manifest-bounded ZN 2023 phase 2 readiness-only preflight. No causal parquet output was written.
 
 Command:
@@ -11,6 +13,7 @@ python -m scripts.phase2_causal_base.build_causal_base_data --profile manifest_s
 
 Result:
 - Readiness status: PASS.
+- Rerun output: `phase2_readiness_only status=PASS checked=1 blockers=0 json=reports/phase_restart/manifest_phase_2_readiness_summary.json`.
 - Expected market-years: 1.
 - Selected market-years: 1.
 - Checked market-years: 1.
@@ -39,3 +42,4 @@ Safety checks:
 - Phase after phase 2: not run.
 - Generated phase 2 outputs: readiness JSON/Markdown only.
 - Data mutation check after run: `git status --short -- data` returned no output.
+- Requested smoke output root remained absent after readiness-only run: `reports/phase_restart/manifest_phase_2_output`.
