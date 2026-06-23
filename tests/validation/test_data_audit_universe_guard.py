@@ -95,7 +95,17 @@ def test_guard_blocks_legacy_quarantined_final_decision_marked_usable(tmp_path: 
     assert "final_decision='keep_quarantined_ohlcv_only_evidence_insufficient'" in failure
 
 
-def test_guard_blocks_assumption_only_final_decision_marked_usable(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "final_decision",
+    [
+        "acceptable_with_caveat_ohlcv_empty_minutes_assumed",
+        "accept_with_caveat_ohlcv_empty_minutes_assumed",
+    ],
+)
+def test_guard_allows_caveat_final_decision_marked_wfa_usable(
+    tmp_path: Path,
+    final_decision: str,
+) -> None:
     path = _write_universe(
         tmp_path / "universe.json",
         [
@@ -103,6 +113,51 @@ def test_guard_blocks_assumption_only_final_decision_marked_usable(tmp_path: Pat
                 "market": "ES",
                 "year": 2024,
                 "audit_status": "usable",
+                "usable_for_wfa": True,
+                "final_decision": final_decision,
+                "reason": "assumption-only no-trade convention",
+            }
+        ],
+    )
+
+    universe = load_data_audit_universe(path)
+
+    assert universe.require_usable("ES", 2024, context="test") is None
+
+
+def test_guard_blocks_caveat_final_decision_without_explicit_wfa_usable(
+    tmp_path: Path,
+) -> None:
+    path = _write_universe(
+        tmp_path / "universe.json",
+        [
+            {
+                "market": "ES",
+                "year": 2024,
+                "audit_status": "usable",
+                "final_decision": "acceptable_with_caveat_ohlcv_empty_minutes_assumed",
+                "reason": "assumption-only no-trade convention",
+            }
+        ],
+    )
+
+    universe = load_data_audit_universe(path)
+    failure = universe.require_usable("ES", 2024, context="test")
+
+    assert failure is not None
+    assert "usable_for_wfa must be true" in failure
+
+
+def test_guard_blocks_caveat_final_decision_marked_diagnostic_only(
+    tmp_path: Path,
+) -> None:
+    path = _write_universe(
+        tmp_path / "universe.json",
+        [
+            {
+                "market": "ES",
+                "year": 2024,
+                "audit_status": "diagnostic_only",
                 "usable_for_wfa": True,
                 "final_decision": "acceptable_with_caveat_ohlcv_empty_minutes_assumed",
                 "reason": "assumption-only no-trade convention",
@@ -114,7 +169,7 @@ def test_guard_blocks_assumption_only_final_decision_marked_usable(tmp_path: Pat
     failure = universe.require_usable("ES", 2024, context="test")
 
     assert failure is not None
-    assert "acceptable_with_caveat_ohlcv_empty_minutes_assumed" in failure
+    assert "audit_status='diagnostic_only'" in failure
 
 
 def test_guard_blocks_missing_market_year(tmp_path: Path) -> None:

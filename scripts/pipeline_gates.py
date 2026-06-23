@@ -80,6 +80,12 @@ def _int_value(value: object) -> int | None:
         return None
 
 
+def _string_sequence(value: object) -> list[str]:
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    return [str(item) for item in value]
+
+
 def check_upstream_manifest(
     *,
     manifest_path: Path,
@@ -90,11 +96,19 @@ def check_upstream_manifest(
     gate_name: str,
     expected_stage: str | None = None,
     block_warnings: bool = True,
+    allowed_statuses: Iterable[str] = ("PASS",),
+    accepted_warning_messages: Iterable[str] | None = None,
 ) -> ManifestGateCheck:
     failures: list[str] = []
     manifest, read_failures = _read_json_manifest(manifest_path)
     failures.extend(read_failures)
     expected_pairs = sorted({(str(market), int(year)) for market, year in expected_market_years})
+    allowed_status_set = {str(status) for status in allowed_statuses}
+    accepted_warning_set = (
+        {str(message) for message in accepted_warning_messages}
+        if accepted_warning_messages is not None
+        else set()
+    )
 
     evidence: dict[str, Any] = {
         "gate": gate_name,
@@ -104,6 +118,7 @@ def check_upstream_manifest(
         "expected_resolved_profile": expected_resolved_profile,
         "expected_output_root": relative_path(expected_output_root),
         "expected_market_year_count": len(expected_pairs),
+        "allowed_statuses": sorted(allowed_status_set),
     }
     if manifest_path.exists():
         evidence["manifest_hash"] = file_sha256(manifest_path)
@@ -114,6 +129,31 @@ def check_upstream_manifest(
 
     evidence["upstream_status"] = manifest.get("status")
     evidence["upstream_stage"] = manifest.get("stage")
+    accepted_warnings_seen: list[str] = []
+
+    def warning_failures(
+        context: str,
+        count_value: object,
+        messages_value: object,
+        *,
+        require_messages: bool,
+    ) -> None:
+        warning_count_value = _int_value(count_value)
+        messages = _string_sequence(messages_value)
+        if block_warnings and messages:
+            unaccepted = sorted({message for message in messages if message not in accepted_warning_set})
+            if unaccepted:
+                failures.append(f"{context} warnings are not accepted: {unaccepted}")
+            else:
+                accepted_warnings_seen.extend(messages)
+        if not block_warnings or warning_count_value in (None, 0):
+            return
+        if accepted_warning_set and messages:
+            return
+        if accepted_warning_set and not require_messages:
+            return
+        failures.append(f"{context} warning_count is {warning_count_value}, not 0")
+
     if expected_stage is not None and manifest.get("stage") != expected_stage:
         failures.append(
             f"upstream manifest stage is {manifest.get('stage')!r}, not {expected_stage!r}"
@@ -133,8 +173,11 @@ def check_upstream_manifest(
             "upstream manifest output_root does not match current input root: "
             f"manifest={manifest.get('output_root')!r} current={relative_path(expected_output_root)}"
         )
-    if manifest.get("status") != "PASS":
-        failures.append(f"upstream manifest status is {manifest.get('status')!r}, not 'PASS'")
+    if manifest.get("status") not in allowed_status_set:
+        failures.append(
+            f"upstream manifest status is {manifest.get('status')!r}, not one of "
+            f"{sorted(allowed_status_set)}"
+        )
 
     failure_count = _int_value(manifest.get("failure_count"))
     if failure_count is None:
@@ -142,16 +185,21 @@ def check_upstream_manifest(
     elif failure_count != 0:
         failures.append(f"upstream manifest failure_count is {failure_count}, not 0")
 
-    warning_count = _int_value(manifest.get("warning_count"))
-    if block_warnings and warning_count not in (None, 0):
-        failures.append(f"upstream manifest warning_count is {warning_count}, not 0")
+    warning_failures(
+        "upstream manifest",
+        manifest.get("warning_count"),
+        manifest.get("warnings"),
+        require_messages=False,
+    )
 
     summary = manifest.get("summary")
     if isinstance(summary, Mapping):
-        for key in ("fail_count", "warn_count"):
-            value = _int_value(summary.get(key))
-            if value not in (None, 0):
-                failures.append(f"upstream manifest summary.{key} is {value}, not 0")
+        fail_count = _int_value(summary.get("fail_count"))
+        if fail_count not in (None, 0):
+            failures.append(f"upstream manifest summary.fail_count is {fail_count}, not 0")
+        warn_count = _int_value(summary.get("warn_count"))
+        if block_warnings and warn_count not in (None, 0) and not accepted_warning_set:
+            failures.append(f"upstream manifest summary.warn_count is {warn_count}, not 0")
 
     if _nonempty_sequence(manifest.get("failures")):
         failures.append("upstream manifest failures are non-empty")
@@ -162,19 +210,22 @@ def check_upstream_manifest(
             if not isinstance(output, Mapping):
                 continue
             row_status = output.get("status")
-            if row_status is not None and row_status != "PASS":
-                failures.append(f"upstream manifest output {index} status is {row_status!r}, not 'PASS'")
+            if row_status is not None and row_status not in allowed_status_set:
+                failures.append(
+                    f"upstream manifest output {index} status is {row_status!r}, "
+                    f"not one of {sorted(allowed_status_set)}"
+                )
             row_failure_count = _int_value(output.get("failure_count"))
             if row_failure_count not in (None, 0):
                 failures.append(
                     f"upstream manifest output {index} failure_count is {row_failure_count}, not 0"
                 )
-            if block_warnings:
-                row_warning_count = _int_value(output.get("warning_count"))
-                if row_warning_count not in (None, 0):
-                    failures.append(
-                        f"upstream manifest output {index} warning_count is {row_warning_count}, not 0"
-                    )
+            warning_failures(
+                f"upstream manifest output {index}",
+                output.get("warning_count"),
+                output.get("warnings"),
+                require_messages=True,
+            )
             if _nonempty_sequence(output.get("failures")):
                 failures.append(f"upstream manifest output {index} failures are non-empty")
 
@@ -198,6 +249,8 @@ def check_upstream_manifest(
             failures.append(f"upstream output hash stale: {relative_path(output_path)}")
 
     evidence["status"] = "PASS" if not failures else "FAIL"
+    evidence["accepted_warning_count"] = len(accepted_warnings_seen)
+    evidence["accepted_warnings"] = sorted(set(accepted_warnings_seen))
     evidence["failures"] = failures
     return ManifestGateCheck(manifest=manifest, failures=failures, evidence=evidence)
 

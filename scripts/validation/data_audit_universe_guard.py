@@ -12,9 +12,11 @@ from typing import Any, Mapping
 
 USABLE_STATUS = "usable"
 BLOCKED_STATUSES = {"quarantined", "diagnostic_only"}
-WFA_BLOCKED_FINAL_DECISIONS = {
+WFA_ACCEPTED_CAVEAT_FINAL_DECISIONS = {
     "acceptable_with_caveat_ohlcv_empty_minutes_assumed",
     "accept_with_caveat_ohlcv_empty_minutes_assumed",
+}
+WFA_BLOCKED_FINAL_DECISIONS = {
     "keep_quarantined_ohlcv_only_evidence_insufficient",
 }
 
@@ -65,15 +67,23 @@ class DataAuditUniverse:
                 f"{context}: data-audit universe blocks {key[0]} {key[1]} "
                 f"with final_decision={final_decision!r}: {reason}"
             )
+        if status != USABLE_STATUS:
+            return (
+                f"{context}: data-audit universe blocks {key[0]} {key[1]} "
+                f"with audit_status={status!r}: {reason}"
+            )
         if row.get("usable_for_wfa") is False:
             return (
                 f"{context}: data-audit universe blocks {key[0]} {key[1]} "
                 f"with usable_for_wfa=False and audit_status={status!r}: {reason}"
             )
-        if status != USABLE_STATUS:
+        if (
+            final_decision in WFA_ACCEPTED_CAVEAT_FINAL_DECISIONS
+            and row.get("usable_for_wfa") is not True
+        ):
             return (
                 f"{context}: data-audit universe blocks {key[0]} {key[1]} "
-                f"with audit_status={status!r}: {reason}"
+                f"with final_decision={final_decision!r}: usable_for_wfa must be true"
             )
         return None
 

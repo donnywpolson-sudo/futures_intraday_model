@@ -30,8 +30,10 @@ def _write_manifest(
     profile: str = "research",
     resolved_profile: str = "research_resolved",
     output_hash: str | None = None,
+    warnings: list[str] | None = None,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
+    output_warnings = list(warnings or [])
     payload = {
         "stage": "upstream",
         "status": status,
@@ -41,6 +43,7 @@ def _write_manifest(
         "warning_count": warning_count,
         "failure_count": failure_count,
         "failures": [] if failure_count == 0 else ["failed"],
+        "warnings": [],
         "summary": {"fail_count": failure_count, "warn_count": warning_count},
         "output_file_hashes": {
             output_path.as_posix(): output_hash if output_hash is not None else file_sha256(output_path)
@@ -53,6 +56,7 @@ def _write_manifest(
                 "warning_count": warning_count,
                 "failure_count": failure_count,
                 "failures": [] if failure_count == 0 else ["failed"],
+                "warnings": output_warnings,
             }
         ],
     }
@@ -60,7 +64,7 @@ def _write_manifest(
     return path
 
 
-def _check(manifest_path: Path, output_root: Path):
+def _check(manifest_path: Path, output_root: Path, **kwargs):
     return check_upstream_manifest(
         manifest_path=manifest_path,
         expected_stage="upstream",
@@ -69,6 +73,7 @@ def _check(manifest_path: Path, output_root: Path):
         expected_output_root=output_root,
         expected_market_years=[("ES", 2024)],
         gate_name="test_gate",
+        **kwargs,
     )
 
 
@@ -112,6 +117,90 @@ def test_upstream_manifest_gate_rejects_warn_or_fail_status(tmp_path: Path) -> N
 
     assert any("status" in failure for failure in _check(warn_manifest, output_root).failures)
     assert any("failure_count" in failure for failure in _check(fail_manifest, output_root).failures)
+
+
+def test_upstream_manifest_gate_accepts_opt_in_warn_with_exact_warning(tmp_path: Path) -> None:
+    output_root = tmp_path / "out"
+    output_path = _write_output(output_root)
+    warning = "features fully unavailable: feature_rel_ret_vs_ES_15,feature_corr_vs_ES_60"
+    warn_manifest = _write_manifest(
+        tmp_path / "warn.json",
+        output_root,
+        output_path,
+        status="WARN",
+        warning_count=1,
+        warnings=[warning],
+    )
+
+    check = _check(
+        warn_manifest,
+        output_root,
+        allowed_statuses=("PASS", "WARN"),
+        accepted_warning_messages=(warning,),
+    )
+
+    assert check.passed
+    assert check.evidence["status"] == "PASS"
+    assert check.evidence["accepted_warning_count"] == 1
+    assert check.evidence["accepted_warnings"] == [warning]
+
+
+def test_upstream_manifest_gate_rejects_opt_in_warn_with_unlisted_warning(tmp_path: Path) -> None:
+    output_root = tmp_path / "out"
+    output_path = _write_output(output_root)
+    warn_manifest = _write_manifest(
+        tmp_path / "warn.json",
+        output_root,
+        output_path,
+        status="WARN",
+        warning_count=1,
+        warnings=["unexpected warning"],
+    )
+
+    check = _check(
+        warn_manifest,
+        output_root,
+        allowed_statuses=("PASS", "WARN"),
+        accepted_warning_messages=(
+            "features fully unavailable: feature_rel_ret_vs_ES_15,feature_corr_vs_ES_60",
+        ),
+    )
+
+    assert not check.passed
+    assert any("warnings are not accepted" in failure for failure in check.failures)
+
+
+def test_upstream_manifest_gate_opt_in_still_rejects_failures_and_stale_hashes(
+    tmp_path: Path,
+) -> None:
+    output_root = tmp_path / "out"
+    output_path = _write_output(output_root)
+    warning = "features fully unavailable: feature_rel_ret_vs_ES_15,feature_corr_vs_ES_60"
+    fail_manifest = _write_manifest(
+        tmp_path / "fail.json",
+        output_root,
+        output_path,
+        status="WARN",
+        failure_count=1,
+        warning_count=1,
+        warnings=[warning],
+    )
+    stale_manifest = _write_manifest(
+        tmp_path / "stale.json",
+        output_root,
+        output_path,
+        status="WARN",
+        warning_count=1,
+        warnings=[warning],
+        output_hash="0" * 64,
+    )
+    kwargs = {
+        "allowed_statuses": ("PASS", "WARN"),
+        "accepted_warning_messages": (warning,),
+    }
+
+    assert any("failure_count" in failure for failure in _check(fail_manifest, output_root, **kwargs).failures)
+    assert any("hash stale" in failure for failure in _check(stale_manifest, output_root, **kwargs).failures)
 
 
 def test_upstream_manifest_gate_rejects_scope_and_root_mismatches(tmp_path: Path) -> None:

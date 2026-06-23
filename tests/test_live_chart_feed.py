@@ -453,8 +453,9 @@ def test_selection_state_round_trips_market_and_timeframe(tmp_path: Path) -> Non
 
 
 class FakeTopbarWidget:
-    def __init__(self, value: str) -> None:
+    def __init__(self, value: str, options: tuple[str, ...] = ()) -> None:
         self.value = value
+        self.options = options
 
     def set(self, value: str) -> None:
         self.value = value
@@ -472,8 +473,7 @@ class FakeTopbar:
         default: str | None = None,
         func: object = None,
     ) -> None:
-        _ = options
-        widget = FakeTopbarWidget(default or "")
+        widget = FakeTopbarWidget(default or "", options)
         self.widgets[name] = widget
 
         if callable(func):
@@ -526,6 +526,59 @@ class FakeChart:
 
     def exit(self) -> None:
         self.is_alive = False
+
+
+def test_timeframe_switch_down_uses_one_minute_source_candles() -> None:
+    fake_chart = FakeChart()
+    display = chart.ChartDisplayState(
+        raw_candles=[],
+        timeframe="4h",
+        timeframe_seconds=chart.timeframe_seconds("4h"),
+        display_tz=timezone.utc,
+        display_tz_name="UTC",
+    )
+    status = chart.ChartStatus()
+    source_candles = [
+        one_minute_candle(0, 100.0),
+        one_minute_candle(1, 101.0),
+        one_minute_candle(2, 102.0),
+    ]
+
+    chart.replace_source_candles(display, status, source_candles)
+    chart.render_chart_display(
+        display,
+        chart=fake_chart,
+        series_factory=lambda candle: candle,
+        status=status,
+        symbols="ESU6",
+        schema="trades",
+        mode="test",
+        stdout=StringIO(),
+    )
+    four_hour_frame = [frame for frame in fake_chart.frames if getattr(frame, "empty", False) is False][-1]
+    assert len(four_hour_frame) == 1
+
+    timeframe_queue: queue.Queue[str] = queue.Queue()
+    timeframe_queue.put("1m")
+    assert chart.drain_timeframe_queue(
+        timeframe_queue,
+        display=display,
+        chart_timeframes=chart.SUPPORTED_CHART_TIMEFRAMES,
+    )
+    chart.render_chart_display(
+        display,
+        chart=fake_chart,
+        series_factory=lambda candle: candle,
+        status=status,
+        symbols="ESU6",
+        schema="trades",
+        mode="test",
+        stdout=StringIO(),
+    )
+
+    one_minute_frame = [frame for frame in fake_chart.frames if getattr(frame, "empty", False) is False][-1]
+    assert len(one_minute_frame) == len(source_candles)
+    assert [float(value) for value in one_minute_frame["close"]] == [100.0, 101.0, 102.0]
 
 
 class FakeStore:
@@ -605,10 +658,26 @@ class FakeLive:
         _ = timeout
 
 
-def fake_databento_module(state: SimpleNamespace) -> ModuleType:
+class FailingStartLive(FakeLive):
+    def start(self) -> None:
+        raise RuntimeError(
+            "Connection to glbx-mdp3.lsg.databento.com:13000 failed: "
+            "[Errno 11002] getaddrinfo failed"
+        )
+
+
+class SwitchBackLive(FakeLive):
+    def start(self) -> None:
+        switch_index = len(self._state.live_subscriptions) - 1
+        switch_markets = getattr(self._state, "switch_markets", ())
+        if switch_index < len(switch_markets):
+            FakeChart.WV.emit_queue.put(f"market_~_{switch_markets[switch_index]}")
+
+
+def fake_databento_module(state: SimpleNamespace, live_cls: type[FakeLive] = FakeLive) -> ModuleType:
     module = ModuleType("fake_databento")
     module.Historical = lambda key: FakeHistorical(key, state)
-    module.Live = lambda key: FakeLive(key, state)
+    module.Live = lambda key: live_cls(key, state)
     return module
 
 
@@ -657,9 +726,98 @@ def test_run_live_chart_switches_backfill_and_subscription_to_selected_market(
     ]
 
 
+def test_run_live_chart_keeps_historical_backfill_when_live_dns_fails() -> None:
+    state = SimpleNamespace(historical_requests=[], live_subscriptions=[], lives=[])
+    fake_chart = FakeChart()
+    stdout = StringIO()
+    stderr = StringIO()
+
+    result = chart.run_live_chart(
+        chart.build_arg_parser().parse_args(
+            [
+                "--market",
+                "ES",
+                "--timeframe",
+                "1m",
+                "--historical-backfill",
+                "--lookback-hours",
+                "4",
+                "--timeout-seconds",
+                "0",
+                "--no-persist-selection",
+            ]
+        ),
+        env={"DATABENTO_API_KEY": "db-test"},
+        db_module=fake_databento_module(state, FailingStartLive),
+        chart_factory=lambda: fake_chart,
+        series_factory=lambda candle: candle,
+        stdout=stdout,
+        stderr=stderr,
+        now=datetime(2026, 6, 21, 23, 0, tzinfo=timezone.utc),
+    )
+
+    assert result == 0
+    assert [request["symbols"] for request in state.historical_requests] == [101]
+    assert [subscription["symbols"] for subscription in state.live_subscriptions] == [101]
+    assert state.lives[0]._stopped is True
+    assert "Databento live stream unavailable after historical backfill" in stderr.getvalue()
+    assert "Databento live chart failed" not in stderr.getvalue()
+    assert "timed_out=True" in stdout.getvalue()
+    assert "live unavailable" in fake_chart.topbar["status"].value
+
+
+def test_run_live_chart_reuses_cached_backfill_when_switching_back_to_market(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = SimpleNamespace(
+        historical_requests=[],
+        live_subscriptions=[],
+        lives=[],
+        switch_markets=("NQ", "ES"),
+    )
+    fake_chart = FakeChart()
+    monotonic_value = 100.0
+
+    def advance_monotonic() -> float:
+        nonlocal monotonic_value
+        monotonic_value += 2.0
+        return monotonic_value
+
+    monkeypatch.setattr(chart.time, "monotonic", advance_monotonic)
+
+    result = chart.run_live_chart(
+        chart.build_arg_parser().parse_args(
+            [
+                "--market",
+                "ES",
+                "--timeframe",
+                "1m",
+                "--historical-backfill",
+                "--lookback-hours",
+                "4",
+                "--timeout-seconds",
+                "0.01",
+                "--no-persist-selection",
+            ]
+        ),
+        env={"DATABENTO_API_KEY": "db-test"},
+        db_module=fake_databento_module(state, SwitchBackLive),
+        chart_factory=lambda: fake_chart,
+        series_factory=lambda candle: candle,
+        stdout=StringIO(),
+        stderr=StringIO(),
+        now=datetime(2026, 6, 21, 23, 0, tzinfo=timezone.utc),
+    )
+
+    assert result == 0
+    assert [request["symbols"] for request in state.historical_requests] == [101, 202]
+    assert [subscription["symbols"] for subscription in state.live_subscriptions] == [101, 202, 101]
+
+
 def test_run_live_chart_uses_persisted_market_and_timeframe(tmp_path: Path) -> None:
     state = SimpleNamespace(historical_requests=[], live_subscriptions=[], lives=[])
     state_path = tmp_path / "live_chart_feed_state.json"
+    fake_chart = FakeChart()
     monotonic_values = iter([103.0, 103.0, 103.02])
     chart.write_selection_state(
         state_path,
@@ -682,7 +840,7 @@ def test_run_live_chart_uses_persisted_market_and_timeframe(tmp_path: Path) -> N
         ),
         env={"DATABENTO_API_KEY": "db-test"},
         db_module=fake_databento_module(state),
-        chart_factory=FakeChart,
+        chart_factory=lambda: fake_chart,
         series_factory=lambda candle: candle,
         stdout=StringIO(),
         stderr=StringIO(),
@@ -694,6 +852,8 @@ def test_run_live_chart_uses_persisted_market_and_timeframe(tmp_path: Path) -> N
     assert [request["symbols"] for request in state.historical_requests] == [202]
     assert [subscription["symbols"] for subscription in state.live_subscriptions] == [202]
     assert chart.load_selection_state(state_path) == {"market": "NQ", "timeframe": "4h"}
+    assert fake_chart.topbar["timeframe"].value == "4h"
+    assert fake_chart.topbar["timeframe"].options == chart.SUPPORTED_CHART_TIMEFRAMES
 
 
 class FakeSymbology:

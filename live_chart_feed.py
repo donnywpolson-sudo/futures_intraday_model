@@ -71,6 +71,15 @@ OHLCV_FIELDS = ("ts_event", "open", "high", "low", "close", "volume")
 OHLCV_PAYLOAD_FIELDS = ("open", "high", "low", "close", "volume")
 TRADE_PAYLOAD_FIELDS = ("price", "size")
 ALWAYS_REPORTED_RECORD_TYPE_MARKERS = ("Error",)
+LIVE_CONNECTION_FAILURE_MARKERS = (
+    "connection refused",
+    "connection reset",
+    "failed to connect",
+    "getaddrinfo failed",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "timed out",
+)
 TIMEFRAME_PATTERN = re.compile(r"^(\d+)([smhd])$")
 MARKET_SYMBOL_PATTERN = re.compile(r"^[A-Z0-9]{1,4}$")
 FUTURES_CONTRACT_PATTERN = re.compile(r"^([A-Z0-9]{1,4})([FGHJKMNQUVXZ])([0-9]{1,2})$")
@@ -137,6 +146,7 @@ class ChartDisplayState:
     rendered_candle_count: int = 0
     loading: bool = True
     session_marker_objects: list[Any] = field(default_factory=list)
+    timeframe_cache: dict[str, list[dict[str, CandleValue]]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -177,6 +187,13 @@ class ResolvedInstrument:
     instrument_id: int
     raw_symbol: str | None
     candidates: tuple[SymbologyCandidate, ...]
+
+
+@dataclass(frozen=True)
+class MarketRuntimeState:
+    resolved: ResolvedInstrument
+    display_symbol: str
+    historical_candles: tuple[dict[str, CandleValue], ...]
 
 
 @dataclass(frozen=True)
@@ -483,6 +500,7 @@ def apply_persisted_selection(
     if (
         getattr(args, "market", None) is None
         and getattr(args, "search_market", None) is None
+        and getattr(args, "symbols", None) is None
         and not getattr(args, "_market_explicit", False)
     ):
         market = state.get("market", "").strip().upper()
@@ -664,6 +682,13 @@ def effective_timeout_seconds(args: argparse.Namespace) -> float | None:
     if getattr(args, "no_timeout", False):
         return None
     return args.timeout_seconds
+
+
+def is_live_connection_failure(exc: Exception) -> bool:
+    text = str(exc).lower()
+    if "connection to " in text and " failed" in text:
+        return True
+    return any(marker in text for marker in LIVE_CONNECTION_FAILURE_MARKERS)
 
 
 def format_chart_title(
@@ -1792,12 +1817,30 @@ def append_display_candle(
             return False
         if candle_time == last_time:
             display.raw_candles[-1] = candle
+            display.timeframe_cache.clear()
         else:
             display.raw_candles.append(candle)
+            display.timeframe_cache.clear()
     else:
         display.raw_candles.append(candle)
+        display.timeframe_cache.clear()
     apply_candle_status(status, candle)
     return True
+
+
+def replace_source_candles(
+    display: ChartDisplayState,
+    status: ChartStatus,
+    candles: Sequence[dict[str, CandleValue]],
+) -> None:
+    display.raw_candles.clear()
+    display.timeframe_cache.clear()
+    display.rendered_candle_count = 0
+    display.loading = True
+    reset_status(status)
+    for candle in candles:
+        display.raw_candles.append(dict(candle))
+        apply_candle_status(status, candle)
 
 
 def seed_candle_for_live(
@@ -1806,7 +1849,7 @@ def seed_candle_for_live(
 ) -> dict[str, CandleValue] | None:
     if not display.raw_candles or live_start is None or live_start == 0:
         return None
-    live_bucket = floor_timeframe(normalize_ts_event(live_start), display.timeframe_seconds)
+    live_bucket = floor_timeframe(normalize_ts_event(live_start), timeframe_seconds(DEFAULT_CHART_TIMEFRAME))
     last_candle = display.raw_candles[-1]
     if normalize_ts_event(last_candle["time"]) == live_bucket:
         return dict(last_candle)
@@ -1847,15 +1890,18 @@ def render_chart_display(
     mode: str,
     stdout: TextIO,
 ) -> None:
-    aggregated = aggregate_candles(
-        display.raw_candles,
-        seconds=display.timeframe_seconds,
-        timeframe=display.timeframe,
-    )
-    display_candles = [
-        candle_for_display(candle, display_tz=display.display_tz)
-        for candle in aggregated
-    ]
+    display_candles = display.timeframe_cache.get(display.timeframe)
+    if display_candles is None:
+        aggregated = aggregate_candles(
+            display.raw_candles,
+            seconds=display.timeframe_seconds,
+            timeframe=display.timeframe,
+        )
+        display_candles = [
+            candle_for_display(candle, display_tz=display.display_tz)
+            for candle in aggregated
+        ]
+        display.timeframe_cache[display.timeframe] = display_candles
     if replace_chart_candles(chart, display_candles, series_factory=series_factory):
         display.rendered_candle_count = len(display_candles)
     else:
@@ -2562,11 +2608,6 @@ def run_live_chart(
     if timeframe_error is not None:
         print(timeframe_error, file=stderr)
         return 2
-    chart_timeframes = tuple(
-        option
-        for option in chart_timeframes
-        if timeframe_seconds(option) >= timeframe_seconds(chart_timeframe)
-    )
 
     if db_module is None:
         try:
@@ -2598,89 +2639,11 @@ def run_live_chart(
         end=historical_end,
         fallback_start=current_time,
     )
-    available_exclusive_end_date = lookup_dataset_available_exclusive_end(
-        historical,
-        dataset=args.dataset,
-        stderr=stderr,
-    )
-    try:
-        end_date = clamp_exclusive_end_date(
-            start_date=start_date,
-            requested_end_date=end_date,
-            available_exclusive_end_date=available_exclusive_end_date,
-            context="symbology",
-            stderr=stderr,
-        )
-        if args.historical_backfill:
-            historical_end = clamp_historical_end(
-                start=live_start,
-                requested_end=historical_end,
-                available_exclusive_end_date=available_exclusive_end_date,
-                stderr=stderr,
-            )
-    except ValueError as exc:
-        print(str(exc), file=stderr)
-        return 2
-    try:
-        resolved = resolve_single_instrument(
-            historical,
-            dataset=args.dataset,
-            market=market,
-            query_symbol=query_symbol,
-            start_date=start_date,
-            end_date=end_date,
-        )
-    except ValueError as exc:
-        print(str(exc), file=stderr)
-        return 2
-    except Exception as exc:
-        retry_available_end = parse_available_end_from_text(str(exc))
-        if retry_available_end is None:
-            print(f"Databento instrument resolution failed: {exc}", file=stderr)
-            return 1
-        available_exclusive_end_date = retry_available_end.date().isoformat()
-        try:
-            retry_end_date = clamp_exclusive_end_date(
-                start_date=start_date,
-                requested_end_date=end_date,
-                available_exclusive_end_date=available_exclusive_end_date,
-                context="symbology retry",
-                stderr=stderr,
-            )
-            if args.historical_backfill:
-                historical_end = clamp_historical_end(
-                    start=live_start,
-                    requested_end=historical_end,
-                    available_exclusive_end_date=available_exclusive_end_date,
-                    stderr=stderr,
-                )
-        except ValueError as clamp_exc:
-            print(str(clamp_exc), file=stderr)
-            return 2
-        if retry_end_date == end_date:
-            print(f"Databento instrument resolution failed: {exc}", file=stderr)
-            return 1
-        end_date = retry_end_date
-        try:
-            resolved = resolve_single_instrument(
-                historical,
-                dataset=args.dataset,
-                market=market,
-                query_symbol=query_symbol,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        except ValueError as retry_exc:
-            print(str(retry_exc), file=stderr)
-            return 2
-        except Exception as retry_exc:
-            print(f"Databento instrument resolution failed: {retry_exc}", file=stderr)
-            return 1
 
     timeframe_queue: queue.Queue[str] = queue.Queue()
     market_queue: queue.Queue[str] = queue.Queue()
     active_market = market
-    display_symbol = resolved.raw_symbol or resolved.market
+    display_symbol = market
     requested_live_start = live_start
     market_switch_enabled_after = time.monotonic() + 2.0
     if persist_selection:
@@ -2701,6 +2664,118 @@ def run_live_chart(
         display_tz=display_tz,
         display_tz_name=display_tz_name,
     )
+    resolved_cache: dict[tuple[str, str], ResolvedInstrument] = {}
+    market_runtime_cache: dict[tuple[object, ...], MarketRuntimeState] = {}
+
+    def resolve_cached_market(selected_market: str) -> ResolvedInstrument:
+        nonlocal end_date, historical_end
+        selected_query_symbol = market_query_symbol(selected_market, args.symbols)
+        cache_key = (selected_market, selected_query_symbol)
+        cached = resolved_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            resolved_market = resolve_single_instrument(
+                historical,
+                dataset=args.dataset,
+                market=selected_market,
+                query_symbol=selected_query_symbol,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        except ValueError:
+            raise
+        except Exception as exc:
+            retry_available_end = parse_available_end_from_text(str(exc))
+            if retry_available_end is None:
+                raise RuntimeError(f"Databento instrument resolution failed: {exc}") from exc
+            available_retry_end_date = retry_available_end.date().isoformat()
+            retry_end_date = clamp_exclusive_end_date(
+                start_date=start_date,
+                requested_end_date=end_date,
+                available_exclusive_end_date=available_retry_end_date,
+                context="symbology retry",
+                stderr=stderr,
+            )
+            if args.historical_backfill:
+                historical_end = clamp_historical_end(
+                    start=live_start,
+                    requested_end=historical_end,
+                    available_exclusive_end_date=available_retry_end_date,
+                    stderr=stderr,
+                )
+            if retry_end_date == end_date:
+                raise RuntimeError(f"Databento instrument resolution failed: {exc}") from exc
+            end_date = retry_end_date
+            resolved_market = resolve_single_instrument(
+                historical,
+                dataset=args.dataset,
+                market=selected_market,
+                query_symbol=selected_query_symbol,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        resolved_cache[cache_key] = resolved_market
+        return resolved_market
+
+    def load_market_runtime(
+        selected_market: str,
+        source_start: SubscriptionStart,
+    ) -> MarketRuntimeState:
+        nonlocal historical_end
+        resolved_market = resolve_cached_market(selected_market)
+        selected_display_symbol = resolved_market.raw_symbol or resolved_market.market
+        normalized_source_start = (
+            normalize_ts_event(source_start) if source_start not in {None, 0} else source_start
+        )
+        cache_key = (
+            selected_market,
+            resolved_market.instrument_id,
+            normalized_source_start,
+            historical_end,
+        )
+        cached = market_runtime_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        source_candles: tuple[dict[str, CandleValue], ...] = ()
+        if args.historical_backfill:
+            historical_request = {
+                "dataset": args.dataset,
+                "schema": args.historical_schema,
+                "symbols": resolved_market.instrument_id,
+                "stype_in": DEFAULT_STYPE_IN,
+                "start": source_start,
+                "end": historical_end,
+            }
+            try:
+                store = historical.timeseries.get_range(**historical_request)
+            except Exception as exc:
+                retry_end = parse_available_end_from_text(str(exc))
+                if retry_end is None:
+                    raise
+                available_retry_end_date = retry_end.date().isoformat()
+                historical_end = clamp_historical_end(
+                    start=source_start,
+                    requested_end=historical_end,
+                    available_exclusive_end_date=available_retry_end_date,
+                    stderr=stderr,
+                )
+                historical_request["end"] = historical_end
+                cache_key = (
+                    selected_market,
+                    resolved_market.instrument_id,
+                    normalized_source_start,
+                    historical_end,
+                )
+                store = historical.timeseries.get_range(**historical_request)
+            source_candles = tuple(historical_store_to_candles(store))
+        runtime_state = MarketRuntimeState(
+            resolved=resolved_market,
+            display_symbol=selected_display_symbol,
+            historical_candles=source_candles,
+        )
+        market_runtime_cache[cache_key] = runtime_state
+        return runtime_state
 
     try:
         chart = chart_factory()
@@ -2727,39 +2802,113 @@ def run_live_chart(
             status_text=LOADING_STATUS_TEXT,
         )
         show_chart(chart)
-        live_symbol = resolved.instrument_id
-
-        if args.historical_backfill:
-            historical_request = {
-                "dataset": args.dataset,
-                "schema": args.historical_schema,
-                "symbols": live_symbol,
-                "stype_in": DEFAULT_STYPE_IN,
-                "start": live_start,
-                "end": historical_end,
-            }
-            try:
-                store = historical.timeseries.get_range(**historical_request)
-            except Exception as exc:
-                retry_end = parse_available_end_from_text(str(exc))
-                if retry_end is None:
-                    raise
-                available_retry_end_date = retry_end.date().isoformat()
+        update_chart_status_text(chart, f"{LOADING_STATUS_TEXT} resolving {active_market}")
+        available_exclusive_end_date = lookup_dataset_available_exclusive_end(
+            historical,
+            dataset=args.dataset,
+            stderr=stderr,
+        )
+        try:
+            end_date = clamp_exclusive_end_date(
+                start_date=start_date,
+                requested_end_date=end_date,
+                available_exclusive_end_date=available_exclusive_end_date,
+                context="symbology",
+                stderr=stderr,
+            )
+            if args.historical_backfill:
                 historical_end = clamp_historical_end(
                     start=live_start,
                     requested_end=historical_end,
-                    available_exclusive_end_date=available_retry_end_date,
+                    available_exclusive_end_date=available_exclusive_end_date,
                     stderr=stderr,
                 )
-                historical_request["end"] = historical_end
-                store = historical.timeseries.get_range(**historical_request)
-            historical_candles = aggregate_candles(
-                historical_store_to_candles(store),
-                seconds=display.timeframe_seconds,
-                timeframe=display.timeframe,
+        except ValueError as exc:
+            print(str(exc), file=stderr)
+            return 2
+        try:
+            runtime_state = load_market_runtime(active_market, live_start)
+        except ValueError as exc:
+            print(str(exc), file=stderr)
+            return 2
+        except RuntimeError as exc:
+            print(str(exc), file=stderr)
+            return 1
+        resolved = runtime_state.resolved
+        display_symbol = runtime_state.display_symbol
+        live_symbol = resolved.instrument_id
+        update_chart_title(
+            chart,
+            format_chart_title(
+                symbols=display_symbol,
+                schema=args.historical_schema,
+                mode=mode,
+                chart_timeframe=display.timeframe,
+                display_tz=display.display_tz,
+                display_tz_name=display_tz_name,
+            ),
+        )
+
+        def wait_after_live_connection_failure(exc: Exception) -> ChartRunResult | None:
+            nonlocal live
+            if (
+                not args.historical_backfill
+                or status.records_updated <= 0
+                or not is_live_connection_failure(exc)
+            ):
+                return None
+            stop_live_client(live)
+            live = None
+            finish_status_line(status, stdout)
+            print(
+                "Databento live stream unavailable after historical backfill; "
+                f"keeping historical chart open until close/timeout: {exc}",
+                file=stderr,
             )
-            for candle in historical_candles:
-                append_display_candle(display, status, candle)
+            display.loading = False
+            update_chart_status_text(
+                chart,
+                format_topbar_status(
+                    symbols=display_symbol,
+                    display=display,
+                    status=status,
+                )
+                + " | live unavailable",
+            )
+            return drain_chart_queue(
+                queue.Queue(),
+                chart=chart,
+                series_factory=series_factory,
+                display=display,
+                timeframe_queue=timeframe_queue,
+                market_queue=market_queue,
+                chart_timeframes=chart_timeframes,
+                markets=markets,
+                max_records=args.max_records,
+                timeout_seconds=effective_timeout_seconds(args),
+                no_data_warning_seconds=0,
+                status=status,
+                symbols=display_symbol,
+                market=active_market,
+                schema=args.schema,
+                mode=mode,
+                stdout=stdout,
+                stderr=stderr,
+                on_timeframe_change=(
+                    lambda selected: write_selection_state(
+                        selection_state_path,
+                        market=active_market,
+                        timeframe=selected,
+                        stderr=stderr,
+                    )
+                    if persist_selection
+                    else None
+                ),
+                clock=clock,
+            )
+
+        if args.historical_backfill:
+            replace_source_candles(display, status, runtime_state.historical_candles)
             if display.raw_candles:
                 render_chart_display(
                     display,
@@ -2788,6 +2937,10 @@ def run_live_chart(
             except Exception as exc:
                 retry_start = parse_allowed_start_from_text(str(exc))
                 if retry_start is None or retried_clamped_start:
+                    fallback_result = wait_after_live_connection_failure(exc)
+                    if fallback_result is not None:
+                        result = fallback_result
+                        break
                     raise
                 stop_live_client(live)
                 live = None
@@ -2807,10 +2960,10 @@ def run_live_chart(
                     stderr=stderr,
                     allow_start_clamp=not retried_clamped_start,
                     trade_aggregator=TradeCandleAggregator(
-                        timeframe_seconds=display.timeframe_seconds,
-                        timeframe=display.timeframe,
+                        timeframe_seconds=timeframe_seconds(DEFAULT_CHART_TIMEFRAME),
+                        timeframe=DEFAULT_CHART_TIMEFRAME,
                         current_bucket=(
-                            candle_bucket_time(seed["time"], display.timeframe)
+                            candle_bucket_time(seed["time"], DEFAULT_CHART_TIMEFRAME)
                             if seed is not None
                             else None
                         ),
@@ -2818,7 +2971,14 @@ def run_live_chart(
                     ),
                 )
             )
-            live.start()
+            try:
+                live.start()
+            except Exception as exc:
+                fallback_result = wait_after_live_connection_failure(exc)
+                if fallback_result is not None:
+                    result = fallback_result
+                    break
+                raise
 
             result = drain_chart_queue(
                 candle_queue,
@@ -2862,6 +3022,7 @@ def run_live_chart(
                 clear_queue_values(candle_queue)
                 clear_session_markers(display)
                 display.raw_candles.clear()
+                display.timeframe_cache.clear()
                 display.rendered_candle_count = 0
                 display.loading = True
                 reset_status(status)
@@ -2875,16 +3036,11 @@ def run_live_chart(
                         timeframe=display.timeframe,
                         stderr=stderr,
                     )
-                query_symbol = market_query_symbol(active_market, args.symbols)
-                resolved = resolve_single_instrument(
-                    historical,
-                    dataset=args.dataset,
-                    market=active_market,
-                    query_symbol=query_symbol,
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-                display_symbol = resolved.raw_symbol or resolved.market
+                update_chart_status_text(chart, f"{LOADING_STATUS_TEXT} {active_market}")
+                live_start = requested_live_start
+                runtime_state = load_market_runtime(active_market, live_start)
+                resolved = runtime_state.resolved
+                display_symbol = runtime_state.display_symbol
                 live_symbol = resolved.instrument_id
                 update_chart_title(
                     chart,
@@ -2897,38 +3053,8 @@ def run_live_chart(
                         display_tz_name=display_tz_name,
                     ),
                 )
-                update_chart_status_text(chart, f"{LOADING_STATUS_TEXT} {active_market}")
-                live_start = requested_live_start
                 if args.historical_backfill:
-                    historical_request = {
-                        "dataset": args.dataset,
-                        "schema": args.historical_schema,
-                        "symbols": live_symbol,
-                        "stype_in": DEFAULT_STYPE_IN,
-                        "start": live_start,
-                        "end": historical_end,
-                    }
-                    try:
-                        store = historical.timeseries.get_range(**historical_request)
-                    except Exception as exc:
-                        retry_end = parse_available_end_from_text(str(exc))
-                        if retry_end is None:
-                            raise
-                        available_retry_end_date = retry_end.date().isoformat()
-                        historical_request["end"] = clamp_historical_end(
-                            start=live_start,
-                            requested_end=historical_end,
-                            available_exclusive_end_date=available_retry_end_date,
-                            stderr=stderr,
-                        )
-                        store = historical.timeseries.get_range(**historical_request)
-                    historical_candles = aggregate_candles(
-                        historical_store_to_candles(store),
-                        seconds=display.timeframe_seconds,
-                        timeframe=display.timeframe,
-                    )
-                    for candle in historical_candles:
-                        append_display_candle(display, status, candle)
+                    replace_source_candles(display, status, runtime_state.historical_candles)
                     if display.raw_candles:
                         render_chart_display(
                             display,
@@ -2958,6 +3084,7 @@ def run_live_chart(
             clear_queue_values(candle_queue)
             clear_session_markers(display)
             display.raw_candles.clear()
+            display.timeframe_cache.clear()
             display.rendered_candle_count = 0
             display.loading = True
             reset_status(status)

@@ -57,6 +57,13 @@ class WfaPolicy:
     final_holdout_excluded_from_selection: bool
 
 
+def accepted_phase4_feature_warning_messages(markets: Iterable[str]) -> tuple[str, ...]:
+    return tuple(
+        f"features fully unavailable: feature_rel_ret_vs_{market}_15,feature_corr_vs_{market}_60"
+        for market in markets
+    )
+
+
 def _read_yaml(path: Path) -> dict[str, Any]:
     payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return payload if isinstance(payload, dict) else {}
@@ -401,6 +408,8 @@ def build_split_plan(
             expected_output_root=input_root,
             expected_market_years=((market, year) for market, year, _ in inputs),
             gate_name="feature_manifest_gate",
+            allowed_statuses=("PASS", "WARN"),
+            accepted_warning_messages=accepted_phase4_feature_warning_messages(plan.markets),
         )
     frames_by_market: dict[str, list[pd.DataFrame]] = {market: [] for market in plan.markets}
     failures: list[str] = []

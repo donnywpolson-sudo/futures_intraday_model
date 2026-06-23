@@ -107,8 +107,10 @@ def _write_feature_manifest(
     output_path: Path,
     status: str = "PASS",
     warning_count: int = 0,
+    warnings: list[str] | None = None,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
+    output_warnings = list(warnings or [])
     payload = {
         "status": status,
         "profile": profile,
@@ -117,6 +119,7 @@ def _write_feature_manifest(
         "warning_count": warning_count,
         "failure_count": 0,
         "failures": [],
+        "warnings": [],
         "summary": {"fail_count": 0, "warn_count": warning_count},
         "output_file_hashes": {output_path.as_posix(): file_sha256(output_path)},
         "outputs": [
@@ -127,6 +130,7 @@ def _write_feature_manifest(
                 "warning_count": warning_count,
                 "failure_count": 0,
                 "failures": [],
+                "warnings": output_warnings,
             }
         ],
     }
@@ -144,21 +148,26 @@ def _write_data_audit_universe(
     audit_status: str,
     market: str = "ES",
     year: int = 2024,
+    final_decision: str | None = None,
+    usable_for_wfa: bool | None = None,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
+    row: dict[str, object] = {
+        "market": market,
+        "year": year,
+        "audit_status": audit_status,
+        "reason": "fixture",
+    }
+    if final_decision is not None:
+        row["final_decision"] = final_decision
+    if usable_for_wfa is not None:
+        row["usable_for_wfa"] = usable_for_wfa
     path.write_text(
         json.dumps(
             {
                 "status": "PASS",
                 "summary": {"audit_status_counts": {audit_status: 1}},
-                "market_years": [
-                    {
-                        "market": market,
-                        "year": year,
-                        "audit_status": audit_status,
-                        "reason": "fixture",
-                    }
-                ],
+                "market_years": [row],
             }
         ),
         encoding="utf-8",
@@ -220,6 +229,40 @@ def test_build_split_plan_rejects_warn_feature_manifest(tmp_path: Path) -> None:
         )
 
     assert "feature_manifest_gate failed" in str(exc.value)
+
+
+def test_build_split_plan_accepts_zero_failure_feature_manifest_with_accepted_warning(
+    tmp_path: Path,
+) -> None:
+    profile_config = _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    feature_root = _feature_root(tmp_path)
+    matrix = _write_matrix(feature_root, year=2024, start="2024-01-01T00:00:00Z")
+    warning = "features fully unavailable: feature_rel_ret_vs_ES_15,feature_corr_vs_ES_60"
+    manifest = _write_feature_manifest(
+        tmp_path / "reports" / "features" / "baseline_feature_manifest.json",
+        profile="research",
+        resolved_profile="research",
+        output_root=feature_root,
+        output_path=matrix,
+        status="WARN",
+        warning_count=1,
+        warnings=[warning],
+    )
+
+    result = build_split_plan(
+        profile="research",
+        input_root=feature_root,
+        reports_root=tmp_path / "reports" / "wfa",
+        profile_config=profile_config,
+        models_config=models_config,
+        feature_manifest=manifest,
+    )
+
+    assert result["failure_count"] == 0
+    assert result["feature_manifest_gate"]["status"] == "PASS"
+    assert result["feature_manifest_gate"]["upstream_status"] == "WARN"
+    assert result["feature_manifest_gate"]["accepted_warnings"] == [warning]
 
 
 def test_build_split_plan_accepts_passed_feature_manifest(tmp_path: Path) -> None:
@@ -343,6 +386,35 @@ def test_build_split_plan_records_data_audit_universe_evidence(tmp_path: Path) -
     assert manifest["failure_count"] == 0
     assert manifest["data_audit_universe"]["status_counts"] == {"usable": 1}
     assert manifest["data_audit_universe"]["file_hash"]
+
+
+def test_build_split_plan_accepts_wfa_usable_caveat_data_audit_universe(
+    tmp_path: Path,
+) -> None:
+    input_root = _feature_root(tmp_path)
+    reports_root = tmp_path / "reports" / "wfa"
+    profile_config = _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    data_audit = _write_data_audit_universe(
+        tmp_path / "reports" / "pipeline_audit" / "universe.json",
+        audit_status="usable",
+        final_decision="acceptable_with_caveat_ohlcv_empty_minutes_assumed",
+        usable_for_wfa=True,
+    )
+    _write_matrix(input_root, year=2024, start="2024-01-01T00:00:00Z")
+
+    manifest = build_split_plan(
+        profile="selected",
+        input_root=input_root,
+        reports_root=reports_root,
+        profile_config=profile_config,
+        models_config=models_config,
+        data_audit_universe_json=data_audit,
+    )
+
+    assert manifest["failure_count"] == 0
+    assert manifest["fold_count"] > 0
+    assert manifest["skipped_input_count"] == 0
 
 
 @pytest.mark.parametrize("profile", ["tier_1", "tier_1_research"])
