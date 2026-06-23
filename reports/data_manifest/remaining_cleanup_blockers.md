@@ -136,3 +136,16 @@ Generated at UTC: 2026-06-22T14:22:47Z
 - `KE:2015` is now excluded from future Phase 2 build batches unless separately policy-excepted.
 - No repair, raw re-enrichment, source-reference correction, Phase 2 build, cleanup, redownload, move, merge, quarantine, delete, or DBN source modification was run.
 - Cleanup remains disabled.
+
+## SR3 2019 Source-Reference Correction
+- Updated at UTC: 2026-06-23T00:13:05Z.
+- Evidence report: `reports/phase_restart/sr3_2019_source_reference_correction.md`.
+- Pushed `75b5453` to `origin/main`.
+- Ran exactly one bounded local Phase 1B conversion/source-reference correction for `SR3:2019` from existing canonical DBNs.
+- Output raw parquet: `data/raw/SR3/2019.parquet`, 4608 rows.
+- Validation: `SR3:2019` now passes `reports/raw_readiness/raw_enriched_optional_schema_audit.json`; source reference failures are 0 and source hash mismatches are 0.
+- Overall optional-schema audit remains `FAIL` because 22 unrelated rows still fail.
+- Remaining source-reference correction rows: 5, SR3 2020-2024.
+- Remaining bounded raw re-enrichment rows: 17, SR1 2018-2026; TN/ZL/ZM/KE 2025-2026.
+- No Phase 2 build, cleanup, redownload, move, merge, quarantine, delete, or DBN source modification was run.
+- Cleanup remains disabled.
