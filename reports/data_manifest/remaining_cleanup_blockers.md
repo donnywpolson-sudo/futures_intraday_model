@@ -161,3 +161,30 @@ Generated at UTC: 2026-06-22T14:22:47Z
 - Remaining bounded raw re-enrichment rows: 17, SR1 2018-2026; TN/ZL/ZM/KE 2025-2026.
 - No Phase 2 build, cleanup, redownload, move, merge, quarantine, delete, or DBN source modification was run.
 - Cleanup remains disabled.
+
+
+## Refreshed Health Matrix And Phase 2 Prerequisites
+- Updated at UTC: 2026-06-23T01:49:59Z.
+- This section supersedes older count snapshots above for current health-matrix and Phase 2 pre-build prerequisite counts.
+- Latest raw optional-schema audit: `FAIL` with 9 file failures, 0 missing source-file references, and 0 source-hash mismatches.
+- Refreshed health class counts: OK_SOURCE_PRESENT=45, POLICY_REVIEW_REQUIRED=464, EXCLUDED_FROM_PHASE2=9, UNKNOWN_REVIEW_REQUIRED=9.
+- Rows still requiring raw/source prerequisite before Phase 2 build: 9 rows: KE:2025, KE:2026, SR1:2026, TN:2025, TN:2026, ZL:2025, ZL:2026, ZM:2025, ZM:2026.
+- Rows cleared from stale unknown/pre-build prerequisite status by latest raw audit: SR3:2019, SR3:2020, SR3:2021, SR3:2022, SR3:2023, SR3:2024, SR1:2018, SR1:2019, SR1:2020, SR1:2021, SR1:2022, SR1:2023, SR1:2024.
+- Phase 2 build commands run in this refresh: 0.
+- Cleanup commands run in this refresh: 0.
+- Cleanup remains disabled until blockers are zero and cleanup is separately approved.
+
+## Raw Source Corrections Completion
+- Updated at UTC: 2026-06-23T02:42:17Z.
+- This section supersedes older raw/source prerequisite counts above.
+- Evidence report: `reports/phase_restart/raw_source_corrections_completion.md`.
+- Final raw optional-schema audit: `PASS` with `file_failure_count=0`, `missing_source_file_count=0`, `schema_failure_count=0`, `statistics_failure_count=0`, `status_failure_count=0`, and `source_hash_mismatch_count=0`.
+- Rows corrected in this run: SR3 2021-2024; SR1 2018-2026; TN 2025-2026; ZL 2025-2026; ZM 2025-2026; KE 2025-2026.
+- Previously corrected rows preserved: SR3 2019-2020.
+- Remaining source-reference correction rows: 0.
+- Remaining bounded raw re-enrichment rows: 0.
+- Accepted Phase 2 rows with unresolved raw/source pre-build prerequisites: 0.
+- Phase 2 build commands run in this completion step: 0.
+- Cleanup commands run in this completion step: 0.
+- No redownload, DBN source modification, move, merge, quarantine, delete, or data artifact staging occurred.
+- Cleanup remains disabled until Phase 2 execution/defer state is settled and cleanup is separately approved.

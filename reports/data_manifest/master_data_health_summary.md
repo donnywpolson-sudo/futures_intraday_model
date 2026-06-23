@@ -1,22 +1,22 @@
 # Master Data Health Matrix
 
-- Generated at UTC: 2026-06-22T23:25:02Z
-- Scope: report-only evidence matrix for every expected market/year from `configs/data_manifest.yaml`.
-- Sources used: `configs/data_manifest.yaml`, manifest coverage, raw optional-schema audit, Phase 2 readiness/decision reports, and cheap file-presence checks only.
-- Safety: no repair, Phase 2 build, cleanup, redownload, move, merge, quarantine, delete, or DBN source modification was run by this report generation.
+- Generated at UTC: 2026-06-23T02:42:17Z
+- Scope: report-only refreshed evidence matrix for every expected market/year from `configs/data_manifest.yaml`.
+- Sources used: current manifest coverage, latest raw optional-schema audit, Phase 2 build/exclusion decisions, and existing matrix metadata.
+- Safety: no repair, Phase 2 build, cleanup, redownload, move, merge, quarantine, delete, or DBN source modification was run by this refresh.
 - Cleanup remains disabled and should stay disabled until blockers are zero and cleanup is explicitly approved.
 
 ## Counts
 
 - Expected market/year rows: 527.
 - `OK_SOURCE_PRESENT`: 45.
-- `POLICY_REVIEW_REQUIRED`: 450.
+- `POLICY_REVIEW_REQUIRED`: 473.
 - `EXCLUDED_FROM_PHASE2`: 9.
-- `UNKNOWN_REVIEW_REQUIRED`: 23.
-- Rows needing drilldown before trust/build: 23 unknown + 9 excluded.
-- Phase 2 readiness evidence rows: 66.
-- Current build plan accepted rows: 58; deferred rows: 8.
-- Decision evidence requiring refresh before Phase 2 build: 1 row(s): KE:2015.
+- `UNKNOWN_REVIEW_REQUIRED`: 0.
+- Rows needing drilldown before trust/build: 0 unknown + 9 excluded.
+- Phase 2 decision rows: 66.
+- Current build plan accepted rows: 57; deferred rows: 9.
+- Accepted rows still requiring pre-build raw evidence: 0.
 
 ## Schema Presence
 
@@ -29,51 +29,34 @@
 
 ## Raw Optional-Schema Audit
 
-- Status: `FAIL` from `reports\raw_readiness\raw_enriched_optional_schema_audit.json`.
-- Files checked: 527; rows checked: 129656421.
+- Status: `PASS` from `reports/raw_readiness/raw_enriched_optional_schema_audit.json`.
+- Files checked: 527; rows checked: 130074125.
 - `duplicate_key_row_count`: 0.
-- `file_failure_count`: 23.
-- `missing_source_file_count`: 48.
+- `file_failure_count`: 0.
+- `missing_source_file_count`: 0.
 - `missing_statistics_archive_market_year_count`: 0.
 - `missing_status_archive_market_year_count`: 67.
-- `row_count`: 129656421.
-- `schema_failure_count`: 17.
+- `row_count`: 130074125.
+- `schema_failure_count`: 0.
 - `source_hash_mismatch_count`: 0.
 - `statistics_archive_market_year_count`: 527.
-- `statistics_failure_count`: 17.
+- `statistics_failure_count`: 0.
 - `status_archive_market_year_count`: 460.
-- `status_failure_count`: 17.
+- `status_failure_count`: 0.
 
 ## Unknown Drilldown
 
-- raw audit failed: missing enriched columns/schema: 17.
-- raw audit failed: missing source reference paths: 6.
+- Current unknown rows: 0.
+- raw optional-schema audit failed: 0.
 
 | pair | primary_blocker | raw_audit_status | raw_failure_summary | latest_phase2_decision |
 | --- | --- | --- | --- | --- |
-| SR3:2019 | raw optional-schema audit failed; source reference path missing | FAIL | source_file path does not exist / status_source_file path does not exist / stat_opening_price_source_file path does not exist / stat_sett... |  |
-| SR3:2020 | raw optional-schema audit failed; source reference path missing | FAIL | source_file path does not exist / status_source_file path does not exist / stat_opening_price_source_file path does not exist / stat_sett... |  |
-| SR3:2021 | raw optional-schema audit failed; source reference path missing | FAIL | source_file path does not exist / status_source_file path does not exist / stat_opening_price_source_file path does not exist / stat_sett... |  |
-| SR3:2022 | raw optional-schema audit failed; source reference path missing | FAIL | source_file path does not exist / status_source_file path does not exist / stat_opening_price_source_file path does not exist / stat_sett... |  |
-| SR3:2023 | raw optional-schema audit failed; source reference path missing | FAIL | source_file path does not exist / status_source_file path does not exist / stat_opening_price_source_file path does not exist / stat_sett... |  |
-| SR3:2024 | raw optional-schema audit failed; source reference path missing | FAIL | source_file path does not exist / status_source_file path does not exist / stat_opening_price_source_file path does not exist / stat_sett... |  |
-| SR1:2018 | raw optional-schema audit failed | FAIL | missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_... | ACCEPTED_FOR_FUTURE_BOUNDED_PHASE2_BUILD |
-| SR1:2019 | raw optional-schema audit failed | FAIL | missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_... | ACCEPTED_FOR_FUTURE_BOUNDED_PHASE2_BUILD |
-| SR1:2020 | raw optional-schema audit failed | FAIL | missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_... | ACCEPTED_FOR_FUTURE_BOUNDED_PHASE2_BUILD |
-| SR1:2021 | raw optional-schema audit failed | FAIL | missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_... | ACCEPTED_FOR_FUTURE_BOUNDED_PHASE2_BUILD |
-| SR1:2022 | raw optional-schema audit failed | FAIL | missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_... | ACCEPTED_FOR_FUTURE_BOUNDED_PHASE2_BUILD |
-| SR1:2023 | raw optional-schema audit failed | FAIL | missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_... | ACCEPTED_FOR_FUTURE_BOUNDED_PHASE2_BUILD |
-| SR1:2024 | raw optional-schema audit failed | FAIL | missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_... | ACCEPTED_FOR_FUTURE_BOUNDED_PHASE2_BUILD |
-| SR1:2025 | raw optional-schema audit failed | FAIL | missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_... | ACCEPTED_FOR_FUTURE_BOUNDED_PHASE2_BUILD |
-| SR1:2026 | raw optional-schema audit failed | FAIL | missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_... | ACCEPTED_FOR_FUTURE_BOUNDED_PHASE2_BUILD |
-| TN:2025 | raw optional-schema audit failed | FAIL | missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_... | ACCEPTED_FOR_FUTURE_BOUNDED_PHASE2_BUILD |
-| TN:2026 | raw optional-schema audit failed | FAIL | missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_... | ACCEPTED_FOR_FUTURE_BOUNDED_PHASE2_BUILD |
-| ZL:2025 | raw optional-schema audit failed | FAIL | missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_... | ACCEPTED_FOR_FUTURE_BOUNDED_PHASE2_BUILD |
-| ZL:2026 | raw optional-schema audit failed | FAIL | missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_... | ACCEPTED_FOR_FUTURE_BOUNDED_PHASE2_BUILD |
-| ZM:2025 | raw optional-schema audit failed | FAIL | missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_... | ACCEPTED_FOR_FUTURE_BOUNDED_PHASE2_BUILD |
-| ZM:2026 | raw optional-schema audit failed | FAIL | missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_... | ACCEPTED_FOR_FUTURE_BOUNDED_PHASE2_BUILD |
-| KE:2025 | raw optional-schema audit failed | FAIL | missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_... | KE_2016_2026_POLICY_REVIEWABLE |
-| KE:2026 | raw optional-schema audit failed | FAIL | missing enriched raw columns: stat_cleared_volume,stat_cleared_volume_missing,stat_cleared_volume_source_file,stat_cleared_volume_source_... | KE_2016_2026_POLICY_REVIEWABLE |
+| None |  |  |  |  |
+
+## Cleared Since Prior Snapshot
+
+- `SR3:2019`, `SR3:2020`, `SR3:2021`, `SR3:2022`, `SR3:2023`, `SR3:2024`, `SR1:2018`, `SR1:2019`, `SR1:2020`, `SR1:2021`, `SR1:2022`, `SR1:2023`, `SR1:2024`, `SR1:2025`, `SR1:2026`, `TN:2025`, `TN:2026`, `ZL:2025`, `ZL:2026`, `ZM:2025`, `ZM:2026`, `KE:2025`, and `KE:2026` now pass the latest raw optional-schema audit and are no longer `UNKNOWN_REVIEW_REQUIRED`.
+- These rows are still not automatically model-ready; rows with missing/stale optional enrichment, missing causal outputs, or Phase 2 decisions remain `POLICY_REVIEW_REQUIRED`.
 
 ## Excluded Drilldown
 
@@ -91,53 +74,11 @@
 
 ## Policy Review Summary
 
-Rows in this class have source evidence present enough to avoid immediate exclusion/unknown classification, but still have optional status/statistics gaps, Phase 2 readiness blockers, accepted exceptions, missing causal outputs, or duplicate/extra manifest policy rows. They are not automatically clean for modeling or cleanup.
+Rows in this class have enough source/raw evidence to avoid unknown classification, but still have optional status/statistics gaps, Phase 2 readiness/build decisions, missing causal outputs, accepted exceptions, or duplicate/extra manifest policy rows. They are not automatically clean for modeling or cleanup.
 
-| pair | primary_blocker | latest_phase2_decision | phase2_top_blocker |
-| --- | --- | --- | --- |
-| ES:2010 | raw status enrichment missing/stale rows; raw statistics enrichment missing/stale rows |  |  |
-| ES:2011 | raw status enrichment missing/stale rows; raw statistics enrichment missing/stale rows |  |  |
-| ES:2012 | raw status enrichment missing/stale rows; raw statistics enrichment missing/stale rows |  |  |
-| ES:2013 | raw status enrichment missing/stale rows; raw statistics enrichment missing/stale rows |  |  |
-| ES:2014 | canonical status DBN absent or optional; raw status enrichment missing/stale rows; raw statistics enrichment missing/stale rows |  |  |
-| ES:2015 | raw status enrichment missing/stale rows; raw statistics enrichment missing/stale rows |  |  |
-| ES:2016 | raw statistics enrichment missing/stale rows |  |  |
-| ES:2017 | raw statistics enrichment missing/stale rows |  |  |
-| ES:2018 | raw statistics enrichment missing/stale rows |  |  |
-| ES:2019 | raw statistics enrichment missing/stale rows |  |  |
-| ES:2020 | raw statistics enrichment missing/stale rows |  |  |
-| ES:2021 | raw statistics enrichment missing/stale rows |  |  |
-| ES:2022 | raw statistics enrichment missing/stale rows |  |  |
-| ES:2023 | raw statistics enrichment missing/stale rows |  |  |
-| ES:2024 | raw statistics enrichment missing/stale rows |  |  |
-| ES:2025 | raw statistics enrichment missing/stale rows |  |  |
-| ES:2026 | raw statistics enrichment missing/stale rows |  |  |
-| NQ:2010 | raw status enrichment missing/stale rows; raw statistics enrichment missing/stale rows |  |  |
-| NQ:2011 | raw status enrichment missing/stale rows; raw statistics enrichment missing/stale rows |  |  |
-| NQ:2012 | canonical status DBN absent or optional; raw status enrichment missing/stale rows; raw statistics enrichment missing/stale rows |  |  |
-| NQ:2013 | raw status enrichment missing/stale rows; raw statistics enrichment missing/stale rows |  |  |
-| NQ:2014 | canonical status DBN absent or optional; raw status enrichment missing/stale rows; raw statistics enrichment missing/stale rows |  |  |
-| NQ:2015 | raw status enrichment missing/stale rows; raw statistics enrichment missing/stale rows |  |  |
-| NQ:2016 | raw statistics enrichment missing/stale rows |  |  |
-| NQ:2017 | raw statistics enrichment missing/stale rows |  |  |
-| NQ:2018 | raw statistics enrichment missing/stale rows |  |  |
-| NQ:2019 | raw statistics enrichment missing/stale rows |  |  |
-| NQ:2020 | raw statistics enrichment missing/stale rows |  |  |
-| NQ:2021 | raw statistics enrichment missing/stale rows |  |  |
-| NQ:2022 | raw statistics enrichment missing/stale rows |  |  |
-| NQ:2023 | raw statistics enrichment missing/stale rows |  |  |
-| NQ:2024 | raw statistics enrichment missing/stale rows |  |  |
-| NQ:2025 | raw statistics enrichment missing/stale rows |  |  |
-| NQ:2026 | raw statistics enrichment missing/stale rows |  |  |
-| RTY:2017 | raw statistics enrichment missing/stale rows; manifest duplicate/extra policy row |  |  |
-| RTY:2018 | raw statistics enrichment missing/stale rows |  |  |
-| RTY:2019 | raw statistics enrichment missing/stale rows |  |  |
-| RTY:2020 | raw statistics enrichment missing/stale rows |  |  |
-| RTY:2021 | raw statistics enrichment missing/stale rows |  |  |
-| RTY:2022 | raw statistics enrichment missing/stale rows |  |  |
+## Safety
 
-## Recommended Next Decision
-
-1. Do not run Phase 2 or cleanup from this matrix alone.
-2. Resolve the 23 `UNKNOWN_REVIEW_REQUIRED` raw/source rows first with bounded one-row re-enrichment, source-reference correction, explicit deferral, or exclusion decisions.
-3. Refresh the Phase 2 build/exclusion plan before any Phase 2 build, because the later KE policy excludes `KE:2015` while the older build plan still lists it as accepted.
+- No Phase 2 build was run.
+- No cleanup was run.
+- No data file was moved, deleted, merged, quarantined, rebuilt, or redownloaded.
+- DBN source files were not modified by this refresh.

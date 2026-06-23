@@ -1,6 +1,6 @@
 # Data Manifest Coverage Summary
 
-Generated at UTC: 2026-06-22T23:10:21.385561+00:00
+Generated at UTC: 2026-06-23T02:47:23.104728+00:00
 
 ## Verdict
 

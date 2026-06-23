@@ -1,12 +1,12 @@
 {
-  "updated_at_utc": "2026-06-22T23:36:26Z",
-  "scope": "bounded report-only Phase 2 build/exclusion plan refreshed after master data health matrix and KE exclusion policy",
+  "updated_at_utc": "2026-06-23T02:42:17Z",
+  "scope": "bounded report-only Phase 2 build/exclusion plan refreshed after raw source corrections completion",
   "decision_state": "PHASE2_BUILD_EXCLUSION_PLAN_REFRESHED_REPORT_ONLY",
   "counts": {
     "total_phase2_decision_rows": 66,
     "accepted_rows_for_future_bounded_phase2_build_approval": 57,
     "deferred_excluded_rows": 9,
-    "accepted_rows_with_pre_build_raw_evidence_prerequisite": 17,
+    "accepted_rows_with_pre_build_raw_evidence_prerequisite": 0,
     "phase2_build_commands_run": 0,
     "cleanup_commands_run": 0
   },
@@ -97,10 +97,7 @@
         "KE:2026"
       ],
       "count": 11,
-      "pre_build_blocked_rows": [
-        "KE:2025",
-        "KE:2026"
-      ]
+      "pre_build_blocked_rows": []
     },
     {
       "batch": "SR1",
@@ -116,17 +113,7 @@
         "SR1:2026"
       ],
       "count": 9,
-      "pre_build_blocked_rows": [
-        "SR1:2018",
-        "SR1:2019",
-        "SR1:2020",
-        "SR1:2021",
-        "SR1:2022",
-        "SR1:2023",
-        "SR1:2024",
-        "SR1:2025",
-        "SR1:2026"
-      ]
+      "pre_build_blocked_rows": []
     },
     {
       "batch": "TN",
@@ -144,10 +131,7 @@
         "TN:2026"
       ],
       "count": 11,
-      "pre_build_blocked_rows": [
-        "TN:2025",
-        "TN:2026"
-      ]
+      "pre_build_blocked_rows": []
     },
     {
       "batch": "ZL",
@@ -168,10 +152,7 @@
         "ZL:2026"
       ],
       "count": 14,
-      "pre_build_blocked_rows": [
-        "ZL:2025",
-        "ZL:2026"
-      ]
+      "pre_build_blocked_rows": []
     },
     {
       "batch": "ZM",
@@ -190,10 +171,7 @@
         "ZM:2026"
       ],
       "count": 12,
-      "pre_build_blocked_rows": [
-        "ZM:2025",
-        "ZM:2026"
-      ]
+      "pre_build_blocked_rows": []
     }
   ],
   "later_command_pattern": "python -m scripts.phase2_causal_base.build_causal_base_data --profile phase2_repair --profile-config reports\\phase_restart\\<slug>_phase2_causal_repair.yaml --raw-root data\\raw --output-root data\\causally_gated_normalized --reports-root reports\\phase_restart --raw-alignment-report reports\\phase_restart\\<slug>_phase2_raw_alignment.json",
@@ -215,24 +193,6 @@
     "data_deleted_in_this_refresh": false,
     "dbn_source_modified_in_this_refresh": false
   },
-  "pre_build_blocked_rows": [
-    "KE:2025",
-    "KE:2026",
-    "SR1:2018",
-    "SR1:2019",
-    "SR1:2020",
-    "SR1:2021",
-    "SR1:2022",
-    "SR1:2023",
-    "SR1:2024",
-    "SR1:2025",
-    "SR1:2026",
-    "TN:2025",
-    "TN:2026",
-    "ZL:2025",
-    "ZL:2026",
-    "ZM:2025",
-    "ZM:2026"
-  ],
-  "pre_build_blocker_reason": "These rows remain in the accepted Phase 2 decision set but must not execute until the raw optional-schema UNKNOWN_REVIEW_REQUIRED issue is corrected or explicitly waived."
+  "pre_build_blocked_rows": [],
+  "pre_build_blocker_reason": "No accepted Phase 2 rows have unresolved raw/source pre-build prerequisites after the final raw optional-schema audit."
 }

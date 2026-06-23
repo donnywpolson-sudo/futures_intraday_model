@@ -1,7 +1,7 @@
 # Batch Phase 2 Build/Exclusion Plan
 
-- Updated at UTC: 2026-06-22T23:36:26Z
-- Scope: bounded report-only build/exclusion plan refreshed after master data health matrix and KE exclusion policy.
+- Updated at UTC: 2026-06-23T02:42:17Z
+- Scope: bounded report-only build/exclusion plan refreshed after raw source corrections completion.
 - Decision state: PHASE2_BUILD_EXCLUSION_PLAN_REFRESHED_REPORT_ONLY
 
 ## Summary
@@ -9,11 +9,11 @@
 - Total Phase 2 decision rows: 66.
 - Accepted rows made eligible for future bounded Phase 2 build approval: 57.
 - Deferred rows excluded from future bounded Phase 2 build batches: 9.
-- Accepted rows with pre-build raw evidence prerequisites: 17.
+- Accepted rows with unresolved pre-build raw evidence prerequisites: 0.
 - Phase 2 build commands run in this step: 0.
 - Cleanup commands run in this step: 0.
 
-This refreshed plan does not run Phase 2. It removes `KE:2015` from the accepted set to match the latest KE exclusion policy. Rows in the accepted set can only run later with explicit Phase 2 build approval, and rows listed as pre-build blocked need raw evidence work first.
+This refreshed plan does not run Phase 2. It keeps the same accepted/deferred row policy and clears all raw/source pre-build prerequisites because the latest raw optional-schema audit passes.
 
 ## Deferred Exclusions
 
@@ -35,11 +35,11 @@ Run later only with explicit Phase 2 build approval. Any row listed in the pre-b
 
 | Batch | Accepted rows | Count | Pre-build blocked rows |
 | --- | --- | ---: | --- |
-| KE | KE:2016, KE:2017, KE:2018, KE:2019, KE:2020, KE:2021, KE:2022, KE:2023, KE:2024, KE:2025, KE:2026 | 11 | KE:2025, KE:2026 |
-| SR1 | SR1:2018, SR1:2019, SR1:2020, SR1:2021, SR1:2022, SR1:2023, SR1:2024, SR1:2025, SR1:2026 | 9 | SR1:2018, SR1:2019, SR1:2020, SR1:2021, SR1:2022, SR1:2023, SR1:2024, SR1:2025, SR1:2026 |
-| TN | TN:2016, TN:2017, TN:2018, TN:2019, TN:2020, TN:2021, TN:2022, TN:2023, TN:2024, TN:2025, TN:2026 | 11 | TN:2025, TN:2026 |
-| ZL | ZL:2011, ZL:2014, ZL:2015, ZL:2016, ZL:2017, ZL:2018, ZL:2019, ZL:2020, ZL:2021, ZL:2022, ZL:2023, ZL:2024, ZL:2025, ZL:2026 | 14 | ZL:2025, ZL:2026 |
-| ZM | ZM:2015, ZM:2016, ZM:2017, ZM:2018, ZM:2019, ZM:2020, ZM:2021, ZM:2022, ZM:2023, ZM:2024, ZM:2025, ZM:2026 | 12 | ZM:2025, ZM:2026 |
+| KE | KE:2016, KE:2017, KE:2018, KE:2019, KE:2020, KE:2021, KE:2022, KE:2023, KE:2024, KE:2025, KE:2026 | 11 | None |
+| SR1 | SR1:2018, SR1:2019, SR1:2020, SR1:2021, SR1:2022, SR1:2023, SR1:2024, SR1:2025, SR1:2026 | 9 | None |
+| TN | TN:2016, TN:2017, TN:2018, TN:2019, TN:2020, TN:2021, TN:2022, TN:2023, TN:2024, TN:2025, TN:2026 | 11 | None |
+| ZL | ZL:2011, ZL:2014, ZL:2015, ZL:2016, ZL:2017, ZL:2018, ZL:2019, ZL:2020, ZL:2021, ZL:2022, ZL:2023, ZL:2024, ZL:2025, ZL:2026 | 14 | None |
+| ZM | ZM:2015, ZM:2016, ZM:2017, ZM:2018, ZM:2019, ZM:2020, ZM:2021, ZM:2022, ZM:2023, ZM:2024, ZM:2025, ZM:2026 | 12 | None |
 
 ## Later Command Pattern
 
