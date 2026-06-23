@@ -181,16 +181,15 @@ Final response must contain only these sections, in this order:
 ### Next
 
 - Use `None.` if no next action.
-- Otherwise use numbered action items for immediate next actions.
-- A fenced next-run prompt is allowed under `Next` only when follow-up work should continue in a fresh Codex thread.
-- If any Severe blockers exist, focus only on clearing the Severe blocker.
-- If Medium blockers exist and no Severe blockers exist, focus on verification, caveat approval, or risk reduction.
-- If no Medium or Severe blockers exist, name the next forward-progress task.
-- Format each numbered item as:
-  `1. Action -> expected result -> stop condition`
-- If user input is required:
-  `User decision needed: <specific decision>`
-When follow-up work should continue in a fresh Codex thread, include a copy-paste-ready prompt under `Next` after the numbered action item using this format:
+- Otherwise output only the exact copy-paste-ready message the user should paste into the next Codex plan prompt.
+- Do not include numbered action items, explanations, prefixes, summaries, or any text outside the copy-paste-ready message.
+- The message must include exact scope, files, commands, stop conditions, and forbidden actions as far as they are known.
+- If exact scope is not known, make the message request the required user decision instead of guessing.
+- If any Severe blockers exist, the message must focus only on clearing the Severe blocker.
+- If Medium blockers exist and no Severe blockers exist, the message must focus on verification, caveat approval, or risk reduction.
+- If no Medium or Severe blockers exist, the message must name the next forward-progress task.
+- When follow-up should continue in a fresh Codex thread, start the message with `Continue from CODEX_HANDOFF.md.`
+- Preferred message format when follow-up work should continue:
 
 ```text
 Continue from CODEX_HANDOFF.md.
@@ -207,11 +206,7 @@ Stop when:
 - <clear acceptance condition>
 ```
 
-The next-run prompt must include exact scope, files, commands, stop conditions, and forbidden actions as far as they are known. If exact scope is not known, state the required user decision instead of guessing.
-
 Preserve project safety rules when relevant: no cleanup, no generated artifact staging, no unapproved build, no DBN/source mutation, and no commit unless explicitly requested.
-
-If any Severe problem exists, the prompt must focus only on clearing that problem. If no Severe problems exist but Medium problems exist, the prompt must focus on verification, caveat approval, or risk reduction. If no Medium or Severe problems exist, the prompt must name the next forward-progress task.
 
 Do not include vague items like "continue improving," "investigate further," or "clean things up."
 
