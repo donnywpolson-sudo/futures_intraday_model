@@ -1,10 +1,44 @@
 # Codex Handoff
 
-- Updated at UTC: 2026-06-23T06:14:09Z
-- Purpose: current-state handoff after live chart lag/data-flow fix.
+- Updated at UTC: 2026-06-23T06:44:35Z
+- Purpose: current-state handoff after live chart timing/state diagnostics.
 - Repo: `C:\Users\donny\Desktop\futures_intraday_model`
-- Pre-run worktree check: `git status --short` showed existing modified `CODEX_HANDOFF.md`, live-chart files, and prior Phase 5 gate files.
-- This handoff now includes the prior Tier 1 Phase 4 evidence restoration, WFA prediction artifact reconciliation, Databento live chart fallback fix, WFA prerequisite refresh blocker, Phase 5 feature-manifest gate policy fix, data-audit universe guard fix, guarded split-plan refresh, live chart timeframe switcher fix, and the current live chart lag/data-flow fix. No cleanup, staging, commit, move, delete, redownload, DBN/source mutation, Phase 1-4 rebuild, Phase 7/8 run, WFA prediction generation, or generated artifact staging was run in this pass.
+- Pre-run worktree check: `git status --short` was clean.
+- This handoff now includes the prior Tier 1 Phase 4 evidence restoration, WFA prediction artifact reconciliation, Databento live chart fallback fix, WFA prerequisite refresh blocker, Phase 5 feature-manifest gate policy fix, data-audit universe guard fix, guarded split-plan refresh, live chart timeframe switcher fix, live chart lag/data-flow fix, and the current live chart timing/state diagnostics. No cleanup, staging, commit, move, delete, redownload, DBN/source mutation, Phase 1-4 rebuild, Phase 7/8 run, WFA prediction generation, or generated artifact staging was run in this pass.
+
+## Latest run: Live chart timing/state diagnostics
+
+### What changed
+
+- Added default-on `stderr` timing markers for chart launch/show, Databento dataset range lookup, symbology resolve, historical fetch/cache hits, first historical render, live subscribe/start, timeframe switch render, and market switch render.
+- Replaced generic chart loading status text with explicit topbar states: `Resolving`, `Backfilling`, `Rendering`, `Connecting`, `Live`, `Historical-only`, `Reconnecting`, and `Stale`.
+- Kept existing render/backfill/data semantics unchanged; this pass did not add latest-first backfill, incremental candle rendering, DNS/TCP preflight, or retry/backoff.
+- Updated the live-connectivity fallback after historical backfill so the chart shows `Historical-only` instead of appending a generic live-unavailable suffix.
+
+### Files changed
+
+- `live_chart_feed.py`
+- `tests/test_live_chart_feed.py`
+- `CODEX_HANDOFF.md`
+
+### Commands run
+
+- `Get-Location`
+- `git status --short`
+- `Get-Content CODEX_HANDOFF.md -TotalCount 120`
+- Targeted `rg` and `Get-Content` reads for live chart status, timing, rendering, switching, and tests
+- `python -m pytest tests/test_live_chart_feed.py tests/live/test_live_chart_lightweight.py`
+- `git diff -- live_chart_feed.py tests/test_live_chart_feed.py`
+- `[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')`
+
+### Test results
+
+- `python -m pytest tests/test_live_chart_feed.py tests/live/test_live_chart_lightweight.py`: `41 passed in 1.99s`
+
+### Remaining work
+
+- Manual visible-chart verification is still needed to confirm the new timing logs and topbar states during real Databento startup, timeframe switch, market switch, and live-connectivity fallback.
+- Next performance scope remains render optimization: latest-first historical display and incremental latest-candle update instead of full re-render where possible.
 
 ## Latest run: Live chart lag/data-flow fix
 

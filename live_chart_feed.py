@@ -104,7 +104,15 @@ CHART_RENDER_BATCH_WAIT_SECONDS = 0.01
 CHART_RENDER_THROTTLE_SECONDS = 0.50
 TOPBAR_STATUS_NAME = "status"
 TOPBAR_MODEL_OVERLAY_NAME = "model"
-LOADING_STATUS_TEXT = "Loading candles..."
+CHART_STATE_RESOLVING = "Resolving"
+CHART_STATE_BACKFILLING = "Backfilling"
+CHART_STATE_RENDERING = "Rendering"
+CHART_STATE_CONNECTING = "Connecting"
+CHART_STATE_LIVE = "Live"
+CHART_STATE_HISTORICAL_ONLY = "Historical-only"
+CHART_STATE_RECONNECTING = "Reconnecting"
+CHART_STATE_STALE = "Stale"
+LOADING_STATUS_TEXT = f"{CHART_STATE_BACKFILLING}..."
 EXCHANGE_TZ_NAME = "America/Chicago"
 RTH_OPEN_HOUR = 8
 RTH_OPEN_MINUTE = 30
@@ -145,6 +153,7 @@ class ChartDisplayState:
     display_tz_name: str
     rendered_candle_count: int = 0
     loading: bool = True
+    topbar_state: str = CHART_STATE_RESOLVING
     session_marker_objects: list[Any] = field(default_factory=list)
     timeframe_cache: dict[str, list[dict[str, CandleValue]]] = field(default_factory=dict)
 
@@ -194,6 +203,27 @@ class MarketRuntimeState:
     resolved: ResolvedInstrument
     display_symbol: str
     historical_candles: tuple[dict[str, CandleValue], ...]
+
+
+@dataclass
+class LiveChartTiming:
+    stderr: TextIO
+    clock: Callable[[], float] = time.perf_counter
+    started_at: float = field(init=False)
+    last_at: float = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.started_at = self.clock()
+        self.last_at = self.started_at
+
+    def mark(self, label: str) -> None:
+        now = self.clock()
+        print(
+            f"Live chart timing: {label} "
+            f"delta={now - self.last_at:.3f}s elapsed={now - self.started_at:.3f}s",
+            file=self.stderr,
+        )
+        self.last_at = now
 
 
 @dataclass(frozen=True)
@@ -731,17 +761,19 @@ def format_topbar_status(
     overlay: ModelOverlayState | None = None,
 ) -> str:
     overlay_text = model_overlay_status_text(overlay or model_overlay_state(market=symbols, symbol=symbols))
-    if display.loading:
-        return f"Loading... {status.records_updated:,} bars | {overlay_text}"
-    latest = short_display_time_label(status.latest_time, display.display_tz)
-    stale = ""
+    topbar_state = display.topbar_state
+    latest_is_stale = False
     if status.latest_time is not None:
         age_seconds = (datetime.now(timezone.utc) - normalize_ts_event(status.latest_time)).total_seconds()
-        if age_seconds > DEFAULT_NO_DATA_WARNING_SECONDS:
-            stale = " | stale"
+        latest_is_stale = age_seconds > DEFAULT_NO_DATA_WARNING_SECONDS
+    if latest_is_stale and topbar_state not in {CHART_STATE_HISTORICAL_ONLY, CHART_STATE_RECONNECTING}:
+        topbar_state = CHART_STATE_STALE
+    if display.loading:
+        return f"{topbar_state}... {status.records_updated:,} bars | {overlay_text}"
+    latest = short_display_time_label(status.latest_time, display.display_tz)
     return (
-        f"{symbols} {display.timeframe} | {status.records_updated:,} bars | "
-        f"last {latest}{stale} | {overlay_text}"
+        f"{topbar_state} | {symbols} {display.timeframe} | "
+        f"{status.records_updated:,} bars | last {latest} | {overlay_text}"
     )
 
 
@@ -2221,6 +2253,7 @@ def drain_chart_queue(
     stdout: TextIO,
     stderr: TextIO,
     on_timeframe_change: Callable[[str], None] | None = None,
+    timing: LiveChartTiming | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> ChartRunResult:
     started_at = clock()
@@ -2262,6 +2295,8 @@ def drain_chart_queue(
                 on_timeframe_change(display.timeframe)
             if status.records_updated > 0:
                 display.loading = False
+                if display.topbar_state != CHART_STATE_HISTORICAL_ONLY:
+                    display.topbar_state = CHART_STATE_LIVE
             render_chart_display(
                 display,
                 chart=chart,
@@ -2272,6 +2307,8 @@ def drain_chart_queue(
                 mode=mode,
                 stdout=stdout,
             )
+            if timing is not None:
+                timing.mark(f"timeframe switch render {display.timeframe}")
             last_render_at = clock()
             pending_render = False
 
@@ -2299,6 +2336,8 @@ def drain_chart_queue(
             if pending_render:
                 if status.records_updated > 0:
                     display.loading = False
+                    if display.topbar_state != CHART_STATE_HISTORICAL_ONLY:
+                        display.topbar_state = CHART_STATE_LIVE
                 render_chart_display(
                     display,
                     chart=chart,
@@ -2313,6 +2352,8 @@ def drain_chart_queue(
                 pending_render = False
             elif display.loading and status.records_updated > 0:
                 display.loading = False
+                if display.topbar_state != CHART_STATE_HISTORICAL_ONLY:
+                    display.topbar_state = CHART_STATE_LIVE
                 update_chart_status_text(
                     chart,
                     format_topbar_status(
@@ -2374,6 +2415,8 @@ def drain_chart_queue(
         ):
             if queue_drained and status.records_updated > 0:
                 display.loading = False
+                if display.topbar_state != CHART_STATE_HISTORICAL_ONLY:
+                    display.topbar_state = CHART_STATE_LIVE
             render_chart_display(
                 display,
                 chart=chart,
@@ -2666,6 +2709,20 @@ def run_live_chart(
     )
     resolved_cache: dict[tuple[str, str], ResolvedInstrument] = {}
     market_runtime_cache: dict[tuple[object, ...], MarketRuntimeState] = {}
+    timing = LiveChartTiming(stderr=stderr)
+
+    def set_chart_state(state: str, symbols: str | None = None) -> None:
+        display.topbar_state = state
+        if chart is None:
+            return
+        update_chart_status_text(
+            chart,
+            format_topbar_status(
+                symbols=symbols or display_symbol or active_market,
+                display=display,
+                status=status,
+            ),
+        )
 
     def resolve_cached_market(selected_market: str) -> ResolvedInstrument:
         nonlocal end_date, historical_end
@@ -2673,7 +2730,9 @@ def run_live_chart(
         cache_key = (selected_market, selected_query_symbol)
         cached = resolved_cache.get(cache_key)
         if cached is not None:
+            timing.mark(f"symbology resolve {selected_market} cached")
             return cached
+        set_chart_state(CHART_STATE_RESOLVING, selected_market)
         try:
             resolved_market = resolve_single_instrument(
                 historical,
@@ -2716,6 +2775,7 @@ def run_live_chart(
                 end_date=end_date,
             )
         resolved_cache[cache_key] = resolved_market
+        timing.mark(f"symbology resolve {selected_market}")
         return resolved_market
 
     def load_market_runtime(
@@ -2736,9 +2796,11 @@ def run_live_chart(
         )
         cached = market_runtime_cache.get(cache_key)
         if cached is not None:
+            timing.mark(f"historical fetch {selected_market} cached")
             return cached
         source_candles: tuple[dict[str, CandleValue], ...] = ()
         if args.historical_backfill:
+            set_chart_state(CHART_STATE_BACKFILLING, selected_display_symbol)
             historical_request = {
                 "dataset": args.dataset,
                 "schema": args.historical_schema,
@@ -2769,6 +2831,7 @@ def run_live_chart(
                 )
                 store = historical.timeseries.get_range(**historical_request)
             source_candles = tuple(historical_store_to_candles(store))
+            timing.mark(f"historical fetch {selected_market}")
         runtime_state = MarketRuntimeState(
             resolved=resolved_market,
             display_symbol=selected_display_symbol,
@@ -2799,15 +2862,17 @@ def run_live_chart(
                 current_market=lambda: active_market,
                 enabled_after=lambda: market_switch_enabled_after,
             ),
-            status_text=LOADING_STATUS_TEXT,
+            status_text=f"{CHART_STATE_RESOLVING}...",
         )
         show_chart(chart)
-        update_chart_status_text(chart, f"{LOADING_STATUS_TEXT} resolving {active_market}")
+        timing.mark("chart launch/show")
+        set_chart_state(CHART_STATE_RESOLVING, active_market)
         available_exclusive_end_date = lookup_dataset_available_exclusive_end(
             historical,
             dataset=args.dataset,
             stderr=stderr,
         )
+        timing.mark("dataset range lookup")
         try:
             end_date = clamp_exclusive_end_date(
                 start_date=start_date,
@@ -2866,15 +2931,7 @@ def run_live_chart(
                 file=stderr,
             )
             display.loading = False
-            update_chart_status_text(
-                chart,
-                format_topbar_status(
-                    symbols=display_symbol,
-                    display=display,
-                    status=status,
-                )
-                + " | live unavailable",
-            )
+            set_chart_state(CHART_STATE_HISTORICAL_ONLY, display_symbol)
             return drain_chart_queue(
                 queue.Queue(),
                 chart=chart,
@@ -2904,12 +2961,14 @@ def run_live_chart(
                     if persist_selection
                     else None
                 ),
+                timing=timing,
                 clock=clock,
             )
 
         if args.historical_backfill:
             replace_source_candles(display, status, runtime_state.historical_candles)
             if display.raw_candles:
+                set_chart_state(CHART_STATE_RENDERING, display_symbol)
                 render_chart_display(
                     display,
                     chart=chart,
@@ -2920,12 +2979,15 @@ def run_live_chart(
                     mode=mode,
                     stdout=stdout,
                 )
+                timing.mark("first historical render")
             live_start = historical_end
+        set_chart_state(CHART_STATE_CONNECTING, display_symbol)
 
         retried_clamped_start = False
         while True:
             candle_queue: queue.Queue[ChartQueueItem] = queue.Queue()
             live = db_module.Live(key=api_key)
+            set_chart_state(CHART_STATE_CONNECTING, display_symbol)
             try:
                 live.subscribe(
                     dataset=args.dataset,
@@ -2934,6 +2996,7 @@ def run_live_chart(
                     stype_in=args.stype_in,
                     start=live_start,
                 )
+                timing.mark(f"live subscribe {active_market}")
             except Exception as exc:
                 retry_start = parse_allowed_start_from_text(str(exc))
                 if retry_start is None or retried_clamped_start:
@@ -2947,10 +3010,7 @@ def run_live_chart(
                 retried_clamped_start = True
                 live_start = retry_start
                 display.loading = True
-                update_chart_status_text(
-                    chart,
-                    f"{LOADING_STATUS_TEXT} retrying from {format_utc_time(live_start)}",
-                )
+                set_chart_state(CHART_STATE_RECONNECTING, display_symbol)
                 continue
 
             seed = seed_candle_for_live(display, live_start)
@@ -2973,6 +3033,7 @@ def run_live_chart(
             )
             try:
                 live.start()
+                timing.mark(f"live start {active_market}")
             except Exception as exc:
                 fallback_result = wait_after_live_connection_failure(exc)
                 if fallback_result is not None:
@@ -3009,6 +3070,7 @@ def run_live_chart(
                     if persist_selection
                     else None
                 ),
+                timing=timing,
                 clock=clock,
             )
             if result.switch_market is not None:
@@ -3036,7 +3098,7 @@ def run_live_chart(
                         timeframe=display.timeframe,
                         stderr=stderr,
                     )
-                update_chart_status_text(chart, f"{LOADING_STATUS_TEXT} {active_market}")
+                set_chart_state(CHART_STATE_RESOLVING, active_market)
                 live_start = requested_live_start
                 runtime_state = load_market_runtime(active_market, live_start)
                 resolved = runtime_state.resolved
@@ -3056,6 +3118,7 @@ def run_live_chart(
                 if args.historical_backfill:
                     replace_source_candles(display, status, runtime_state.historical_candles)
                     if display.raw_candles:
+                        set_chart_state(CHART_STATE_RENDERING, display_symbol)
                         render_chart_display(
                             display,
                             chart=chart,
@@ -3066,7 +3129,9 @@ def run_live_chart(
                             mode=mode,
                             stdout=stdout,
                         )
+                        timing.mark(f"market switch render {active_market}")
                     live_start = historical_end
+                set_chart_state(CHART_STATE_CONNECTING, display_symbol)
                 retried_clamped_start = False
                 market_switch_enabled_after = time.monotonic() + 1.0
                 continue
@@ -3089,10 +3154,7 @@ def run_live_chart(
             display.loading = True
             reset_status(status)
             replace_chart_candles(chart, [], series_factory=series_factory)
-            update_chart_status_text(
-                chart,
-                f"{LOADING_STATUS_TEXT} retrying from {format_utc_time(result.retry_start)}",
-            )
+            set_chart_state(CHART_STATE_RECONNECTING, display_symbol)
             live_start = result.retry_start
             retried_clamped_start = True
 

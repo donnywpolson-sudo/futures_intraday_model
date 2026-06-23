@@ -360,7 +360,7 @@ def test_status_text_reports_model_placeholder_and_stale_data() -> None:
     text = chart.format_topbar_status(symbols="ESU6", display=display, status=status)
 
     assert "model output unavailable" in text
-    assert "stale" in text
+    assert text.startswith("Stale |")
 
 
 def test_emit_status_line_is_display_only_and_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -581,6 +581,62 @@ def test_timeframe_switch_down_uses_one_minute_source_candles() -> None:
     assert [float(value) for value in one_minute_frame["close"]] == [100.0, 101.0, 102.0]
 
 
+def test_drain_chart_queue_logs_timeframe_switch_render_and_keeps_options() -> None:
+    fake_chart = FakeChart()
+    chart.configure_timeframe_switcher(
+        fake_chart,
+        timeframe_options=chart.SUPPORTED_CHART_TIMEFRAMES,
+        selected_timeframe="1m",
+        on_timeframe_change=None,
+    )
+    display = chart.ChartDisplayState(
+        raw_candles=[],
+        timeframe="1m",
+        timeframe_seconds=chart.timeframe_seconds("1m"),
+        display_tz=timezone.utc,
+        display_tz_name="UTC",
+        loading=False,
+        topbar_state=chart.CHART_STATE_LIVE,
+    )
+    status = chart.ChartStatus()
+    chart.replace_source_candles(
+        display,
+        status,
+        [one_minute_candle(minute, close=100.0 + minute) for minute in range(5)],
+    )
+    display.loading = False
+    display.topbar_state = chart.CHART_STATE_LIVE
+    timeframe_queue: queue.Queue[str] = queue.Queue()
+    timeframe_queue.put("5m")
+    stderr = StringIO()
+
+    chart.drain_chart_queue(
+        queue.Queue(),
+        chart=fake_chart,
+        series_factory=lambda candle: candle,
+        display=display,
+        timeframe_queue=timeframe_queue,
+        market_queue=queue.Queue(),
+        chart_timeframes=chart.SUPPORTED_CHART_TIMEFRAMES,
+        markets={"ES": chart.MarketInfo(symbol="ES")},
+        max_records=0,
+        timeout_seconds=0,
+        no_data_warning_seconds=0,
+        status=status,
+        symbols="ESU6",
+        market="ES",
+        schema="trades",
+        mode="test",
+        stdout=StringIO(),
+        stderr=stderr,
+        timing=chart.LiveChartTiming(stderr=stderr),
+        clock=lambda: 0.0,
+    )
+
+    assert fake_chart.topbar["timeframe"].options == chart.SUPPORTED_CHART_TIMEFRAMES
+    assert "Live chart timing: timeframe switch render 5m" in stderr.getvalue()
+
+
 class FakeStore:
     def __init__(self, instrument_id: int) -> None:
         self.instrument_id = instrument_id
@@ -686,6 +742,7 @@ def test_run_live_chart_switches_backfill_and_subscription_to_selected_market(
 ) -> None:
     state = SimpleNamespace(historical_requests=[], live_subscriptions=[], lives=[])
     fake_chart = FakeChart()
+    stderr = StringIO()
     monotonic_values = iter([100.0, 103.0, 103.0, 103.0, 103.1, 103.2, 103.3])
     monkeypatch.setattr(chart.time, "monotonic", lambda: next(monotonic_values, 103.3))
 
@@ -709,7 +766,7 @@ def test_run_live_chart_switches_backfill_and_subscription_to_selected_market(
         chart_factory=lambda: fake_chart,
         series_factory=lambda candle: candle,
         stdout=StringIO(),
-        stderr=StringIO(),
+        stderr=stderr,
         now=datetime(2026, 6, 21, 23, 0, tzinfo=timezone.utc),
     )
 
@@ -724,6 +781,18 @@ def test_run_live_chart_switches_backfill_and_subscription_to_selected_market(
         for frame in fake_chart.frames
         if hasattr(frame, "empty") and not frame.empty
     ]
+    timing_log = stderr.getvalue()
+    assert "Live chart timing: chart launch/show" in timing_log
+    assert "Live chart timing: dataset range lookup" in timing_log
+    assert "Live chart timing: symbology resolve ES" in timing_log
+    assert "Live chart timing: historical fetch ES" in timing_log
+    assert "Live chart timing: first historical render" in timing_log
+    assert "Live chart timing: live subscribe ES" in timing_log
+    assert "Live chart timing: live start ES" in timing_log
+    assert "Live chart timing: symbology resolve NQ" in timing_log
+    assert "Live chart timing: historical fetch NQ" in timing_log
+    assert "Live chart timing: market switch render NQ" in timing_log
+    assert "Live chart timing: live subscribe NQ" in timing_log
 
 
 def test_run_live_chart_keeps_historical_backfill_when_live_dns_fails() -> None:
@@ -763,7 +832,7 @@ def test_run_live_chart_keeps_historical_backfill_when_live_dns_fails() -> None:
     assert "Databento live stream unavailable after historical backfill" in stderr.getvalue()
     assert "Databento live chart failed" not in stderr.getvalue()
     assert "timed_out=True" in stdout.getvalue()
-    assert "live unavailable" in fake_chart.topbar["status"].value
+    assert fake_chart.topbar["status"].value.startswith("Historical-only |")
 
 
 def test_run_live_chart_reuses_cached_backfill_when_switching_back_to_market(
