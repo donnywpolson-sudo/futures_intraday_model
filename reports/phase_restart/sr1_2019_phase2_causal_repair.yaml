@@ -28,6 +28,16 @@ profiles:
     markets: ["SR1"]
     years: [2019]
     forbid_research_use: true
+    accepted_readiness_exceptions:
+      - category: roll_maturity
+        market: SR1
+        year: 2019
+        reason: "accepted one-row Phase 2 SR1 2019 roll-maturity review exception"
+        evidence_paths:
+          - reports/phase_restart/sr1_2019_phase2_raw_alignment.json
+          - reports/data_manifest/data_source_validity_map.md
+        warning_prefixes:
+          - "roll maturity sequence not monotonic"
 
 aliases:
   phase2_repair: sr1_2019_phase2_causal_repair

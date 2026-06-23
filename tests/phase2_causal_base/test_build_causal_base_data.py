@@ -294,6 +294,70 @@ def _readiness_raw_row(
     }
 
 
+def _write_roll_maturity_exception_config(
+    path: Path,
+    *,
+    profile_market: str,
+    exception_market: str,
+    evidence_path: Path,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "defaults:",
+                "  years: [2024]",
+                "  max_synthetic_gap_minutes: 120",
+                "  max_synthetic_rows_pct: 100.0",
+                "  max_degraded_rows_pct: 1.0",
+                "  max_roll_window_rows_pct: 0.0",
+                "  require_roll_metadata_for_profiles: []",
+                "causal_base:",
+                f"  sparse_trade_derived_ohlcv_markets: [{profile_market}]",
+                "  sparse_trade_derived_roll_window_minutes: 15",
+                "profiles:",
+                "  tier_0:",
+                f"    markets: [{profile_market}]",
+                "    years: [2024]",
+                "    accepted_readiness_exceptions:",
+                "      - category: roll_maturity",
+                f"        market: {exception_market}",
+                "        year: 2024",
+                "        reason: accepted test roll-maturity review",
+                "        evidence_paths:",
+                f"          - {evidence_path.as_posix()}",
+                "        warning_prefixes:",
+                "          - roll maturity sequence not monotonic",
+                "          - roll exclusion threshold breached",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_non_monotonic_roll_raw(path: Path, market: str) -> None:
+    rows = []
+    for ts_event, close, instrument_id, month_code, maturity_month in [
+        ("2024-01-02T15:00:00Z", 100.5, 100, "H4", 3),
+        ("2024-01-02T15:01:00Z", 101.0, 101, "M4", 6),
+        ("2024-01-02T15:02:00Z", 100.75, 100, "H4", 3),
+    ]:
+        rows.append(
+            {
+                **_readiness_raw_row(
+                    ts_event,
+                    close=close,
+                    instrument_id=instrument_id,
+                    symbol=f"{market}.v.0",
+                ),
+                "raw_symbol": f"{market}{month_code}",
+                "maturity_year": 2024,
+                "maturity_month": maturity_month,
+            }
+        )
+    _write_raw(path, rows)
+
+
 def _write_tier0_alignment(path: Path, raw_root: Path, *, status: str = "PASS") -> None:
     _write_raw_alignment_report(
         path,
@@ -384,6 +448,44 @@ def test_output_root_guard_rejects_partial_root_without_manifest(tmp_path: Path)
 
     assert len(failures) == 1
     assert "already contains parquet files" in failures[0]
+    assert "causal_base_manifest.json" in failures[0]
+
+
+def test_output_root_guard_allows_new_planned_output_in_nonempty_root(
+    tmp_path: Path,
+) -> None:
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    reports_root = tmp_path / "reports" / "causal_base_candidate"
+    _write_raw(
+        output_root / "ES" / "2024.parquet",
+        [_readiness_raw_row("2024-01-02T15:00:00Z")],
+    )
+
+    failures = output_root_guard_failures(
+        output_root=output_root,
+        reports_root=reports_root,
+        planned_outputs=[output_root / "SR1" / "2018.parquet"],
+    )
+
+    assert failures == []
+
+
+def test_output_root_guard_rejects_existing_planned_output_without_manifest(
+    tmp_path: Path,
+) -> None:
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    reports_root = tmp_path / "reports" / "causal_base_candidate"
+    planned_output = output_root / "SR1" / "2018.parquet"
+    _write_raw(planned_output, [_readiness_raw_row("2024-01-02T15:00:00Z")])
+
+    failures = output_root_guard_failures(
+        output_root=output_root,
+        reports_root=reports_root,
+        planned_outputs=[planned_output],
+    )
+
+    assert len(failures) == 1
+    assert "planned output already exists" in failures[0]
     assert "causal_base_manifest.json" in failures[0]
 
 
@@ -732,6 +834,113 @@ def test_non_monotonic_roll_maturity_sequence_warns(tmp_path: Path) -> None:
     assert result.roll_maturity_backstep_count == 1
     assert len(result.roll_maturity_backstep_examples) == 1
     assert any("roll maturity sequence not monotonic" in item for item in result.warnings)
+
+
+def test_phase2_readiness_accepts_configured_exact_roll_maturity_exception(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "reports" / "sr1_roll_decision.md"
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text("accepted SR1 roll-maturity test decision\n", encoding="utf-8")
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_roll_maturity_exception_config(
+        profile_config,
+        profile_market="SR1",
+        exception_market="SR1",
+        evidence_path=evidence_path,
+    )
+    raw_root = tmp_path / "data" / "raw"
+    raw_path = raw_root / "SR1" / "2024.parquet"
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_raw_alignment_report(
+        report_path,
+        raw_root=raw_root,
+        profile="tier_0",
+        resolved_profile="tier_0",
+        overrides={
+            "markets": ["SR1"],
+            "years": [2024],
+            "pre_availability_exemptions": [],
+            "expected_market_year_count": 1,
+        },
+    )
+    _write_non_monotonic_roll_raw(raw_path, "SR1")
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        output_root=output_root,
+        profile_config_path=profile_config,
+        roll_window_bars=1,
+    )
+
+    assert report["status"] == "PASS"
+    assert report["blocker_count"] == 0
+    assert report["accepted_exception_count"] == 1
+    accepted = report["accepted_readiness_exceptions"][0]
+    assert accepted["market"] == "SR1"
+    assert accepted["year"] == 2024
+    assert accepted["original_status"] == "WARN"
+    assert any(
+        warning.startswith("roll maturity sequence not monotonic")
+        for warning in accepted["warnings"]
+    )
+    assert any(
+        warning.startswith("roll exclusion threshold breached")
+        for warning in accepted["warnings"]
+    )
+    assert not (output_root / "SR1" / "2024.parquet").exists()
+
+
+def test_phase2_readiness_blocks_unlisted_roll_maturity_exception(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "reports" / "sr1_roll_decision.md"
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text("accepted SR1 roll-maturity test decision\n", encoding="utf-8")
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_roll_maturity_exception_config(
+        profile_config,
+        profile_market="SR3",
+        exception_market="SR1",
+        evidence_path=evidence_path,
+    )
+    raw_root = tmp_path / "data" / "raw"
+    raw_path = raw_root / "SR3" / "2024.parquet"
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_raw_alignment_report(
+        report_path,
+        raw_root=raw_root,
+        profile="tier_0",
+        resolved_profile="tier_0",
+        overrides={
+            "markets": ["SR3"],
+            "years": [2024],
+            "pre_availability_exemptions": [],
+            "expected_market_year_count": 1,
+        },
+    )
+    _write_non_monotonic_roll_raw(raw_path, "SR3")
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        output_root=output_root,
+        profile_config_path=profile_config,
+        roll_window_bars=1,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["blocker_count"] == 1
+    assert report["accepted_exception_count"] == 0
+    blocker = report["blockers"][0]
+    assert blocker["market"] == "SR3"
+    assert blocker["year"] == 2024
+    assert "roll maturity sequence not monotonic" in blocker["top_blocker_reason"]
 
 
 def test_phase2_readiness_allows_configured_sparse_trade_derived_ohlcv_gap(

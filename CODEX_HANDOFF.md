@@ -1,5 +1,297 @@
 # Codex Handoff
 
+## SR1 2020 Phase 2 readiness exception accepted
+- Updated at UTC: 2026-06-23T04:38:36Z
+- Scope: applied the bounded SR1:2020 exact-row roll-maturity readiness exception review and reran readiness-only. No Phase 2 build, cleanup, Phase 3+, redownload, DBN/source mutation, staging, commit, move, delete, or quarantine was run.
+
+Files changed/generated
+- `reports/phase_restart/sr1_2020_phase2_causal_repair.yaml`: added a profile-local `roll_maturity` accepted readiness exception for `SR1:2020`, limited to warning prefixes `roll maturity sequence not monotonic` and `roll exclusion threshold breached`.
+- `reports/phase_restart/sr1_2020_phase2_readiness_refresh.json` and `.md`: refreshed ignored readiness-only evidence, now `PASS`.
+- `CODEX_HANDOFF.md`: this handoff update.
+
+Commands run
+- `Get-Location`
+- `git status --short`
+- `git status --short -- data`
+- Targeted reads of `CODEX_HANDOFF.md`, `reports/phase_restart/sr1_2018_phase2_causal_repair.yaml`, `reports/phase_restart/sr1_2019_phase2_causal_repair.yaml`, `reports/phase_restart/sr1_2020_phase2_causal_repair.yaml`, `reports/phase_restart/sr1_2020_phase2_raw_alignment.json`, `reports/phase_restart/sr1_2020_phase2_readiness.json`, and `reports/data_manifest/data_source_validity_map.md`.
+- `python -m scripts.phase2_causal_base.build_causal_base_data --profile phase2_repair --profile-config reports\phase_restart\sr1_2020_phase2_causal_repair.yaml --raw-root data\raw --output-root data\causally_gated_normalized --reports-root reports\phase_restart --raw-alignment-report reports\phase_restart\sr1_2020_phase2_raw_alignment.json --readiness-only --readiness-json-out reports\phase_restart\sr1_2020_phase2_readiness_refresh.json --readiness-md-out reports\phase_restart\sr1_2020_phase2_readiness_refresh.md`
+- `git status --short -- data`
+- `[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')`
+
+Validation results
+- Existing raw alignment evidence: `reports/phase_restart/sr1_2020_phase2_raw_alignment.json` has `status=PASS`, `needs_phase1b_conversion_count=0`, `raw_only_count=0`, `source_hash_mismatch_count=0`, `invalid_manifest_count=0`, and `repair_manifest_failure_count=0`.
+- Existing readiness blocker before exception: `status=FAIL`, `failure_count=0`, `blocker_count=1`, top blocker `roll maturity sequence not monotonic: backsteps=72`.
+- SR1:2020 readiness-only: `phase2_readiness_only status=PASS checked=1 blockers=0`.
+- Readiness refresh: `status=PASS`, `failure_count=0`, `blocker_count=0`, `accepted_exception_count=1`, original status `WARN`.
+- Accepted warnings exactly `roll maturity sequence not monotonic: backsteps=72` and `roll exclusion threshold breached: rows_pct=2.674358 rows=255`.
+- `data/raw/SR1/2020.parquet` exists.
+- `data/causally_gated_normalized/SR1/2020.parquet` remains absent.
+- `git status --short -- data`: empty.
+
+Remaining work
+- Stop here because this run was readiness exception review only.
+- SR1:2020 is readiness-pass for a future explicitly approved one-row Phase 2 build.
+- Cleanup remains disabled and unrun.
+
+Next recommended step
+- If approved, run the one-row SR1:2020 Phase 2 build using the refreshed `reports/phase_restart/sr1_2020_phase2_causal_repair.yaml`, then run `python scripts\audit_data_manifest.py` and `git status --short -- data`. Stop before cleanup and before any additional row.
+
+## SR1 2019 Phase 2 one-row build complete
+- Updated at UTC: 2026-06-23T04:35:41Z
+- Scope: ran the approved one-row SR1:2019 Phase 2 build only. No cleanup, Phase 3+, redownload, DBN/source mutation, staging, commit, move, delete, quarantine, or additional row was run.
+
+Files changed/generated
+- `data/causally_gated_normalized/SR1/2019.parquet`: generated ignored Phase 2 output for the selected row.
+- `reports/phase_restart/causal_base_manifest.json` and `causal_base_validation.*`: refreshed ignored Phase 2 build evidence for the selected row.
+- `reports/data_manifest/manifest_coverage_check.csv` and `manifest_coverage_summary.md`: refreshed manifest audit outputs.
+- `CODEX_HANDOFF.md`: this handoff update.
+
+Commands run
+- `Get-Location`
+- `git status --short`
+- `git status --short -- data`
+- Targeted read of `CODEX_HANDOFF.md`.
+- `Test-Path data\causally_gated_normalized\SR1\2019.parquet`
+- `python -m scripts.phase2_causal_base.build_causal_base_data --profile phase2_repair --profile-config reports\phase_restart\sr1_2019_phase2_causal_repair.yaml --raw-root data\raw --output-root data\causally_gated_normalized --reports-root reports\phase_restart --raw-alignment-report reports\phase_restart\sr1_2019_phase2_raw_alignment.json`
+- `python scripts\audit_data_manifest.py`
+- Targeted JSON/parquet sanity reads for `reports/phase_restart/causal_base_manifest.json` and `data/causally_gated_normalized/SR1/2019.parquet`.
+- `[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')`
+
+Validation results
+- Initial `git status --short -- data`: empty.
+- SR1:2019 build command: `WARN SR1 2019: raw=10252 out=10252 synthetic=0 warnings=1 failures=0`; local trade OHLCV gap gate skipped.
+- Generated output exists: `data/causally_gated_normalized/SR1/2019.parquet`.
+- Output parquet sanity check: rows 10252, markets `SR1`, years `2019`.
+- Generated build manifest: `status=WARN`, outputs 1, SR1 2019, output_rows 10252, warnings 1, failures 0.
+- Preserved warning: `roll maturity sequence not monotonic: backsteps=50`.
+- Manifest audit: `manifest_check issues=166 failures=0`.
+- Final `git status --short -- data`: empty.
+- Accepted missing Phase 2 rows after this build: 55.
+
+Remaining work
+- Stop here because this run was SR1:2019 build only.
+- The SR1:2019 build manifest remains `WARN` because the accepted roll-maturity warning is intentionally preserved in build evidence, with `failure_count=0`.
+- Generated data/report artifacts are ignored and were not staged.
+- Cleanup remains disabled and unrun.
+
+Next recommended step
+- Apply the same bounded exact-row roll-maturity readiness exception review to `SR1:2020`, rerun readiness-only, and stop before build unless readiness passes with no new blocker. Current SR1:2020 evidence exists, readiness is `FAIL`, `failure_count=0`, `blocker_count=1`, top blocker `roll maturity sequence not monotonic: backsteps=72`, and `data/causally_gated_normalized/SR1/2020.parquet` is absent.
+
+## SR1 2019 Phase 2 readiness exception accepted
+- Updated at UTC: 2026-06-23T04:31:27Z
+- Scope: applied the bounded SR1:2019 exact-row roll-maturity readiness exception review and reran readiness-only. No Phase 2 build, cleanup, Phase 3+, redownload, DBN/source mutation, staging, commit, move, delete, or quarantine was run.
+
+Files changed/generated
+- `reports/phase_restart/sr1_2019_phase2_causal_repair.yaml`: added a profile-local `roll_maturity` accepted readiness exception for `SR1:2019`, limited to the warning prefix `roll maturity sequence not monotonic`.
+- `reports/phase_restart/sr1_2019_phase2_readiness_refresh.json` and `.md`: refreshed ignored readiness-only evidence, now `PASS`.
+- `CODEX_HANDOFF.md`: this handoff update.
+
+Commands run
+- `Get-Location`
+- `git status --short`
+- Targeted reads of `CODEX_HANDOFF.md`, `reports/phase_restart/sr1_2018_phase2_causal_repair.yaml`, `reports/phase_restart/sr1_2019_phase2_causal_repair.yaml`, `reports/phase_restart/sr1_2019_phase2_raw_alignment.json`, `reports/phase_restart/sr1_2019_phase2_readiness.json`, `reports/phase_restart/sr1_2018_phase2_readiness_refresh.json`, and `reports/data_manifest/data_source_validity_map.md`.
+- `python -m pytest tests\phase2_causal_base\test_build_causal_base_data.py -k roll_maturity_exception -q`
+- `python -m scripts.phase2_causal_base.build_causal_base_data --profile phase2_repair --profile-config reports\phase_restart\sr1_2019_phase2_causal_repair.yaml --raw-root data\raw --output-root data\causally_gated_normalized --reports-root reports\phase_restart --raw-alignment-report reports\phase_restart\sr1_2019_phase2_raw_alignment.json --readiness-only --readiness-json-out reports\phase_restart\sr1_2019_phase2_readiness_refresh.json --readiness-md-out reports\phase_restart\sr1_2019_phase2_readiness_refresh.md`
+- `git status --short -- data`
+- `[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')`
+
+Validation results
+- Focused exception tests: `2 passed, 67 deselected`.
+- SR1:2019 readiness-only: `phase2_readiness_only status=PASS checked=1 blockers=0`.
+- Readiness refresh: `status=PASS`, `failure_count=0`, `blocker_count=0`, `accepted_exception_count=1`, original status `WARN`, accepted warning exactly `roll maturity sequence not monotonic: backsteps=50`.
+- Existing raw alignment evidence: `reports/phase_restart/sr1_2019_phase2_raw_alignment.json` has `status=PASS`, `needs_phase1b_conversion_count=0`, `raw_only_count=0`, `source_hash_mismatch_count=0`, and `invalid_manifest_count=0`.
+- `data/raw/SR1/2019.parquet` exists.
+- `data/causally_gated_normalized/SR1/2019.parquet` remains absent.
+- `git status --short -- data`: empty.
+
+Remaining work
+- Stop here because this run was readiness exception review only.
+- SR1:2019 is readiness-pass for a future explicitly approved one-row Phase 2 build.
+- Cleanup remains disabled and unrun.
+
+Next recommended step
+- If approved, run the one-row SR1:2019 Phase 2 build using the refreshed `reports/phase_restart/sr1_2019_phase2_causal_repair.yaml`, then run `python scripts\audit_data_manifest.py` and `git status --short -- data`. Stop before cleanup and before any additional row.
+
+## SR1 2018 caveat accepted and next scope selected
+- Updated at UTC: 2026-06-23T04:01:10Z
+- Scope: reviewed the current SR1:2018 Phase 2 build manifest, confirmed the WARN caveat is accepted by exact-row readiness evidence, ran broader relevant tests, and selected the next one-row scope. No Phase 2 build, cleanup, Phase 3+, redownload, DBN source mutation, staging, commit, move, delete, or quarantine was run in this pass.
+
+Files changed/generated
+- `CODEX_HANDOFF.md`: this handoff update.
+
+Commands run
+- `git status --short`
+- `git status --short -- data`
+- Targeted reads of `CODEX_HANDOFF.md`, `reports/phase_restart/causal_base_manifest.json`, `reports/phase_restart/sr1_2018_phase2_readiness_refresh.json`, `reports/phase_restart/sr1_2018_phase2_causal_repair.yaml`, `reports/data_manifest/data_source_validity_map.md`, and SR1:2019 Phase 2 evidence files.
+- `python -m pytest tests\phase2_causal_base tests\validation -q`
+
+Validation results
+- SR1:2018 WARN caveat: accepted. Current `reports/phase_restart/causal_base_manifest.json` has one output, `SR1:2018`, `status=WARN`, `failure_count=0`, warnings exactly `roll maturity sequence not monotonic: backsteps=36` and `roll exclusion threshold breached: rows_pct=7.426376 rows=116`.
+- Current readiness evidence accepts that caveat: `reports/phase_restart/sr1_2018_phase2_readiness_refresh.json` has `status=PASS`, `blocker_count=0`, `failure_count=0`, `accepted_exception_count=1`, and the same two warnings under the SR1:2018 roll-maturity exception.
+- Broader relevant tests: `290 passed in 37.22s` for `tests\phase2_causal_base` and `tests\validation`.
+- `git status --short -- data`: empty.
+- Selected next scope: one row, `SR1:2019`.
+
+Next selected scope evidence
+- `SR1:2019` is in the accepted list in `reports/data_manifest/data_source_validity_map.md`.
+- Existing config: `reports/phase_restart/sr1_2019_phase2_causal_repair.yaml`.
+- Existing raw alignment: `reports/phase_restart/sr1_2019_phase2_raw_alignment.json`, status `PASS`.
+- Existing readiness: `reports/phase_restart/sr1_2019_phase2_readiness.json`, status `FAIL`, `failure_count=0`, `blocker_count=1`, top blocker `roll maturity sequence not monotonic: backsteps=50`.
+- Raw exists: `data/raw/SR1/2019.parquet`.
+- Phase 2 output absent: `data/causally_gated_normalized/SR1/2019.parquet`.
+
+Remaining work
+- Stop here with scope selected. Do not build SR1:2019 until separately approved.
+- SR1:2019 likely needs an explicit exact-row roll-maturity exception review before readiness can pass, matching the SR1:2018 pattern.
+- Cleanup remains disabled and unrun.
+
+Next recommended step
+- If approved, apply the same bounded exact-row roll-maturity exception review to `SR1:2019`, rerun readiness-only, and stop before build unless readiness passes with no new blocker.
+
+## SR1 2018 Phase 2 pilot built
+- Updated at UTC: 2026-06-23T03:52:23Z
+- Scope: implemented an explicit, exact-row Phase 2 readiness exception for the accepted SR1:2018 roll-maturity review caveat, then ran only the approved SR1:2018 readiness/build scope. No cleanup, Phase 3+, redownload, DBN source mutation, multi-row batch build, staging, commit, move, delete, or quarantine was run.
+
+Files changed/generated
+- `scripts/phase2_causal_base/build_causal_base_data.py`: added strict config parsing for evidence-backed `roll_maturity` readiness exceptions, kept them off by default, preserved accepted warning details in readiness reports, and refined the output-root guard for bounded planned outputs.
+- `tests/phase2_causal_base/test_build_causal_base_data.py`: added exact-row roll-maturity exception coverage and bounded output-root guard coverage.
+- `reports/phase_restart/sr1_2018_phase2_causal_repair.yaml`: enabled the accepted SR1:2018 roll-maturity exception for the one-row repair profile only.
+- `reports/phase_restart/sr1_2018_phase2_readiness_refresh.json` and `.md`: refreshed ignored readiness evidence, now `PASS`.
+- `data/causally_gated_normalized/SR1/2018.parquet`: generated ignored Phase 2 output for the selected row.
+- `reports/phase_restart/causal_base_manifest.json` and `causal_base_validation.*`: generated ignored Phase 2 build evidence for the selected row.
+- `CODEX_HANDOFF.md`: this handoff update.
+
+Commands run
+- `python -m pytest tests\phase2_causal_base\test_build_causal_base_data.py -q`
+- `python -m scripts.phase2_causal_base.build_causal_base_data --profile phase2_repair --profile-config reports\phase_restart\sr1_2018_phase2_causal_repair.yaml --raw-root data\raw --output-root data\causally_gated_normalized --reports-root reports\phase_restart --raw-alignment-report reports\phase_restart\sr1_2018_phase2_raw_alignment.json --readiness-only --readiness-json-out reports\phase_restart\sr1_2018_phase2_readiness_refresh.json --readiness-md-out reports\phase_restart\sr1_2018_phase2_readiness_refresh.md`
+- `python -m scripts.phase2_causal_base.build_causal_base_data --profile phase2_repair --profile-config reports\phase_restart\sr1_2018_phase2_causal_repair.yaml --raw-root data\raw --output-root data\causally_gated_normalized --reports-root reports\phase_restart --raw-alignment-report reports\phase_restart\sr1_2018_phase2_raw_alignment.json`
+- `python scripts\audit_data_manifest.py`
+- `git status --short -- data`
+- `git diff --check`
+- Targeted JSON/parquet sanity reads for readiness/build evidence.
+
+Validation results
+- Focused phase2 tests: `69 passed`.
+- SR1:2018 readiness-only: `status=PASS checked=1 blockers=0`, `failure_count=0`, `accepted_exception_count=1`, `accepted_warnings=2`.
+- SR1:2018 build command: `WARN SR1 2018: raw=1562 out=1562 synthetic=0 warnings=2 failures=0`; local trade OHLCV gap gate skipped for this profile.
+- Generated output exists: `data/causally_gated_normalized/SR1/2018.parquet`.
+- Output parquet sanity check: rows 1562, markets `SR1`, years `2018`.
+- Generated build manifest: `status=WARN`, outputs 1, SR1 2018, output_rows 1562, warnings 2, failures 0.
+- Manifest audit: `manifest_check issues=167 failures=0`.
+- `git status --short -- data`: empty.
+- `git diff --check`: CRLF normalization warnings only, no whitespace errors.
+
+Remaining work
+- Stop before cleanup, Phase 3+, redownloads, DBN source mutation, and any multi-row Phase 2 batch build.
+- The SR1:2018 build manifest remains `WARN` because the accepted roll-maturity warnings are intentionally preserved in build evidence, even though readiness accepted them for this one-row scope.
+- Generated data/report artifacts are ignored and were not staged.
+
+Next recommended step
+- Review the SR1:2018 Phase 2 build evidence in `reports/phase_restart/causal_base_manifest.json` and decide whether to select the next single accepted Phase 2 row or approve a bounded batch. Stop before cleanup.
+
+## SR1 2018 Phase 2 pilot blocked before build
+- Updated at UTC: 2026-06-23T03:40:11Z
+- Scope: implemented the approved one-row Phase 2 pilot preflight for `SR1:2018`. The data-writing build was not run because readiness remained blocked by the accepted roll-maturity exception under current code behavior.
+
+Files changed/generated
+- `reports/phase_restart/sr1_2018_phase2_readiness_refresh.json`: ignored readiness-only JSON evidence.
+- `reports/phase_restart/sr1_2018_phase2_readiness_refresh.md`: ignored readiness-only markdown evidence.
+- `reports/phase_restart/sr1_2018_phase2_build_attempt_blocked.md`: blocked-at-readiness evidence report.
+- `CODEX_HANDOFF.md`: this handoff update.
+
+Commands run
+- `git status --short -- data`
+- `python -m scripts.phase2_causal_base.build_causal_base_data --profile phase2_repair --profile-config reports\phase_restart\sr1_2018_phase2_causal_repair.yaml --raw-root data\raw --output-root data\causally_gated_normalized --reports-root reports\phase_restart --raw-alignment-report reports\phase_restart\sr1_2018_phase2_raw_alignment.json --readiness-only --readiness-json-out reports\phase_restart\sr1_2018_phase2_readiness_refresh.json --readiness-md-out reports\phase_restart\sr1_2018_phase2_readiness_refresh.md`
+- `python -m scripts.phase2_causal_base.build_causal_base_data --profile phase2_repair --profile-config reports\phase_restart\sr1_2018_phase2_causal_repair.yaml --raw-root data\raw --output-root data\causally_gated_normalized --reports-root reports\causal_base --raw-alignment-report reports\phase_restart\sr1_2018_phase2_raw_alignment.json --readiness-only --readiness-json-out reports\phase_restart\sr1_2018_phase2_readiness_refresh.json --readiness-md-out reports\phase_restart\sr1_2018_phase2_readiness_refresh.md`
+- Targeted reads of `reports/phase_restart/phase2_corrected_execution_strategy.md`, `reports/phase_restart/ke_2015_2026_phase2_build_attempt_blocked.md`, and related guard evidence.
+
+Validation results
+- Initial readiness command with `--reports-root reports\phase_restart` stopped on output-root guard because `reports\phase_restart\causal_base_manifest.json` is absent while `data\causally_gated_normalized` already contains parquet files.
+- Readiness-only rerun with paired manifest root `reports\causal_base` completed: `phase2_readiness_only status=FAIL checked=1 blockers=1`.
+- Readiness refresh details: `failure_count=0`, `blocker_count=1`, top blocker `roll maturity sequence not monotonic: backsteps=36`, additional warning `roll exclusion threshold breached: rows_pct=7.426376 rows=116`.
+- `data/causally_gated_normalized/SR1/2018.parquet` remains absent.
+- `git status --short -- data` remained empty.
+
+Remaining work
+- A separate explicit roll-maturity exception code path or approved build/report-manifest strategy is required before `SR1:2018` can write Phase 2 output.
+- Cleanup remains disabled and unrun.
+
+Next recommended step
+- Decide whether to implement a focused Phase 2 roll-maturity exception mechanism for accepted rows, or choose a different accepted row whose readiness can become `PASS` without code changes. Stop before cleanup.
+
+## Raw source corrections completion
+- Updated at UTC: 2026-06-23T02:42:17Z
+- Scope: implemented the approved one-row-at-a-time correction loop for all remaining raw/source rows after `SR3:2020`. No Phase 2 build, cleanup, phase 3+, redownload, DBN source mutation, move, merge, quarantine, delete, or data artifact staging was run.
+
+Files changed/generated
+- `data/raw/SR3/2021.parquet` through `data/raw/SR3/2024.parquet`: generated ignored source-reference correction outputs.
+- `data/raw/SR1/2018.parquet` through `data/raw/SR1/2026.parquet`: generated ignored optional status/statistics re-enrichment outputs.
+- `data/raw/TN/2025.parquet`, `data/raw/TN/2026.parquet`, `data/raw/ZL/2025.parquet`, `data/raw/ZL/2026.parquet`, `data/raw/ZM/2025.parquet`, `data/raw/ZM/2026.parquet`, `data/raw/KE/2025.parquet`, and `data/raw/KE/2026.parquet`: generated ignored optional status/statistics re-enrichment outputs.
+- `reports/phase_restart/<row_slug>/**`: generated ignored per-row converter evidence directories.
+- `reports/raw_readiness/raw_enriched_optional_schema_audit.json` and `.md`: refreshed ignored final validation evidence.
+- `reports/phase_restart/raw_source_corrections_completion.md`: completion evidence packet.
+- `reports/data_manifest/data_source_validity_map.md`: updated to zero unresolved raw/source rows.
+- `reports/data_manifest/remaining_cleanup_blockers.md`: appended superseding completion counts.
+- `reports/phase_restart/batch_phase2_build_exclusion_plan.md/json`: refreshed to zero unresolved pre-build raw/source prerequisites; Phase 2 still not run.
+- `CODEX_HANDOFF.md`: this handoff update.
+
+Commands run
+- Preflight: `Get-Location`, `git status --short`, `git status --short -- data`, and targeted reads of current handoff, validity map, raw audit JSON, and SR3 evidence.
+- One bounded `python -m scripts.phase1B_convert.convert_databento_raw --mode convert-parquet --schema ohlcv-1m ... --include-optional-schemas status,statistics --optional-dbn-root data/dbn --optional-schema-policy warn --offline-local-conditions --workers 1 --overwrite` per row.
+- Full `python -m scripts.validation.audit_enriched_raw_optional_schemas --raw-root data/raw --dbn-root data/dbn --json-out reports/raw_readiness/raw_enriched_optional_schema_audit.json --md-out reports/raw_readiness/raw_enriched_optional_schema_audit.md` after each row.
+- `python scripts\audit_data_manifest.py`
+- `git status --short -- data` after row gates.
+
+Validation results
+- Corrected rows this run: SR3 2021-2024; SR1 2018-2026; TN 2025-2026; ZL 2025-2026; ZM 2025-2026; KE 2025-2026.
+- Previously corrected and preserved: SR3 2019-2020.
+- Final raw optional-schema audit: `status=PASS files=527 rows=130074125 core=PASS status_optional=WARN statistics_optional=PASS file_failures=0`.
+- Final audit summary: `file_failure_count=0`, `missing_source_file_count=0`, `schema_failure_count=0`, `source_hash_mismatch_count=0`, `statistics_failure_count=0`, `status_failure_count=0`.
+- Refreshed Phase 2 build/exclusion plan: accepted rows 57, deferred/excluded rows 9, unresolved pre-build raw/source prerequisites 0, Phase 2 build commands run 0.
+- Manifest audit: `manifest_check issues=168 failures=0`.
+- `optional_status_readiness=WARN` remains only because 67 status archives are expected missing/optional.
+- Final `git status --short -- data`: empty.
+
+Remaining work
+- Phase 2 build remains unrun and still requires separate explicit approval.
+- Cleanup remains disabled and unrun until Phase 2 execution/defer state is settled and cleanup is separately approved.
+- The generated data/report outputs are ignored artifacts and were not staged.
+
+Next recommended step
+- Refresh the master data health matrix and Phase 2 build/exclusion evidence from the final raw audit, then decide whether to approve a bounded Phase 2 readiness/build run. Stop before cleanup.
+
+## Data source validity map
+- Updated at UTC: 2026-06-23T00:14:03Z
+- Scope: consolidated existing manifest, health-matrix, raw-readiness, and Phase 2 decision evidence into a report-only source-validity map. No validation, repair, download, Phase 2 build, cleanup, move, delete, or DBN/source mutation was run by this pass.
+
+Files changed/generated
+- `reports/data_manifest/data_source_validity_map.md`: current source-validity map and Phase 2 accepted/prerequisite/excluded row classification.
+- `CODEX_HANDOFF.md`: this handoff update.
+
+Commands run
+- `Get-Location`
+- `git status --short`
+- `git status --short -- data`
+- `rg` searches over source/status/Phase 2 report paths.
+- Targeted reads of `reports/data_manifest/*` and `reports/phase_restart/*` decision summaries.
+- `Import-Csv reports\data_manifest\master_data_health_matrix.csv` grouped and filtered by `health_class`.
+- `[DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")`
+
+Validation results
+- High-level source classes from the current `master_data_health_matrix.csv` snapshot: `OK_SOURCE_PRESENT=45`, `POLICY_REVIEW_REQUIRED=450`, `UNKNOWN_REVIEW_REQUIRED=23`, `EXCLUDED_FROM_PHASE2=9`.
+- Later local evidence in `reports/phase_restart/sr3_2019_source_reference_correction.md` and `reports/raw_readiness/raw_enriched_optional_schema_audit.json` shows `SR3:2019` cleared after the matrix snapshot; current raw optional-schema audit still fails with `file_failure_count=22`.
+- Current Phase 2 build/exclusion plan: 57 accepted for future bounded build approval, 17 accepted rows with pre-build raw/source evidence prerequisites, 9 deferred/excluded rows, 0 Phase 2 builds approved/run.
+- Manifest coverage summary: raw parquet 527/527 present, `data/dbn/ohlcv_1m` 527/527 present, `data/dbn/definition` 527/527 present, `data/dbn/statistics` 527/527 present, `data/dbn/status` 460/527 present with 67 expected missing and 0 unexpected missing.
+- `git status --short -- data` was empty before edits.
+
+Remaining work
+- Use `reports/data_manifest/data_source_validity_map.md` as the routing map for the next bounded action.
+- Resolve one `UNKNOWN_REVIEW_REQUIRED` or pre-build prerequisite row at a time before any Phase 2 build.
+- Keep cleanup disabled until Phase 2 execution/defer state is settled and cleanup is separately approved.
+
+Next recommended step
+- Run one bounded raw/source evidence repair for a prerequisite row, starting with `SR1:2018` or another user-selected row, then rerun the raw optional-schema audit for that row. Stop before Phase 2 build and cleanup.
+
 ## KE Phase 2 exclusion and policy-review decision
 - Updated at UTC: 2026-06-22T23:04:25Z
 - Scope: recorded the report-only KE Phase 2 decision. KE 2013-2015 are excluded from canonical Phase 2 unless explicitly policy-excepted; KE 2014 remains specifically excluded; KE 2016-2026 are policy-reviewable rather than automatically clean. No canonical data was modified, and no Phase 2 build, Phase 3+, cleanup, repair, redownload, quarantine, merge, move, delete, or data artifact staging occurred.
@@ -2798,3 +3090,15 @@ Updated at UTC: 2026-06-22T00:23:29Z
 - Commands run: read objective attachment; `git status --short`; `git status --short -- data`; `git diff --stat`; `git diff --check`; targeted report/config reads; report creation.
 - Data safety: no download, repair, Phase 2 build, cleanup, move, merge, quarantine, delete, rebuild, redownload, generated data staging, or DBN source modification was run.
 - Remaining work: preserve the ignored workflow report in git only if explicitly approved; keep cleanup disabled until blockers are zero and cleanup is separately approved.
+
+
+## Refreshed Health Matrix And Phase 2 Prerequisites
+- Updated at UTC: 2026-06-23T01:49:59Z.
+- Scope: report-only refresh of manifest coverage, master data health matrix, source-validity map, and Phase 2 build prerequisite counts from existing evidence.
+- This section supersedes older count snapshots above for current health-matrix and Phase 2 pre-build prerequisite counts.
+- Files changed/generated by this slice: `reports/data_manifest/master_data_health_summary.md`, `reports/data_manifest/master_data_health_matrix.csv`, `reports/data_manifest/master_data_health_matrix.json`, `reports/data_manifest/data_source_validity_map.md`, `reports/data_manifest/remaining_cleanup_blockers.md`, `reports/phase_restart/batch_phase2_build_exclusion_plan.md`, `reports/phase_restart/batch_phase2_build_exclusion_plan.json`, `CODEX_HANDOFF.md`.
+- Commands run: read objective attachment; preflight `git status --short`, `git status --short -- data`, `git diff --stat`, `git diff --check`; `python scripts\audit_data_manifest.py`; report-only refresh script.
+- Results: manifest audit `issues=168 failures=0`; raw optional-schema audit remains `FAIL` with 9 file failures; health counts OK=45, POLICY=464, EXCLUDED=9, UNKNOWN=9; Phase 2 accepted rows with pre-build raw evidence prerequisites now 9.
+- Cleared from stale unknown/pre-build prerequisite status: SR3:2019-2024 and SR1:2018-2024.
+- Data safety: no repair, Phase 2 build, cleanup, move, merge, quarantine, delete, rebuild, redownload, generated data staging, or DBN source modification was run.
+- Remaining work: run bounded raw optional re-enrichment for the 9 remaining raw prerequisite rows, then refresh this matrix again; keep cleanup disabled.

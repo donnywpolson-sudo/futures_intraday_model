@@ -1,6 +1,6 @@
 # Data Manifest Coverage Summary
 
-Generated at UTC: 2026-06-23T02:47:23.104728+00:00
+Generated at UTC: 2026-06-23T04:35:19.118433+00:00
 
 ## Verdict
 
@@ -8,12 +8,12 @@ Generated at UTC: 2026-06-23T02:47:23.104728+00:00
 - Cleanup/quarantine allowed: false
 - Cleanup gate: No cleanup/quarantine until UNKNOWN and policy-deferred paths are reviewed.
 - Coverage CSV rows read: 10
-- Issue rows written: 168
+- Issue rows written: 166
 
 ## Missing Pairs
 
 - `data/raw/{market}/{year}.parquet`: expected missing 0; unexpected missing 0.
-- `data/causally_gated_normalized/{market}/{year}.parquet`: expected missing 0; unexpected missing 66.
+- `data/causally_gated_normalized/{market}/{year}.parquet`: expected missing 0; unexpected missing 64.
 - `data/dbn/status`: expected missing 67; unexpected missing 0.
 
 ## Extras And Duplicates

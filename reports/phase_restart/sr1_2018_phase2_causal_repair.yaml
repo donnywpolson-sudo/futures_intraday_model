@@ -28,6 +28,17 @@ profiles:
     markets: ["SR1"]
     years: [2018]
     forbid_research_use: true
+    accepted_readiness_exceptions:
+      - category: roll_maturity
+        market: SR1
+        year: 2018
+        reason: "accepted one-row Phase 2 pilot roll-maturity review exception"
+        evidence_paths:
+          - reports/phase_restart/sr1_2018_phase2_raw_alignment.json
+          - reports/data_manifest/data_source_validity_map.md
+        warning_prefixes:
+          - "roll maturity sequence not monotonic"
+          - "roll exclusion threshold breached"
 
 aliases:
   phase2_repair: sr1_2018_phase2_causal_repair

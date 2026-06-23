@@ -187,6 +187,11 @@ DEFAULT_MAX_DEGRADED_ROWS_PCT = 1.0
 DEFAULT_MAX_ROLL_WINDOW_ROWS_PCT = 1.0
 DEFAULT_SYNTHETIC_GAP_THRESHOLD_ACTION = "warn"
 SYNTHETIC_GAP_THRESHOLD_ACTIONS = {"warn", "diagnostic"}
+ROLL_MATURITY_EXCEPTION_CATEGORY = "roll_maturity"
+ROLL_MATURITY_EXCEPTION_WARNING_PREFIXES = (
+    "roll maturity sequence not monotonic",
+    "roll exclusion threshold breached",
+)
 DEFAULT_REQUIRE_ROLL_METADATA_PROFILES = {
     "tier_1",
     "tier_1_research",
@@ -204,6 +209,16 @@ DEFAULT_REQUIRE_ROLL_METADATA_PROFILES = {
 
 
 @dataclass(frozen=True)
+class AcceptedReadinessException:
+    market: str
+    year: int
+    category: str
+    reason: str
+    evidence_paths: tuple[str, ...]
+    warning_prefixes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class CausalBaseConfig:
     max_synthetic_rows_pct: float = DEFAULT_MAX_SYNTHETIC_ROWS_PCT
     max_synthetic_gap_minutes: int = DEFAULT_MAX_SYNTHETIC_GAP_MINUTES
@@ -216,6 +231,7 @@ class CausalBaseConfig:
     require_roll_metadata_for_profiles: tuple[str, ...] = tuple(
         sorted(DEFAULT_REQUIRE_ROLL_METADATA_PROFILES)
     )
+    accepted_readiness_exceptions: tuple[AcceptedReadinessException, ...] = tuple()
 
 
 @dataclass(frozen=True)
@@ -382,6 +398,40 @@ def relative_source_path(path: Path) -> str:
         return path.relative_to(Path.cwd()).as_posix()
     except ValueError:
         return path.as_posix()
+
+
+def _evidence_path_exists(path_value: str) -> bool:
+    path = Path(path_value)
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return path.exists()
+
+
+def _accepted_readiness_exception_for_result(
+    result: ValidationResult,
+    config: CausalBaseConfig,
+) -> dict[str, Any] | None:
+    if result.failures or not result.warnings:
+        return None
+    for exception in config.accepted_readiness_exceptions:
+        if exception.market != result.market or exception.year != result.year:
+            continue
+        if exception.category != ROLL_MATURITY_EXCEPTION_CATEGORY:
+            continue
+        if not all(
+            any(warning.startswith(prefix) for prefix in exception.warning_prefixes)
+            for warning in result.warnings
+        ):
+            continue
+        if not all(_evidence_path_exists(path) for path in exception.evidence_paths):
+            continue
+        return {
+            "category": exception.category,
+            "reason": exception.reason,
+            "evidence_paths": list(exception.evidence_paths),
+            "accepted_warnings": list(result.warnings),
+        }
+    return None
 
 
 def hash_optional_file(path: Path) -> str | None:
@@ -645,6 +695,76 @@ def _as_mapping(value: object) -> dict[str, object]:
     return {}
 
 
+def _as_nonempty_str_list(value: object, *, field_name: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list")
+    items = tuple(str(item).strip() for item in value if str(item).strip())
+    if not items:
+        raise ValueError(f"{field_name} must contain at least one value")
+    return items
+
+
+def _parse_accepted_readiness_exceptions(
+    value: object,
+) -> tuple[AcceptedReadinessException, ...]:
+    if value in (None, ""):
+        return tuple()
+    if not isinstance(value, list):
+        raise ValueError("accepted_readiness_exceptions must be a list")
+
+    exceptions: list[AcceptedReadinessException] = []
+    for index, raw_entry in enumerate(value):
+        entry = _as_mapping(raw_entry)
+        if not entry:
+            raise ValueError(
+                f"accepted_readiness_exceptions[{index}] must be a mapping"
+            )
+        category = str(entry.get("category", "")).strip()
+        if category != ROLL_MATURITY_EXCEPTION_CATEGORY:
+            raise ValueError(
+                "accepted_readiness_exceptions only supports category "
+                f"{ROLL_MATURITY_EXCEPTION_CATEGORY!r}"
+            )
+        market = str(entry.get("market", "")).strip()
+        if not market:
+            raise ValueError(
+                f"accepted_readiness_exceptions[{index}].market is required"
+            )
+        try:
+            year = int(entry["year"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"accepted_readiness_exceptions[{index}].year must be an integer"
+            ) from exc
+        reason = str(entry.get("reason", "")).strip()
+        if not reason:
+            raise ValueError(
+                f"accepted_readiness_exceptions[{index}].reason is required"
+            )
+        evidence_paths = _as_nonempty_str_list(
+            entry.get("evidence_paths", entry.get("evidence")),
+            field_name=f"accepted_readiness_exceptions[{index}].evidence_paths",
+        )
+        warning_prefixes = _as_nonempty_str_list(
+            entry.get(
+                "warning_prefixes",
+                list(ROLL_MATURITY_EXCEPTION_WARNING_PREFIXES),
+            ),
+            field_name=f"accepted_readiness_exceptions[{index}].warning_prefixes",
+        )
+        exceptions.append(
+            AcceptedReadinessException(
+                market=market,
+                year=year,
+                category=category,
+                reason=reason,
+                evidence_paths=evidence_paths,
+                warning_prefixes=warning_prefixes,
+            )
+        )
+    return tuple(exceptions)
+
+
 def load_causal_base_config(
     profile_config_path: Path = DEFAULT_PROFILE_CONFIG,
     profile: str = DEFAULT_PROFILE,
@@ -746,6 +866,15 @@ def load_causal_base_config(
             )
         ),
         require_roll_metadata_for_profiles=tuple(str(item) for item in required),
+        accepted_readiness_exceptions=_parse_accepted_readiness_exceptions(
+            profile_config.get(
+                "accepted_readiness_exceptions",
+                causal_base.get(
+                    "accepted_readiness_exceptions",
+                    defaults.get("accepted_readiness_exceptions", []),
+                ),
+            )
+        ),
     )
 
 
@@ -2353,6 +2482,16 @@ def write_readiness_report(report: dict[str, Any], json_path: Path, markdown_pat
             )
     else:
         lines.append("- None")
+    accepted = report.get("accepted_readiness_exceptions") or []
+    lines.extend(["", "## Accepted Readiness Exceptions", ""])
+    if accepted:
+        for item in accepted[:100]:
+            lines.append(
+                f"- {item.get('market')} {item.get('year')}: "
+                f"{item.get('category')} warnings={len(item.get('warnings') or [])}"
+            )
+    else:
+        lines.append("- None")
     markdown_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -2505,9 +2644,11 @@ def build_phase2_readiness_report(
         "resumed_market_year_count": 0,
         "pending_market_year_count": 0,
         "blocker_count": 0,
+        "accepted_exception_count": 0,
         "failure_count": len(failures),
         "failures": failures,
         "blockers": [],
+        "accepted_readiness_exceptions": [],
     }
     if failures:
         return report
@@ -2556,6 +2697,7 @@ def build_phase2_readiness_report(
         else max_synthetic_gap_minutes
     )
     blockers: list[dict[str, Any]] = []
+    accepted_exceptions: list[dict[str, Any]] = []
     checked_count = 0
     resumed_count = len(
         {
@@ -2589,7 +2731,24 @@ def build_phase2_readiness_report(
     def record_result(result: ValidationResult) -> dict[str, Any]:
         row = phase2_readiness_result_row(result, resolved_profile=resolved_profile)
         if result.status != "PASS":
-            blockers.append(row)
+            accepted_exception = _accepted_readiness_exception_for_result(result, config)
+            if accepted_exception is None:
+                blockers.append(row)
+            else:
+                row["original_status"] = row["status"]
+                row["status"] = "PASS"
+                row["accepted_readiness_exception"] = accepted_exception
+                accepted_exceptions.append(
+                    {
+                        "market": result.market,
+                        "year": result.year,
+                        "original_status": result.status,
+                        "category": accepted_exception["category"],
+                        "reason": accepted_exception["reason"],
+                        "evidence_paths": accepted_exception["evidence_paths"],
+                        "warnings": list(result.warnings),
+                    }
+                )
         if checkpoint_row_callback is not None:
             checkpoint_row_callback(row)
         return row
@@ -2644,20 +2803,36 @@ def build_phase2_readiness_report(
             "resumed_market_year_count": resumed_count,
             "pending_market_year_count": pending_count,
             "blocker_count": len(blockers),
+            "accepted_exception_count": len(accepted_exceptions),
             "failure_count": 0,
             "failures": [],
             "blockers": blockers,
+            "accepted_readiness_exceptions": accepted_exceptions,
         }
     )
     return report
 
 
-def output_root_guard_failures(*, output_root: Path, reports_root: Path) -> list[str]:
+def output_root_guard_failures(
+    *,
+    output_root: Path,
+    reports_root: Path,
+    planned_outputs: Iterable[Path] | None = None,
+) -> list[str]:
     manifest_path = reports_root / "causal_base_manifest.json"
     if manifest_path.exists():
         return []
     if not output_root.exists():
         return []
+    if planned_outputs is not None:
+        existing_planned = [path for path in planned_outputs if path.exists()]
+        if not existing_planned:
+            return []
+        return [
+            "planned output already exists but paired Phase 2 manifest is missing: "
+            f"output={relative_source_path(existing_planned[0])} "
+            f"manifest={relative_source_path(manifest_path)}"
+        ]
     try:
         has_parquet = next(output_root.rglob("*.parquet"), None) is not None
     except OSError as exc:
@@ -2713,14 +2888,6 @@ def main() -> int:
     profile_config_path = Path(args.profile_config)
     session_config_path = Path(args.session_config)
     raw_alignment_report = Path(args.raw_alignment_report)
-    output_root_failures = output_root_guard_failures(
-        output_root=output_root,
-        reports_root=reports_root,
-    )
-    if output_root_failures:
-        for failure in output_root_failures:
-            print(f"FAIL output_root_guard: {failure}")
-        return 1
     raw_alignment_failures = raw_alignment_guard_failures(
         report_path=raw_alignment_report,
         raw_root=raw_root,
@@ -2732,6 +2899,24 @@ def main() -> int:
             print(f"FAIL raw_alignment_guard: {failure}")
         return 1
     config = load_causal_base_config(profile_config_path, args.profile)
+    raw_alignment = _read_json(raw_alignment_report)
+    inputs, _ = filter_inputs_by_raw_alignment(
+        resolve_profile_inputs(args.profile, raw_root, profile_config_path),
+        raw_alignment,
+    )
+    if not args.readiness_only:
+        output_root_failures = output_root_guard_failures(
+            output_root=output_root,
+            reports_root=reports_root,
+            planned_outputs=[
+                output_root / market / f"{year}.parquet"
+                for market, year, _input_path in inputs
+            ],
+        )
+        if output_root_failures:
+            for failure in output_root_failures:
+                print(f"FAIL output_root_guard: {failure}")
+            return 1
     readiness = build_phase2_readiness_report(
         profile=args.profile,
         raw_root=raw_root,
@@ -2758,11 +2943,6 @@ def main() -> int:
         print("FAIL phase2_readiness_preflight")
         print(json.dumps(readiness, indent=2))
         return 1
-    raw_alignment = _read_json(raw_alignment_report)
-    inputs, _ = filter_inputs_by_raw_alignment(
-        resolve_profile_inputs(args.profile, raw_root, profile_config_path),
-        raw_alignment,
-    )
 
     results: list[ValidationResult] = []
     for market, year, input_path in inputs:

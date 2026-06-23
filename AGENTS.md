@@ -80,29 +80,51 @@ Validation/check policy:
 * Do not treat pre-launch sandbox/spawn failures as project failures.
 * Only treat validation as failed if Python launches and returns a traceback, failed assertion, failed test, or nonzero exit code.
 * Do not include a Tests, Validation, Manual Check, Added, Removed, or Modified section in the final output unless explicitly requested.
-* Mention only important failed checks, blockers, generated-artifact risks, row-count/model-metric changes, or caveats under `## Notes/blockers`.
+* Mention only unresolved failed checks, blockers, generated-artifact risks, row-count/model-metric risks, or caveats under the global `Blockers` section.
 
 ## Final output
 
-This section overrides any earlier Output Format, Tests, Validation, Manual Check, Added/Removed/Modified, audited-answer structure, or reporting sections in this file.
+This repo follows the global final-output format exactly: `Done`, `Blockers`, `Next`, and `Metrics`. Repo-specific rules here are additive only; they do not rename or replace global sections.
 
-Final output only, using exactly these sections in this order:
+Use global `Blockers` for unresolved repo-specific caveats, including failed checks, generated-artifact risks, row-count/model-metric risks, preserved user work, or validation gaps.
 
-## Changed
-* Files changed and concise purpose, or "None."
+Use global `Next` for the next action. When follow-up work should continue in a fresh Codex thread, include a copy-paste-ready prompt there.
 
-## Notes/blockers
-* Remaining risks, blockers, preserved user work, failed checks if important, generated-artifact risks, row-count/model-metric changes, or important caveats.
-* Write "None." if there are no meaningful notes/blockers.
+If including a next-run prompt, make it usable in a fresh Codex thread:
 
-## Next
-* The single most useful next action, or "None."
+* Make it usable in a fresh Codex thread.
+* Include exact scope, files, commands, stop conditions, and forbidden actions.
+* Preserve project safety rules in the prompt when relevant: no cleanup, no generated artifact staging, no unapproved build, no DBN/source mutation, no commit unless explicitly requested.
+* Prefer one row, one approved batch, or one explicit user decision.
+* If any Severe problem exists, the prompt must focus only on clearing that problem.
+* If no Severe problems exist but Medium problems exist, the prompt must focus on verification, caveat approval, or risk reduction.
+* If no Medium or Severe problems exist, the prompt must name the next forward-progress task.
+* Do not include optional polish unless explicitly requested.
+* Do not write vague items like "continue improving," "investigate further," or "clean things up."
+* If no next work exists, write `None`.
 
-## Metrics
-* Elapsed time: report if available from the runtime or command wrapper; otherwise write "not available to agent".
-* Token usage: report final token usage if available from Codex runtime/tool output; otherwise write "not available to agent".
+Preferred prompt format:
+
+```text
+Continue from CODEX_HANDOFF.md.
+
+Next selected scope: <one row, one approved batch, or one decision>.
+
+Rules:
+- <forbidden actions>
+- <scope limits>
+- <validation requirements>
+
+Task:
+- <exact action 1>
+- <exact action 2>
+- <exact action 3>
+
+Stop when:
+- <clear acceptance condition>
+```
 
 Do not estimate or fabricate elapsed time or token usage.
-Always include the Metrics section. If metrics are unavailable, write "not available to agent" rather than omitting the section.
-Do not include Tests, Validation, Manual Check, Why, Added, Removed, or Modified sections unless explicitly requested.
+Always include the global `Metrics` section. If metrics are unavailable, write `not available to agent` rather than omitting the section.
+Do not add repo-only top-level sections such as `Problems`, `Next Step(s)`, `Tests`, `Validation`, `Manual Check`, `Why`, `Added`, `Removed`, `Modified`, `Changed`, or `Notes/blockers` unless explicitly requested.
 

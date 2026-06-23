@@ -115,8 +115,6 @@ data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parque
 data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,KE:2024,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
 data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,KE:2025,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
 data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,KE:2026,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
-data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,SR1:2018,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
-data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,SR1:2019,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
 data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,SR1:2020,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
 data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,SR1:2021,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
 data/causally_gated_normalized/{market}/{year}.parquet,phase2_causal_base_parquet,SR1:2022,missing_pair,unexpected_missing,false,expected by manifest but absent from filename inventory
