@@ -149,3 +149,15 @@ Generated at UTC: 2026-06-22T14:22:47Z
 - Remaining bounded raw re-enrichment rows: 17, SR1 2018-2026; TN/ZL/ZM/KE 2025-2026.
 - No Phase 2 build, cleanup, redownload, move, merge, quarantine, delete, or DBN source modification was run.
 - Cleanup remains disabled.
+
+## SR3 2020 Source-Reference Correction
+- Updated at UTC: 2026-06-23T00:24:36Z.
+- Evidence report: `reports/phase_restart/sr3_2020_source_reference_correction.md`.
+- Ran exactly one bounded local Phase 1B conversion/source-reference correction for `SR3:2020` from existing canonical DBNs.
+- Output raw parquet: `data/raw/SR3/2020.parquet`, 10630 rows.
+- Validation: `SR3:2020` now passes `reports/raw_readiness/raw_enriched_optional_schema_audit.json`; source reference failures are 0 and source hash mismatches are 0.
+- Overall optional-schema audit remains `FAIL` because 21 unrelated rows still fail.
+- Remaining source-reference correction rows: 4, SR3 2021-2024.
+- Remaining bounded raw re-enrichment rows: 17, SR1 2018-2026; TN/ZL/ZM/KE 2025-2026.
+- No Phase 2 build, cleanup, redownload, move, merge, quarantine, delete, or DBN source modification was run.
+- Cleanup remains disabled.
