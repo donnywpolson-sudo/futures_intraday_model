@@ -13,9 +13,17 @@ if str(ROOT) not in sys.path:
 from scripts.phase1A_download.download_databento_raw import main
 
 
+def _has_arg(name: str) -> bool:
+    return any(arg == name or arg.startswith(f"{name}=") for arg in sys.argv[1:])
+
+
 def phase1b_main() -> int:
-    if not any(arg == "--mode" or arg.startswith("--mode=") for arg in sys.argv[1:]):
+    if not _has_arg("--mode"):
         sys.argv[1:1] = ["--mode", "convert-parquet"]
+    if not _has_arg("--include-optional-schemas"):
+        sys.argv.extend(["--include-optional-schemas", "status,statistics"])
+    if not _has_arg("--optional-schema-policy"):
+        sys.argv.extend(["--optional-schema-policy", "require"])
     return main()
 
 

@@ -1461,10 +1461,17 @@ def phase1b_dbn_gate_failures(
     dataset: str | None,
     stype_in: str,
     stype_out: str,
+    optional_schemas: Iterable[str] = (),
+    optional_schema_policy: str = "warn",
 ) -> list[str]:
+    schemas = [SCHEMA, "definition"]
+    if optional_schema_policy == "require":
+        for schema in optional_schemas:
+            if schema not in schemas:
+                schemas.append(schema)
     tasks = build_tasks_for_schemas(
         products,
-        schemas=[SCHEMA, "definition"],
+        schemas=schemas,
         start=start,
         end=end,
         output_root=dbn_root,
@@ -2675,6 +2682,10 @@ def exact_zero_cost_estimate(estimate: dict[str, object]) -> bool:
     )
 
 
+def billable_size_for_estimate(estimate: dict[str, object]) -> int | None:
+    return billable_size_to_int(estimate.get("billable_size"))
+
+
 def disk_free_bytes(path: Path) -> int:
     probe = path
     while not probe.exists() and probe != probe.parent:
@@ -2799,10 +2810,23 @@ def build_zero_cost_gate(
 ) -> tuple[dict[str, object], list[DownloadTask], list[dict[str, object]]]:
     existing, pending = split_existing_and_pending_tasks(tasks, overwrite=overwrite)
     estimates = estimate_cost(client, pending) if pending else []
+    zero_cost_estimates = [
+        estimate for estimate in estimates if exact_zero_cost_estimate(estimate)
+    ]
+    zero_cost_empty_estimates = [
+        estimate
+        for estimate in zero_cost_estimates
+        if billable_size_for_estimate(estimate) == 0
+    ]
+    zero_cost_invalid_size_estimates = [
+        estimate
+        for estimate in zero_cost_estimates
+        if billable_size_for_estimate(estimate) is None
+    ]
     zero_estimate_keys = {
         task_key(estimate)
-        for estimate in estimates
-        if exact_zero_cost_estimate(estimate)
+        for estimate in zero_cost_estimates
+        if (billable_size_for_estimate(estimate) or 0) > 0
     }
     downloadable_pending = [
         task for task in pending if task_key(task) in zero_estimate_keys
@@ -2826,6 +2850,14 @@ def build_zero_cost_gate(
     failures: list[str] = []
     if billable_failures:
         failures.extend(billable_failures)
+    if zero_cost_empty_estimates:
+        failures.append(
+            f"zero-cost estimates with zero billable_size; provider returned no downloadable DBN data: {len(zero_cost_empty_estimates)}"
+        )
+    if zero_cost_invalid_size_estimates:
+        failures.append(
+            f"zero-cost estimates with invalid billable_size: {len(zero_cost_invalid_size_estimates)}"
+        )
     if required_with_cushion > free_bytes:
         failures.append(
             f"estimated billable_size with {ZERO_COST_DISK_CUSHION:.2f}x cushion exceeds free disk: {required_with_cushion} > {free_bytes}"
@@ -2843,7 +2875,7 @@ def build_zero_cost_gate(
     if missing_estimate_count:
         failures.append(f"missing cost estimates: {missing_estimate_count}")
     if pending and not downloadable_pending:
-        failures.append("no pending tasks had exact zero estimated cost")
+        failures.append("no pending tasks had exact zero estimated cost with positive billable_size")
 
     selected_tasks = existing if failures else existing + downloadable_pending
     report = {
@@ -2854,6 +2886,8 @@ def build_zero_cost_gate(
         "estimated_task_count": len(estimates),
         "missing_estimate_count": missing_estimate_count,
         "downloadable_zero_cost_task_count": len(downloadable_pending),
+        "provider_empty_estimate_count": len(zero_cost_empty_estimates),
+        "invalid_zero_cost_billable_size_count": len(zero_cost_invalid_size_estimates),
         "skipped_nonzero_or_invalid_cost_count": sum(
             1
             for item in estimates
@@ -3596,6 +3630,8 @@ def main() -> int:
             dataset=args.dataset,
             stype_in=args.stype_in,
             stype_out=args.stype_out,
+            optional_schemas=optional_schemas,
+            optional_schema_policy=args.optional_schema_policy,
         )
         if gate_failures:
             for failure in gate_failures:
@@ -3839,6 +3875,7 @@ def main() -> int:
             print(
                 f"ZERO_COST_GATE status={gate['status']} "
                 f"downloadable={zero_downloadable} "
+                f"provider_empty={gate['provider_empty_estimate_count']} "
                 f"billable_size={gate['zero_cost_billable_size']}"
             )
             return 0 if gate["status"] == "PASS" else 1
@@ -3862,6 +3899,7 @@ def main() -> int:
         print(
             f"ZERO_COST_GATE status={gate['status']} "
             f"downloadable={gate['downloadable_zero_cost_task_count']} "
+            f"provider_empty={gate['provider_empty_estimate_count']} "
             f"billable_size={gate['zero_cost_billable_size']}",
             flush=True,
         )

@@ -39,8 +39,10 @@ outputs/
 output/
 logs/
 logs/live/
+codex-log/
 artifacts/
 cache/
+.codex_home/
 
 # Heavy or generated data file formats
 *.parquet

@@ -23,14 +23,14 @@ from scripts.phase1A_download.download_databento_raw import (  # noqa: E402
     resolve_requested_schemas,
     validate_raw_file_manifest,
 )
-from scripts.phase1_raw_contract import SCHEMA_ALIASES, SCHEMA_PATHS, SUPPORTED_SCHEMAS  # noqa: E402
+from scripts.phase1_raw_contract import REQUIRED_SCHEMAS, SCHEMA_ALIASES, SCHEMA_PATHS, SUPPORTED_SCHEMAS  # noqa: E402
 from scripts.validation.check_tier_2_coverage import (  # noqa: E402
     load_yaml,
     resolve_profile_name,
 )
 
 
-DEFAULT_SCHEMAS = (SCHEMA, "definition")
+DEFAULT_SCHEMAS = REQUIRED_SCHEMAS
 _SCHEMA_ROOT_NAMES = set(SCHEMA_PATHS.values())
 
 
@@ -208,6 +208,12 @@ def build_report(
     resolved, markets, years = _profile_markets_and_years(config_path, profile)
     schemas = resolve_schema_args(schemas)
     optional_schemas = resolve_optional_schema_args(optional_schemas)
+    required_marked_optional = sorted(set(optional_schemas) & set(DEFAULT_SCHEMAS))
+    if required_marked_optional:
+        raise ValueError(
+            "Phase 1A downstream readiness schemas cannot be optional: "
+            + ",".join(required_marked_optional)
+        )
     optional_schema_set = set(optional_schemas)
     effective_dbn_root = _normalize_dbn_root(dbn_root)
     rows = _expected_archive_rows(
@@ -288,7 +294,7 @@ def parse_args() -> argparse.Namespace:
         action="append",
         choices=[*SUPPORTED_SCHEMAS, *SCHEMA_ALIASES],
         dest="schemas",
-        help="Schema to check; defaults to ohlcv-1m and definition.",
+        help="Schema to check; defaults to Phase 1A required schemas: ohlcv-1m, definition, statistics, status.",
     )
     parser.add_argument(
         "--optional-schema",

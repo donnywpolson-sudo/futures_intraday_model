@@ -64,6 +64,8 @@ RAW_OPTIONAL_AUDIT_COLUMNS = [
 ]
 DEFINITION_COMPARE_COLUMNS = ["raw_symbol", "tick_size", "contract_multiplier_or_point_value"]
 MAX_HASH_WORKERS = 4
+TRADES_SCHEMA = "trades"
+TRADES_RECONSTRUCTED_SOURCE_SCHEMA = "trades_reconstructed_ohlcv_1m"
 
 
 def _schema_root(dbn_root: Path, schema: str) -> Path:
@@ -212,6 +214,86 @@ def _contains_semicolon_value(series: pd.Series, value: str) -> pd.Series:
     return series.fillna("").astype(str).map(
         lambda item: target in {part.strip() for part in item.split(";") if part.strip()}
     )
+
+
+def _source_file_matches_path(source_file: str, path: Path) -> bool:
+    source_path = Path(source_file)
+    if not source_path.is_absolute():
+        source_path = Path.cwd() / source_path
+    try:
+        return source_path.resolve() == path.resolve()
+    except OSError:
+        return source_path.as_posix() == path.as_posix()
+
+
+def _manifest_request_status(path: Path) -> str | None:
+    try:
+        payload = json.loads(raw_file_manifest_path(path).read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    value = payload.get("request_status")
+    return str(value) if value is not None else None
+
+
+def _validate_trades_reconstructed_source(
+    *,
+    market: str,
+    year: int,
+    df: pd.DataFrame,
+    row_mask: pd.Series,
+    source_hash: str,
+    trades_paths: list[Path],
+    file_hashes: dict[Path, str] | None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    row_count = int(row_mask.sum())
+    if "source_schema" not in df.columns:
+        return None, f"{source_hash}: missing source_schema column"
+    source_schemas = _split_semicolon_values(df.loc[row_mask, "source_schema"])
+    if source_schemas != {TRADES_RECONSTRUCTED_SOURCE_SCHEMA}:
+        return None, f"{source_hash}: source_schema not approved: {sorted(source_schemas)}"
+    if "source_file" not in df.columns:
+        return None, f"{source_hash}: missing source_file column"
+
+    row_source_files = _split_semicolon_values(df.loc[row_mask, "source_file"])
+    candidate_paths = [
+        path
+        for path in trades_paths
+        if any(_source_file_matches_path(source_file, path) for source_file in row_source_files)
+    ]
+    if not candidate_paths:
+        return None, f"{source_hash}: source_file not present in local trades DBN"
+
+    invalid_manifest_failures: list[str] = []
+    for path in candidate_paths:
+        actual_hash = _cached_file_sha256(path, file_hashes)
+        if actual_hash != source_hash:
+            continue
+        manifest_failures = validate_raw_file_manifest(
+            path,
+            expected_schema=TRADES_SCHEMA,
+            expected_market=market,
+            expected_year=year,
+            file_sha256_value=actual_hash,
+        )
+        request_status = _manifest_request_status(path)
+        if request_status != "ok":
+            manifest_failures.append(f"manifest request_status is {request_status!r}, not 'ok'")
+        if manifest_failures:
+            invalid_manifest_failures.append(f"{path.as_posix()}: {'; '.join(manifest_failures)}")
+            continue
+        return {
+            "market": market,
+            "year": year,
+            "source_sha256": source_hash,
+            "source_file": path.as_posix(),
+            "source_schema": TRADES_RECONSTRUCTED_SOURCE_SCHEMA,
+            "row_count": row_count,
+            "reason": "local_trades_reconstructed_ohlcv",
+        }, None
+
+    if invalid_manifest_failures:
+        return None, f"{source_hash}: trades manifest invalid: {' | '.join(invalid_manifest_failures)}"
+    return None, f"{source_hash}: source_sha256 not found in referenced local trades DBN"
 
 
 def _load_repair_manifest(
@@ -416,6 +498,7 @@ def _validate_source_hashes(
     key: tuple[str, int],
     df: pd.DataFrame,
     ohlcv_paths: list[Path],
+    trades_paths: list[Path] | None = None,
     file_hashes: dict[Path, str] | None = None,
     repair_lookup: dict[tuple[str, int, str], dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
@@ -435,7 +518,22 @@ def _validate_source_hashes(
     for source_hash in missing:
         repair = lookup.get((market, year, source_hash))
         if repair is None:
-            unapproved.append(source_hash)
+            row_mask = _contains_semicolon_value(df["source_sha256"], source_hash)
+            accepted_trade_repair, trade_failure = _validate_trades_reconstructed_source(
+                market=market,
+                year=year,
+                df=df,
+                row_mask=row_mask,
+                source_hash=source_hash,
+                trades_paths=trades_paths or [],
+                file_hashes=file_hashes,
+            )
+            if accepted_trade_repair is not None:
+                accepted_repairs.append(accepted_trade_repair)
+            else:
+                unapproved.append(source_hash)
+                if trade_failure:
+                    repair_failures.append(trade_failure)
             continue
         row_mask = _contains_semicolon_value(df["source_sha256"], source_hash)
         actual_row_count = int(row_mask.sum())
@@ -546,6 +644,9 @@ def build_report(
 ) -> dict[str, Any]:
     ohlcv_index = _index_schema_dbns(dbn_root, SCHEMA)
     definition_index = _index_schema_dbns(dbn_root, "definition")
+    status_index = _index_schema_dbns(dbn_root, "status")
+    statistics_index = _index_schema_dbns(dbn_root, "statistics")
+    trades_index = _index_schema_dbns(dbn_root, TRADES_SCHEMA)
     raw_index = _index_raw_files(raw_root)
     discovery_profile = _discovery_profile_name(config_path, profile)
     if discovery_profile is None:
@@ -564,8 +665,10 @@ def build_report(
     if expected_only:
         ohlcv_index = {key: value for key, value in ohlcv_index.items() if key in expected}
         definition_index = {key: value for key, value in definition_index.items() if key in expected}
+        status_index = {key: value for key, value in status_index.items() if key in expected}
+        statistics_index = {key: value for key, value in statistics_index.items() if key in expected}
         raw_index = {key: value for key, value in raw_index.items() if key in expected}
-    file_hashes = _build_file_hash_cache(ohlcv_index, definition_index)
+    file_hashes = _build_file_hash_cache(ohlcv_index, definition_index, status_index, statistics_index)
     repair_manifest, repair_lookup, repair_manifest_failures = _load_repair_manifest(
         repair_manifest_path,
         raw_root=raw_root,
@@ -573,18 +676,29 @@ def build_report(
 
     missing_ohlcv = sorted(expected - set(ohlcv_index))
     missing_definition = sorted(expected - set(definition_index))
+    missing_status = sorted(expected - set(status_index))
+    missing_statistics = sorted(expected - set(statistics_index))
     missing_raw = sorted(expected - set(raw_index))
+    complete_required_dbn_keys = (
+        set(ohlcv_index) & set(definition_index) & set(status_index) & set(statistics_index)
+    )
     needs_phase1b = [
         _row(key, status="needs_phase1b_conversion")
         for key in missing_raw
-        if key in ohlcv_index and key in definition_index
+        if key in complete_required_dbn_keys
     ]
-    raw_only = sorted(set(raw_index) - (set(ohlcv_index) & set(definition_index)))
-    dbn_only_inventory = sorted((set(ohlcv_index) & set(definition_index)) - set(raw_index))
+    raw_only = sorted(set(raw_index) - complete_required_dbn_keys)
+    dbn_only_inventory = sorted(complete_required_dbn_keys - set(raw_index))
 
     invalid_manifests = _validate_manifest_paths(ohlcv_index, schema=SCHEMA, file_hashes=file_hashes)
     invalid_manifests.extend(
         _validate_manifest_paths(definition_index, schema="definition", file_hashes=file_hashes)
+    )
+    invalid_manifests.extend(
+        _validate_manifest_paths(status_index, schema="status", file_hashes=file_hashes)
+    )
+    invalid_manifests.extend(
+        _validate_manifest_paths(statistics_index, schema="statistics", file_hashes=file_hashes)
     )
 
     raw_schema_failures: list[dict[str, Any]] = []
@@ -605,6 +719,7 @@ def build_report(
                 key=key,
                 df=df,
                 ohlcv_paths=ohlcv_index[key],
+                trades_paths=trades_index.get(key, []),
                 file_hashes=file_hashes,
                 repair_lookup=repair_lookup,
             )
@@ -624,6 +739,10 @@ def build_report(
         failures.append(f"missing OHLCV DBN market-years: {len(missing_ohlcv)}")
     if missing_definition:
         failures.append(f"missing definition DBN market-years: {len(missing_definition)}")
+    if missing_status:
+        failures.append(f"missing status DBN market-years: {len(missing_status)}")
+    if missing_statistics:
+        failures.append(f"missing statistics DBN market-years: {len(missing_statistics)}")
     if missing_raw:
         failures.append(f"missing raw parquet market-years: {len(missing_raw)}")
     if invalid_manifests:
@@ -660,9 +779,13 @@ def build_report(
         "pre_availability_exemption_count": len(pre_availability_exemptions),
         "ohlcv_dbn_market_year_count": len(ohlcv_index),
         "definition_dbn_market_year_count": len(definition_index),
+        "status_dbn_market_year_count": len(status_index),
+        "statistics_dbn_market_year_count": len(statistics_index),
         "raw_market_year_count": len(raw_index),
         "missing_ohlcv_dbn_count": len(missing_ohlcv),
         "missing_definition_dbn_count": len(missing_definition),
+        "missing_status_dbn_count": len(missing_status),
+        "missing_statistics_dbn_count": len(missing_statistics),
         "missing_raw_count": len(missing_raw),
         "needs_phase1b_conversion_count": len(needs_phase1b),
         "dbn_only_inventory_count": len(dbn_only_inventory),
@@ -681,6 +804,8 @@ def build_report(
         "pre_availability_exemptions": pre_availability_exemptions,
         "missing_ohlcv_dbn": [_row(key) for key in missing_ohlcv],
         "missing_definition_dbn": [_row(key) for key in missing_definition],
+        "missing_status_dbn": [_row(key) for key in missing_status],
+        "missing_statistics_dbn": [_row(key) for key in missing_statistics],
         "missing_raw": [_row(key) for key in missing_raw],
         "needs_phase1b_conversion": needs_phase1b,
         "dbn_only_inventory": [_row(key) for key in dbn_only_inventory],
@@ -710,6 +835,8 @@ def write_markdown(path: Path, report: dict[str, Any]) -> None:
         f"- Raw market-years: {report['raw_market_year_count']}",
         f"- OHLCV DBN market-years: {report['ohlcv_dbn_market_year_count']}",
         f"- Definition DBN market-years: {report['definition_dbn_market_year_count']}",
+        f"- Status DBN market-years: {report['status_dbn_market_year_count']}",
+        f"- Statistics DBN market-years: {report['statistics_dbn_market_year_count']}",
         f"- Needs Phase 1B conversion: {report['needs_phase1b_conversion_count']}",
         f"- Raw-only market-years: {report['raw_only_count']}",
         f"- Invalid manifests: {report['invalid_manifest_count']}",
@@ -781,6 +908,8 @@ def main() -> int:
     write_markdown(Path(args.md_out), report)
     print(
         "status={status} expected={expected_market_year_count} raw={raw_market_year_count} "
+        "missing_status={missing_status_dbn_count} "
+        "missing_statistics={missing_statistics_dbn_count} "
         "needs_phase1b={needs_phase1b_conversion_count} raw_only={raw_only_count} "
         "invalid_manifests={invalid_manifest_count} source_hash_mismatches={source_hash_mismatch_count} "
         "definition_join_status={definition_join_status} "

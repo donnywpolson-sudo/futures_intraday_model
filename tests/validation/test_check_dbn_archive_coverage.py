@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from scripts.phase1A_download.download_databento_raw import (
@@ -68,18 +69,18 @@ def test_dbn_archive_coverage_fails_closed_for_missing_strict_tier3_v2_roots(tmp
     )
 
     assert report["status"] == "FAIL"
-    assert report["expected_archive_count"] == 10
-    assert report["missing_archive_count"] == 10
+    assert report["expected_archive_count"] == 20
+    assert report["missing_archive_count"] == 20
     assert report["missing_archives_by_market"] == {
-        "KE": 2,
-        "SR1": 2,
-        "TN": 2,
-        "ZL": 2,
-        "ZM": 2,
+        "KE": 4,
+        "SR1": 4,
+        "TN": 4,
+        "ZL": 4,
+        "ZM": 4,
     }
 
 
-def test_dbn_archive_coverage_passes_with_ohlcv_definition_and_manifests(tmp_path: Path) -> None:
+def test_dbn_archive_coverage_passes_with_required_phase1a_schemas_and_manifests(tmp_path: Path) -> None:
     config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES", "SR1"], [2018])
     dbn_root = tmp_path / "data" / "dbn" / "ohlcv_1m"
     seed = build_report(config_path=config, profile="tier_3_research", dbn_root=dbn_root)
@@ -129,38 +130,21 @@ def test_dbn_archive_coverage_can_ignore_manifests_for_archive_only_probe(tmp_pa
 
     assert strict["status"] == "FAIL"
     assert strict["missing_archive_count"] == 0
-    assert strict["missing_manifest_count"] == 2
+    assert strict["missing_manifest_count"] == 4
     assert archive_only["status"] == "PASS"
 
 
-def test_dbn_archive_coverage_reports_optional_status_gaps_without_failure(tmp_path: Path) -> None:
+def test_dbn_archive_coverage_rejects_optional_required_phase1a_schemas(tmp_path: Path) -> None:
     config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2024])
     dbn_root = tmp_path / "data" / "dbn"
-    seed = build_report(
-        config_path=config,
-        profile="tier_3_research",
-        dbn_root=dbn_root,
-        schemas=("ohlcv-1m", "definition", "status"),
-        optional_schemas=("status",),
-    )
-    for row in seed["missing_archives"]:
-        if row["schema"] != "status":
-            _touch_expected_archive(row)
 
-    report = build_report(
-        config_path=config,
-        profile="tier_3_research",
-        dbn_root=dbn_root,
-        schemas=("ohlcv-1m", "definition", "status"),
-        optional_schemas=("status",),
-    )
-
-    assert report["status"] == "PASS"
-    assert report["missing_archive_count"] == 0
-    assert report["missing_manifest_count"] == 0
-    assert report["missing_optional_archive_count"] == 1
-    assert report["missing_optional_manifest_count"] == 1
-    assert report["missing_optional_archives_by_schema"] == {"status": 1}
+    with pytest.raises(ValueError, match="Phase 1A downstream readiness schemas cannot be optional: status"):
+        build_report(
+            config_path=config,
+            profile="tier_3_research",
+            dbn_root=dbn_root,
+            optional_schemas=("status",),
+        )
 
 
 def test_dbn_archive_coverage_still_fails_missing_required_schema(tmp_path: Path) -> None:
@@ -171,7 +155,6 @@ def test_dbn_archive_coverage_still_fails_missing_required_schema(tmp_path: Path
         profile="tier_3_research",
         dbn_root=dbn_root,
         schemas=("ohlcv-1m", "definition", "status"),
-        optional_schemas=("status",),
     )
     for row in seed["missing_archives"]:
         if row["schema"] == "ohlcv-1m":
@@ -182,13 +165,11 @@ def test_dbn_archive_coverage_still_fails_missing_required_schema(tmp_path: Path
         profile="tier_3_research",
         dbn_root=dbn_root,
         schemas=("ohlcv-1m", "definition", "status"),
-        optional_schemas=("status",),
     )
 
     assert report["status"] == "FAIL"
-    assert report["missing_archive_count"] == 1
-    assert report["missing_archives_by_schema"] == {"definition": 1}
-    assert report["missing_optional_archive_count"] == 1
+    assert report["missing_archive_count"] == 2
+    assert report["missing_archives_by_schema"] == {"definition": 1, "status": 1}
 
 
 def test_dbn_archive_coverage_uses_partial_current_year_end_date(tmp_path: Path) -> None:

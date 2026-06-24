@@ -16,7 +16,10 @@ from scripts.phase1A_download.download_databento_raw import (
     schema_path_name,
     symbol_for_product,
 )
-from scripts.phase1C_validate.audit_raw_dbn_alignment import build_report
+from scripts.phase1C_validate.audit_raw_dbn_alignment import (
+    TRADES_RECONSTRUCTED_SOURCE_SCHEMA,
+    build_report,
+)
 from scripts.validation.triage_raw_dbn_alignment import (
     build_definition_path_report,
     build_definition_drilldown,
@@ -76,6 +79,11 @@ def _write_dbn_with_manifest(root: Path, schema: str, market: str = "ES", year: 
     return path
 
 
+def _write_required_metadata_dbns(root: Path, market: str = "ES", year: int = 2024) -> None:
+    _write_dbn_with_manifest(root, "status", market, year)
+    _write_dbn_with_manifest(root, "statistics", market, year)
+
+
 def _definition_frame(
     *,
     raw_symbol: str = "ESH4",
@@ -110,6 +118,7 @@ def _write_raw(
     year: int = 2024,
     raw_symbol: str = "ESH4",
     tick_size: float = 0.25,
+    source_schema: str = "ohlcv-1m",
     source_file: str | None = None,
     source_sha256: str | None = None,
     drop_columns: list[str] | None = None,
@@ -134,6 +143,7 @@ def _write_raw(
         "raw_symbol": raw_symbol,
         "tick_size": tick_size,
         "contract_multiplier_or_point_value": 50.0,
+        "source_schema": source_schema,
         "source_file": source_file or ohlcv_path.as_posix(),
         "source_sha256": source_sha256 or file_sha256(ohlcv_path),
     }
@@ -149,6 +159,7 @@ def test_raw_dbn_alignment_passes_clean_market_year(tmp_path: Path, monkeypatch)
     raw_root = tmp_path / "data" / "raw"
     ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m")
     definition = _write_dbn_with_manifest(dbn_root, "definition")
+    _write_required_metadata_dbns(dbn_root)
     _write_raw(raw_root, ohlcv)
     _install_fake_databento(monkeypatch, {definition: _definition_frame()})
 
@@ -183,6 +194,7 @@ def test_raw_dbn_alignment_discovery_profile_uses_raw_market_years(
     raw_root = tmp_path / "data" / "raw"
     ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m")
     definition = _write_dbn_with_manifest(dbn_root, "definition")
+    _write_required_metadata_dbns(dbn_root)
     _write_raw(raw_root, ohlcv)
     _install_fake_databento(monkeypatch, {definition: _definition_frame()})
 
@@ -203,6 +215,7 @@ def test_raw_dbn_alignment_expected_only_ignores_raw_outside_profile(
     raw_root = tmp_path / "data" / "raw"
     ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m")
     definition = _write_dbn_with_manifest(dbn_root, "definition")
+    _write_required_metadata_dbns(dbn_root)
     _write_raw(raw_root, ohlcv)
     _write_raw(raw_root, ohlcv, market="CL", year=2024)
     _install_fake_databento(monkeypatch, {definition: _definition_frame()})
@@ -226,6 +239,7 @@ def test_raw_dbn_alignment_reports_dbn_only_market_year_as_phase1b_gap(tmp_path:
     dbn_root = tmp_path / "data" / "dbn"
     ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m")
     definition = _write_dbn_with_manifest(dbn_root, "definition")
+    _write_required_metadata_dbns(dbn_root)
     _install_fake_databento(monkeypatch, {definition: _definition_frame()})
 
     report = build_report(config_path=config, profile="tier_3", dbn_root=dbn_root, raw_root=tmp_path / "data" / "raw")
@@ -287,6 +301,7 @@ def test_raw_dbn_alignment_accepts_repair_manifest_source_hash(tmp_path: Path, m
     raw_root = tmp_path / "data" / "raw"
     ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m")
     definition = _write_dbn_with_manifest(dbn_root, "definition")
+    _write_required_metadata_dbns(dbn_root)
     repair_source = "reports/repair/evidence.json"
     _write_raw(raw_root, ohlcv, source_file=repair_source, source_sha256="repair-hash")
     repair_manifest = tmp_path / "repair_manifest.json"
@@ -324,6 +339,63 @@ def test_raw_dbn_alignment_accepts_repair_manifest_source_hash(tmp_path: Path, m
     assert report["repair_manifest_status"] == "PASS"
     assert report["accepted_repair_source_count"] == 1
     assert report["accepted_repair_sources"][0]["source_sha256"] == "repair-hash"
+
+
+def test_raw_dbn_alignment_accepts_trades_reconstructed_source_hash(tmp_path: Path, monkeypatch) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["ZN"], [2025])
+    dbn_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m", "ZN", 2025)
+    definition = _write_dbn_with_manifest(dbn_root, "definition", "ZN", 2025)
+    _write_required_metadata_dbns(dbn_root, "ZN", 2025)
+    trades = _write_dbn_with_manifest(dbn_root, "trades", "ZN", 2025)
+    raw_path = _write_raw(raw_root, ohlcv, market="ZN", year=2025, raw_symbol="ZNH5")
+    raw = pd.read_parquet(raw_path)
+    repaired_row = raw.iloc[0].copy()
+    repaired_row["ts_event"] = pd.Timestamp("2025-01-02T15:01:00Z")
+    repaired_row["source_schema"] = TRADES_RECONSTRUCTED_SOURCE_SCHEMA
+    repaired_row["source_file"] = trades.as_posix()
+    repaired_row["source_sha256"] = file_sha256(trades)
+    pd.concat([raw, repaired_row.to_frame().T], ignore_index=True).to_parquet(raw_path, index=False)
+    _install_fake_databento(monkeypatch, {definition: _definition_frame(raw_symbol="ZNH5")})
+
+    report = build_report(config_path=config, profile="tier_3", dbn_root=dbn_root, raw_root=raw_root)
+
+    assert report["status"] == "PASS"
+    assert report["source_hash_mismatch_count"] == 0
+    assert report["accepted_repair_source_count"] == 1
+    assert report["accepted_repair_sources"][0]["source_schema"] == TRADES_RECONSTRUCTED_SOURCE_SCHEMA
+    assert report["accepted_repair_sources"][0]["row_count"] == 1
+
+
+def test_raw_dbn_alignment_rejects_unapproved_non_ohlcv_source_hash(tmp_path: Path, monkeypatch) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["ZN"], [2025])
+    dbn_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m", "ZN", 2025)
+    definition = _write_dbn_with_manifest(dbn_root, "definition", "ZN", 2025)
+    trades = _write_dbn_with_manifest(dbn_root, "trades", "ZN", 2025)
+    trades_hash = file_sha256(trades)
+    _write_raw(
+        raw_root,
+        ohlcv,
+        market="ZN",
+        year=2025,
+        raw_symbol="ZNH5",
+        source_schema="trades",
+        source_file=trades.as_posix(),
+        source_sha256=trades_hash,
+    )
+    _install_fake_databento(monkeypatch, {definition: _definition_frame(raw_symbol="ZNH5")})
+
+    report = build_report(config_path=config, profile="tier_3", dbn_root=dbn_root, raw_root=raw_root)
+
+    assert report["status"] == "FAIL"
+    assert report["source_hash_mismatch_count"] == 1
+    assert report["accepted_repair_source_count"] == 0
+    assert report["source_hash_mismatches"][0]["raw_hashes_not_found_in_local_ohlcv_dbn"] == [
+        trades_hash
+    ]
 
 
 def test_raw_dbn_alignment_rejects_bad_repair_manifest_row_count(tmp_path: Path, monkeypatch) -> None:
@@ -401,6 +473,7 @@ def test_raw_dbn_alignment_reports_raw_only_extra_market(tmp_path: Path, monkeyp
     raw_root = tmp_path / "data" / "raw"
     es_ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m", "ES")
     es_definition = _write_dbn_with_manifest(dbn_root, "definition", "ES")
+    _write_required_metadata_dbns(dbn_root, "ES")
     nq_ohlcv_placeholder = raw_root / "NQ" / "2024.dbn.zst"
     nq_ohlcv_placeholder.parent.mkdir(parents=True, exist_ok=True)
     nq_ohlcv_placeholder.write_bytes(b"not-canonical")

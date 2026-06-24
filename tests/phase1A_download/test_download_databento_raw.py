@@ -403,7 +403,7 @@ def test_public_raw_ingest_modes_parse() -> None:
     assert pipeline_raw_ready_for_run(args.mode, effective_raw_format(args), effective_output_root(args)) is True
 
 
-def test_phase1b_entry_defaults_to_convert_parquet(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_phase1b_entry_defaults_to_strict_four_l0_convert_parquet(monkeypatch: pytest.MonkeyPatch) -> None:
     from scripts.phase1B_convert import convert_databento_raw
 
     captured: dict[str, list[str]] = {}
@@ -417,6 +417,42 @@ def test_phase1b_entry_defaults_to_convert_parquet(monkeypatch: pytest.MonkeyPat
 
     assert convert_databento_raw.phase1b_main() == 0
     assert captured["argv"][1:3] == ["--mode", "convert-parquet"]
+    assert "--include-optional-schemas" in captured["argv"]
+    assert captured["argv"][captured["argv"].index("--include-optional-schemas") + 1] == "status,statistics"
+    assert "--optional-schema-policy" in captured["argv"]
+    assert captured["argv"][captured["argv"].index("--optional-schema-policy") + 1] == "require"
+
+
+def test_phase1b_entry_respects_explicit_optional_schema_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    from scripts.phase1B_convert import convert_databento_raw
+
+    captured: dict[str, list[str]] = {}
+
+    def fake_main() -> int:
+        captured["argv"] = sys.argv.copy()
+        return 0
+
+    monkeypatch.setattr(convert_databento_raw, "main", fake_main)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "convert_databento_raw.py",
+            "--mode",
+            "convert-parquet",
+            "--include-optional-schemas",
+            "status",
+            "--optional-schema-policy",
+            "warn",
+        ],
+    )
+
+    assert convert_databento_raw.phase1b_main() == 0
+    assert captured["argv"].count("--mode") == 1
+    assert captured["argv"].count("--include-optional-schemas") == 1
+    assert captured["argv"][captured["argv"].index("--include-optional-schemas") + 1] == "status"
+    assert captured["argv"].count("--optional-schema-policy") == 1
+    assert captured["argv"][captured["argv"].index("--optional-schema-policy") + 1] == "warn"
 
 
 def _write_dbn_with_manifest(task: DownloadTask) -> Path:
@@ -430,7 +466,12 @@ def _write_dbn_with_manifest(task: DownloadTask) -> Path:
     return path
 
 
-def _phase1b_gate_failures(dbn_root: Path) -> list[str]:
+def _phase1b_gate_failures(
+    dbn_root: Path,
+    *,
+    optional_schemas: tuple[str, ...] = (),
+    optional_schema_policy: str = "warn",
+) -> list[str]:
     return phase1b_dbn_gate_failures(
         dbn_root=dbn_root,
         products=["ES"],
@@ -440,6 +481,8 @@ def _phase1b_gate_failures(dbn_root: Path) -> list[str]:
         dataset=None,
         stype_in=STYPE_IN,
         stype_out=STYPE_OUT,
+        optional_schemas=optional_schemas,
+        optional_schema_policy=optional_schema_policy,
     )
 
 
@@ -448,6 +491,34 @@ def test_phase1b_dbn_gate_blocks_missing_expected_dbn(tmp_path: Path) -> None:
 
     assert any("missing ohlcv-1m DBN" in failure for failure in failures)
     assert any("missing definition DBN" in failure for failure in failures)
+
+
+def test_phase1b_dbn_gate_blocks_missing_required_metadata_dbns(tmp_path: Path) -> None:
+    dbn_root = tmp_path / "data" / "dbn" / "ohlcv_1m"
+    tasks = build_tasks_for_schemas(
+        ["ES"],
+        schemas=["ohlcv-1m", "definition"],
+        start="2024-01-01",
+        end="2025-01-01",
+        output_root=dbn_root,
+        chunk="year",
+        mode="download-dbn",
+        raw_format="dbn-zstd",
+        dataset=None,
+        stype_in=STYPE_IN,
+        stype_out=STYPE_OUT,
+    )
+    for task in tasks:
+        _write_dbn_with_manifest(task)
+
+    failures = _phase1b_gate_failures(
+        dbn_root,
+        optional_schemas=("status", "statistics"),
+        optional_schema_policy="require",
+    )
+
+    assert any("missing status DBN" in failure for failure in failures)
+    assert any("missing statistics DBN" in failure for failure in failures)
 
 
 def test_phase1b_dbn_gate_blocks_bad_sidecar_manifest(tmp_path: Path) -> None:
@@ -496,6 +567,34 @@ def test_phase1b_dbn_gate_accepts_complete_ohlcv_and_definition_dbns(tmp_path: P
         _write_dbn_with_manifest(task)
 
     assert _phase1b_gate_failures(dbn_root) == []
+
+
+def test_phase1b_dbn_gate_accepts_complete_required_four_l0_dbns(tmp_path: Path) -> None:
+    dbn_root = tmp_path / "data" / "dbn" / "ohlcv_1m"
+    tasks = build_tasks_for_schemas(
+        ["ES"],
+        schemas=["ohlcv-1m", "definition", "statistics", "status"],
+        start="2024-01-01",
+        end="2025-01-01",
+        output_root=dbn_root,
+        chunk="year",
+        mode="download-dbn",
+        raw_format="dbn-zstd",
+        dataset=None,
+        stype_in=STYPE_IN,
+        stype_out=STYPE_OUT,
+    )
+    for task in tasks:
+        _write_dbn_with_manifest(task)
+
+    assert (
+        _phase1b_gate_failures(
+            dbn_root,
+            optional_schemas=("status", "statistics"),
+            optional_schema_policy="require",
+        )
+        == []
+    )
 
 
 def test_phase1b_offline_local_conditions_skips_metadata_client(
@@ -2525,7 +2624,38 @@ def test_zero_cost_gate_requires_exact_zero(tmp_path: Path) -> None:
     assert selected == []
     assert report["downloadable_zero_cost_task_count"] == 0
     assert report["skipped_nonzero_or_invalid_cost_count"] == 2
-    assert "no pending tasks had exact zero estimated cost" in report["failures"]
+    assert "no pending tasks had exact zero estimated cost with positive billable_size" in report["failures"]
+
+
+def test_zero_cost_gate_rejects_zero_billable_size_as_provider_empty(tmp_path: Path) -> None:
+    empty_task = _dbn_task(
+        tmp_path / "data" / "dbn" / "status" / "6C" / "2010" / "2010-06-06_2011-01-01.dbn.zst",
+        schema="status",
+        market="6C",
+        start="2010-06-06",
+        end="2011-01-01",
+    )
+    metadata = CostMetadata(
+        costs={_task_request_key(empty_task): 0.0},
+        sizes={_task_request_key(empty_task): 0},
+    )
+
+    report, selected, _estimates = build_zero_cost_gate(
+        CostClient(metadata),
+        [empty_task],
+        overwrite=False,
+        output_root=tmp_path,
+    )
+
+    assert report["status"] == "FAIL"
+    assert selected == []
+    assert report["downloadable_zero_cost_task_count"] == 0
+    assert report["provider_empty_estimate_count"] == 1
+    assert report["zero_cost_billable_size"] == 0
+    assert report["failures"] == [
+        "zero-cost estimates with zero billable_size; provider returned no downloadable DBN data: 1",
+        "no pending tasks had exact zero estimated cost with positive billable_size",
+    ]
 
 
 def test_zero_cost_start_search_advances_to_first_shared_zero_date(tmp_path: Path) -> None:
@@ -2665,10 +2795,10 @@ def test_dry_run_uses_separate_plan_path_and_no_results(
     assert payload["output_role"] == "dbn_archive"
     assert payload["pipeline_raw_ready"] is False
     assert payload["schema"] == "all"
-    assert payload["schemas"] == ["ohlcv-1m", "definition"]
-    assert payload["task_count"] == 2
+    assert payload["schemas"] == ["ohlcv-1m", "definition", "statistics", "status"]
+    assert payload["task_count"] == 4
     planned = payload["tasks"]
-    assert [task["schema"] for task in planned] == ["ohlcv-1m", "definition"]
+    assert [task["schema"] for task in planned] == ["ohlcv-1m", "definition", "statistics", "status"]
     assert planned[0]["output_path"].endswith(
         "data/dbn/ohlcv_1m/ES/2024/2024-01-01_2024-01-02.dbn.zst"
     )
@@ -2677,6 +2807,12 @@ def test_dry_run_uses_separate_plan_path_and_no_results(
     )
     assert planned[1]["symbol"] == "ES.FUT"
     assert planned[1]["stype_in"] == "parent"
+    assert planned[2]["output_path"].endswith(
+        "data/dbn/statistics/ES/2024/2024-01-01_2024-01-02.dbn.zst"
+    )
+    assert planned[3]["output_path"].endswith(
+        "data/dbn/status/ES/2024/2024-01-01_2024-01-02.dbn.zst"
+    )
 
 
 def REQUIRED_TEST_COLUMNS() -> list[str]:

@@ -894,6 +894,64 @@ def test_phase2_readiness_accepts_configured_exact_roll_maturity_exception(
     assert not (output_root / "SR1" / "2024.parquet").exists()
 
 
+def test_phase2_readiness_fail_fast_continues_after_accepted_exception(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "reports" / "sr1_roll_decision.md"
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text("accepted SR1 roll-maturity test decision\n", encoding="utf-8")
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_roll_maturity_exception_config(
+        profile_config,
+        profile_market="SR1, ES",
+        exception_market="SR1",
+        evidence_path=evidence_path,
+    )
+    raw_root = tmp_path / "data" / "raw"
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_raw_alignment_report(
+        report_path,
+        raw_root=raw_root,
+        profile="tier_0",
+        resolved_profile="tier_0",
+        overrides={
+            "markets": ["SR1", "ES"],
+            "years": [2024],
+            "pre_availability_exemptions": [],
+            "expected_market_year_count": 2,
+        },
+    )
+    _write_non_monotonic_roll_raw(raw_root / "SR1" / "2024.parquet", "SR1")
+    _write_raw(
+        raw_root / "ES" / "2024.parquet",
+        [
+            _readiness_raw_row("2024-01-02T15:00:00Z", close=100.5),
+            _readiness_raw_row("2024-01-02T15:01:00Z", close=100.75),
+            _readiness_raw_row("2024-01-02T15:02:00Z", close=101.0),
+        ],
+    )
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        output_root=output_root,
+        profile_config_path=profile_config,
+        roll_window_bars=1,
+        fail_fast=True,
+    )
+
+    assert report["status"] == "PASS"
+    assert report["selected_market_year_count"] == 2
+    assert report["checked_market_year_count"] == 2
+    assert report["pending_market_year_count"] == 0
+    assert report["blocker_count"] == 0
+    assert report["accepted_exception_count"] == 1
+    assert not (output_root / "SR1" / "2024.parquet").exists()
+    assert not (output_root / "ES" / "2024.parquet").exists()
+
+
 def test_phase2_readiness_blocks_unlisted_roll_maturity_exception(
     tmp_path: Path,
 ) -> None:

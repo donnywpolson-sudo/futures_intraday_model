@@ -2768,9 +2768,9 @@ def build_phase2_readiness_report(
         for task in tasks:
             result = _run_phase2_readiness_task(task)
             checked_count += 1
-            record_result(result)
+            row = record_result(result)
             emit_progress(result)
-            if result.status != "PASS" and fail_fast:
+            if row["status"] != "PASS" and fail_fast:
                 break
             if blocker_limit is not None and len(blockers) >= blocker_limit:
                 break

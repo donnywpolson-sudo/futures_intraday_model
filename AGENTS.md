@@ -1,4 +1,4 @@
-# futures_intraday_model AGENTS.override.md
+# futures_intraday_model AGENTS.md
 
 These instructions are repo-local guidance for this repository. For work inside this repo, follow this file over broader repository or global Codex guidance when there is a conflict, where allowed by higher-priority system or developer instructions. Do not defer to broader guidance for repo-specific choices.
 

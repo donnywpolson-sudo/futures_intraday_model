@@ -4,7 +4,7 @@ from __future__ import annotations
 
 VENDOR = "databento"
 REQUIRED_DATASET = "GLBX.MDP3"
-REQUIRED_SCHEMAS = ("ohlcv-1m", "definition")
+REQUIRED_SCHEMAS = ("ohlcv-1m", "definition", "statistics", "status")
 HISTORY_SCHEMAS = (
     "definition",
     "ohlcv-1d",

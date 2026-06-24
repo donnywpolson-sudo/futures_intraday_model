@@ -257,6 +257,7 @@ def _check_status(
         failures.append(_failure("status_stale is inconsistent with status_missing"))
 
     if key not in status_archive_keys:
+        failures.append(_failure("required status DBN archive missing for market-year"))
         source_present = _nonnull_text_mask(df["status_source_file"])
         bad = source_present | status_missing.ne(True) | status_stale.ne(True)
         metrics["missing_status_archive_flag_failure_rows"] = int(bad.sum())
@@ -323,6 +324,7 @@ def _check_statistics(
         failures.append(_failure("statistics_stale is inconsistent with statistics_missing"))
 
     if key not in statistics_archive_keys:
+        failures.append(_failure("required statistics DBN archive missing for market-year"))
         source_present = pd.Series(False, index=df.index)
         for stat_name, _ in STAT_TYPE_FIELDS.values():
             source_present |= _nonnull_text_mask(df[f"stat_{stat_name}_source_file"])
@@ -430,10 +432,10 @@ def build_report(
         failures.extend(statistics_failures)
 
         if key not in status_archive_keys:
-            warnings.append("missing optional status DBN archive for market-year")
+            warnings.append("missing required status DBN archive for market-year")
             totals["missing_status_archive_market_year_count"] += 1
         if key not in statistics_archive_keys:
-            warnings.append("missing optional statistics DBN archive for market-year")
+            warnings.append("missing required statistics DBN archive for market-year")
             totals["missing_statistics_archive_market_year_count"] += 1
 
         if missing_required or (expected_column_count is not None and len(columns) != expected_column_count):

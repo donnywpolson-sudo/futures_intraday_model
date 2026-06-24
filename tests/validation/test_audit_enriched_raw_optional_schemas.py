@@ -110,7 +110,7 @@ def test_enriched_raw_optional_schema_audit_passes_complete_sources(tmp_path: Pa
     assert report["verdicts"]["optional_statistics_readiness"] == "PASS"
 
 
-def test_missing_status_archive_is_warning_when_flags_are_explicit(tmp_path: Path) -> None:
+def test_missing_status_archive_fails_when_flags_are_explicit(tmp_path: Path) -> None:
     dbn_root = tmp_path / "data" / "dbn"
     raw_root = tmp_path / "data" / "raw"
     ohlcv, _, statistics = _source_paths(dbn_root)
@@ -120,9 +120,28 @@ def test_missing_status_archive_is_warning_when_flags_are_explicit(tmp_path: Pat
 
     report = build_report(raw_root=raw_root, dbn_root=dbn_root, expected_column_count=None)
 
-    assert report["status"] == "PASS"
-    assert report["verdicts"]["optional_status_readiness"] == "WARN"
+    assert report["status"] == "FAIL"
+    assert report["verdicts"]["optional_status_readiness"] == "FAIL"
     assert report["summary"]["missing_status_archive_market_year_count"] == 1
+    assert report["summary"]["status_failure_count"] == 1
+    assert report["files"][0]["failures"][0]["failure"] == "required status DBN archive missing for market-year"
+
+
+def test_missing_statistics_archive_fails_when_flags_are_explicit(tmp_path: Path) -> None:
+    dbn_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    ohlcv, status, _ = _source_paths(dbn_root)
+    for path in (dbn_root / "statistics" / "ES" / "2024").glob("*"):
+        path.unlink()
+    _write_raw(raw_root, [_base_row(ohlcv=ohlcv, status=status, statistics=None)])
+
+    report = build_report(raw_root=raw_root, dbn_root=dbn_root, expected_column_count=None)
+
+    assert report["status"] == "FAIL"
+    assert report["verdicts"]["optional_statistics_readiness"] == "FAIL"
+    assert report["summary"]["missing_statistics_archive_market_year_count"] == 1
+    assert report["summary"]["statistics_failure_count"] == 1
+    assert report["files"][0]["failures"][0]["failure"] == "required statistics DBN archive missing for market-year"
 
 
 def test_bad_optional_source_hash_fails(tmp_path: Path) -> None:

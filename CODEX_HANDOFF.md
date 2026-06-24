@@ -1,676 +1,297 @@
 # Codex Handoff
 
-- Updated at UTC: 2026-06-23T06:44:35Z
-- Purpose: current-state handoff after live chart timing/state diagnostics.
+- Updated at UTC: 2026-06-24T02:48:41Z
+- Purpose: current-state handoff after refreshing non-DBN-mutating Phase 1B/1C readiness evidence following the partial 2010 status repair.
 - Repo: `C:\Users\donny\Desktop\futures_intraday_model`
-- Pre-run worktree check: `git status --short` was clean.
-- This handoff now includes the prior Tier 1 Phase 4 evidence restoration, WFA prediction artifact reconciliation, Databento live chart fallback fix, WFA prerequisite refresh blocker, Phase 5 feature-manifest gate policy fix, data-audit universe guard fix, guarded split-plan refresh, live chart timeframe switcher fix, live chart lag/data-flow fix, and the current live chart timing/state diagnostics. No cleanup, staging, commit, move, delete, redownload, DBN/source mutation, Phase 1-4 rebuild, Phase 7/8 run, WFA prediction generation, or generated artifact staging was run in this pass.
 
-## Latest run: Live chart timing/state diagnostics
+## Current Status
 
-### What changed
+- User policy decision: Phase 1A now means all L0 DBN schemas are complete, including `status`.
+- Phase 1A status under this definition: not complete. Current archive coverage evidence shows `missing_archives=55`, `missing_manifests=55`, and `invalid_manifests=0`.
+- Code status: Phase 1A required schemas are now `ohlcv-1m`, `definition`, `statistics`, and `status` in `scripts/phase1_raw_contract.py`; `scripts/validation/check_dbn_archive_coverage.py` defaults to those schemas and rejects marking any of them optional.
+- User policy decision: Phase 1B readiness means convert/combine Phase 1A downloads into raw market-year parquet, with each `tier_3_research` market-year having complete raw parquet data for the four L0 schemas: `ohlcv-1m`, `status`, `definition`/`definitions`, and `statistics`, matching the downloaded Phase 1A DBN data.
+- Code status: `scripts/phase1B_convert/convert_databento_raw.py` now defaults Phase 1B conversion to `--include-optional-schemas status,statistics` and `--optional-schema-policy require` when those args are not explicitly provided.
+- Code status: Phase 1B pre-conversion DBN gate now enforces required `status` and `statistics` archives when `--optional-schema-policy require` is active, so strict conversion fails before per-file conversion if four-L0 DBN inputs are incomplete.
+- Code status: Phase 1C raw/DBN alignment now indexes required `status` and `statistics` DBNs, validates their manifests, reports missing metadata DBN counts, and fails when four-L0 DBN alignment is incomplete.
+- Phase 1B status under this definition: not complete. Refreshed strict raw enriched audit report shows `status=FAIL`, `files=527`, `rows=130074125`, `file_failure_count=55`, `missing_status_archive_market_year_count=55`, `status_failure_count=55`, `missing_statistics_archive_market_year_count=0`, and `statistics_failure_count=0`.
+- Phase 1C status under the four-L0 definition: not complete. Refreshed partial raw/DBN alignment report shows `status=FAIL`, `expected=461`, `raw=527`, `missing_status_dbn_count=55`, `missing_statistics_dbn_count=0`, `needs_phase1b_conversion_count=0`, `raw_only_count=55`, `invalid_manifest_count=0`, and `source_hash_mismatch_count=0`.
+- Active next scope: get explicit approval to continue the remaining four parent-symbol `status` zero-cost repair commands with a longer command timeout. The approved sequence stopped after the first command exited with timeout `124`.
+- Missing Phase 1A `status` DBN market-years grouped by year after the 2010 parent-symbol partial repair:
+  - `2011`: `6C,HG,HO,LE,RB,UB,YM,ZB,ZF,ZM,ZN,ZS,ZT`
+  - `2012`: `6E,HO,LE,NQ,RB,UB,YM,ZB,ZF,ZL,ZM,ZN,ZT`
+  - `2013`: `6E,6M,HE,HO,KE,LE,RB,YM,ZL,ZM,ZS,ZT,ZW`
+  - `2014`: `6A,6B,6C,6E,6J,6M,ES,GC,HG,NQ,RB,SI,YM,ZC,ZM,ZT`
+- Existing `status` manifests use `schema=status`, `stype_in=continuous`, `stype_out=instrument_id`, and paths under `data/dbn/status/{market}/{year}/{start}_{end}.dbn.zst`.
+- Missing-status dry-run verification passed:
+  - Dry-run plan files: `reports/phase1A_status_repair_20260624/{2010,2011,2012,2013,2014}/databento_download_plan_dry_run.json`.
+  - Task counts by year: `2010=12`, `2011=13`, `2012=13`, `2013=13`, `2014=16`, total `67`.
+  - Planned unique market-years: `67`.
+  - Bad schema count: `0`; all planned tasks use `schema=status`.
+  - Bad output path count: `0`; all planned outputs target `data/dbn/status/...`.
+  - Exact set comparison against `reports/raw_readiness/raw_enriched_optional_schema_audit.json`: `audit_missing=67`, `planned=67`, `missing_not_planned=0`, `planned_not_missing=0`.
+- Latest read-only Phase 1A archive coverage check still fails: `status=FAIL expected_archives=1844 missing_archives=67 missing_manifests=67 missing_optional_archives=0 missing_optional_manifests=0 invalid_manifests=0 extra_market_dirs=0`.
+- Repeated approval-boundary recheck still fails with the same result: `status=FAIL expected_archives=1844 missing_archives=67 missing_manifests=67 missing_optional_archives=0 missing_optional_manifests=0 invalid_manifests=0 extra_market_dirs=0`.
+- Approved repair attempt status before the gate fix: stopped on the first batch. The 2010 continuous-symbol `status` command passed `ZERO_COST_GATE status=PASS downloadable=12 billable_size=0`, then exited `1` after all 12 selected tasks returned `422 data_no_data_found_for_request`.
+- Zero-size gate fix: `scripts/phase1A_download/download_databento_raw.py` now treats exact-zero-cost estimates with `billable_size=0` as provider-empty blockers, not downloadable DBN archives. The CLI prints `provider_empty=<count>` in zero-cost gate summaries.
+- Refreshed 2010 continuous-symbol gate evidence: `reports/phase1A_status_repair_20260624/2010/databento_zero_cost_gate.json` now shows `status=FAIL`, `downloadable_zero_cost_task_count=0`, `provider_empty_estimate_count=12`, `selected_task_count=0`.
+- Revised 2010 parent-symbol estimate-only probe: `reports/phase1A_status_repair_20260624/probe_parent_2010/databento_zero_cost_gate.json` shows `status=PASS`, `downloadable_zero_cost_task_count=12`, `provider_empty_estimate_count=0`, `zero_cost_billable_size=141320`. This indicates the 2010 blocker is request semantics (`continuous` status no-data), not provider absence for `status` itself.
+- Parent-symbol estimate-only probes for the remaining missing `status` batches:
+  - `probe_parent_2011`: `status=PASS`, `downloadable=13`, `provider_empty=0`, `billable_size=217400`.
+  - `probe_parent_2012`: `status=PASS`, `downloadable=13`, `provider_empty=0`, `billable_size=144240`.
+  - `probe_parent_2013`: `status=FAIL`, `downloadable=12`, `provider_empty=1`, `billable_size=223760`; only provider-empty estimate is `KE 2013`.
+  - `probe_parent_2013_no_ke`: `status=PASS`, `downloadable=12`, `provider_empty=0`, `billable_size=223760`.
+  - `probe_parent_2014`: `status=PASS`, `downloadable=16`, `provider_empty=0`, `billable_size=239200`.
+- `KE 2013 status` provider-empty evidence: parent-symbol probe has `billable_size=0`, continuous-symbol probe under `reports/phase1A_status_repair_20260624/probe_continuous_KE_2013/` also has `status=FAIL`, `downloadable=0`, `provider_empty=1`, `billable_size=0`. Local `KE 2013` `ohlcv-1m`, `definition`, and `statistics` manifests exist; the gap is status-specific.
+- Approved repair execution status: the first parent-symbol repair command (`parent_2010`) exited with timeout `124` after 600 seconds, so the remaining four repair commands were not run. Read-only inspection showed `reports/phase1A_status_repair_20260624/parent_2010/databento_download_results.json` contains 12 records, all `status=ok`, all `schema=status`, all `stype_in=parent`, products `6C,6J,GC,HO,LE,RB,UB,ZB,ZC,ZF,ZN,ZT`, and `total_bytes=68405`.
+- Current Phase 1A archive coverage after the 2010 parent-symbol repair attempt: `status=FAIL expected_archives=1844 missing_archives=55 missing_manifests=55 missing_optional_archives=0 missing_optional_manifests=0 invalid_manifests=0 extra_market_dirs=0`.
+- Professional end-state wording: "Complete the `tier_3_research` research pipeline from validated four-schema L0 Databento `.dbn.zst` archives (`ohlcv-1m`, `definition`, `statistics`, `status`) for every configured market-year, through source-matched raw market-year parquet, raw/DBN provenance validation, normalized causal-gated parquet, leakage-safe labels/features, purged walk-forward splits, train-only WFA predictions, cost-aware Phase 8 model/policy evaluation, and Phase 9 hypothesis/robustness gates with manifests, hashes, row counts, warnings, and failures recorded at every stage."
+- Missing from the user's raw-to-complete wording: explicit manifests/hashes, raw/DBN alignment, as-of joins for definitions/status/statistics, session/calendar/roll/tick/cost assumptions, causal gating, leakage checks, target timing, purge/embargo, locked holdout/forward separation, generated artifact hygiene, WFA prediction evidence, Phase 8 cost/selection gates, and Phase 9 hypothesis registry/robustness evidence.
+- Latest approved Phase 2 evidence:
+  - Inputs/evidence roots: `data/causally_gated_normalized/_bounded_phase2_58_20260623` and `reports/phase_restart/bounded_phase2_58_20260623`.
+  - Output membership at last review: expected `58`, actual `58`, missing `0`, extra `0`.
+  - Deferred rows present in bounded outputs: `0`.
+  - Manifest output path issues: `0`.
+  - Scoped config status at last review showed no changes to `configs/data_manifest.yaml` or `configs/alpha_tiered.yaml`.
+- Batch validation status at last review:
+  - `KE`: `WARN`, rows `PASS=4 WARN=8 FAIL=0`, warnings `8`, failures `0`; warning category `roll maturity sequence not monotonic=8`.
+  - `SR1`: `WARN`, rows `PASS=0 WARN=9 FAIL=0`, warnings `12`, failures `0`; warning categories `roll maturity sequence not monotonic=9`, `roll exclusion threshold breached=3`.
+  - `TN`: `PASS`, rows `PASS=11 WARN=0 FAIL=0`, warnings `0`, failures `0`.
+  - `ZL`: `WARN`, rows `PASS=7 WARN=7 FAIL=0`, warnings `7`, failures `0`; warning category `roll maturity sequence not monotonic=7`.
+  - `ZM`: `WARN`, rows `PASS=4 WARN=8 FAIL=0`, warnings `8`, failures `0`; warning category `roll maturity sequence not monotonic=8`.
+- Interpretation: the bounded packet is approved for downstream Phase 3 planning only. `WARN` batches are accepted caveats with zero failures, not clean `PASS`.
 
-- Added default-on `stderr` timing markers for chart launch/show, Databento dataset range lookup, symbology resolve, historical fetch/cache hits, first historical render, live subscribe/start, timeframe switch render, and market switch render.
-- Replaced generic chart loading status text with explicit topbar states: `Resolving`, `Backfilling`, `Rendering`, `Connecting`, `Live`, `Historical-only`, `Reconnecting`, and `Stale`.
-- Kept existing render/backfill/data semantics unchanged; this pass did not add latest-first backfill, incremental candle rendering, DNS/TCP preflight, or retry/backoff.
-- Updated the live-connectivity fallback after historical backfill so the chart shows `Historical-only` instead of appending a generic live-unavailable suffix.
+## Important Prior Evidence
 
-### Files changed
+- Phase 2 readiness accepted-exception fail-fast fix was made in `scripts/phase2_causal_base/build_causal_base_data.py`; focused regression result at the time: `1 passed, 69 deselected`.
+- Bounded readiness-only later passed for all five batches: `KE=12`, `SR1=9`, `TN=11`, `ZL=14`, `ZM=12`, total `58`, with `pending=0`, `blockers=0`, `failures=0`.
+- Bounded Phase 2 build commands exited `0` for `KE`, `SR1`, `TN`, `ZL`, and `ZM`; generated 58 causal parquet outputs under `data/causally_gated_normalized/_bounded_phase2_58_20260623`.
+- Phase 1C trades-derived raw provenance policy fix was made in `scripts/phase1C_validate/audit_raw_dbn_alignment.py`; focused validation at the time: `27 passed in 3.06s`; broad Phase 1C refresh status: `PASS`, expected `461`, raw `527`, needs Phase 1B `0`, raw-only `0`, invalid manifests `0`, source hash mismatches `0`.
+- Current L0 DBN schema presence from `reports/data_manifest/master_data_health_summary.md`: `ohlcv_1m=527/527`, `definition=527/527`, `statistics=527/527`, `status=460/527`.
+- Raw enriched schema audit is now strict for Phase 1B four-L0 readiness. Current result: `status=FAIL`, `core_raw_readiness=PASS`, `optional_status_readiness=FAIL`, `optional_statistics_readiness=PASS`, `file_failure_count=67`, `missing_status_archive_market_year_count=67`, `status_failure_count=67`.
+- Current Phase 1B evidence from `reports/data_manifest/master_data_health_summary.md` and `reports/raw_readiness/raw_enriched_optional_schema_audit.json`: `raw_parquet_present=527/527`, `file_count=527`, `row_count=130074125`, `schema_failure_count=0`, `source_hash_mismatch_count=0`; this is not sufficient for the new Phase 1B definition until `status` is complete for all `tier_3_research` market-years.
+- WFA prediction evidence remains separate and stale: `data/predictions` had `0` files and 24 historical `reports/wfa/*_predictions_manifest.json` references were missing current prediction parquet evidence. Do not treat those as current WFA evidence without a separately approved regeneration.
+- Live-ops docs remain not production-live ready. Previously recorded closeout evidence: focused live-ops/chart validation `71 passed`, smoke CLI `PASS live trading smoke scenarios=34 decision_cycles=34 audit_rows=34`, broad bounded pytest `732 passed, 58 warnings`.
 
-- `live_chart_feed.py`
-- `tests/test_live_chart_feed.py`
-- `CODEX_HANDOFF.md`
+## Files Changed
 
-### Commands run
-
-- `Get-Location`
-- `git status --short`
-- `Get-Content CODEX_HANDOFF.md -TotalCount 120`
-- Targeted `rg` and `Get-Content` reads for live chart status, timing, rendering, switching, and tests
-- `python -m pytest tests/test_live_chart_feed.py tests/live/test_live_chart_lightweight.py`
-- `git diff -- live_chart_feed.py tests/test_live_chart_feed.py`
-- `[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')`
-
-### Test results
-
-- `python -m pytest tests/test_live_chart_feed.py tests/live/test_live_chart_lightweight.py`: `41 passed in 1.99s`
-
-### Remaining work
-
-- Manual visible-chart verification is still needed to confirm the new timing logs and topbar states during real Databento startup, timeframe switch, market switch, and live-connectivity fallback.
-- Next performance scope remains render optimization: latest-first historical display and incremental latest-candle update instead of full re-render where possible.
-
-## Latest run: Live chart lag/data-flow fix
-
-### What changed
-
-- Kept unrelated WFA files untouched.
-- Reworked live chart display state so `raw_candles` remains canonical 1-minute source data while displayed timeframes are derived from that source.
-- Added a per-timeframe in-memory render cache and invalidated it only when source candles change.
-- Changed historical backfill loading to store 1-minute candles instead of storing already-aggregated display candles, so switching down from `4h` to `1m` keeps true 1-minute detail.
-- Changed live trade aggregation to always build 1-minute source candles, independent of the selected display timeframe.
-- Added an in-memory market runtime cache for resolved instrument and historical 1-minute source candles, so switching back to a previously loaded market avoids another historical backfill request.
-- Moved chart creation/show before Databento dataset range lookup, symbology resolution, and backfill loading, with a resolving status while Databento work continues.
-
-### Files changed
-
-- `live_chart_feed.py`
-- `tests/test_live_chart_feed.py`
-- `CODEX_HANDOFF.md`
-
-Unrelated dirty WFA files were preserved.
-
-### Commands run
-
-- `Get-Location`
-- `git status --short`
-- `Get-Content -TotalCount 140 CODEX_HANDOFF.md`
-- Targeted `rg` and `Get-Content` reads for live chart rendering, switching, startup, and tests
-- `python -m pytest tests/test_live_chart_feed.py tests/live/test_live_chart_lightweight.py`
-- `git diff -- live_chart_feed.py tests/test_live_chart_feed.py`
-- `[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')`
-
-### Test results
-
-- First focused run failed because the new cache test's synthetic market-switch event was blocked by the existing market-switch debounce.
-- Second focused run failed because the second synthetic switch was still inside the debounce window.
-- Final focused run passed:
-  - `python -m pytest tests/test_live_chart_feed.py tests/live/test_live_chart_lightweight.py`: `40 passed in 2.38s`
-
-### Remaining work
-
-- Manual visible-chart verification still needed for perceived startup, market-switch, and timeframe-switch responsiveness.
-- Expected cause summary: timeframe switch lag was code/data-flow; first-load market switch lag is code plus Databento network; `.exe` to chart-open lag is Python/lightweight-charts cold start plus previous Databento pre-chart work; PC hardware may affect DataFrame/render speed but is not the primary diagnosis.
-
-## Previous run: Live chart timeframe switcher fix
-
-### What changed
-
-- Confirmed `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, and `1d` were still present in `SUPPORTED_CHART_TIMEFRAMES`.
-- Removed the runtime filter that hid chart switcher options below the currently selected/persisted timeframe. A persisted `4h` selection no longer hides `1m`, `5m`, `15m`, `30m`, or `1h`.
-- Updated the fake topbar test helper to retain switcher options and asserted a persisted `4h` selection still exposes all supported chart timeframes.
-
-### Files changed
-
-- `live_chart_feed.py`
-- `tests/test_live_chart_feed.py`
-- `CODEX_HANDOFF.md`
-
-Unrelated dirty WFA files were preserved.
-
-### Commands run
-
-- `Get-Location`
-- `git status --short`
-- `Get-Content -TotalCount 80 CODEX_HANDOFF.md`
-- Targeted `rg` and `Get-Content` reads for live chart timeframe handling and tests
-- Persisted state read from `%LOCALAPPDATA%\futures_intraday_model\live_chart_feed_state.json`
-- `python -m pytest tests/test_live_chart_feed.py tests/live/test_live_chart_lightweight.py`
-- `git diff -- live_chart_feed.py tests/test_live_chart_feed.py`
-- `[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')`
-
-### Test results
-
-- `python -m pytest tests/test_live_chart_feed.py tests/live/test_live_chart_lightweight.py`: `38 passed in 1.39s`
-
-### Remaining work
-
-- Reopen the live chart and verify the topbar offers all supported timeframes while the currently selected/persisted timeframe remains selected.
-
-## Previous run: Phase 5 data-audit universe guard fix
-
-### What changed
-
-- Updated `scripts/validation/data_audit_universe_guard.py` so OHLCV caveat final decisions are accepted only when the data-audit universe row is explicitly `audit_status="usable"` and `usable_for_wfa=true`.
-- Kept strict blocking for missing rows, non-`PASS` universe status, `usable_for_wfa=false`, `quarantined`/`diagnostic_only` audit statuses, and `keep_quarantined_ohlcv_only_evidence_insufficient`.
-- Added focused guard and Phase 5 tests for the accepted caveat case and fail-closed cases.
-- Reran the guarded Tier 1 split-plan refresh and stopped before Phase 7.
-
-### Files changed
-
-- `scripts/validation/data_audit_universe_guard.py`
-- `tests/validation/test_data_audit_universe_guard.py`
-- `tests/phase5_wfa/test_build_wfa_splits.py`
-- `CODEX_HANDOFF.md`
-
-Unrelated dirty live-chart files were preserved.
-
-### Commands run
-
-- `git status --short`
-- Targeted reads of `CODEX_HANDOFF.md`, `scripts\validation\data_audit_universe_guard.py`, `tests\validation\test_data_audit_universe_guard.py`, `tests\phase5_wfa\test_build_wfa_splits.py`, and `scripts\phase5_wfa\build_wfa_splits.py`
-- `python -m pytest tests/validation/test_data_audit_universe_guard.py tests/phase5_wfa/test_build_wfa_splits.py`
-- `python -m scripts.phase5_wfa.build_wfa_splits --profile tier_1 --input-root data/feature_matrices/baseline --reports-root reports/wfa_tier1_current_baseline_20260622_split_plan --profile-config configs/alpha_tiered.yaml --models-config configs/models.yaml --feature-manifest reports/features_baseline/baseline_feature_manifest.json --data-audit-universe-json reports/pipeline_audit/tier_1_data_audit_universe.json`
-- Split-plan verification for `failure_count`, `fold_count`, skipped inputs, data-audit hash, Phase 4 input hashes, and feature-manifest gate evidence
-- Prediction target absence checks for `data\predictions\tier1_current_baseline_20260622` and `reports\wfa\tier1_current_baseline_20260622_predictions_manifest.json`
-
-### Test results
-
-- `python -m pytest tests/validation/test_data_audit_universe_guard.py tests/phase5_wfa/test_build_wfa_splits.py`: `29 passed in 2.49s`
-- Guarded split-plan refresh result:
-  - command exit code: 0
-  - printed: `PASS WFA split plan: folds=48 markets=4 failures=0`
-  - `failure_count`: 0
-  - `fold_count`: 48
-  - `skipped_input_count`: 0
-  - `data_audit_hash_matches`: true
-  - `input_hash_count`: 8
-  - `input_hash_mismatch_count`: 0
-  - `feature_manifest_gate.status`: `PASS`
-  - `feature_manifest_gate.upstream_status`: `WARN`
-  - accepted Phase 4 warning messages: 4 unique market messages
-- No Phase 7 command was run.
-- No prediction artifacts were created for `tier1_current_baseline_20260622`.
-
-### Remaining work
-
-- WFA prediction evidence remains missing by design until a separate approved Phase 7 regeneration run.
-- Keep cleanup blocked until prediction evidence is regenerated/reconciled and broader validation evidence is refreshed.
-
-### Next recommended step
-
-```text
-Continue from CODEX_HANDOFF.md.
-
-Next selected scope: Phase 7 WFA prediction regeneration for tier1_current_baseline_20260622.
-
-Rules:
-- Do not run cleanup, Phase 1-5 rebuilds, redownloads, DBN/source mutation, Phase 8/model selection, generated artifact staging, or commits.
-- Do not edit historical WFA manifests.
-- Keep generated data/report artifacts ignored and untracked.
-
-Task:
-- Preflight the refreshed split plan at reports/wfa_tier1_current_baseline_20260622_split_plan/split_plan.json: require failure_count=0, fold_count=48, skipped_input_count=0, current data-audit hash evidence, current Phase 4 input hashes, and feature_manifest_gate.status=PASS.
-- Run only:
-  python -m scripts.phase7_wfa.run_wfa --profile tier_1 --matrix baseline --run tier1_current_baseline_20260622 --input-root data/feature_matrices/baseline --split-plan reports/wfa_tier1_current_baseline_20260622_split_plan/split_plan.json --predictions-root data/predictions --reports-root reports/wfa --models-config configs/models.yaml --profile-config configs/alpha_tiered.yaml --feature-set manifests/feature_sets/baseline_current.json --data-audit-universe-json reports/pipeline_audit/tier_1_data_audit_universe.json
-- Verify prediction parquet existence, prediction manifest existence, failure_count=0, prediction_count>0, artifact_evidence_ready=true, stale_output_path_exists=false, fold_count=48, all Phase 7A model ids, manifest output hash match, and parquet metadata row count equals manifest prediction_count.
-- Update CODEX_HANDOFF.md with commands, results, blockers, and next selected scope.
-
-Stop when:
-- WFA prediction evidence passes verification, or the first blocker is recorded without running Phase 8.
-```
-
-## Latest run: Databento live chart visible verification
-
-### What happened
-
-- Initial `git status --short` showed existing modified files:
+- This run changed:
+  - `scripts/phase1_raw_contract.py`
+  - `scripts/validation/check_dbn_archive_coverage.py`
+  - `tests/phase1A_download/test_download_databento_raw.py`
+  - `tests/validation/test_check_dbn_archive_coverage.py`
   - `CODEX_HANDOFF.md`
-  - `live_chart_feed.py`
-  - `scripts/phase5_wfa/build_wfa_splits.py`
-  - `scripts/pipeline_gates.py`
-  - `tests/phase5_wfa/test_build_wfa_splits.py`
-  - `tests/test_live_chart_feed.py`
-  - `tests/test_pipeline_gates.py`
-- Opened a visible PowerShell verification window and ran:
-  - `python live_chart_feed.py --historical-backfill --market ES --lookback-hours 168 --timeout-seconds 120 --no-data-warning-seconds 15`
-- Verification log path outside the repo:
-  - `C:\Users\donny\AppData\Local\Temp\live_chart_verify_20260622_225107.log`
-- Databento historical/symbology clamp output was captured:
-  - `Databento symbology end date: requested=2026-06-24, available_exclusive=2026-06-23, final=2026-06-23`
-  - `Databento historical end date: requested=2026-06-23, available_exclusive=2026-06-23, final=2026-06-23`
-- Live DNS/connectivity did not fail in this run. The chart reached live streaming and printed live status rows through `latest=2026-06-23 05:45Z`.
-- Final chart output:
-  - `Live chart stopped: records_updated=47058 first=2026-06-16T05:45:00Z latest=2026-06-23T05:45:00Z last_close=7472.25 timed_out=False chart_closed=True`
-  - `TRUE_EXIT_CODE=0`
-- No `Databento live chart failed` output was captured.
-- No lingering `python.exe` live-chart process remained after completion.
+- This wording/gap-map pass changed only `CODEX_HANDOFF.md`.
+- This missing-status command-plan pass changed only `CODEX_HANDOFF.md`.
+- This missing-status dry-run pass changed only `CODEX_HANDOFF.md` in tracked files. Dry-run JSON reports were generated under ignored `reports/phase1A_status_repair_20260624/`.
+- This approval-boundary recheck changed only `CODEX_HANDOFF.md`.
+- This repeated approval-boundary recheck changed only `CODEX_HANDOFF.md`.
+- This approved repair attempt changed `CODEX_HANDOFF.md` and generated ignored reports under `reports/phase1A_status_repair_20260624/2010/`. It did not complete the first status batch.
+- This zero-size gate repair changed `scripts/phase1A_download/download_databento_raw.py`, `tests/phase1A_download/test_download_databento_raw.py`, and `CODEX_HANDOFF.md`. It generated ignored refreshed/probe reports under `reports/phase1A_status_repair_20260624/`.
+- This parent-probe pass changed only `CODEX_HANDOFF.md` in tracked files. It generated ignored estimate-only reports under `reports/phase1A_status_repair_20260624/probe_parent_2011`, `probe_parent_2012`, `probe_parent_2013`, `probe_parent_2013_no_ke`, `probe_parent_2014`, and `probe_continuous_KE_2013`.
+- This continuation pass changed only `CODEX_HANDOFF.md`; no DBN/source/raw mutation was performed because the current user message did not explicitly approve the five parent-symbol repair commands.
+- This Phase 1B strict-readiness pass changed `scripts/validation/audit_enriched_raw_optional_schemas.py`, `tests/validation/test_audit_enriched_raw_optional_schemas.py`, and `CODEX_HANDOFF.md`. It refreshed ignored/raw-readiness reports but did not mutate DBN/source/raw data.
+- This Phase 1B wrapper-default pass changed `scripts/phase1B_convert/convert_databento_raw.py`, `tests/phase1A_download/test_download_databento_raw.py`, and `CODEX_HANDOFF.md`.
+- This Phase 1B pre-conversion gate pass changed `scripts/phase1A_download/download_databento_raw.py`, `tests/phase1A_download/test_download_databento_raw.py`, and `CODEX_HANDOFF.md`. It refreshed ignored/raw-readiness reports but did not mutate DBN/source/raw data.
+- This Phase 1C four-L0 alignment pass changed `scripts/phase1C_validate/audit_raw_dbn_alignment.py`, `tests/validation/test_audit_raw_dbn_alignment.py`, and `CODEX_HANDOFF.md`. It refreshed ignored/raw-ingest reports but did not mutate DBN/source/raw data.
+- This Phase 1A parent-symbol repair execution changed `CODEX_HANDOFF.md` in tracked files and generated/updated ignored data/report artifacts under `data/dbn/status/{6C,6J,GC,HO,LE,RB,UB,ZB,ZC,ZF,ZN,ZT}/2010/` and `reports/phase1A_status_repair_20260624/parent_2010/`.
+- This continuation pass changed only `CODEX_HANDOFF.md` in tracked files. It refreshed ignored reports under `reports/raw_readiness/` and `reports/raw_ingest/`, but did not mutate DBN/source/raw data or run downloads.
+- Pre-existing dirty files preserved:
+  - `.gitignore`
+  - `scripts/phase1C_validate/audit_raw_dbn_alignment.py`
+  - `scripts/phase2_causal_base/build_causal_base_data.py`
+  - `tests/phase2_causal_base/test_build_causal_base_data.py`
+  - `tests/validation/test_audit_raw_dbn_alignment.py`
+  - `codex-local.ps1`
+- No staging, commit, generated artifact preservation, cleanup, delete, move, DBN/source/raw mutation, Phase 3-8 run, WFA/model run, or config change was performed.
 
-### Verification result
-
-- The original live DNS failure did not reproduce.
-- Actual Databento live connectivity was verified in a visible terminal run.
-- Historical backfill reached the expected Databento date-clamp path.
-- The process completed with true exit code `0`.
-- The fallback-specific message `Databento live stream unavailable after historical backfill` was not expected or observed because the live connection succeeded.
-
-### Remaining work
-
-- No remaining live-chart verification blocker from this pass.
-- If the Databento DNS failure reappears later, use the previously added fallback path and capture the visible terminal output from that failing live-connectivity run.
-
-## Previous run: Phase 5 feature-manifest gate policy fix
-
-### What changed
-
-- Updated `scripts/pipeline_gates.py` so upstream manifest gates remain strict by default but can opt in to explicit allowed statuses and exact accepted warning messages.
-- Updated `scripts/phase5_wfa/build_wfa_splits.py` only: Phase 5 now accepts Phase 4 `WARN` manifests for the exact self-market unavailable feature warnings generated from the active profile markets.
-- Added focused tests proving default gates still reject `WARN`, opt-in gates accept only exact approved warnings, failures/stale hashes remain rejected, and Phase 5 accepts the approved zero-failure Phase 4 warning case.
-- Reran the guarded split-plan refresh. It now passes `feature_manifest_gate` but still fails before Phase 7 because the data-audit universe guard blocks all 8 Tier 1 market-years.
-
-### Files changed
-
-- `scripts/pipeline_gates.py`
-- `scripts/phase5_wfa/build_wfa_splits.py`
-- `tests/test_pipeline_gates.py`
-- `tests/phase5_wfa/test_build_wfa_splits.py`
-- `CODEX_HANDOFF.md`
-
-### Commands run
+## Commands Run In This Run
 
 - `Get-Location`
 - `git status --short`
-- `Get-Content -LiteralPath CODEX_HANDOFF.md -TotalCount 220`
-- Targeted reads of `scripts\pipeline_gates.py`, `scripts\phase5_wfa\build_wfa_splits.py`, `tests\test_pipeline_gates.py`, and `tests\phase5_wfa\test_build_wfa_splits.py`
-- `python -m pytest tests/test_pipeline_gates.py tests/phase5_wfa/test_build_wfa_splits.py`
-- `python -m scripts.phase5_wfa.build_wfa_splits --profile tier_1 --input-root data/feature_matrices/baseline --reports-root reports/wfa_tier1_current_baseline_20260622_split_plan --profile-config configs/alpha_tiered.yaml --models-config configs/models.yaml --feature-manifest reports/features_baseline/baseline_feature_manifest.json --data-audit-universe-json reports/pipeline_audit/tier_1_data_audit_universe.json`
-- Split-plan failure summary from `reports\wfa_tier1_current_baseline_20260622_split_plan\split_plan.json`
-- Prediction target absence check for `tier1_current_baseline_20260622`
-- `git diff -- scripts\pipeline_gates.py scripts\phase5_wfa\build_wfa_splits.py tests\test_pipeline_gates.py tests\phase5_wfa\test_build_wfa_splits.py`
-- `[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')`
-
-### Test results
-
-- `python -m pytest tests/test_pipeline_gates.py tests/phase5_wfa/test_build_wfa_splits.py`: `26 passed in 2.73s`
-- Guarded split-plan refresh result:
-  - command exit code: 1
-  - printed: `FAIL WFA split plan: folds=0 markets=4 failures=1`
-  - `feature_manifest_gate.status`: `PASS`
-  - `feature_manifest_gate.accepted_warning_count`: 8
-  - `failure_count`: 1
-  - `fold_count`: 0
-  - `skipped_input_count`: 8
-  - failure: `data-audit universe blocked all market-years; no folds generated`
-  - first skip detail: `WFA split-plan generation: data-audit universe blocks ES 2023 with final_decision='acceptable_with_caveat_ohlcv_empty_minutes_assumed': decision table marks market-year acceptable under current OHLCV-only evidence`
-- No Phase 7 command was run.
-- No prediction artifacts were created for `tier1_current_baseline_20260622`.
-
-### Remaining work
-
-- WFA prediction regeneration remains blocked until the data-audit universe WFA-usability policy is reconciled for `acceptable_with_caveat_ohlcv_empty_minutes_assumed` market-years.
-- Do not run Phase 7 until a guarded split plan has `failure_count=0`, `fold_count=48`, current data-audit evidence, and current Phase 4 input hashes.
-
-### Next recommended step
-
-```text
-Continue from CODEX_HANDOFF.md.
-
-Next selected scope: data-audit universe WFA-usability policy for OHLCV caveat decisions.
-
-Rules:
-- Do not run cleanup, Phase 1-4 rebuilds, redownloads, DBN/source mutation, WFA prediction generation, generated artifact staging, or commits.
-- Do not bypass data-audit universe guards or edit historical WFA manifests.
-- Preserve unrelated dirty `live_chart_feed.py` and `tests/test_live_chart_feed.py` changes.
-
-Task:
-- Inspect `scripts.validation.data_audit_universe_guard`, `scripts.validation.build_data_audit_universe`, and focused tests for final_decision handling.
-- Decide and implement the smallest explicit policy, if justified, for treating `acceptable_with_caveat_ohlcv_empty_minutes_assumed` as WFA-usable when `usable_for_wfa=true` and the universe status is `PASS`.
-- Add focused tests proving quarantined/diagnostic decisions still block WFA.
-- Rerun focused data-audit guard tests and the guarded Phase 5 split-plan refresh.
-- Update CODEX_HANDOFF.md with commands, results, blockers, and next selected scope.
-
-Stop when:
-- The guarded split plan reaches `failure_count=0` and `fold_count=48`, or the first blocker is recorded without running Phase 7.
-```
-
-## Previous run: Databento live chart fallback verification attempt
-
-### What happened
-
-- Pre-run `git status --short` matched the expected three modified files:
-  - `CODEX_HANDOFF.md`
-  - `live_chart_feed.py`
-  - `tests/test_live_chart_feed.py`
-- Sandboxed verification command failed before Databento/chart runtime execution with `[WinError 5] Access is denied` while `lightweight_charts` imported and tried to create a Windows multiprocessing pipe.
-- Retried the exact command outside the sandbox after approval:
-  - `python live_chart_feed.py --historical-backfill --market ES --lookback-hours 168 --timeout-seconds 120 --no-data-warning-seconds 15`
-- The unsandboxed command exceeded the tool timeout after `154021 ms`, produced no captured stdout/stderr, and left the exact verification process running as PID `8604`.
-- PID `8604` was stopped with approval using `Stop-Process -Id 8604 -Force`.
-- Final `git status --short` showed the same three live-chart/handoff files plus unrelated modified WFA gate files `scripts/phase5_wfa/build_wfa_splits.py`, `scripts/pipeline_gates.py`, `tests/phase5_wfa/test_build_wfa_splits.py`, and `tests/test_pipeline_gates.py`; this verification pass did not edit those WFA gate files.
-
-### Verification result
-
-- Fallback behavior was not confirmed.
-- No Databento historical date clamp output was captured from the unsandboxed attempt.
-- No `Databento live stream unavailable after historical backfill` output was captured.
-- No `Databento live chart failed` output was captured.
-- Process exit code for the unsandboxed attempt was not the chart process exit code; the tool returned timeout code `124`.
-
-### Next recommended step
-
-```text
-Continue from CODEX_HANDOFF.md.
-
-Next selected scope: clear the Databento live chart verification blocker without code edits.
-
-Rules:
-- Do not edit code, cleanup, stage, commit, redownload, mutate DBN/source data, or generate model/WFA artifacts.
-- Do not run WFA/model or data rebuild commands.
-- Keep generated artifacts untracked.
-
-Task:
-- Run the live chart verification command from a visible interactive terminal or VS Code run button so stdout/stderr and chart close behavior can be observed directly:
-  python live_chart_feed.py --historical-backfill --market ES --lookback-hours 168 --timeout-seconds 120 --no-data-warning-seconds 15
-- If it opens a chart, close the chart window after historical candles render or after the live-unavailable status appears.
-- Record exact terminal output, whether the chart opened, whether historical candles rendered, and the true process exit code.
-
-Stop when:
-- The fallback behavior is confirmed with exact output and exit code, or the first different failure is captured with exact output.
-```
-
-## Previous run: WFA prerequisite refresh attempt
-
-### What changed
-
-- Ran the approved WFA preflight for `tier1_current_baseline_20260622`.
-- Preflight passed: Phase 4 manifest is `WARN` with `failure_count=0`, 8 outputs exist, 4 baseline registries exist, the frozen baseline feature set has 122 features and matches `feature_cols.json`, and `reports/pipeline_audit/tier_1_data_audit_universe.json` is `PASS` with 8/8 `usable_for_wfa`.
-- Stopped before Phase 7 because guarded Phase 5 split-plan generation failed on the current feature-manifest gate: upstream Phase 4 manifest and all 8 outputs are `WARN` with warnings, not `PASS` with zero warnings.
-- Confirmed no target artifacts were created:
-  - `reports/wfa_tier1_current_baseline_20260622_split_plan`
-  - `data/predictions/tier1_current_baseline_20260622`
-  - `reports/wfa/tier1_current_baseline_20260622_predictions_manifest.json`
-  - `reports/wfa/tier1_current_baseline_20260622_wfa_report.json`
-
-### Files changed
-
-- `CODEX_HANDOFF.md`
-
-### Commands run
-
-- `Get-Location`
-- `git status --short`
-- `Get-Content -LiteralPath CODEX_HANDOFF.md -TotalCount 260`
-- Phase 4 preflight summary from `reports\features_baseline\baseline_feature_manifest.json`
-- Feature-set/registry preflight for `manifests\feature_sets\baseline_current.json` and `data\feature_matrices\baseline\feature_cols.json`
-- Data-audit universe preflight for `reports\pipeline_audit\tier_1_data_audit_universe.json`
-- Target-output collision checks for `tier1_current_baseline_20260622`
-- `python -m scripts.phase5_wfa.build_wfa_splits --profile tier_1 --input-root data/feature_matrices/baseline --reports-root reports/wfa_tier1_current_baseline_20260622_split_plan --profile-config configs/alpha_tiered.yaml --models-config configs/models.yaml --feature-manifest reports/features_baseline/baseline_feature_manifest.json --data-audit-universe-json reports/pipeline_audit/tier_1_data_audit_universe.json`
-- Post-failure target-output existence checks
-- `git status --short -- data reports CODEX_HANDOFF.md`
-- `[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')`
-
-### Test results
-
-- No pytest was run; no code changed.
-- Guarded Phase 5 split-plan command failed before writing outputs:
-  - `feature_manifest_gate failed: upstream manifest status is 'WARN', not 'PASS'; upstream manifest warning_count is 8, not 0; ... upstream manifest output 7 warning_count is 1, not 0`
-
-### Remaining work
-
-- WFA prediction regeneration remains blocked until Phase 5 has an approved policy/code path for this restored Phase 4 evidence, or Phase 4 evidence is regenerated in a way that produces `PASS`.
-- Do not bypass the `feature_manifest_gate`; the next safe scope is a separate Phase 5 gate policy/code decision for zero-failure Phase 4 `WARN` manifests with accepted warnings.
-
-### Next recommended step
-
-```text
-Continue from CODEX_HANDOFF.md.
-
-Next selected scope: Phase 5 feature_manifest_gate policy/code decision for zero-failure Phase 4 WARN manifests.
-
-Rules:
-- Do not run cleanup, Phase 1-4 rebuilds, redownloads, DBN/source mutation, WFA prediction generation, generated artifact staging, or commits.
-- Do not bypass WFA provenance gates or edit historical WFA manifests.
-- Keep any generated data/report artifacts ignored and untracked.
-
-Task:
-- Inspect `scripts.phase5_wfa.build_wfa_splits` and the upstream manifest gate helper/tests.
-- Decide and implement the smallest explicit policy for accepting Phase 4 `WARN` only when `failure_count=0`, all expected outputs exist, and warnings are accepted/documented.
-- Add or update focused tests proving Phase 5 still rejects real failures and only accepts the approved zero-failure warning case.
-- Run the focused Phase 5 WFA split tests.
-- Update CODEX_HANDOFF.md with commands, results, blockers, and the next selected scope.
-
-Stop when:
-- The policy/code decision is implemented and focused tests pass, or the first blocker is recorded without running Phase 7.
-```
-
-## Latest run: Databento live chart DNS fallback
-
-### What changed
-
-- Diagnosed the pasted failure as a Databento live DNS/connection failure after historical backfill had already succeeded.
-- Updated `live_chart_feed.py` so a live DNS/connection failure after loaded historical candles keeps the historical chart open until chart close/timeout and exits 0 instead of surfacing `Databento live chart failed` with exit code 1.
-- Prevented persisted market selection from overriding legacy `--symbols`-only calls without `--market`, matching existing CLI semantics tests.
-
-### Files changed
-
-- `live_chart_feed.py`
-- `tests/test_live_chart_feed.py`
-- `CODEX_HANDOFF.md`
-
-### Commands run
-
-- `Get-Location`
-- `git status --short`
-- `Test-Path CODEX_HANDOFF.md`
-- `rg --files -g "live_chart_feed.py" -g "CODEX_HANDOFF.md"`
+- `rg -n "futures_intraday_model|CODEX_HANDOFF|handoff" C:\Users\donny\.codex\memories\MEMORY.md`
 - `Get-Content -Raw CODEX_HANDOFF.md`
-- Targeted `rg` and `Get-Content` reads for `live_chart_feed.py`, live chart tests, and live Databento scripts
-- `python -m pytest tests/test_live_chart_feed.py`
-- `python -m pytest tests\live\test_live_chart_lightweight.py`
-- `python -m pytest tests/test_live_chart_feed.py tests\live\test_live_chart_lightweight.py`
-- `git diff -- live_chart_feed.py tests\test_live_chart_feed.py`
+- `git diff -- CODEX_HANDOFF.md`
+- `rg -n "^(## |### Next recommended step|Next selected scope:|## Current selected scope|## Current Tier 1|## Current WFA|## Current SR1|## Data health|## Live-ops|## Latest run:|## Previous run:)" CODEX_HANDOFF.md`
+- `Get-Content CODEX_HANDOFF.md -Tail 220`
+- `Get-Date -AsUTC -Format "yyyy-MM-ddTHH:mm:ssZ"` failed because this PowerShell version lacks `-AsUTC`.
+- `[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')`
 - `git status --short`
+- `Get-Content CODEX_HANDOFF.md -TotalCount 80`
+- `(Get-Content CODEX_HANDOFF.md).Count`
+- `Get-Content reports\data_manifest\master_data_health_summary.md -TotalCount 45`
+- `[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')`
+- `rg -n "Phase 1A|phase1A|phase 1A|dbn_present|ohlcv_1m_dbn_present|definition_dbn_present|statistics_dbn_present|status_dbn_present|missing_status|downstream readiness|readiness" scripts tests configs -S`
+- `Get-Content scripts\validation\check_dbn_archive_coverage.py -TotalCount 260`
+- `Get-Content scripts\audit_data_manifest.py -TotalCount 280`
+- `Get-Content tests\validation\test_check_dbn_archive_coverage.py -TotalCount 260`
+- `Get-Content scripts\phase1_raw_contract.py -TotalCount 140`
+- `python -m pytest tests/validation/test_check_dbn_archive_coverage.py tests/phase1A_download/test_download_databento_raw.py`
+- `python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data/dbn`
+- `rg --files scripts configs tests | rg "phase[1-9]|wfa|feature|label|causal|model|selection|prediction|promot|gate|manifest"`
+- targeted reads of `configs/alpha_tiered.yaml`, `configs/models.yaml`, Phase 2/3/4/5/7/8/9 script headers/argument and manifest paths
+- `Get-ChildItem -Path data\dbn\status -Recurse -Filter *.manifest.json | Select-Object -First 3 -ExpandProperty FullName`
+- `Get-Content data\dbn\status\6A\2010\2010-06-06_2011-01-01.dbn.zst.manifest.json -TotalCount 80`
+- PowerShell extraction from `reports\raw_readiness\raw_enriched_optional_schema_audit.json` to list and group the 67 missing `status` market-years.
+- Targeted read of `scripts\phase1A_download\download_databento_raw.py` around `dbn_schema_root`, task output paths, and zero-cost gate behavior.
+- Five Phase 1A missing-status `--dry-run` commands under `reports\phase1A_status_repair_20260624\{2010,2011,2012,2013,2014}`.
+- `Get-ChildItem -Path reports\phase1A_status_repair_20260624 -Recurse -File`
+- PowerShell verification of the five dry-run JSON plans for plan count, task counts, schema, output paths, unique planned keys, and exact set match against the 67 missing audit keys.
+- `git status --short -- reports\phase1A_status_repair_20260624`
+- `python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data\dbn`
+- Repeated `python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data\dbn`
+- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6C,6J,GC,HO,LE,RB,UB,ZB,ZC,ZF,ZN,ZT --start 2010-01-01 --end 2011-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2010 --workers 4 --resume --zero-cost-only` failed in sandbox before launchable download because Databento cost checks could not reach the proxy target.
+- Same 2010 command retried with scoped network approval. Zero-cost gate passed, then the command exited `1` after 12 Databento `422 data_no_data_found_for_request` download errors.
+- `Get-ChildItem -Path reports\phase1A_status_repair_20260624\2010 -File | Select-Object Name,Length,LastWriteTime`
+- `Get-Content reports\phase1A_status_repair_20260624\2010\databento_download_results.json -TotalCount 80`
+- `Get-Content reports\phase1A_status_repair_20260624\2010\databento_zero_cost_gate.json -TotalCount 60`
+- PowerShell summary of `databento_download_results.json` status counts: `download_error=12`.
+- Inspected current handoff, Phase 1A readiness checker, data-manifest exception patterns, downloader zero-cost gate logic, and local 2010 status manifests.
+- `python -m pytest tests/phase1A_download/test_download_databento_raw.py tests/validation/test_check_dbn_archive_coverage.py`
+- Repeated after CLI summary change: `python -m pytest tests/phase1A_download/test_download_databento_raw.py tests/validation/test_check_dbn_archive_coverage.py`
+- Reran the 2010 continuous-symbol zero-cost command after the gate fix. It exited `1` at the gate with `ZERO_COST_GATE status=FAIL downloadable=0 billable_size=0` and no batch submissions.
+- `python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data\dbn`
+- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6C,6J,GC,HO,LE,RB,UB,ZB,ZC,ZF,ZN,ZT --start 2010-01-01 --end 2011-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\probe_parent_2010 --workers 1 --resume --estimate-cost --zero-cost-only`
+- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6C,HG,HO,LE,RB,UB,YM,ZB,ZF,ZM,ZN,ZS,ZT --start 2011-01-01 --end 2012-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\probe_parent_2011 --workers 1 --resume --estimate-cost --zero-cost-only`
+- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6E,HO,LE,NQ,RB,UB,YM,ZB,ZF,ZL,ZM,ZN,ZT --start 2012-01-01 --end 2013-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\probe_parent_2012 --workers 1 --resume --estimate-cost --zero-cost-only`
+- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6E,6M,HE,HO,KE,LE,RB,YM,ZL,ZM,ZS,ZT,ZW --start 2013-01-01 --end 2014-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\probe_parent_2013 --workers 1 --resume --estimate-cost --zero-cost-only`
+- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6A,6B,6C,6E,6J,6M,ES,GC,HG,NQ,RB,SI,YM,ZC,ZM,ZT --start 2014-01-01 --end 2015-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\probe_parent_2014 --workers 1 --resume --estimate-cost --zero-cost-only`
+- Checked local `KE 2013` manifests for `ohlcv-1m`, `definition`, and `statistics`.
+- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets KE --start 2013-01-01 --end 2014-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\probe_continuous_KE_2013 --workers 1 --resume --estimate-cost --zero-cost-only`
+- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6E,6M,HE,HO,LE,RB,YM,ZL,ZM,ZS,ZT,ZW --start 2013-01-01 --end 2014-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\probe_parent_2013_no_ke --workers 1 --resume --estimate-cost --zero-cost-only`
+- Continuation check: `python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data\dbn`
+- Targeted Phase 1B readiness search/read of `scripts/validation/audit_enriched_raw_optional_schemas.py`, `tests/validation/test_audit_enriched_raw_optional_schemas.py`, `scripts/phase1C_validate/audit_raw_dbn_alignment.py`, and `scripts/audit_data_manifest.py`.
+- `python -m pytest tests/validation/test_audit_enriched_raw_optional_schemas.py`
+- `python -m scripts.validation.audit_enriched_raw_optional_schemas`
+- `python -m pytest tests/phase1A_download/test_download_databento_raw.py tests/validation/test_audit_enriched_raw_optional_schemas.py`
+- Repeated after Phase 1B pre-conversion gate change: `python -m pytest tests/phase1A_download/test_download_databento_raw.py tests/validation/test_audit_enriched_raw_optional_schemas.py`
+- Repeated after Phase 1B pre-conversion gate change: `python -m scripts.validation.audit_enriched_raw_optional_schemas`
+- `python -m pytest tests/validation/test_audit_raw_dbn_alignment.py` failed before fixture updates because clean two-L0 fixtures no longer satisfy the four-L0 alignment contract.
+- Repeated after fixture/output updates: `python -m pytest tests/validation/test_audit_raw_dbn_alignment.py`
+- `python -m scripts.phase1C_validate.audit_raw_dbn_alignment --skip-definition-join`
+- `Get-Location`
+- `git status --short`
+- `Get-Content -Path CODEX_HANDOFF.md -TotalCount 260`
+- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6C,6J,GC,HO,LE,RB,UB,ZB,ZC,ZF,ZN,ZT --start 2010-01-01 --end 2011-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\parent_2010 --workers 4 --resume --zero-cost-only` timed out with exit `124` after 600 seconds.
+- `Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" | Select-Object ProcessId,ParentProcessId,CreationDate,CommandLine | Format-List`
+- `Get-ChildItem -Path reports\phase1A_status_repair_20260624\parent_2010 -File | Select-Object Name,Length,LastWriteTime`
+- `python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data\dbn`
+- PowerShell summaries of `reports\phase1A_status_repair_20260624\parent_2010\databento_download_results.json` for count/status/schema/stype/products/bytes.
+- `git status --short -- data\dbn reports\phase1A_status_repair_20260624`
+- `[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')`
+- `Get-Location`
+- `git status --short`
+- `Get-Content -Path CODEX_HANDOFF.md -TotalCount 280`
+- `python -m scripts.validation.audit_enriched_raw_optional_schemas` printed `status=FAIL files=527 rows=130074125 core=PASS status_optional=FAIL statistics_optional=PASS file_failures=55`, but the shell call timed out with exit `124`.
+- `python -m scripts.phase1C_validate.audit_raw_dbn_alignment --skip-definition-join` printed `status=FAIL expected=461 raw=527 missing_status=55 missing_statistics=0 needs_phase1b=0 raw_only=55 invalid_manifests=0 source_hash_mismatches=0 definition_join_status=skipped definition_join_mismatches=0`, but the shell call timed out with exit `124`.
+- `python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data\dbn`
+- `Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" | Select-Object ProcessId,ParentProcessId,CreationDate,CommandLine | Format-List`
+- Read-only summaries of `reports\raw_readiness\raw_enriched_optional_schema_audit.json` and `reports\raw_ingest\raw_dbn_alignment.json`.
+- `Get-Item reports\raw_readiness\raw_enriched_optional_schema_audit.json, reports\raw_ingest\raw_dbn_alignment.json | Select-Object Name,Length,LastWriteTime`
 - `[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')`
 
-### Test results
+## Test And Validation Results
 
-- `python -m pytest tests/test_live_chart_feed.py`: `31 passed in 1.18s`
-- Initial `python -m pytest tests\live\test_live_chart_lightweight.py`: failed because persisted local chart state let a legacy `--symbols`-only call reach `lightweight_charts` and hit `[WinError 5] Access is denied`; fixed by ignoring persisted market selection when `--symbols` is supplied without `--market`.
-- Final `python -m pytest tests/test_live_chart_feed.py tests\live\test_live_chart_lightweight.py`: `38 passed in 1.24s`
+- Current evidence verifies Phase 1A is not complete under the new all-L0-including-status definition.
+- Current evidence verifies Phase 1B is not complete under the new convert/combine four-L0 definition because `status` archive coverage is `394/461` for `tier_3_research`.
+- Focused validation after code change: `python -m pytest tests/validation/test_check_dbn_archive_coverage.py tests/phase1A_download/test_download_databento_raw.py` passed with `94 passed in 3.02s`.
+- Current Phase 1A readiness checker result after code change: `status=FAIL expected_archives=1844 missing_archives=67 missing_manifests=67 missing_optional_archives=0 missing_optional_manifests=0 invalid_manifests=0 extra_market_dirs=0`.
+- Current phase map evidence: Phase 6 is a compatibility wrapper over Phase 7 WFA; Phase 7 is the active train-only WFA prediction implementation used by current tests/reports.
+- Missing `status` repair dry-run was executed and verified in this pass. No API download, cost estimate, DBN/source mutation, conversion, or Phase 3+ command was run.
+- Latest read-only coverage recheck result: `status=FAIL expected_archives=1844 missing_archives=67 missing_manifests=67 missing_optional_archives=0 missing_optional_manifests=0 invalid_manifests=0 extra_market_dirs=0`.
+- Repeated read-only coverage recheck result is unchanged: `status=FAIL expected_archives=1844 missing_archives=67 missing_manifests=67 missing_optional_archives=0 missing_optional_manifests=0 invalid_manifests=0 extra_market_dirs=0`.
+- Approved 2010 repair command result: `ZERO_COST_GATE status=PASS downloadable=12 billable_size=0`, then `download_error=12`; each selected task returned `422 data_no_data_found_for_request`.
+- Phase 1A coverage validation was not rerun after the failed repair because the approved stop condition required stopping on the first nonzero download command.
+- Focused validation after the zero-size gate fix: `95 passed in 2.95s`.
+- Refreshed 2010 continuous-symbol gate result after the fix: `status=FAIL`, `downloadable_zero_cost_task_count=0`, `provider_empty_estimate_count=12`, `selected_task_count=0`; no batch submissions were made.
+- Current Phase 1A coverage validation remains failed: `status=FAIL expected_archives=1844 missing_archives=67 missing_manifests=67 missing_optional_archives=0 missing_optional_manifests=0 invalid_manifests=0 extra_market_dirs=0`.
+- Continuation Phase 1A coverage validation remains failed with the same result: `status=FAIL expected_archives=1844 missing_archives=67 missing_manifests=67 missing_optional_archives=0 missing_optional_manifests=0 invalid_manifests=0 extra_market_dirs=0`.
+- Focused Phase 1B strict-readiness tests passed: `6 passed in 1.47s`.
+- Current strict raw enriched audit result: `status=FAIL files=527 rows=130074125 core=PASS status_optional=FAIL statistics_optional=PASS file_failures=67`.
+- Current raw enriched audit summary: `missing_status_archive_market_year_count=67`, `status_failure_count=67`, `missing_statistics_archive_market_year_count=0`, `statistics_failure_count=0`, `source_hash_mismatch_count=0`, `schema_failure_count=0`.
+- Focused Phase 1B wrapper/default and raw enriched readiness tests passed: `93 passed in 3.59s`.
+- Focused Phase 1B gate/wrapper/default and raw enriched readiness tests passed: `95 passed in 3.68s`.
+- Current strict raw enriched audit remains correctly failed: `status=FAIL files=527 rows=130074125 core=PASS status_optional=FAIL statistics_optional=PASS file_failures=67`.
+- Current strict raw enriched audit summary remains: `missing_status_archive_market_year_count=67`, `status_failure_count=67`, `missing_statistics_archive_market_year_count=0`, `statistics_failure_count=0`, `source_hash_mismatch_count=0`, `schema_failure_count=0`.
+- Focused Phase 1C four-L0 alignment tests passed after fixture updates: `27 passed in 3.24s`.
+- Current partial Phase 1C raw/DBN alignment result: `status=FAIL expected=461 raw=527 missing_status_dbn_count=67 missing_statistics_dbn_count=0 needs_phase1b_conversion_count=0 raw_only_count=67 invalid_manifest_count=0 source_hash_mismatch_count=0 definition_join_status=skipped definition_join_mismatch_count=0`.
+- Revised 2010 parent-symbol estimate-only probe passed: `ZERO_COST_GATE status=PASS downloadable=12 provider_empty=0 billable_size=141320`.
+- Parent-symbol estimate-only repair scope now verified for 66 of 67 missing `status` market-years: `2010=12`, `2011=13`, `2012=13`, `2013_no_ke=12`, `2014=16`; all five exact repair subsets have `status=PASS`, `provider_empty=0`, and positive billable size.
+- `KE 2013 status` remains provider-empty under both `parent` and `continuous` estimate-only probes.
+- First approved parent-symbol repair command timed out with exit `124`, so the remaining four commands were not run. The generated `parent_2010` results file contains 12 records and all are `status=ok`, `schema=status`, `stype_in=parent`, with `bad_status=0`, `bad_schema=0`, `bad_stype=0`, `total_bytes=68405`.
+- Current Phase 1A coverage validation after the `parent_2010` repair attempt: `status=FAIL expected_archives=1844 missing_archives=55 missing_manifests=55 missing_optional_archives=0 missing_optional_manifests=0 invalid_manifests=0 extra_market_dirs=0`.
+- Refreshed strict raw enriched audit report after the `parent_2010` repair attempt: `status=FAIL files=527 rows=130074125 file_failure_count=55 missing_status_archive_market_year_count=55 status_failure_count=55 missing_statistics_archive_market_year_count=0 statistics_failure_count=0`.
+- Refreshed partial Phase 1C raw/DBN alignment report after the `parent_2010` repair attempt: `status=FAIL expected=461 raw=527 missing_status_dbn_count=55 missing_statistics_dbn_count=0 needs_phase1b_conversion_count=0 raw_only_count=55 invalid_manifest_count=0 source_hash_mismatch_count=0`.
+- Caveat: the two refreshed audit commands printed complete summaries but exited by shell timeout `124`; the JSON report files were refreshed and read successfully afterward.
 
-### Remaining work
+## Remaining Work
 
-- Rerun the same live chart command/window that produced `getaddrinfo failed`; if Databento live DNS still fails, expected behavior is historical candles remain visible until chart close/timeout with a live-unavailable message and process exit 0.
-- If actual live streaming is required, resolve the local/network DNS path to `glbx-mdp3.lsg.databento.com:13000`; this code change does not fix external DNS/connectivity.
+- Do not treat Phase 1A as done until `status` DBN coverage is either repaired to `527/527` or the user explicitly changes the definition again.
+- Do not treat Phase 1B as done until all `tier_3_research` market-year raw parquet files contain valid combined/enriched data for the four L0 schemas and match the downloaded Phase 1A DBN evidence.
+- Phase 1B strict audit now fails closed on missing required `status`/`statistics` DBN coverage instead of treating status as a warning-only optional enrichment.
+- Phase 1B conversion wrapper now defaults to required `status,statistics` enrichment; explicit overrides are still respected for test or diagnostic use.
+- Phase 1B pre-conversion DBN gate now checks required status/statistics archives before conversion when strict mode is active.
+- Phase 1C raw/DBN alignment now fails closed on missing required status/statistics DBN coverage, so it no longer reports four-L0 raw alignment as complete while `status` archives are missing.
+- Do not rerun the continuous-symbol 2010 repair command; it is now proven provider-empty for these 12 market-years.
+- Run the revised parent-symbol 2010 zero-cost repair command only after explicit approval because it mutates `data/dbn/status`.
+- Continue the remaining four parent-symbol repair commands only after explicit approval because the approved sequence stopped on timeout `124`. Do not rerun `parent_2010` unless read-only evidence later contradicts its 12 `ok` results.
+- Decide whether `KE 2013 status` should remain a severe blocker, be documented as a provider-unavailable explicit exception, or be excluded from the readiness universe. Do not silently pass Phase 1A while `KE 2013 status` is missing.
+- Do not execute Phase 3, WFA/model selection, cleanup, quarantine, DBN/source/raw mutation, generated artifact staging, commits, or config changes unless explicitly approved.
+- Phase 3 planning from the bounded Phase 2 packet should wait behind the Phase 1A status-coverage decision if strict all-L0 completeness is required before downstream work.
+- Carry forward accepted WARN caveats for `KE`, `SR1`, `ZL`, and `ZM`; `SR1` includes roll exclusion threshold warnings.
+- Keep deferred rows excluded unless separately approved: `KE:2013`, `KE:2014`, `ZL:2012`, `ZL:2013`, `ZM:2011`, `ZM:2012`, `ZM:2013`, `ZM:2014`.
 
-### Next recommended step
+## Next Recommended Step
 
 ```text
 Continue from CODEX_HANDOFF.md.
-
-Next selected scope: rerun the Databento live chart command/window that produced the `getaddrinfo failed` error, read output only first.
-
+Next selected scope: user approval to continue the remaining Phase 1A `status` parent-symbol repair after the 2010 command timed out.
 Rules:
-- Do not cleanup, stage, commit, redownload, mutate DBN/source data, or generate model/WFA artifacts.
-- Do not change trading/data semantics or public CLI contracts.
-- Keep generated artifacts untracked.
-
+- Do not run cleanup, Phase 1B conversion, Phase 2+, WFA/model selection, generated artifact staging, commits, or config changes.
+- Do not rerun any old continuous-symbol repair commands.
+- Do not rerun `parent_2010` unless current read-only evidence contradicts `reports/phase1A_status_repair_20260624/parent_2010/databento_download_results.json` showing 12 `ok` records.
+- Do not include `KE` in the 2013 repair command; both parent and continuous estimate-only probes show `KE 2013 status` is provider-empty.
+- Do not mutate DBN/source data unless the user explicitly approves the four remaining parent-symbol commands below.
+- Treat Phase 1A and Phase 1B as incomplete until `python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data/dbn` passes.
+- Use a longer command timeout than 600 seconds for each remaining repair command.
+- Use current evidence first: `reports/phase1A_status_repair_20260624/parent_2010/databento_download_results.json`, `reports/phase1A_status_repair_20260624/probe_parent_{2011,2012,2013_no_ke,2014}/databento_zero_cost_gate.json`, and `reports/phase1A_status_repair_20260624/probe_continuous_KE_2013/databento_zero_cost_gate.json`.
 Task:
-- Launch the same live chart path that previously printed `Databento live chart failed: Connection to glbx-mdp3.lsg.databento.com:13000 failed: [Errno 11002] getaddrinfo failed`.
-- Verify historical candles render and the terminal reports `Databento live stream unavailable after historical backfill` instead of `Databento live chart failed`.
-- Record the exit code and whether the chart stays open until close/timeout.
-
+- If the user approves DBN mutation, run only these four revised zero-cost commands:
+  `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6C,HG,HO,LE,RB,UB,YM,ZB,ZF,ZM,ZN,ZS,ZT --start 2011-01-01 --end 2012-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\parent_2011 --workers 4 --resume --zero-cost-only`
+  `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6E,HO,LE,NQ,RB,UB,YM,ZB,ZF,ZL,ZM,ZN,ZT --start 2012-01-01 --end 2013-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\parent_2012 --workers 4 --resume --zero-cost-only`
+  `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6E,6M,HE,HO,LE,RB,YM,ZL,ZM,ZS,ZT,ZW --start 2013-01-01 --end 2014-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\parent_2013_no_ke --workers 4 --resume --zero-cost-only`
+  `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6A,6B,6C,6E,6J,6M,ES,GC,HG,NQ,RB,SI,YM,ZC,ZM,ZT --start 2014-01-01 --end 2015-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\parent_2014 --workers 4 --resume --zero-cost-only`
+- Stop immediately if any zero-cost gate fails, any command exits nonzero, or any planned task is nonzero-cost.
+- If all four commands pass, rerun `python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data\dbn`.
 Stop when:
-- The rerun confirms the new fallback behavior, or the first different failure is captured with exact output.
+- The remaining 54 downloadable status archives are repaired and coverage is rechecked, or the first zero-cost/download/validation blocker is recorded. Expect `KE 2013 status` to remain the next unresolved policy blocker unless separately addressed.
 ```
 
-## Current selected scope
+## Obsolete Phase 1A Status Repair Command Plan
 
-- Active next scope: reopen the live chart and manually verify startup, market-switch, and timeframe-switch responsiveness after the source-candle/cache changes.
-- Current readiness state: focused live chart tests pass; the chart now opens before Databento metadata/symbology/backfill work, all timeframe options remain visible, display timeframes derive from canonical 1-minute source candles, and repeat market switches can reuse cached historical source candles. WFA prediction evidence still requires a separate approved Phase 7 run after the refreshed split plan.
-- Required stop limits for the next run: do not run cleanup, Phase 1-5 rebuilds, redownloads, DBN/source mutation, generated artifact staging, WFA prediction generation, model/WFA artifact generation, code edits, or commits unless explicitly approved.
+Do not run these continuous-symbol commands for the 2010 blocker. The 2010 continuous-symbol gate is proven provider-empty (`provider_empty_estimate_count=12`), while the parent-symbol probe is zero-cost with positive billable size. Keep this block only as historical evidence for the original dry-run set comparison.
 
-## Current Tier 1 Phase 4 evidence
+Historical dry-run planning commands:
 
-- Preflight passed:
-  - `reports/labels/label_manifest.json` status: `PASS`
-  - Label manifest profile: `tier_1`
-  - Label manifest outputs: 8
-  - Missing label output paths: 0
-  - Planned Phase 4 outputs present before regeneration: 0 of 8
-  - Planned Phase 4 root registries present before regeneration: 0 of 4
-- Tier 1 Phase 4 baseline feature regeneration completed:
-  - Command: `python -m scripts.phase4_features.build_baseline_features --profile tier_1 --input-root data/labeled --output-root data/feature_matrices/baseline --reports-root reports/features_baseline --label-manifest reports/labels/label_manifest.json`
-  - Manifest: `reports/features_baseline/baseline_feature_manifest.json`
-  - Manifest status: `WARN`
-  - Manifest profile: `tier_1`
-  - Expected inputs: 8
-  - Actual inputs: 8
-  - Outputs: 8
-  - Failure count: 0
-  - Warning count: 8
-  - Missing manifest output paths after regeneration: 0
-  - Root registries restored: `feature_cols.json`, `target_cols.json`, `metadata_cols.json`, `excluded_cols.json`
-- Output row counts:
-  - `ES:2023`: rows=353428, training_valid=344171
-  - `ES:2024`: rows=355065, training_valid=346913
-  - `CL:2023`: rows=353359, training_valid=319190
-  - `CL:2024`: rows=355962, training_valid=304103
-  - `ZN:2023`: rows=353549, training_valid=239248
-  - `ZN:2024`: rows=355249, training_valid=231530
-  - `6E:2023`: rows=354284, training_valid=296557
-  - `6E:2024`: rows=356478, training_valid=285372
-- Preserved Phase 4 warnings:
-  - `ES:2023` and `ES:2024`: `features fully unavailable: feature_rel_ret_vs_ES_15,feature_corr_vs_ES_60`
-  - `CL:2023` and `CL:2024`: `features fully unavailable: feature_rel_ret_vs_CL_15,feature_corr_vs_CL_60`
-  - `ZN:2023` and `ZN:2024`: `features fully unavailable: feature_rel_ret_vs_ZN_15,feature_corr_vs_ZN_60`
-  - `6E:2023` and `6E:2024`: `features fully unavailable: feature_rel_ret_vs_6E_15,feature_corr_vs_6E_60`
-- Focused Phase 4 tests passed:
-  - Command: `python -m pytest tests/phase4_features/test_build_baseline_features.py`
-  - Result: `33 passed in 10.36s`
-- Generated-artifact hygiene:
-  - `git status --short -- data reports CODEX_HANDOFF.md` was empty before the handoff edit because regenerated `data/` and `reports/` artifacts are ignored.
-  - `data/predictions` remains unreconciled and was not regenerated.
+```powershell
+python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6C,6J,GC,HO,LE,RB,UB,ZB,ZC,ZF,ZN,ZT --start 2010-01-01 --end 2011-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2010 --workers 4 --resume --dry-run
+python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6C,HG,HO,LE,RB,UB,YM,ZB,ZF,ZM,ZN,ZS,ZT --start 2011-01-01 --end 2012-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2011 --workers 4 --resume --dry-run
+python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6E,HO,LE,NQ,RB,UB,YM,ZB,ZF,ZL,ZM,ZN,ZT --start 2012-01-01 --end 2013-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2012 --workers 4 --resume --dry-run
+python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6E,6M,HE,HO,KE,LE,RB,YM,ZL,ZM,ZS,ZT,ZW --start 2013-01-01 --end 2014-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2013 --workers 4 --resume --dry-run
+python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6A,6B,6C,6E,6J,6M,ES,GC,HG,NQ,RB,SI,YM,ZC,ZM,ZT --start 2014-01-01 --end 2015-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2014 --workers 4 --resume --dry-run
+```
 
-## Current WFA prediction artifact reconciliation
+Obsolete continuous-symbol download commands:
 
-- Report: `reports/wfa_prediction_artifact_reconciliation_20260622.md`
-- Scope checked:
-  - `reports/wfa/*_predictions_manifest.json`
-  - `data/predictions`
-  - Fixture-only reference: `reports/wfa_fixture_smoke/data/predictions/fixture_smoke/oos_predictions.parquet`
-- Reconciliation counts:
-  - Prediction manifests checked: 24
-  - Prediction files currently under `data/predictions`: 0
-  - `valid_current_evidence`: 0
-  - `stale_missing_prediction`: 24
-  - Present invalid or hash-mismatch manifests: 0
-  - Manifests with `artifact_evidence_ready=true`: 24
-  - Manifests with `stale_output_path_exists=true`: 0
-  - Manifests with output hash entries for their prediction path: 24
-- Result:
-  - No `reports/wfa` prediction manifest currently has a valid prediction parquet on disk.
-  - The fixture-smoke parquet exists but is fixture evidence only and is not a recovery source for `reports/wfa`.
-  - Treat existing `reports/wfa/*_predictions_manifest.json` files as historical until a separately approved regeneration run writes matching current `data/predictions/<run>/oos_predictions.parquet` artifacts.
+```powershell
+python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6C,6J,GC,HO,LE,RB,UB,ZB,ZC,ZF,ZN,ZT --start 2010-01-01 --end 2011-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2010 --workers 4 --resume --zero-cost-only
+python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6C,HG,HO,LE,RB,UB,YM,ZB,ZF,ZM,ZN,ZS,ZT --start 2011-01-01 --end 2012-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2011 --workers 4 --resume --zero-cost-only
+python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6E,HO,LE,NQ,RB,UB,YM,ZB,ZF,ZL,ZM,ZN,ZT --start 2012-01-01 --end 2013-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2012 --workers 4 --resume --zero-cost-only
+python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6E,6M,HE,HO,KE,LE,RB,YM,ZL,ZM,ZS,ZT,ZW --start 2013-01-01 --end 2014-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2013 --workers 4 --resume --zero-cost-only
+python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6A,6B,6C,6E,6J,6M,ES,GC,HG,NQ,RB,SI,YM,ZC,ZM,ZT --start 2014-01-01 --end 2015-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2014 --workers 4 --resume --zero-cost-only
+```
 
-## Current SR1 Phase 2 evidence
+Validate Phase 1A readiness after any approved repair:
 
-- `SR1:2018` Phase 2 pilot was built.
-  - Output: `data/causally_gated_normalized/SR1/2018.parquet`
-  - Rows: 1562
-  - Build manifest status: `WARN`
-  - Failures: 0
-  - Preserved accepted warnings: `roll maturity sequence not monotonic: backsteps=36`; `roll exclusion threshold breached: rows_pct=7.426376 rows=116`
-  - Focused Phase 2 tests at the time: `69 passed`
-  - Broader related tests later: `290 passed in 37.22s` for `tests\phase2_causal_base` and `tests\validation`
-
-- `SR1:2019` Phase 2 build was completed.
-  - Output: `data/causally_gated_normalized/SR1/2019.parquet`
-  - Rows: 10252
-  - Build manifest status: `WARN`
-  - Failures: 0
-  - Preserved accepted warning: `roll maturity sequence not monotonic: backsteps=50`
-  - Manifest audit at the time: `manifest_check issues=166 failures=0`
-  - `git status --short -- data` was empty after the build.
-
-- `SR1:2020` readiness passed but build has not been run.
-  - Config: `reports/phase_restart/sr1_2020_phase2_causal_repair.yaml`
-  - Existing raw alignment: `reports/phase_restart/sr1_2020_phase2_raw_alignment.json`
-  - Raw alignment status: `PASS`
-  - Raw alignment counts: `needs_phase1b_conversion_count=0`, `raw_only_count=0`, `source_hash_mismatch_count=0`, `invalid_manifest_count=0`, `repair_manifest_failure_count=0`
-  - Readiness refresh: `reports/phase_restart/sr1_2020_phase2_readiness_refresh.json` and `.md`
-  - Readiness refresh status: `PASS`
-  - Readiness refresh counts: `failure_count=0`, `blocker_count=0`, `accepted_exception_count=1`
-  - Accepted warnings exactly: `roll maturity sequence not monotonic: backsteps=72`; `roll exclusion threshold breached: rows_pct=2.674358 rows=255`
-  - Raw file exists: `data/raw/SR1/2020.parquet`
-  - Phase 2 output remains absent: `data/causally_gated_normalized/SR1/2020.parquet`
-  - `git status --short -- data` was empty after readiness-only refresh.
-
-## Data health and prerequisite state
-
-- Latest refreshed health matrix and Phase 2 prerequisite snapshot recorded:
-  - Manifest audit: `issues=168 failures=0`
-  - Raw optional-schema audit: `FAIL` with 9 file failures
-  - Health counts: `OK=45`, `POLICY=464`, `EXCLUDED=9`, `UNKNOWN=9`
-  - Phase 2 accepted rows with pre-build raw evidence prerequisites: 9
-  - Cleared from stale unknown/pre-build prerequisite status: `SR3:2019-2024` and `SR1:2018-2024`
-- `SR3:2019` and `SR3:2020` source-reference corrections were completed before this compaction.
-  - `SR3:2019` conversion wrote 4608 rows and cleared source-reference/hash failures for that row.
-  - `SR3:2020` conversion wrote 10630 rows and cleared source-reference/hash failures for that row.
-  - Optional-schema audit remained `FAIL` overall because unrelated rows still failed.
-- Cleanup remains disabled. Keep cleanup disabled until blockers are zero and cleanup is separately approved.
-
-## Live-ops state
-
-- Paper/smoke live-ops scaffold work reached closeout documentation.
-- Current docs state is explicitly not production-live ready.
-- Focused live-ops/chart validation at closeout: `71 passed`
-- Smoke CLI at closeout: `PASS live trading smoke scenarios=34 decision_cycles=34 audit_rows=34`
-- Broad bounded pytest at closeout: `732 passed, 58 warnings`
-- Deferred live-ops production-depth items remain: broker SDK/account integration, real live order path, GUI/chart launch, `--no-timeout` runtime, cancel/flatten-on-kill production behavior, direct broker-owned audit append, deeper reconciliation, and broader runtime durability.
-
-## Files changed by this run
-
-- Ignored/generated:
-  - `data/feature_matrices/baseline/{ES,CL,ZN,6E}/{2023,2024}.parquet`
-  - `data/feature_matrices/baseline/feature_cols.json`
-  - `data/feature_matrices/baseline/target_cols.json`
-  - `data/feature_matrices/baseline/metadata_cols.json`
-  - `data/feature_matrices/baseline/excluded_cols.json`
-  - `reports/features_baseline/baseline_feature_manifest.json`
-  - `reports/features_baseline/baseline_feature_report.json`
-  - `reports/features_baseline/feature_registry.json`
-  - `reports/features_baseline/feature_correlation_report.csv`
-  - `reports/wfa_prediction_artifact_reconciliation_20260622.md`
-- Tracked:
-  - `CODEX_HANDOFF.md`
-
-## Commands run in this run
-
-- `Get-Location`
-- `git rev-parse --show-toplevel`
-- `git status --short`
-- `Get-Content -LiteralPath CODEX_HANDOFF.md`
-- Label manifest preflight summary from `reports\labels\label_manifest.json`
-- Phase 4 output and registry absence preflight under `data\feature_matrices\baseline`
-- Existing Phase 4 manifest stale-output preflight from `reports\features_baseline\baseline_feature_manifest.json`
-- `python -m scripts.phase4_features.build_baseline_features --profile tier_1 --input-root data/labeled --output-root data/feature_matrices/baseline --reports-root reports/features_baseline --label-manifest reports/labels/label_manifest.json`
-- Post-run Phase 4 output, registry, and manifest verification
-- `git status --short -- data reports CODEX_HANDOFF.md`
-- `python -m pytest tests/phase4_features/test_build_baseline_features.py`
-- Phase 4 warning summary from `reports\features_baseline\baseline_feature_manifest.json`
-- WFA Phase 4 preflight summary from `reports\features_baseline\baseline_feature_manifest.json`
-- `Get-ChildItem -LiteralPath data\predictions -File -Recurse`
-- `Get-Date -Format yyyyMMdd`
-- WFA prediction manifest reconciliation summary from `reports\wfa\*_predictions_manifest.json`
-- `Get-ChildItem -LiteralPath data\predictions -Directory -Recurse`
-- `Test-Path -LiteralPath reports\wfa_fixture_smoke\data\predictions\fixture_smoke\oos_predictions.parquet`
-- `[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')`
-
-## Test results for this run
-
-- `python -m pytest tests/phase4_features/test_build_baseline_features.py`: `33 passed in 10.36s`
-- No pytest or WFA/modeling tests were run during reconciliation; no code changed and no prediction generation was performed.
-
-## Remaining work
-
-- Run no cleanup unless separately approved.
-- Keep cleanup blocked. `data/predictions` has 0 files and 24 WFA manifests reference missing prediction parquet files; this run did not change or regenerate predictions.
-- Before WFA/model evidence can be trusted, run one separately approved Tier 1 baseline WFA regeneration with a new run name, then verify prediction parquet existence, manifest hash fields, `failure_count=0`, `prediction_count>0`, and evidence flags.
-- Refresh broader validation evidence only after WFA prediction artifact state is understood.
-- Do not treat `WARN` build manifests for `SR1:2018` or `SR1:2019` as failures by themselves; the warnings were intentionally preserved as accepted roll-maturity evidence with zero failures.
-- Before trusting broader Phase 2/model results, continue to verify row-level raw alignment, readiness, warning exceptions, generated output presence, manifest audit, and generated-artifact hygiene.
-
-## Next recommended step
-
-```text
-Continue from CODEX_HANDOFF.md.
-
-Next selected scope: one approved Tier 1 baseline WFA regeneration plan/run decision.
-
-Rules:
-- Do not run cleanup, Phase 1-4 rebuilds, redownloads, DBN/source mutation, generated artifact staging, or commits.
-- Do not overwrite historical `reports/wfa` manifests or `data/predictions` runs.
-- If WFA regeneration is approved, use a new run name.
-- Keep generated artifacts ignored/untracked.
-
-Task:
-- Choose a new run name for one Tier 1 baseline WFA regeneration, for example `tier1_current_baseline_20260622`.
-- Preflight current `data/feature_matrices/baseline`, `reports/wfa/split_plan.json`, `configs/models.yaml`, and exact model/profile arguments.
-- Propose or run the exact WFA command only if the new user request explicitly approves prediction regeneration.
-- Verify generated prediction parquet and manifest fields, hash evidence, `artifact_evidence_ready`, and `failure_count`.
-- Update CODEX_HANDOFF.md with commands, results, blockers, and the next selected scope.
-
-Stop when:
-- The WFA regeneration command is approved and completed with evidence, or the first blocker is recorded without running broader scopes.
+```powershell
+python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data\dbn
 ```
