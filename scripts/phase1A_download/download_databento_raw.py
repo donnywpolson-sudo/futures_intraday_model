@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Protocol, TypedDict, cast
+from typing import Any, Callable, Iterable, Mapping, Protocol, TypedDict, cast
 from uuid import uuid4
 
 import pandas as pd
@@ -61,6 +61,7 @@ DEFAULT_STREAM_OUT = DEFAULT_RAW_OUT
 DEFAULT_DBN_OUT = "data/dbn/ohlcv_1m"
 DEFAULT_BATCH_OUT = DEFAULT_DBN_OUT
 DEFAULT_REPORTS_ROOT = "reports/raw_ingest"
+DEFAULT_REQUIRED_SCHEMA_EXCEPTIONS_CONFIG = PROJECT_ROOT / "configs" / "phase1a_required_schema_exceptions.yaml"
 DEFAULT_WORKERS = 4
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_RETRY_BACKOFF_SECONDS = 1.0
@@ -190,6 +191,10 @@ ORDERED_OUTPUT_COLUMNS = [
 
 OPTIONAL_RAW_SCHEMAS = ("status", "statistics")
 OPTIONAL_SCHEMA_POLICIES = ("warn", "require")
+DEFINITION_SOURCE_COLUMNS = [
+    "definition_source_file",
+    "definition_source_sha256",
+]
 STATUS_ENRICHMENT_COLUMNS = [
     "status_ts_event",
     "status_action",
@@ -277,6 +282,8 @@ RAW_STRING_COLUMNS = {
     "source_dataset",
     "source_file",
     "source_sha256",
+    "definition_source_file",
+    "definition_source_sha256",
     "status_action_name",
     "status_reason_name",
     "status_trading_event_name",
@@ -1343,6 +1350,25 @@ def validate_chunk_date_filename(path: Path, year: int) -> None:
         raise ValueError(DBN_ARCHIVE_LAYOUT_ERROR)
 
 
+def dbn_archive_date_range(path: Path, year: int) -> tuple[str, str]:
+    stem = dbn_file_stem(path)
+    parts = stem.split("_")
+    if len(parts) == 2:
+        start = date.fromisoformat(parts[0])
+        end = date.fromisoformat(parts[1])
+        return start.isoformat(), end.isoformat()
+    if legacy_dbn_filename_year(path) is not None:
+        return f"{year}-01-01", f"{year + 1}-01-01"
+    raise ValueError(DBN_ARCHIVE_LAYOUT_ERROR)
+
+
+def dbn_archive_group_date_range(paths: Iterable[Path], year: int) -> tuple[str, str]:
+    ranges = [dbn_archive_date_range(path, year) for path in paths]
+    if not ranges:
+        return f"{year}-01-01", f"{year + 1}-01-01"
+    return min(start for start, _end in ranges), max(end for _start, end in ranges)
+
+
 def infer_dbn_archive_entry(path: Path, dbn_root: Path) -> DbnArchiveEntry:
     try:
         parts = path.relative_to(dbn_root).parts
@@ -1404,6 +1430,8 @@ def dbn_paths_for_tasks(tasks: Iterable[DownloadTask]) -> list[Path]:
 
 
 def definition_root_for_dbn_root(dbn_root: Path) -> Path:
+    if dbn_root.name == schema_path_name("definition"):
+        return dbn_root
     if dbn_root.name == schema_path_name(SCHEMA):
         return dbn_root.parent / schema_path_name("definition")
     if dbn_root.name == VENDOR:
@@ -1417,8 +1445,9 @@ def definition_paths_for_group(
     year: int,
     *,
     raw_root: Path | None = None,
+    definition_dbn_root: Path | None = None,
 ) -> list[Path]:
-    base = definition_root_for_dbn_root(dbn_root)
+    base = definition_root_for_dbn_root(definition_dbn_root or dbn_root)
     canonical_dir = base / product / str(year)
     paths: list[Path] = []
     if canonical_dir.exists():
@@ -1435,9 +1464,50 @@ def definition_paths_for_group(
     return sorted(set(paths))
 
 
-def expected_definition_path_for_group(dbn_root: Path, product: str, year: int) -> Path:
-    base = definition_root_for_dbn_root(dbn_root)
+def expected_definition_path_for_group(
+    dbn_root: Path,
+    product: str,
+    year: int,
+    *,
+    definition_dbn_root: Path | None = None,
+) -> Path:
+    base = definition_root_for_dbn_root(definition_dbn_root or dbn_root)
     return base / product / str(year)
+
+
+def dbn_root_for_schema(
+    dbn_root: Path,
+    schema: str,
+    *,
+    definition_dbn_root: Path | None = None,
+    optional_dbn_root: Path | None = None,
+    optional_schema_roots: Mapping[str, Path] | None = None,
+) -> Path:
+    if schema == SCHEMA:
+        return dbn_root
+    if schema == "definition":
+        return definition_root_for_dbn_root(definition_dbn_root or dbn_root)
+    if schema in OPTIONAL_RAW_SCHEMAS:
+        schema_root = (optional_schema_roots or {}).get(schema) or optional_dbn_root or dbn_root
+        return optional_schema_root_for_dbn_root(schema_root, schema)
+    return dbn_schema_root(dbn_root, schema)
+
+
+def dbn_task_for_schema_root(task: DownloadTask, schema_root: Path) -> DownloadTask:
+    return DownloadTask(
+        dataset=task.dataset,
+        product=task.product,
+        year=task.year,
+        start=task.start,
+        end=task.end,
+        symbol=task.symbol,
+        output_path=(schema_root / task.product / str(task.year) / f"{task.start}_{task.end}.dbn.zst").as_posix(),
+        schema=task.schema,
+        stype_in=task.stype_in,
+        stype_out=task.stype_out,
+        chunk=task.chunk,
+        raw_format=task.raw_format,
+    )
 
 
 def discovery_dbn_files(dbn_root: Path, raw_root: Path) -> list[Path]:
@@ -1462,30 +1532,71 @@ def phase1b_dbn_gate_failures(
     stype_in: str,
     stype_out: str,
     optional_schemas: Iterable[str] = (),
+    definition_dbn_root: Path | None = None,
+    optional_dbn_root: Path | None = None,
+    optional_schema_roots: Mapping[str, Path] | None = None,
     optional_schema_policy: str = "warn",
+    required_schema_exceptions_config: Path | None = DEFAULT_REQUIRED_SCHEMA_EXCEPTIONS_CONFIG,
 ) -> list[str]:
     schemas = [SCHEMA, "definition"]
     if optional_schema_policy == "require":
         for schema in optional_schemas:
             if schema not in schemas:
                 schemas.append(schema)
-    tasks = build_tasks_for_schemas(
-        products,
-        schemas=schemas,
-        start=start,
-        end=end,
-        output_root=dbn_root,
-        chunk=chunk,
-        mode="download-dbn",
-        raw_format="dbn-zstd",
-        dataset=dataset,
-        stype_in=stype_in,
-        stype_out=stype_out,
-    )
+    tasks: list[DownloadTask] = []
+    for schema in schemas:
+        schema_root = dbn_root_for_schema(
+            dbn_root,
+            schema,
+            definition_dbn_root=definition_dbn_root,
+            optional_dbn_root=optional_dbn_root,
+            optional_schema_roots=optional_schema_roots,
+        )
+        tasks.extend(
+            dbn_task_for_schema_root(task, schema_root)
+            for task in build_tasks_for_schemas(
+                products,
+                schemas=[schema],
+                start=start,
+                end=end,
+                output_root=dbn_root,
+                chunk=chunk,
+                mode="download-dbn",
+                raw_format="dbn-zstd",
+                dataset=dataset,
+                stype_in=stype_in,
+                stype_out=stype_out,
+            )
+        )
     failures: list[str] = []
+    exception_keys: set[tuple[str, str, int, str, str]] = set()
+    if optional_schema_policy == "require":
+        from scripts.validation.check_dbn_archive_coverage import required_schema_exception_archive_keys
+
+        exception_keys, _exceptions, exception_failures = required_schema_exception_archive_keys(
+            required_schema_exceptions_config
+        )
+        failures.extend(exception_failures)
+
+    task_by_key = {
+        (task.schema, task.product, int(task.year), task.start, task.end): task
+        for task in tasks
+    }
+    for key in sorted(exception_keys & set(task_by_key)):
+        task = task_by_key[key]
+        path = Path(task.output_path)
+        if path.exists() and path_size_bytes(path) > 0:
+            schema, market, year, _start, _end = key
+            failures.append(
+                f"required schema exception is stale because archive is present: {schema} {market} {year}"
+            )
+
     for task in tasks:
+        key = (task.schema, task.product, int(task.year), task.start, task.end)
         path = Path(task.output_path)
         if not path.exists() or path_size_bytes(path) <= 0:
+            if key in exception_keys:
+                continue
             failures.append(
                 f"missing {task.schema} DBN for {task.product} {task.year}: {path.as_posix()}"
             )
@@ -1507,11 +1618,24 @@ def definition_frame_for_group(
     year: int,
     *,
     raw_root: Path | None = None,
+    definition_dbn_root: Path | None = None,
 ) -> tuple[pd.DataFrame, list[Path]]:
-    paths = definition_paths_for_group(dbn_root, product, year, raw_root=raw_root)
+    paths = definition_paths_for_group(
+        dbn_root,
+        product,
+        year,
+        raw_root=raw_root,
+        definition_dbn_root=definition_dbn_root,
+    )
     if not paths:
         raise ValueError(
-            f"missing definition file: {expected_definition_path_for_group(dbn_root, product, year).as_posix()}"
+            "missing definition file: "
+            + expected_definition_path_for_group(
+                dbn_root,
+                product,
+                year,
+                definition_dbn_root=definition_dbn_root,
+            ).as_posix()
         )
     frames: list[pd.DataFrame] = []
     for path in paths:
@@ -1620,6 +1744,19 @@ def enrich_with_definition_metadata(df: pd.DataFrame, definitions: pd.DataFrame)
     merged["source_schema"] = SCHEMA
     merged["source_dataset"] = CME_DATASET
     return merged
+
+
+def drop_exact_duplicate_ohlcv_rows(df: pd.DataFrame) -> pd.DataFrame:
+    key_cols = ["ts_event", "instrument_id"]
+    if not set(key_cols).issubset(df.columns):
+        return df
+    duplicate_key_rows = df.duplicated(key_cols, keep=False)
+    if not duplicate_key_rows.any():
+        return df
+    exact_deduped = df.drop_duplicates(keep="last")
+    if exact_deduped.duplicated(key_cols).any():
+        raise ValueError("conflicting duplicate OHLCV rows for ts_event,instrument_id")
+    return exact_deduped
 
 
 def parse_optional_schemas(value: str | None) -> tuple[str, ...]:
@@ -2117,8 +2254,11 @@ def convert_dbn_archive_to_raw(
     condition_source: str | None = None,
     default_quality_status: str = "metadata_unavailable",
     optional_schemas: Iterable[str] = (),
+    definition_dbn_root: Path | None = None,
     optional_dbn_root: Path | None = None,
+    optional_schema_roots: Mapping[str, Path] | None = None,
     optional_schema_policy: str = "warn",
+    required_schema_exceptions_config: Path | None = DEFAULT_REQUIRED_SCHEMA_EXCEPTIONS_CONFIG,
 ) -> list[dict[str, object]]:
     requested_optional_schemas = tuple(dict.fromkeys(optional_schemas))
     unsupported_optional = sorted(set(requested_optional_schemas) - set(OPTIONAL_RAW_SCHEMAS))
@@ -2126,9 +2266,22 @@ def convert_dbn_archive_to_raw(
         raise ValueError("unsupported optional schemas: " + ",".join(unsupported_optional))
     if optional_schema_policy not in OPTIONAL_SCHEMA_POLICIES:
         raise ValueError("unsupported optional schema policy: " + optional_schema_policy)
+    exception_keys: set[tuple[str, str, int, str, str]] = set()
+    if optional_schema_policy == "require":
+        from scripts.validation.check_dbn_archive_coverage import required_schema_exception_archive_keys
+
+        exception_keys, _exceptions, exception_failures = required_schema_exception_archive_keys(
+            required_schema_exceptions_config
+        )
+        if exception_failures:
+            raise ValueError("required schema exception validation failed: " + "; ".join(exception_failures))
     effective_optional_dbn_root = optional_dbn_root or (
         dbn_root.parent if dbn_root.name == schema_path_name(SCHEMA) else dbn_root
     )
+    effective_optional_schema_roots = {
+        schema: (optional_schema_roots or {}).get(schema, effective_optional_dbn_root)
+        for schema in requested_optional_schemas
+    }
     source_paths = list(paths) if paths is not None else discovery_dbn_files(dbn_root, raw_root)
     entries = archive_entries_for_paths(source_paths, dbn_root, products=products)
     groups: dict[tuple[str, int], list[Path]] = {}
@@ -2173,9 +2326,12 @@ def convert_dbn_archive_to_raw(
                 product,
                 year,
                 raw_root=raw_root,
+                definition_dbn_root=definition_dbn_root,
             )
             for definition_path in definition_paths:
                 input_hashes[definition_path.as_posix()] = file_sha256(definition_path)
+            definition_source_file = ";".join(path.as_posix() for path in definition_paths)
+            definition_source_sha256 = ";".join(input_hashes[path.as_posix()] for path in definition_paths)
             skipped = has_non_empty_output(out) and not overwrite
             if skipped:
                 check = validate_download(out)
@@ -2200,16 +2356,29 @@ def convert_dbn_archive_to_raw(
                     "ts_event",
                     kind="mergesort",
                 )
+                df = drop_exact_duplicate_ohlcv_rows(df)
                 df = enrich_with_definition_metadata(df, definitions)
                 optional_frames: dict[str, pd.DataFrame | None] = {}
+                group_start, group_end = dbn_archive_group_date_range(group_paths, year)
                 for schema in requested_optional_schemas:
-                    loaded = load_optional_schema_frame_for_group(
-                        effective_optional_dbn_root,
-                        schema,
-                        product,
-                        year,
-                        policy=optional_schema_policy,
-                    )
+                    try:
+                        loaded = load_optional_schema_frame_for_group(
+                            effective_optional_schema_roots.get(schema, effective_optional_dbn_root),
+                            schema,
+                            product,
+                            year,
+                            policy=optional_schema_policy,
+                        )
+                    except ValueError:
+                        exception_key = (schema, product, int(year), group_start, group_end)
+                        if optional_schema_policy == "require" and exception_key in exception_keys:
+                            optional_frames[schema] = None
+                            optional_input_paths[schema] = []
+                            optional_warnings.append(
+                                f"provider-unavailable required {schema} DBN exception for {product} {year}"
+                            )
+                            continue
+                        raise
                     optional_frames[schema] = loaded.frame
                     optional_warnings.extend(loaded.warnings)
                     optional_input_paths[schema] = [path.as_posix() for path in loaded.paths]
@@ -2236,6 +2405,8 @@ def convert_dbn_archive_to_raw(
                 df["year"] = year
                 df["source_file"] = ";".join(path.as_posix() for path in group_paths)
                 df["source_sha256"] = ";".join(file_sha256(path) for path in group_paths)
+                df["definition_source_file"] = definition_source_file
+                df["definition_source_sha256"] = definition_source_sha256
                 readiness_cols = [
                     "datetime_utc",
                     "market",
@@ -2250,6 +2421,7 @@ def convert_dbn_archive_to_raw(
                     "source_dataset",
                     "source_file",
                     "source_sha256",
+                    *DEFINITION_SOURCE_COLUMNS,
                 ]
                 optional_cols: list[str] = []
                 if "status" in requested_optional_schemas:
@@ -2297,6 +2469,15 @@ def convert_dbn_archive_to_raw(
                     "optional_schemas": list(requested_optional_schemas),
                     "optional_schema_policy": optional_schema_policy,
                     "optional_dbn_root": effective_optional_dbn_root.as_posix(),
+                    "definition_dbn_root": (
+                        definition_root_for_dbn_root(definition_dbn_root).as_posix()
+                        if definition_dbn_root is not None
+                        else None
+                    ),
+                    "optional_schema_roots": {
+                        schema: root.as_posix()
+                        for schema, root in effective_optional_schema_roots.items()
+                    },
                     "optional_schema_input_paths": optional_input_paths,
                     "optional_schema_match_summary": optional_match_summary,
                     "optional_schema_warning_count": len(optional_warnings),
@@ -2330,6 +2511,15 @@ def convert_dbn_archive_to_raw(
                     "optional_schemas": list(requested_optional_schemas),
                     "optional_schema_policy": optional_schema_policy,
                     "optional_dbn_root": effective_optional_dbn_root.as_posix(),
+                    "definition_dbn_root": (
+                        definition_root_for_dbn_root(definition_dbn_root).as_posix()
+                        if definition_dbn_root is not None
+                        else None
+                    ),
+                    "optional_schema_roots": {
+                        schema: root.as_posix()
+                        for schema, root in effective_optional_schema_roots.items()
+                    },
                     "optional_schema_input_paths": optional_input_paths,
                     "optional_schema_warning_count": len(optional_warnings),
                     "warnings": optional_warnings,
@@ -3487,6 +3677,15 @@ def report_path(args: argparse.Namespace, name: str) -> Path:
     return effective_reports_root(args) / name
 
 
+def optional_schema_roots_from_args(args: argparse.Namespace) -> dict[str, Path]:
+    roots: dict[str, Path] = {}
+    if getattr(args, "status_dbn_root", None):
+        roots["status"] = Path(args.status_dbn_root)
+    if getattr(args, "statistics_dbn_root", None):
+        roots["statistics"] = Path(args.statistics_dbn_root)
+    return roots
+
+
 def print_dry_run(tasks: list[DownloadTask]) -> None:
     print(f"DRY_RUN total_planned_chunks={len(tasks)}")
     for task in tasks:
@@ -3539,6 +3738,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--raw-root", default=DEFAULT_RAW_OUT)
     parser.add_argument("--reports-root", default=DEFAULT_REPORTS_ROOT)
     parser.add_argument(
+        "--definition-dbn-root",
+        help="Override definition DBN root for convert-parquet; defaults to root derived from --dbn-root.",
+    )
+    parser.add_argument(
         "--include-optional-schemas",
         default="",
         help="Comma-separated optional L0 schemas to as-of enrich onto OHLCV rows; supports status,statistics.",
@@ -3547,6 +3750,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--optional-dbn-root",
         default="data/dbn",
         help="Root containing optional schema DBNs, e.g. data/dbn/status/{market}/{year}.",
+    )
+    parser.add_argument(
+        "--status-dbn-root",
+        help="Override status DBN root for convert-parquet; supports split parent-source candidate roots.",
+    )
+    parser.add_argument(
+        "--statistics-dbn-root",
+        help="Override statistics DBN root for convert-parquet; supports split parent-source candidate roots.",
     )
     parser.add_argument(
         "--optional-schema-policy",
@@ -3561,6 +3772,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "For --mode convert-parquet only, avoid Databento metadata calls and "
             "treat local archive dates as available. Intended for offline smoke validation."
         ),
+    )
+    parser.add_argument(
+        "--required-schema-exceptions-config",
+        default=DEFAULT_REQUIRED_SCHEMA_EXCEPTIONS_CONFIG.as_posix(),
+        help="Explicit required-schema exception config for Phase 1B strict DBN gate.",
+    )
+    parser.add_argument(
+        "--disable-required-schema-exceptions",
+        action="store_true",
+        help="Disable required-schema exceptions in the Phase 1B strict DBN gate.",
     )
     parser.add_argument("--out", help="Legacy output root override; prefer --dbn-root or --raw-root.")
     parser.add_argument("--plan-out", help="Override download plan path; defaults under --reports-root.")
@@ -3621,6 +3842,9 @@ def main() -> int:
         products = set(product_list)
         dbn_root = effective_output_root(args)
         raw_root = effective_raw_root(args)
+        definition_dbn_root = Path(args.definition_dbn_root) if args.definition_dbn_root else None
+        optional_dbn_root = Path(args.optional_dbn_root)
+        optional_schema_roots = optional_schema_roots_from_args(args)
         gate_failures = phase1b_dbn_gate_failures(
             dbn_root=dbn_root,
             products=product_list,
@@ -3631,7 +3855,13 @@ def main() -> int:
             stype_in=args.stype_in,
             stype_out=args.stype_out,
             optional_schemas=optional_schemas,
+            definition_dbn_root=definition_dbn_root,
+            optional_dbn_root=optional_dbn_root,
+            optional_schema_roots=optional_schema_roots,
             optional_schema_policy=args.optional_schema_policy,
+            required_schema_exceptions_config=(
+                None if args.disable_required_schema_exceptions else Path(args.required_schema_exceptions_config)
+            ),
         )
         if gate_failures:
             for failure in gate_failures:
@@ -3662,8 +3892,13 @@ def main() -> int:
             condition_by_group=condition_by_group,
             condition_source=condition_source,
             optional_schemas=optional_schemas,
-            optional_dbn_root=Path(args.optional_dbn_root),
+            definition_dbn_root=definition_dbn_root,
+            optional_dbn_root=optional_dbn_root,
+            optional_schema_roots=optional_schema_roots,
             optional_schema_policy=args.optional_schema_policy,
+            required_schema_exceptions_config=(
+                None if args.disable_required_schema_exceptions else Path(args.required_schema_exceptions_config)
+            ),
         )
         write_json(report_path(args, "databento_convert_results.json"), results)
         write_json(

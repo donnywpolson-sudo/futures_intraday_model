@@ -289,6 +289,325 @@ profiles:
     requires_all_market_configs: true
     requires_cost_configs: true
     market_families: *full_market_families
+    accepted_readiness_exceptions:
+      - category: status_sparse
+        market: 6M
+        year: 2010
+        reason: p0_status_sparse_policy_approved_20260624
+        evidence_paths: &p0_status_sparse_evidence
+          - reports/phase2_readiness/tier3_research_after_phase1b_rebuild_20260624_p0_status_sparse_policy_approval_plan.json
+          - reports/phase2_readiness/tier3_research_after_phase1b_rebuild_20260624_p0_status_sidecar_diagnostic.json
+          - reports/phase2_readiness/tier3_research_after_phase1b_rebuild_20260624_p0_status_overlap_diagnostic.json
+          - reports/phase2_readiness/tier3_research_after_phase1b_rebuild_20260624_p0_status_asof_causality_diagnostic.json
+        warning_prefixes:
+          - 'synthetic threshold breached: rows_pct=53.70651 max_gap_minutes=120'
+      - category: status_sparse
+        market: 6M
+        year: 2011
+        reason: p0_status_sparse_policy_approved_20260624
+        evidence_paths: *p0_status_sparse_evidence
+        warning_prefixes:
+          - 'synthetic threshold breached: rows_pct=51.913089 max_gap_minutes=120'
+      - category: status_sparse
+        market: 6M
+        year: 2014
+        reason: p0_status_sparse_policy_approved_20260624
+        evidence_paths: *p0_status_sparse_evidence
+        warning_prefixes:
+          - 'synthetic threshold breached: rows_pct=52.265632 max_gap_minutes=116'
+      - category: status_sparse
+        market: HE
+        year: 2010
+        reason: p0_status_sparse_policy_approved_20260624
+        evidence_paths: *p0_status_sparse_evidence
+        warning_prefixes:
+          - 'roll maturity sequence not monotonic: backsteps=1'
+          - 'synthetic threshold breached: rows_pct=61.989039 max_gap_minutes=119'
+      - category: status_sparse
+        market: HE
+        year: 2011
+        reason: p0_status_sparse_policy_approved_20260624
+        evidence_paths: *p0_status_sparse_evidence
+        warning_prefixes:
+          - 'roll maturity sequence not monotonic: backsteps=3'
+          - 'synthetic threshold breached: rows_pct=59.435291 max_gap_minutes=117'
+      - category: status_sparse
+        market: HE
+        year: 2012
+        reason: p0_status_sparse_policy_approved_20260624
+        evidence_paths: *p0_status_sparse_evidence
+        warning_prefixes:
+          - 'roll maturity sequence not monotonic: backsteps=3'
+          - 'synthetic threshold breached: rows_pct=58.970774 max_gap_minutes=119'
+      - category: status_sparse
+        market: HE
+        year: 2013
+        reason: p0_status_sparse_policy_approved_20260624
+        evidence_paths: *p0_status_sparse_evidence
+        warning_prefixes:
+          - 'roll maturity sequence not monotonic: backsteps=3'
+          - 'synthetic threshold breached: rows_pct=58.586431 max_gap_minutes=114'
+      - category: status_sparse
+        market: HE
+        year: 2014
+        reason: p0_status_sparse_policy_approved_20260624
+        evidence_paths: *p0_status_sparse_evidence
+        warning_prefixes:
+          - 'synthetic threshold breached: rows_pct=51.97148 max_gap_minutes=117'
+      - category: status_sparse
+        market: KE
+        year: 2013
+        reason: p0_status_sparse_policy_approved_20260624
+        evidence_paths: *p0_status_sparse_evidence
+        warning_prefixes:
+          - 'synthetic threshold breached: rows_pct=59.633118 max_gap_minutes=105'
+      - category: status_sparse
+        market: KE
+        year: 2014
+        reason: p0_status_sparse_policy_approved_20260624
+        evidence_paths: *p0_status_sparse_evidence
+        warning_prefixes:
+          - 'roll maturity sequence not monotonic: backsteps=4'
+          - 'synthetic threshold breached: rows_pct=61.854098 max_gap_minutes=119'
+          - 'degraded threshold breached: rows_pct=2.734991 bars=2777 sessions=7'
+      - category: status_sparse
+        market: KE
+        year: 2015
+        reason: p0_status_sparse_policy_approved_20260624
+        evidence_paths: *p0_status_sparse_evidence
+        warning_prefixes:
+          - 'synthetic threshold breached: rows_pct=60.032591 max_gap_minutes=120'
+      - category: status_sparse
+        market: LE
+        year: 2010
+        reason: p0_status_sparse_policy_approved_20260624
+        evidence_paths: *p0_status_sparse_evidence
+        warning_prefixes:
+          - 'roll maturity sequence not monotonic: backsteps=2'
+          - 'synthetic threshold breached: rows_pct=61.459145 max_gap_minutes=120'
+      - category: status_sparse
+        market: LE
+        year: 2011
+        reason: p0_status_sparse_policy_approved_20260624
+        evidence_paths: *p0_status_sparse_evidence
+        warning_prefixes:
+          - 'roll maturity sequence not monotonic: backsteps=5'
+          - 'synthetic threshold breached: rows_pct=58.132653 max_gap_minutes=115'
+      - category: status_sparse
+        market: LE
+        year: 2012
+        reason: p0_status_sparse_policy_approved_20260624
+        evidence_paths: *p0_status_sparse_evidence
+        warning_prefixes:
+          - 'roll maturity sequence not monotonic: backsteps=4'
+          - 'synthetic threshold breached: rows_pct=57.784717 max_gap_minutes=119'
+      - category: status_sparse
+        market: LE
+        year: 2013
+        reason: p0_status_sparse_policy_approved_20260624
+        evidence_paths: *p0_status_sparse_evidence
+        warning_prefixes:
+          - 'roll maturity sequence not monotonic: backsteps=2'
+          - 'synthetic threshold breached: rows_pct=59.396891 max_gap_minutes=119'
+      - category: status_sparse
+        market: LE
+        year: 2014
+        reason: p0_status_sparse_policy_approved_20260624
+        evidence_paths: *p0_status_sparse_evidence
+        warning_prefixes:
+          - 'synthetic threshold breached: rows_pct=51.938446 max_gap_minutes=119'
+      - category: status_sparse
+        market: RB
+        year: 2010
+        reason: p0_status_sparse_policy_approved_20260624
+        evidence_paths: *p0_status_sparse_evidence
+        warning_prefixes:
+          - 'synthetic threshold breached: rows_pct=49.845241 max_gap_minutes=120'
+      - category: status_sparse
+        market: ZT
+        year: 2012
+        reason: p0_status_sparse_policy_approved_20260624
+        evidence_paths: *p0_status_sparse_evidence
+        warning_prefixes:
+          - 'synthetic threshold breached: rows_pct=50.031391 max_gap_minutes=120'
+      - category: status_sparse
+        market: ZT
+        year: 2013
+        reason: p0_status_sparse_policy_approved_20260624
+        evidence_paths: *p0_status_sparse_evidence
+        warning_prefixes:
+          - 'synthetic threshold breached: rows_pct=51.154512 max_gap_minutes=120'
+      - category: status_sparse
+        market: ZT
+        year: 2014
+        reason: p0_status_sparse_policy_approved_20260624
+        evidence_paths: *p0_status_sparse_evidence
+        warning_prefixes:
+          - 'synthetic threshold breached: rows_pct=51.765938 max_gap_minutes=120'
+          - 'degraded threshold breached: rows_pct=2.979056 bars=4994 sessions=10'
+      - category: degraded_raw_quality
+        market: 6E
+        year: 2020
+        reason: degraded_only_policy_approved_20260625
+        evidence_paths: &degraded_only_evidence
+          - reports/phase2_readiness/degraded_only_report_only_review_20260625/degraded_only_readonly_evidence.json
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.297123 bars=4515 sessions=5'
+      - category: degraded_raw_quality
+        market: CL
+        year: 2019
+        reason: degraded_only_policy_approved_20260625
+        evidence_paths: *degraded_only_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.550863 bars=5458 sessions=7'
+      - category: degraded_raw_quality
+        market: ES
+        year: 2019
+        reason: degraded_only_policy_approved_20260625
+        evidence_paths: *degraded_only_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.544351 bars=5398 sessions=7'
+      - category: degraded_raw_quality
+        market: ES
+        year: 2020
+        reason: degraded_only_policy_approved_20260625
+        evidence_paths: *degraded_only_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.298586 bars=4540 sessions=5'
+      - category: degraded_raw_quality
+        market: GC
+        year: 2019
+        reason: degraded_only_policy_approved_20260625
+        evidence_paths: *degraded_only_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.564493 bars=5445 sessions=7'
+      - category: degraded_raw_quality
+        market: NQ
+        year: 2019
+        reason: degraded_only_policy_approved_20260625
+        evidence_paths: *degraded_only_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.54325 bars=5399 sessions=7'
+      - category: degraded_raw_quality
+        market: NQ
+        year: 2020
+        reason: degraded_only_policy_approved_20260625
+        evidence_paths: *degraded_only_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.301121 bars=4540 sessions=5'
+      - category: degraded_raw_quality
+        market: YM
+        year: 2019
+        reason: degraded_only_policy_approved_20260625
+        evidence_paths: *degraded_only_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.546868 bars=5396 sessions=7'
+      - category: degraded_raw_quality
+        market: ZN
+        year: 2014
+        reason: degraded_only_policy_approved_20260625
+        evidence_paths: *degraded_only_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=2.968642 bars=8828 sessions=10'
+      - category: degraded_raw_quality
+        market: ZN
+        year: 2019
+        reason: degraded_only_policy_approved_20260625
+        evidence_paths: *degraded_only_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.569391 bars=5089 sessions=7'
+      - category: vendor_trusted_ohlcv_no_trade
+        market: HE
+        year: 2016
+        reason: row_specific_vendor_trusted_ohlcv_no_trade_approved_20260626
+        evidence_paths: &vendor_trusted_ohlcv_no_trade_evidence
+          - reports/raw_ingest/raw_dbn_alignment.json
+          - reports/raw_readiness/raw_enriched_optional_schema_audit.json
+        warning_prefixes:
+          - 'roll maturity sequence not monotonic: backsteps=1'
+          - 'synthetic threshold breached: rows_pct=5.558501 max_gap_minutes=24'
+      - category: vendor_trusted_ohlcv_no_trade
+        market: HE
+        year: 2019
+        reason: row_specific_vendor_trusted_ohlcv_no_trade_approved_20260626
+        evidence_paths: *vendor_trusted_ohlcv_no_trade_evidence
+        warning_prefixes:
+          - 'synthetic threshold breached: rows_pct=2.085533 max_gap_minutes=37'
+          - 'degraded threshold breached: rows_pct=1.621837 bars=1098 sessions=4'
+      - category: vendor_trusted_ohlcv_no_trade
+        market: HE
+        year: 2020
+        reason: row_specific_vendor_trusted_ohlcv_no_trade_approved_20260626
+        evidence_paths: *vendor_trusted_ohlcv_no_trade_evidence
+        warning_prefixes:
+          - 'roll maturity sequence not monotonic: backsteps=1'
+          - 'synthetic threshold breached: rows_pct=3.873587 max_gap_minutes=40'
+          - 'degraded threshold breached: rows_pct=1.025517 bars=680 sessions=4'
+      - category: degraded_raw_quality
+        market: HE
+        year: 2019
+        reason: row_specific_he_degraded_raw_quality_approved_20260626
+        evidence_paths: *vendor_trusted_ohlcv_no_trade_evidence
+        warning_prefixes:
+          - 'synthetic threshold breached: rows_pct=2.085533 max_gap_minutes=37'
+          - 'degraded threshold breached: rows_pct=1.621837 bars=1098 sessions=4'
+      - category: degraded_raw_quality
+        market: HE
+        year: 2020
+        reason: row_specific_he_degraded_raw_quality_approved_20260626
+        evidence_paths: *vendor_trusted_ohlcv_no_trade_evidence
+        warning_prefixes:
+          - 'roll maturity sequence not monotonic: backsteps=1'
+          - 'synthetic threshold breached: rows_pct=3.873587 max_gap_minutes=40'
+          - 'degraded threshold breached: rows_pct=1.025517 bars=680 sessions=4'
+      - category: vendor_trusted_ohlcv_no_trade
+        market: LE
+        year: 2016
+        reason: row_specific_vendor_trusted_ohlcv_no_trade_approved_20260626
+        evidence_paths: *vendor_trusted_ohlcv_no_trade_evidence
+        warning_prefixes:
+          - 'roll maturity sequence not monotonic: backsteps=1'
+          - 'synthetic threshold breached: rows_pct=4.84661 max_gap_minutes=63'
+      - category: vendor_trusted_ohlcv_no_trade
+        market: LE
+        year: 2020
+        reason: row_specific_vendor_trusted_ohlcv_no_trade_approved_20260626
+        evidence_paths: *vendor_trusted_ohlcv_no_trade_evidence
+        warning_prefixes:
+          - 'roll maturity sequence not monotonic: backsteps=2'
+          - 'synthetic threshold breached: rows_pct=2.702193 max_gap_minutes=27'
+      - category: parent_sparse_ohlcv_no_trade
+        market: KE
+        year: 2019
+        reason: row_specific_ke_parent_sparse_ohlcv_no_trade_approved_20260626
+        evidence_paths: &ke_parent_sparse_ohlcv_no_trade_evidence
+          - reports/phase2_readiness/ke_2019_2021_2024_parent_candidate_20260626T133239Z/sr_front_contract_candidate_manifest.json
+          - reports/phase2_readiness/ke_2019_2021_2024_parent_candidate_20260626T133239Z/sr_front_contract_candidate_raw_alignment.json
+        warning_prefixes:
+          - 'synthetic threshold breached: rows_pct=57.450805 max_gap_minutes=119'
+      - category: parent_sparse_ohlcv_no_trade
+        market: KE
+        year: 2021
+        reason: row_specific_ke_parent_sparse_ohlcv_no_trade_approved_20260626
+        evidence_paths: *ke_parent_sparse_ohlcv_no_trade_evidence
+        warning_prefixes:
+          - 'synthetic threshold breached: rows_pct=52.118061 max_gap_minutes=119'
+      - category: parent_sparse_ohlcv_no_trade
+        market: KE
+        year: 2023
+        reason: row_specific_ke_parent_sparse_ohlcv_no_trade_approved_20260626
+        evidence_paths:
+          - reports/phase2_readiness/ke_2023_parent_candidate_20260626/sr_front_contract_candidate_manifest.json
+          - reports/phase2_readiness/ke_2023_parent_candidate_20260626/sr_front_contract_candidate_raw_alignment.json
+        warning_prefixes:
+          - 'synthetic threshold breached: rows_pct=53.439024 max_gap_minutes=116'
+      - category: parent_sparse_ohlcv_no_trade
+        market: KE
+        year: 2024
+        reason: row_specific_ke_parent_sparse_ohlcv_no_trade_approved_20260626
+        evidence_paths: *ke_parent_sparse_ohlcv_no_trade_evidence
+        warning_prefixes:
+          - 'synthetic threshold breached: rows_pct=50.469719 max_gap_minutes=118'
 
   tier_3_holdout:
     description: "Tier 3 locked holdout: 33 markets, 2025."

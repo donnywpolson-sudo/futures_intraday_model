@@ -156,6 +156,101 @@ def test_front_contract_candidate_selects_front_and_drops_deferred_only_minutes(
     assert candidate["source_file"].eq("candidate.dbn.zst").all()
 
 
+def test_ke_front_contract_candidate_uses_outright_front_policy() -> None:
+    definitions = pd.DataFrame(
+        [
+            {
+                "ts_event": pd.Timestamp("2015-12-01T00:00:00Z"),
+                "instrument_id": 10,
+                "raw_symbol": "KEH6",
+                "instrument_class": "F",
+                "min_price_increment": 0.25,
+                "contract_multiplier": 5000.0,
+                "expiration": pd.Timestamp("2016-03-14T16:00:00Z"),
+                "activation": pd.Timestamp("2015-12-01T00:00:00Z"),
+                "maturity_year": 2016,
+                "maturity_month": 3,
+            },
+            {
+                "ts_event": pd.Timestamp("2015-12-01T00:00:00Z"),
+                "instrument_id": 11,
+                "raw_symbol": "KEK6",
+                "instrument_class": "F",
+                "min_price_increment": 0.25,
+                "contract_multiplier": 5000.0,
+                "expiration": pd.Timestamp("2016-05-13T16:00:00Z"),
+                "activation": pd.Timestamp("2015-12-01T00:00:00Z"),
+                "maturity_year": 2016,
+                "maturity_month": 5,
+            },
+        ]
+    )
+    ohlcv = pd.DataFrame(
+        [
+            _ohlcv_row("2016-01-04T15:00:00Z", 10, "KEH6", 450.0),
+            _ohlcv_row("2016-01-04T15:00:00Z", 11, "KEK6", 455.0),
+            _ohlcv_row("2016-03-15T15:00:00Z", 11, "KEK6", 456.0),
+        ]
+    )
+    status = pd.DataFrame(
+        [
+            {
+                "ts_event": pd.Timestamp("2015-12-01T00:00:00Z"),
+                "instrument_id": 10,
+                "action": 7,
+                "reason": "NORMAL",
+                "trading_event": 0,
+                "is_trading": "Y",
+                "is_quoting": "Y",
+            },
+            {
+                "ts_event": pd.Timestamp("2015-12-01T00:00:00Z"),
+                "instrument_id": 11,
+                "action": 7,
+                "reason": "NORMAL",
+                "trading_event": 0,
+                "is_trading": "Y",
+                "is_quoting": "Y",
+            },
+        ]
+    )
+    statistics = pd.DataFrame(
+        [
+            {
+                "ts_event": pd.Timestamp("2015-12-01T00:00:00Z"),
+                "instrument_id": 10,
+                "stat_type": 1,
+                "price": 450.0,
+            },
+            {
+                "ts_event": pd.Timestamp("2015-12-01T00:00:00Z"),
+                "instrument_id": 11,
+                "stat_type": 1,
+                "price": 455.0,
+            },
+        ]
+    )
+
+    candidate, metrics = builder.build_front_contract_candidate_frame(
+        ohlcv=ohlcv,
+        definitions=definitions,
+        status=status,
+        statistics=statistics,
+        market="KE",
+        year=2016,
+        source_files=["ke_parent.dbn.zst"],
+        source_hashes=["a" * 64],
+    )
+
+    assert candidate["raw_symbol"].tolist() == ["KEH6", "KEK6"]
+    assert candidate["instrument_id"].tolist() == [10, 11]
+    assert not candidate["ts_event"].duplicated().any()
+    assert metrics["selection_policy"] == builder.FRONT_CONTRACT_POLICY_NAME
+    assert metrics["contract_universe_policy"] == "outright_futures"
+    assert metrics["dropped_deferred_contract_rows"] == 1
+    assert metrics["maturity_backstep_count"] == 0
+
+
 def test_front_contract_candidate_rejects_duplicate_front_timestamps() -> None:
     ohlcv = pd.DataFrame(
         [
@@ -561,3 +656,141 @@ def test_candidate_build_fails_alignment_when_sidecar_coverage_is_missing(
     ]
     assert any("sidecar enrichment incomplete" in failure for failure in report["failures"])
     assert not output_root.exists()
+
+
+def test_candidate_build_supports_ke_candidate_only_report_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate_root = tmp_path / "data" / "dbn" / "ohlcv_1m_parent"
+    definition_root = tmp_path / "data" / "dbn" / "definition"
+    status_root = tmp_path / "data" / "dbn" / "status_parent"
+    statistics_root = tmp_path / "data" / "dbn" / "statistics_parent"
+    output_root = tmp_path / "reports" / "phase2_readiness" / "ke_candidate" / "raw"
+    reports_root = tmp_path / "reports" / "phase2_readiness" / "ke_candidate"
+    source_path = candidate_root / "KE" / "2016" / "2016-01-01_2017-01-01.dbn.zst"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(b"dbn")
+
+    monkeypatch.setattr(
+        builder,
+        "build_source_audit",
+        lambda **_: {
+            "status": "PASS",
+            "repair_source_ready_count": 1,
+            "blocked_count": 0,
+        },
+    )
+    monkeypatch.setattr(builder, "_ohlcv_paths", lambda *_: [source_path])
+    monkeypatch.setattr(builder, "file_sha256", lambda _: "a" * 64)
+    monkeypatch.setattr(
+        builder,
+        "_load_ohlcv_frame",
+        lambda *_: pd.DataFrame(
+            [
+                _ohlcv_row("2016-01-04T15:00:00Z", 10, "KEH6", 450.0),
+                _ohlcv_row("2016-03-15T15:00:00Z", 11, "KEK6", 456.0),
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        builder,
+        "definition_frame_for_group",
+        lambda *_: (
+            pd.DataFrame(
+                [
+                    {
+                        "ts_event": pd.Timestamp("2015-12-01T00:00:00Z"),
+                        "instrument_id": 10,
+                        "raw_symbol": "KEH6",
+                        "instrument_class": "F",
+                        "min_price_increment": 0.25,
+                        "contract_multiplier": 5000.0,
+                        "expiration": pd.Timestamp("2016-03-14T16:00:00Z"),
+                        "maturity_year": 2016,
+                        "maturity_month": 3,
+                    },
+                    {
+                        "ts_event": pd.Timestamp("2015-12-01T00:00:00Z"),
+                        "instrument_id": 11,
+                        "raw_symbol": "KEK6",
+                        "instrument_class": "F",
+                        "min_price_increment": 0.25,
+                        "contract_multiplier": 5000.0,
+                        "expiration": pd.Timestamp("2016-05-13T16:00:00Z"),
+                        "maturity_year": 2016,
+                        "maturity_month": 5,
+                    },
+                ]
+            ),
+            [definition_root / "definition.dbn.zst"],
+        ),
+    )
+    monkeypatch.setattr(
+        builder,
+        "load_optional_schema_frame_for_group",
+        lambda root, schema, *_args, **_kwargs: _OptionalFrame(
+            pd.DataFrame(
+                [
+                    {
+                        "ts_event": pd.Timestamp("2015-12-01T00:00:00Z"),
+                        "instrument_id": 10,
+                        "action": 7,
+                        "reason": "NORMAL",
+                        "trading_event": 0,
+                        "is_trading": "Y",
+                        "is_quoting": "Y",
+                    },
+                    {
+                        "ts_event": pd.Timestamp("2015-12-01T00:00:00Z"),
+                        "instrument_id": 11,
+                        "action": 7,
+                        "reason": "NORMAL",
+                        "trading_event": 0,
+                        "is_trading": "Y",
+                        "is_quoting": "Y",
+                    },
+                ]
+            )
+            if schema == "status"
+            else pd.DataFrame(
+                [
+                    {
+                        "ts_event": pd.Timestamp("2015-12-01T00:00:00Z"),
+                        "instrument_id": 10,
+                        "stat_type": 1,
+                        "price": 450.0,
+                    },
+                    {
+                        "ts_event": pd.Timestamp("2015-12-01T00:00:00Z"),
+                        "instrument_id": 11,
+                        "stat_type": 1,
+                        "price": 455.0,
+                    },
+                ]
+            ),
+            root / schema / "KE" / "2016" / "sidecar.dbn.zst",
+        ),
+    )
+
+    report = builder.build_candidate_outputs(
+        candidate_dbn_root=candidate_root,
+        sidecar_dbn_root=definition_root,
+        definition_dbn_root=definition_root,
+        status_dbn_root=status_root,
+        statistics_dbn_root=statistics_root,
+        output_root=output_root,
+        reports_root=reports_root,
+        markets=["KE"],
+        years=[2016],
+        profile="tier_3",
+        resolved_profile="tier_3_research",
+    )
+
+    assert report["status"] == "PASS"
+    assert report["candidate_policy"]["name"] == builder.FRONT_CONTRACT_POLICY_NAME
+    assert report["output_root"] == output_root.as_posix()
+    assert report["outputs"][0]["market"] == "KE"
+    assert report["outputs"][0]["selection_policy"] == builder.FRONT_CONTRACT_POLICY_NAME
+    assert (output_root / "KE" / "2016.parquet").exists()
+    assert (reports_root / builder.RAW_ALIGNMENT_NAME).exists()

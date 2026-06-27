@@ -20,6 +20,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--raw-root", default="data/raw")
     parser.add_argument("--expected-exclusion", nargs="*", default=[])
     parser.add_argument("--promoted-raw-alignment-out", required=True)
+    parser.add_argument(
+        "--alignment-only-existing-raw",
+        action="store_true",
+        help=(
+            "Validate already-promoted raw files and write only the raw alignment "
+            "report; do not copy candidate files into --raw-root."
+        ),
+    )
     return parser
 
 
@@ -297,6 +305,117 @@ def _write_promoted_alignment(
     return report
 
 
+def _manifest_for_dbn(path: Path) -> Path:
+    return path.with_name(f"{path.name}.manifest.json")
+
+
+def _validate_source_manifest(
+    *,
+    path: Path,
+    schema: str,
+    market: str,
+    year: int,
+) -> list[str]:
+    failures: list[str] = []
+    if not path.exists():
+        return [f"{schema} source DBN missing: {path.as_posix()}"]
+    if path.stat().st_size <= 0:
+        failures.append(f"{schema} source DBN is zero-size: {path.as_posix()}")
+
+    manifest_path = _manifest_for_dbn(path)
+    if not manifest_path.exists():
+        return failures + [f"{schema} source manifest missing: {manifest_path.as_posix()}"]
+    try:
+        manifest = _read_json(manifest_path)
+    except Exception as exc:
+        return failures + [f"{schema} source manifest unreadable: {manifest_path.as_posix()}: {exc}"]
+
+    manifest_schema = str(manifest.get("schema", ""))
+    if manifest_schema != schema:
+        failures.append(f"{schema} source manifest schema={manifest_schema!r}, expected {schema!r}")
+    if str(manifest.get("market", "")) != market:
+        failures.append(
+            f"{schema} source manifest market={manifest.get('market')!r}, expected {market!r}"
+        )
+    manifest_start = str(manifest.get("start", ""))
+    manifest_end = str(manifest.get("end", ""))
+    if manifest_start != f"{year}-01-01" or manifest_end != f"{year + 1}-01-01":
+        failures.append(
+            f"{schema} source manifest range={manifest_start}_{manifest_end}, "
+            f"expected {year}-01-01_{year + 1}-01-01"
+        )
+    stype_in = str(manifest.get("stype_in", ""))
+    if stype_in == "continuous":
+        failures.append(f"{schema} source manifest stype_in is continuous: {manifest_path.as_posix()}")
+    if stype_in == "":
+        failures.append(f"{schema} source manifest stype_in is missing: {manifest_path.as_posix()}")
+    symbols = manifest.get("symbols_requested", [])
+    if isinstance(symbols, str):
+        symbols = [symbols]
+    if any(str(symbol).endswith(".v.0") for symbol in symbols if symbol is not None):
+        failures.append(
+            f"{schema} source manifest uses continuous symbol: {manifest_path.as_posix()}"
+        )
+
+    current_hash = file_sha256(path)
+    manifest_hash = manifest.get("file_sha256")
+    if manifest_hash is not None and current_hash != str(manifest_hash):
+        failures.append(f"{schema} source DBN hash mismatch: {path.as_posix()}")
+    manifest_size = manifest.get("file_size_bytes")
+    if manifest_size is not None:
+        try:
+            expected_size = int(manifest_size)
+        except (TypeError, ValueError):
+            failures.append(f"{schema} source manifest file_size_bytes invalid: {manifest_size!r}")
+        else:
+            if expected_size != path.stat().st_size:
+                failures.append(f"{schema} source DBN size mismatch: {path.as_posix()}")
+    return failures
+
+
+def _validate_parent_source_evidence(outputs: Iterable[dict[str, Any]]) -> list[str]:
+    failures: list[str] = []
+    required_fields = [
+        ("ohlcv-1m", "ohlcv_input_paths"),
+        ("status", "status_paths"),
+        ("statistics", "statistics_paths"),
+    ]
+    for row in outputs:
+        market = str(row["market"])
+        year = int(row["year"])
+        for schema, field_name in required_fields:
+            values = row.get(field_name)
+            if not isinstance(values, list) or not values:
+                failures.append(f"{market} {year} missing {field_name}")
+                continue
+            for value in values:
+                failures.extend(
+                    _validate_source_manifest(
+                        path=Path(str(value)),
+                        schema=schema,
+                        market=market,
+                        year=year,
+                    )
+                )
+    return failures
+
+
+def _validate_existing_raw_targets(outputs: Iterable[dict[str, Any]]) -> list[str]:
+    failures: list[str] = []
+    for row in outputs:
+        target_path = row["target_path"]
+        if not target_path.exists():
+            failures.append(f"canonical target missing: {target_path.as_posix()}")
+            continue
+        target_hash = file_sha256(target_path)
+        if target_hash != row["source_hash"]:
+            failures.append(
+                f"canonical target hash mismatch for {target_path.as_posix()}: "
+                f"{target_hash} != {row['source_hash']}"
+            )
+    return failures
+
+
 def promote_candidate(
     *,
     candidate_manifest: Path,
@@ -304,6 +423,7 @@ def promote_candidate(
     raw_root: Path,
     expected_exclusions: set[tuple[str, int]],
     promoted_raw_alignment_out: Path,
+    alignment_only_existing_raw: bool = False,
 ) -> dict[str, Any]:
     manifest, readiness, outputs, failures = _preflight(
         candidate_manifest=candidate_manifest,
@@ -327,6 +447,38 @@ def promote_candidate(
         "failures": failures,
     }
     if failures:
+        return report
+
+    if alignment_only_existing_raw:
+        alignment_failures = _validate_existing_raw_targets(outputs)
+        alignment_failures.extend(_validate_parent_source_evidence(outputs))
+        if alignment_failures:
+            report.update(
+                {
+                    "status": "FAIL",
+                    "alignment_only_existing_raw": True,
+                    "failures": alignment_failures,
+                }
+            )
+            return report
+
+        alignment = _write_promoted_alignment(
+            path=promoted_raw_alignment_out,
+            manifest=manifest,
+            readiness=readiness,
+            outputs=outputs,
+            raw_root=raw_root,
+            candidate_manifest=candidate_manifest,
+            readiness_summary=readiness_summary,
+        )
+        report.update(
+            {
+                "status": "PASS",
+                "alignment_only_existing_raw": True,
+                "promoted_raw_alignment_status": alignment["status"],
+                "failures": [],
+            }
+        )
         return report
 
     promoted: list[dict[str, Any]] = []
@@ -383,6 +535,7 @@ def main(argv: list[str] | None = None) -> int:
             raw_root=Path(args.raw_root),
             expected_exclusions=expected_exclusions,
             promoted_raw_alignment_out=Path(args.promoted_raw_alignment_out),
+            alignment_only_existing_raw=bool(args.alignment_only_existing_raw),
         )
     except Exception as exc:
         report = {

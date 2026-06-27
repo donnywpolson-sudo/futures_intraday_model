@@ -36,6 +36,7 @@ from scripts.phase1A_download.download_databento_raw import (
     dbn_schema_root,
     dbn_chunk_manifest_rows,
     dbn_parquet_path,
+    drop_exact_duplicate_ohlcv_rows,
     dry_run_plan_path,
     effective_output_root,
     effective_raw_format,
@@ -466,24 +467,103 @@ def _write_dbn_with_manifest(task: DownloadTask) -> Path:
     return path
 
 
+def _write_split_root_dbn(
+    path: Path,
+    *,
+    schema: str,
+    market: str = "ES",
+    year: int = 2024,
+    stype_in: str = "parent",
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(f"{schema}-fixture".encode("utf-8"))
+    task = DownloadTask(
+        dataset=CME_DATASET,
+        product=market,
+        year=year,
+        start=f"{year}-01-01",
+        end=f"{year + 1}-01-01",
+        symbol=symbol_for_product(market, stype_in),
+        output_path=path.as_posix(),
+        schema=schema,
+        stype_in=stype_in,
+        stype_out="instrument_id",
+        chunk="year",
+        raw_format="dbn-zstd",
+    )
+    write_json(
+        raw_file_manifest_path(path),
+        build_raw_file_manifest(task, path, job_id="fixture", request_status="ok"),
+    )
+    return path
+
+
 def _phase1b_gate_failures(
     dbn_root: Path,
     *,
+    products: list[str] | None = None,
+    start: str = "2024-01-01",
+    end: str = "2025-01-01",
+    stype_in: str = STYPE_IN,
+    stype_out: str = STYPE_OUT,
     optional_schemas: tuple[str, ...] = (),
+    definition_dbn_root: Path | None = None,
+    optional_dbn_root: Path | None = None,
+    optional_schema_roots: dict[str, Path] | None = None,
     optional_schema_policy: str = "warn",
+    required_schema_exceptions_config: Path | None = None,
 ) -> list[str]:
     return phase1b_dbn_gate_failures(
         dbn_root=dbn_root,
-        products=["ES"],
-        start="2024-01-01",
-        end="2025-01-01",
+        products=products or ["ES"],
+        start=start,
+        end=end,
         chunk="year",
         dataset=None,
-        stype_in=STYPE_IN,
-        stype_out=STYPE_OUT,
+        stype_in=stype_in,
+        stype_out=stype_out,
         optional_schemas=optional_schemas,
+        definition_dbn_root=definition_dbn_root,
+        optional_dbn_root=optional_dbn_root,
+        optional_schema_roots=optional_schema_roots,
         optional_schema_policy=optional_schema_policy,
+        required_schema_exceptions_config=required_schema_exceptions_config,
     )
+
+
+def _write_provider_empty_exception_config(
+    path: Path,
+    *,
+    evidence_path: Path,
+    market: str = "KE",
+    year: int = 2013,
+    start: str = "2013-01-01",
+    end: str = "2014-01-01",
+) -> Path:
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text(
+        '{"status": "FAIL", "provider_empty_estimate_count": 1}\n',
+        encoding="utf-8",
+    )
+    path.write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "required_schema_exceptions:",
+                "  - schema: status",
+                f"    market: {market}",
+                f"    year: {year}",
+                f"    start: {start}",
+                f"    end: {end}",
+                "    reason: provider_empty",
+                "    evidence_paths:",
+                f"      - {evidence_path.as_posix()}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return path
 
 
 def test_phase1b_dbn_gate_blocks_missing_expected_dbn(tmp_path: Path) -> None:
@@ -597,6 +677,117 @@ def test_phase1b_dbn_gate_accepts_complete_required_four_l0_dbns(tmp_path: Path)
     )
 
 
+def test_phase1b_dbn_gate_accepts_split_parent_candidate_roots(tmp_path: Path) -> None:
+    dbn_root = tmp_path / "data" / "dbn" / "ohlcv_1m_parent"
+    definition_root = tmp_path / "data" / "dbn" / "definition"
+    status_root = tmp_path / "data" / "dbn" / "status_parent"
+    statistics_root = tmp_path / "data" / "dbn" / "statistics_parent"
+    filename = "2024-01-01_2025-01-01.dbn.zst"
+    _write_split_root_dbn(dbn_root / "ES" / "2024" / filename, schema="ohlcv-1m")
+    _write_split_root_dbn(definition_root / "ES" / "2024" / filename, schema="definition")
+    _write_split_root_dbn(status_root / "status" / "ES" / "2024" / filename, schema="status")
+    _write_split_root_dbn(
+        statistics_root / "statistics" / "ES" / "2024" / filename,
+        schema="statistics",
+    )
+
+    default_failures = _phase1b_gate_failures(
+        dbn_root,
+        stype_in="parent",
+        optional_schemas=("status", "statistics"),
+        optional_schema_policy="require",
+    )
+    assert any("missing definition DBN" in failure for failure in default_failures)
+    assert any("missing status DBN" in failure for failure in default_failures)
+    assert any("missing statistics DBN" in failure for failure in default_failures)
+
+    assert (
+        _phase1b_gate_failures(
+            dbn_root,
+            stype_in="parent",
+            definition_dbn_root=definition_root,
+            optional_dbn_root=tmp_path / "data" / "dbn",
+            optional_schema_roots={
+                "status": status_root,
+                "statistics": statistics_root,
+            },
+            optional_schemas=("status", "statistics"),
+            optional_schema_policy="require",
+        )
+        == []
+    )
+
+
+def test_phase1b_dbn_gate_accepts_exact_status_provider_empty_exception(tmp_path: Path) -> None:
+    dbn_root = tmp_path / "data" / "dbn" / "ohlcv_1m"
+    tasks = build_tasks_for_schemas(
+        ["KE"],
+        schemas=["ohlcv-1m", "definition", "statistics"],
+        start="2013-01-01",
+        end="2014-01-01",
+        output_root=dbn_root,
+        chunk="year",
+        mode="download-dbn",
+        raw_format="dbn-zstd",
+        dataset=None,
+        stype_in=STYPE_IN,
+        stype_out=STYPE_OUT,
+    )
+    for task in tasks:
+        _write_dbn_with_manifest(task)
+    exceptions = _write_provider_empty_exception_config(
+        tmp_path / "exceptions.yaml",
+        evidence_path=tmp_path / "probe.json",
+    )
+
+    failures = _phase1b_gate_failures(
+        dbn_root,
+        products=["KE"],
+        start="2013-01-01",
+        end="2014-01-01",
+        optional_schemas=("status", "statistics"),
+        optional_schema_policy="require",
+        required_schema_exceptions_config=exceptions,
+    )
+
+    assert failures == []
+
+
+def test_phase1b_dbn_gate_rejects_stale_status_exception(tmp_path: Path) -> None:
+    dbn_root = tmp_path / "data" / "dbn" / "ohlcv_1m"
+    tasks = build_tasks_for_schemas(
+        ["KE"],
+        schemas=["ohlcv-1m", "definition", "statistics", "status"],
+        start="2013-01-01",
+        end="2014-01-01",
+        output_root=dbn_root,
+        chunk="year",
+        mode="download-dbn",
+        raw_format="dbn-zstd",
+        dataset=None,
+        stype_in=STYPE_IN,
+        stype_out=STYPE_OUT,
+    )
+    for task in tasks:
+        _write_dbn_with_manifest(task)
+    exceptions = _write_provider_empty_exception_config(
+        tmp_path / "exceptions.yaml",
+        evidence_path=tmp_path / "probe.json",
+    )
+
+    failures = _phase1b_gate_failures(
+        dbn_root,
+        products=["KE"],
+        start="2013-01-01",
+        end="2014-01-01",
+        optional_schemas=("status", "statistics"),
+        optional_schema_policy="require",
+        required_schema_exceptions_config=exceptions,
+    )
+
+    assert any("required schema exception is stale" in failure for failure in failures)
+
+
 def test_phase1b_offline_local_conditions_skips_metadata_client(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -666,6 +857,96 @@ def test_phase1b_offline_local_conditions_skips_metadata_client(
     assert captured["condition_source"] == "offline_local_all_available"
 
 
+def test_convert_parquet_cli_passes_split_root_args(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    dbn_root = tmp_path / "data" / "dbn" / "ohlcv_1m_parent"
+    raw_root = tmp_path / "reports" / "candidate" / "raw"
+    reports_root = tmp_path / "reports" / "candidate"
+    definition_root = tmp_path / "data" / "dbn" / "definition"
+    status_root = tmp_path / "data" / "dbn" / "status_parent"
+    statistics_root = tmp_path / "data" / "dbn" / "statistics_parent"
+    entry_path = dbn_root / "ES" / "2024" / "2024-01-01_2025-01-01.dbn.zst"
+    entry = DbnArchiveEntry(path=entry_path, product="ES", year=2024)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "download_databento_raw.py",
+            "--mode",
+            "convert-parquet",
+            "--markets",
+            "ES",
+            "--start",
+            "2024-01-01",
+            "--end",
+            "2025-01-01",
+            "--dbn-root",
+            dbn_root.as_posix(),
+            "--definition-dbn-root",
+            definition_root.as_posix(),
+            "--raw-root",
+            raw_root.as_posix(),
+            "--optional-dbn-root",
+            (tmp_path / "data" / "dbn").as_posix(),
+            "--status-dbn-root",
+            status_root.as_posix(),
+            "--statistics-dbn-root",
+            statistics_root.as_posix(),
+            "--reports-root",
+            reports_root.as_posix(),
+            "--include-optional-schemas",
+            "status,statistics",
+            "--optional-schema-policy",
+            "require",
+            "--offline-local-conditions",
+        ],
+    )
+
+    def fake_phase1b_dbn_gate_failures(**kwargs: object) -> list[str]:
+        captured["gate"] = kwargs
+        return []
+
+    monkeypatch.setattr(downloader, "phase1b_dbn_gate_failures", fake_phase1b_dbn_gate_failures)
+    monkeypatch.setattr(downloader, "discovery_dbn_files", lambda *_: [entry_path])
+    monkeypatch.setattr(downloader, "archive_entries_for_paths", lambda *_, **__: [entry])
+    monkeypatch.setattr(
+        downloader,
+        "get_client",
+        lambda: (_ for _ in ()).throw(AssertionError("network should not be used")),
+    )
+
+    def fake_convert_dbn_archive_to_raw(*_: object, **kwargs: object) -> list[dict[str, object]]:
+        captured["convert"] = kwargs
+        return [
+            {
+                "status": "ok",
+                "market": "ES",
+                "year": 2024,
+                "output_path": (raw_root / "ES" / "2024.parquet").as_posix(),
+                "data_quality_source": str(kwargs["condition_source"]),
+                "vendor_quality_available": True,
+            }
+        ]
+
+    monkeypatch.setattr(downloader, "convert_dbn_archive_to_raw", fake_convert_dbn_archive_to_raw)
+
+    assert downloader.main() == 0
+    for key in ["gate", "convert"]:
+        captured_kwargs = captured[key]
+        assert isinstance(captured_kwargs, dict)
+        assert captured_kwargs["definition_dbn_root"] == definition_root
+        assert captured_kwargs["optional_dbn_root"] == tmp_path / "data" / "dbn"
+        assert captured_kwargs["optional_schema_roots"] == {
+            "status": status_root,
+            "statistics": statistics_root,
+        }
+        assert captured_kwargs["optional_schema_policy"] == "require"
+
+
 def test_new_speedup_args_parse_without_breaking_existing_defaults() -> None:
     args = build_arg_parser().parse_args(
         [
@@ -698,6 +979,9 @@ def test_new_speedup_args_parse_without_breaking_existing_defaults() -> None:
     assert args.workers == 4
     assert args.raw_format == "dbn-zstd"
     assert args.resume is True
+    assert args.definition_dbn_root is None
+    assert args.status_dbn_root is None
+    assert args.statistics_dbn_root is None
 
 
 def test_continuous_requests_use_supported_output_symbology() -> None:
@@ -1370,6 +1654,48 @@ def test_validate_download_rejects_duplicate_timestamp_bad_ohlc_and_negative_vol
     assert "duplicate_ts_event" in check["errors"]
     assert "bad_ohlc" in check["errors"]
     assert "negative_volume" in check["errors"]
+
+
+def test_drop_exact_duplicate_ohlcv_rows_collapses_exact_overlap() -> None:
+    df = pd.DataFrame(
+        {
+            "ts_event": [
+                pd.Timestamp("2026-06-12T15:00:00Z"),
+                pd.Timestamp("2026-06-12T15:00:00Z"),
+            ],
+            "instrument_id": [100, 100],
+            "open": [1.0, 1.0],
+            "high": [2.0, 2.0],
+            "low": [0.5, 0.5],
+            "close": [1.5, 1.5],
+            "volume": [10, 10],
+        }
+    )
+
+    out = drop_exact_duplicate_ohlcv_rows(df)
+
+    assert len(out) == 1
+    assert out.iloc[0]["close"] == 1.5
+
+
+def test_drop_exact_duplicate_ohlcv_rows_rejects_conflicting_overlap() -> None:
+    df = pd.DataFrame(
+        {
+            "ts_event": [
+                pd.Timestamp("2026-06-12T15:00:00Z"),
+                pd.Timestamp("2026-06-12T15:00:00Z"),
+            ],
+            "instrument_id": [100, 100],
+            "open": [1.0, 1.0],
+            "high": [2.0, 2.0],
+            "low": [0.5, 0.5],
+            "close": [1.5, 1.6],
+            "volume": [10, 10],
+        }
+    )
+
+    with pytest.raises(ValueError, match="conflicting duplicate OHLCV rows"):
+        drop_exact_duplicate_ohlcv_rows(df)
 
 
 def test_validate_download_rejects_non_monotonic_timestamps(tmp_path: Path) -> None:
@@ -2160,6 +2486,11 @@ def test_convert_dbn_archive_writes_canonical_raw_parquet_and_manifest(
     assert results[0]["warnings"] == []
     assert out["raw_symbol"].tolist() == ["ESH4", "ESH4"]
     assert out["tick_size"].tolist() == [0.25, 0.25]
+    assert out["definition_source_file"].tolist() == [definition_path.as_posix(), definition_path.as_posix()]
+    assert out["definition_source_sha256"].tolist() == [
+        results[0]["input_hashes"][definition_path.as_posix()],
+        results[0]["input_hashes"][definition_path.as_posix()],
+    ]
 
     manifest = build_raw_ingest_manifest(
         results,
@@ -2513,10 +2844,221 @@ def test_convert_dbn_archive_stages_optional_schema_hashes_and_columns(
     assert results[0]["status"] == "ok"
     assert out["status_action_name"].tolist() == ["TRADING"]
     assert out["stat_opening_price"].tolist() == [100.25]
+    assert out["definition_source_file"].tolist() == [definition_path.as_posix()]
+    assert out["definition_source_sha256"].tolist() == [results[0]["input_hashes"][definition_path.as_posix()]]
     assert results[0]["input_hashes"][status_path.as_posix()]
     assert results[0]["input_hashes"][statistics_path.as_posix()]
     assert results[0]["optional_schema_match_summary"]["status"]["matched_rows"] == 1
     assert results[0]["optional_schema_warning_count"] == 0
+
+
+def test_convert_dbn_archive_accepts_split_parent_candidate_roots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dbn_root = tmp_path / "data" / "dbn" / "ohlcv_1m_parent"
+    definition_root = tmp_path / "data" / "dbn" / "definition"
+    status_root = tmp_path / "data" / "dbn" / "status_parent"
+    statistics_root = tmp_path / "data" / "dbn" / "statistics_parent"
+    raw_root = tmp_path / "reports" / "phase2_readiness" / "candidate" / "raw"
+    filename = "2024-01-01_2025-01-01.dbn.zst"
+    dbn_path = dbn_root / "ES" / "2024" / filename
+    definition_path = definition_root / "ES" / "2024" / filename
+    status_path = status_root / "status" / "ES" / "2024" / filename
+    statistics_path = statistics_root / "statistics" / "ES" / "2024" / filename
+    for path, schema in [
+        (dbn_path, "ohlcv-1m"),
+        (definition_path, "definition"),
+        (status_path, "status"),
+        (statistics_path, "statistics"),
+    ]:
+        _write_split_root_dbn(path, schema=schema)
+
+    ohlcv_df = pd.DataFrame(
+        {
+            "ts_event": [pd.Timestamp("2024-01-02T15:00:00Z")],
+            "open": [1.0],
+            "high": [1.1],
+            "low": [0.9],
+            "close": [1.0],
+            "volume": [10],
+            "rtype": [33],
+            "publisher_id": [1],
+            "instrument_id": [100],
+            "symbol": ["ESH4"],
+        }
+    )
+    definition_df = pd.DataFrame(
+        {
+            "ts_event": [pd.Timestamp("2024-01-01T00:00:00Z")],
+            "instrument_id": [100],
+            "raw_symbol": ["ESH4"],
+            "min_price_increment": [0.25],
+            "contract_multiplier": [50.0],
+        }
+    )
+    status_df = pd.DataFrame(
+        {
+            "ts_event": [pd.Timestamp("2024-01-02T14:59:00Z")],
+            "instrument_id": [100],
+            "action": [7],
+            "reason": [0],
+            "trading_event": [0],
+            "is_trading": ["Y"],
+            "is_quoting": ["Y"],
+            "is_short_sell_restricted": ["N"],
+        }
+    )
+    statistics_df = pd.DataFrame(
+        {
+            "ts_event": [pd.Timestamp("2024-01-02T14:58:00Z")],
+            "instrument_id": [100],
+            "stat_type": [1],
+            "price": [100.25],
+            "quantity": [0],
+        }
+    )
+
+    class FakeDBNStore:
+        @classmethod
+        def from_file(cls, path: Path) -> FakeStore:
+            frames = {
+                dbn_path: ohlcv_df,
+                definition_path: definition_df,
+                status_path: status_df,
+                statistics_path: statistics_df,
+            }
+            return FakeStore(frames[path].copy())
+
+    monkeypatch.setitem(
+        sys.modules,
+        "databento",
+        types.SimpleNamespace(DBNStore=FakeDBNStore),
+    )
+
+    results = convert_dbn_archive_to_raw(
+        dbn_root,
+        raw_root,
+        condition_by_group={("ES", 2024): {"2024-01-02": "available"}},
+        optional_schemas=("status", "statistics"),
+        definition_dbn_root=definition_root,
+        optional_dbn_root=tmp_path / "data" / "dbn",
+        optional_schema_roots={
+            "status": status_root,
+            "statistics": statistics_root,
+        },
+        optional_schema_policy="require",
+    )
+
+    output_path = raw_root / "ES" / "2024.parquet"
+    out = pd.read_parquet(output_path)
+    assert results[0]["status"] == "ok"
+    assert results[0]["input_paths"] == [dbn_path.as_posix()]
+    assert results[0]["definition_paths"] == [definition_path.as_posix()]
+    assert results[0]["definition_dbn_root"] == definition_root.as_posix()
+    assert results[0]["optional_schema_roots"] == {
+        "status": status_root.as_posix(),
+        "statistics": statistics_root.as_posix(),
+    }
+    assert results[0]["optional_schema_input_paths"] == {
+        "status": [status_path.as_posix()],
+        "statistics": [statistics_path.as_posix()],
+    }
+    assert out["source_file"].tolist() == [dbn_path.as_posix()]
+    assert out["definition_source_file"].tolist() == [definition_path.as_posix()]
+    assert out["status_action_name"].tolist() == ["TRADING"]
+    assert out["stat_opening_price"].tolist() == [100.25]
+    assert results[0]["optional_schema_warning_count"] == 0
+
+
+def test_convert_dbn_archive_accepts_exact_status_provider_empty_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dbn_root = tmp_path / "data" / "dbn" / "ohlcv_1m"
+    optional_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw_enriched_candidate"
+    dbn_path = dbn_root / "KE" / "2013" / "2013-01-01_2014-01-01.dbn.zst"
+    definition_path = optional_root / "definition" / "KE" / "2013" / "2013-01-01_2014-01-01.dbn.zst"
+    statistics_path = optional_root / "statistics" / "KE" / "2013" / "2013-01-01_2014-01-01.dbn.zst"
+    for path, payload, schema in [
+        (dbn_path, b"ohlcv", "ohlcv-1m"),
+        (definition_path, b"definition", "definition"),
+        (statistics_path, b"statistics", "statistics"),
+    ]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        _write_raw_manifest(path, schema=schema, market="KE", year=2013)
+
+    ohlcv_df = pd.DataFrame(
+        {
+            "ts_event": [pd.Timestamp("2013-01-02T15:00:00Z")],
+            "open": [1.0],
+            "high": [1.1],
+            "low": [0.9],
+            "close": [1.0],
+            "volume": [10],
+            "rtype": [33],
+            "publisher_id": [1],
+            "instrument_id": [100],
+            "symbol": ["KEH3"],
+        }
+    )
+    definition_df = pd.DataFrame(
+        {
+            "ts_event": [pd.Timestamp("2013-01-01T00:00:00Z")],
+            "instrument_id": [100],
+            "raw_symbol": ["KEH3"],
+            "min_price_increment": [0.25],
+            "contract_multiplier": [50.0],
+        }
+    )
+    statistics_df = pd.DataFrame(
+        {
+            "ts_event": [pd.Timestamp("2013-01-02T14:58:00Z")],
+            "instrument_id": [100],
+            "stat_type": [1],
+            "price": [100.25],
+            "quantity": [0],
+        }
+    )
+
+    class FakeDBNStore:
+        @classmethod
+        def from_file(cls, path: Path) -> FakeStore:
+            frames = {
+                dbn_path: ohlcv_df,
+                definition_path: definition_df,
+                statistics_path: statistics_df,
+            }
+            return FakeStore(frames[path].copy())
+
+    monkeypatch.setitem(
+        sys.modules,
+        "databento",
+        types.SimpleNamespace(DBNStore=FakeDBNStore),
+    )
+    exceptions = _write_provider_empty_exception_config(
+        tmp_path / "exceptions.yaml",
+        evidence_path=tmp_path / "probe.json",
+    )
+
+    results = convert_dbn_archive_to_raw(
+        dbn_root,
+        raw_root,
+        condition_by_group={("KE", 2013): {"2013-01-02": "available"}},
+        optional_schemas=("status", "statistics"),
+        optional_dbn_root=optional_root,
+        optional_schema_policy="require",
+        required_schema_exceptions_config=exceptions,
+    )
+
+    out = pd.read_parquet(raw_root / "KE" / "2013.parquet")
+    assert results[0]["status"] == "ok"
+    assert results[0]["optional_schema_warning_count"] == 1
+    assert out["status_missing"].tolist() == [True]
+    assert out["status_stale"].tolist() == [True]
+    assert out["stat_opening_price"].tolist() == [100.25]
 
 
 def test_estimate_cost_stops_on_auth_failure(tmp_path: Path) -> None:

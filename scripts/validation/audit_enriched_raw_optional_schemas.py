@@ -18,11 +18,16 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.phase1A_download.download_databento_raw import (  # noqa: E402
+    DEFINITION_SOURCE_COLUMNS,
     STAT_TYPE_FIELDS,
     STATISTICS_ENRICHMENT_COLUMNS,
     STATUS_ENRICHMENT_COLUMNS,
     file_sha256,
     iter_dbn_files,
+)
+from scripts.validation.check_dbn_archive_coverage import (  # noqa: E402
+    DEFAULT_REQUIRED_SCHEMA_EXCEPTIONS_CONFIG,
+    required_schema_exception_keys,
 )
 
 
@@ -48,6 +53,7 @@ CORE_RAW_COLUMNS = [
     "source_dataset",
     "source_file",
     "source_sha256",
+    *DEFINITION_SOURCE_COLUMNS,
 ]
 DEFINITION_COLUMNS = [
     "raw_symbol",
@@ -59,6 +65,7 @@ DEFINITION_COLUMNS = [
 ]
 SOURCE_REF_COLUMNS = [
     ("source_file", "source_sha256"),
+    ("definition_source_file", "definition_source_sha256"),
     ("status_source_file", "status_source_sha256"),
     *[
         (f"stat_{stat_name}_source_file", f"stat_{stat_name}_source_sha256")
@@ -97,6 +104,7 @@ AUDIT_READ_COLUMNS = sorted(
         "instrument_id",
         "source_file",
         "source_sha256",
+        *DEFINITION_SOURCE_COLUMNS,
         *STATUS_AUDIT_COLUMNS,
         *STAT_AUDIT_COLUMNS,
     }
@@ -144,6 +152,15 @@ def _resolve_source_path(value: object) -> Path | None:
     return Path.cwd() / path
 
 
+def _split_source_values(value: object) -> list[str]:
+    if pd.isna(value):
+        return []
+    text = str(value).strip()
+    if not text:
+        return []
+    return [part.strip() for part in text.split(";") if part.strip()]
+
+
 def _bool_series(series: pd.Series) -> pd.Series:
     if pd.api.types.is_bool_dtype(series):
         return series.fillna(False).astype(bool)
@@ -183,31 +200,44 @@ def _check_source_refs(
             continue
         refs = df.loc[_nonnull_text_mask(df[file_col]), [file_col, hash_col]].drop_duplicates()
         for _, ref in refs.iterrows():
-            source_path = _resolve_source_path(ref[file_col])
-            if source_path is None:
+            source_values = _split_source_values(ref[file_col])
+            if not source_values:
                 continue
-            metrics["source_reference_count"] += 1
-            expected_hash = None if pd.isna(ref[hash_col]) else str(ref[hash_col]).strip()
-            if not expected_hash:
-                metrics["missing_source_hash_count"] += 1
+            hash_values = _split_source_values(ref[hash_col])
+            metrics["source_reference_count"] += len(source_values)
+            if not hash_values:
+                metrics["missing_source_hash_count"] += len(source_values)
                 failures.append(_failure(f"{file_col} has non-null path without {hash_col}", [{"path": str(ref[file_col])}]))
                 continue
-            if not source_path.is_file():
-                metrics["missing_source_file_count"] += 1
-                failures.append(_failure(f"{file_col} path does not exist", [{"path": str(ref[file_col])}]))
-                continue
-            actual_hash = hash_cache.get(source_path)
-            if actual_hash is None:
-                actual_hash = file_sha256(source_path)
-                hash_cache[source_path] = actual_hash
-            if actual_hash != expected_hash:
-                metrics["source_hash_mismatch_count"] += 1
+            if len(hash_values) != len(source_values):
+                metrics["missing_source_hash_count"] += len(source_values)
                 failures.append(
                     _failure(
-                        f"{file_col}/{hash_col} hash mismatch",
-                        [{"path": str(ref[file_col]), "expected": expected_hash, "actual": actual_hash}],
+                        f"{file_col}/{hash_col} source reference count mismatch",
+                        [{"path": str(ref[file_col]), "hash": str(ref[hash_col])}],
                     )
                 )
+                continue
+            for source_value, expected_hash in zip(source_values, hash_values, strict=True):
+                source_path = _resolve_source_path(source_value)
+                if source_path is None:
+                    continue
+                if not source_path.is_file():
+                    metrics["missing_source_file_count"] += 1
+                    failures.append(_failure(f"{file_col} path does not exist", [{"path": source_value}]))
+                    continue
+                actual_hash = hash_cache.get(source_path)
+                if actual_hash is None:
+                    actual_hash = file_sha256(source_path)
+                    hash_cache[source_path] = actual_hash
+                if actual_hash != expected_hash:
+                    metrics["source_hash_mismatch_count"] += 1
+                    failures.append(
+                        _failure(
+                            f"{file_col}/{hash_col} hash mismatch",
+                            [{"path": source_value, "expected": expected_hash, "actual": actual_hash}],
+                        )
+                    )
     return failures, metrics
 
 
@@ -216,11 +246,13 @@ def _check_status(
     df: pd.DataFrame,
     key: tuple[str, int],
     status_archive_keys: set[tuple[str, int]],
+    status_exception_keys: set[tuple[str, int]],
     available_columns: set[str],
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     failures: list[dict[str, Any]] = []
     metrics = {
         "status_archive_present": int(key in status_archive_keys),
+        "status_required_schema_exception": int(key in status_exception_keys),
         "status_missing_rows": 0,
         "status_stale_rows": 0,
         "status_future_timestamp_rows": 0,
@@ -256,7 +288,7 @@ def _check_status(
     if inconsistent_stale.any():
         failures.append(_failure("status_stale is inconsistent with status_missing"))
 
-    if key not in status_archive_keys:
+    if key not in status_archive_keys and key not in status_exception_keys:
         failures.append(_failure("required status DBN archive missing for market-year"))
         source_present = _nonnull_text_mask(df["status_source_file"])
         bad = source_present | status_missing.ne(True) | status_stale.ne(True)
@@ -360,11 +392,21 @@ def build_report(
     *,
     raw_root: Path,
     dbn_root: Path,
-    expected_column_count: int | None = 86,
+    expected_column_count: int | None = 88,
+    required_schema_exceptions_config: Path | None = DEFAULT_REQUIRED_SCHEMA_EXCEPTIONS_CONFIG,
 ) -> dict[str, Any]:
     raw_files = _raw_index(raw_root)
     status_archive_keys = _schema_index(dbn_root, "status")
     statistics_archive_keys = _schema_index(dbn_root, "statistics")
+    status_exception_keys, status_exceptions, exception_failures = required_schema_exception_keys(
+        required_schema_exceptions_config,
+        schema="status",
+    )
+    stale_status_exception_keys = sorted(status_exception_keys & status_archive_keys)
+    for market, year in stale_status_exception_keys:
+        exception_failures.append(
+            f"required schema exception is stale because status archive is present: {market} {year}"
+        )
     hash_cache: dict[Path, str] = {}
     files: list[dict[str, Any]] = []
     schema_signatures: set[tuple[str, ...]] = set()
@@ -379,6 +421,8 @@ def build_report(
         "statistics_failure_count": 0,
         "missing_status_archive_market_year_count": 0,
         "missing_statistics_archive_market_year_count": 0,
+        "status_required_schema_exception_count": 0,
+        "required_schema_exception_failure_count": 0,
     }
 
     for key, path in sorted(raw_files.items()):
@@ -419,6 +463,7 @@ def build_report(
             df=df,
             key=key,
             status_archive_keys=status_archive_keys,
+            status_exception_keys=status_exception_keys,
             available_columns=available_columns,
         )
         failures.extend(status_failures)
@@ -431,7 +476,10 @@ def build_report(
         )
         failures.extend(statistics_failures)
 
-        if key not in status_archive_keys:
+        if key not in status_archive_keys and key in status_exception_keys:
+            warnings.append("provider-unavailable required status DBN exception for market-year")
+            totals["status_required_schema_exception_count"] += 1
+        elif key not in status_archive_keys:
             warnings.append("missing required status DBN archive for market-year")
             totals["missing_status_archive_market_year_count"] += 1
         if key not in statistics_archive_keys:
@@ -462,6 +510,7 @@ def build_report(
         )
 
     file_failure_count = sum(1 for row in files if row["status"] == "FAIL")
+    totals["required_schema_exception_failure_count"] = len(exception_failures)
     status_warning_count = totals["missing_status_archive_market_year_count"]
     statistics_warning_count = totals["missing_statistics_archive_market_year_count"]
     verdicts = {
@@ -472,7 +521,7 @@ def build_report(
             + totals["duplicate_key_row_count"]
         ),
         "optional_status_readiness": _verdict(
-            failures=totals["status_failure_count"],
+            failures=totals["status_failure_count"] + totals["required_schema_exception_failure_count"],
             warnings=status_warning_count,
         ),
         "optional_statistics_readiness": _verdict(
@@ -484,7 +533,7 @@ def build_report(
     return {
         "stage": "raw_enriched_optional_schema_audit",
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "status": "FAIL" if file_failure_count else "PASS",
+        "status": "FAIL" if file_failure_count or exception_failures else "PASS",
         "raw_root": raw_root.as_posix(),
         "dbn_root": dbn_root.as_posix(),
         "expected_column_count": expected_column_count,
@@ -499,6 +548,13 @@ def build_report(
             "status_archive_market_year_count": len(status_archive_keys & set(raw_files)),
             "statistics_archive_market_year_count": len(statistics_archive_keys & set(raw_files)),
         },
+        "required_schema_exceptions_config": (
+            required_schema_exceptions_config.as_posix()
+            if required_schema_exceptions_config is not None
+            else None
+        ),
+        "required_schema_exceptions": status_exceptions,
+        "required_schema_exception_failures": exception_failures,
         "alpha_readiness_caveat": (
             "Raw enriched metadata is available for future research, but direct status_, stat_, "
             "and statistics_ feature use requires a separate leakage-safe feature design."
@@ -541,6 +597,8 @@ def write_markdown(path: Path, report: dict[str, Any]) -> None:
         f"- Statistics audit failures: {summary['statistics_failure_count']}",
         f"- Missing optional status archive market-years: {summary['missing_status_archive_market_year_count']}",
         f"- Missing optional statistics archive market-years: {summary['missing_statistics_archive_market_year_count']}",
+        f"- Status required-schema exceptions: {summary['status_required_schema_exception_count']}",
+        f"- Required-schema exception failures: {summary['required_schema_exception_failure_count']}",
         "",
         "## Caveat",
         "",
@@ -561,7 +619,12 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-root", default="data/raw")
     parser.add_argument("--dbn-root", default="data/dbn")
-    parser.add_argument("--expected-column-count", type=int, default=86)
+    parser.add_argument("--expected-column-count", type=int, default=88)
+    parser.add_argument(
+        "--required-schema-exceptions-config",
+        default=DEFAULT_REQUIRED_SCHEMA_EXCEPTIONS_CONFIG.as_posix(),
+    )
+    parser.add_argument("--disable-required-schema-exceptions", action="store_true")
     parser.add_argument("--json-out", default="reports/raw_readiness/raw_enriched_optional_schema_audit.json")
     parser.add_argument("--md-out", default="reports/raw_readiness/raw_enriched_optional_schema_audit.md")
     return parser.parse_args(list(argv) if argv is not None else None)
@@ -573,6 +636,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         raw_root=Path(args.raw_root),
         dbn_root=Path(args.dbn_root),
         expected_column_count=args.expected_column_count,
+        required_schema_exceptions_config=(
+            None if args.disable_required_schema_exceptions else Path(args.required_schema_exceptions_config)
+        ),
     )
     write_json(Path(args.json_out), report)
     if args.md_out:
@@ -580,7 +646,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     print(
         "status={status} files={file_count} rows={row_count} core={core} "
         "status_optional={status_optional} statistics_optional={statistics_optional} "
-        "file_failures={file_failures}".format(
+        "file_failures={file_failures} required_exceptions={required_exceptions} "
+        "exception_failures={exception_failures}".format(
             status=report["status"],
             file_count=report["file_count"],
             row_count=report["row_count"],
@@ -588,6 +655,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             status_optional=report["verdicts"]["optional_status_readiness"],
             statistics_optional=report["verdicts"]["optional_statistics_readiness"],
             file_failures=report["summary"]["file_failure_count"],
+            required_exceptions=report["summary"]["status_required_schema_exception_count"],
+            exception_failures=report["summary"]["required_schema_exception_failure_count"],
         )
     )
     return 0 if report["status"] == "PASS" else 1

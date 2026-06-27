@@ -84,6 +84,35 @@ def _write_required_metadata_dbns(root: Path, market: str = "ES", year: int = 20
     _write_dbn_with_manifest(root, "statistics", market, year)
 
 
+def _write_provider_empty_exception(path: Path, evidence_path: Path) -> Path:
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text(
+        json.dumps({"status": "FAIL", "provider_empty_estimate_count": 1}, indent=2),
+        encoding="utf-8",
+    )
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "required_schema_exceptions": [
+                    {
+                        "schema": "status",
+                        "market": "KE",
+                        "year": 2013,
+                        "start": "2013-01-01",
+                        "end": "2014-01-01",
+                        "reason": "provider_empty",
+                        "evidence_paths": [evidence_path.as_posix()],
+                    }
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def _definition_frame(
     *,
     raw_symbol: str = "ESH4",
@@ -262,6 +291,32 @@ def test_raw_dbn_alignment_reports_missing_definition_dbn(tmp_path: Path) -> Non
     assert report["status"] == "FAIL"
     assert report["missing_definition_dbn_count"] == 1
     assert report["raw_only_count"] == 1
+
+
+def test_raw_dbn_alignment_accepts_exact_status_provider_empty_exception(tmp_path: Path, monkeypatch) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["KE"], [2013])
+    dbn_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m", "KE", 2013)
+    definition = _write_dbn_with_manifest(dbn_root, "definition", "KE", 2013)
+    _write_dbn_with_manifest(dbn_root, "statistics", "KE", 2013)
+    _write_raw(raw_root, ohlcv, market="KE", year=2013, raw_symbol="KEH3")
+    _install_fake_databento(monkeypatch, {definition: _definition_frame(raw_symbol="KEH3")})
+    exceptions = _write_provider_empty_exception(tmp_path / "exceptions.yaml", tmp_path / "evidence.json")
+
+    report = build_report(
+        config_path=config,
+        profile="tier_3",
+        dbn_root=dbn_root,
+        raw_root=raw_root,
+        skip_definition_join=True,
+        required_schema_exceptions_config=exceptions,
+    )
+
+    assert report["status"] == "PASS"
+    assert report["missing_status_dbn_count"] == 0
+    assert report["raw_only_count"] == 0
+    assert report["status_required_schema_exception_count"] == 1
 
 
 def test_raw_dbn_alignment_reports_raw_schema_column_failure(tmp_path: Path, monkeypatch) -> None:

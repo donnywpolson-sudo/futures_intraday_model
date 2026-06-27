@@ -1,297 +1,712 @@
 # Codex Handoff
 
-- Updated at UTC: 2026-06-24T02:48:41Z
-- Purpose: current-state handoff after refreshing non-DBN-mutating Phase 1B/1C readiness evidence following the partial 2010 status repair.
+- Updated at UTC: 2026-06-27T00:46:50Z
+- Purpose: Current futures data-readiness/provenance state after final global Phase 1-2 reconciliation of the approved campaign rows.
 - Repo: `C:\Users\donny\Desktop\futures_intraday_model`
 
-## Current Status
+## Current Verified State
 
-- User policy decision: Phase 1A now means all L0 DBN schemas are complete, including `status`.
-- Phase 1A status under this definition: not complete. Current archive coverage evidence shows `missing_archives=55`, `missing_manifests=55`, and `invalid_manifests=0`.
-- Code status: Phase 1A required schemas are now `ohlcv-1m`, `definition`, `statistics`, and `status` in `scripts/phase1_raw_contract.py`; `scripts/validation/check_dbn_archive_coverage.py` defaults to those schemas and rejects marking any of them optional.
-- User policy decision: Phase 1B readiness means convert/combine Phase 1A downloads into raw market-year parquet, with each `tier_3_research` market-year having complete raw parquet data for the four L0 schemas: `ohlcv-1m`, `status`, `definition`/`definitions`, and `statistics`, matching the downloaded Phase 1A DBN data.
-- Code status: `scripts/phase1B_convert/convert_databento_raw.py` now defaults Phase 1B conversion to `--include-optional-schemas status,statistics` and `--optional-schema-policy require` when those args are not explicitly provided.
-- Code status: Phase 1B pre-conversion DBN gate now enforces required `status` and `statistics` archives when `--optional-schema-policy require` is active, so strict conversion fails before per-file conversion if four-L0 DBN inputs are incomplete.
-- Code status: Phase 1C raw/DBN alignment now indexes required `status` and `statistics` DBNs, validates their manifests, reports missing metadata DBN counts, and fails when four-L0 DBN alignment is incomplete.
-- Phase 1B status under this definition: not complete. Refreshed strict raw enriched audit report shows `status=FAIL`, `files=527`, `rows=130074125`, `file_failure_count=55`, `missing_status_archive_market_year_count=55`, `status_failure_count=55`, `missing_statistics_archive_market_year_count=0`, and `statistics_failure_count=0`.
-- Phase 1C status under the four-L0 definition: not complete. Refreshed partial raw/DBN alignment report shows `status=FAIL`, `expected=461`, `raw=527`, `missing_status_dbn_count=55`, `missing_statistics_dbn_count=0`, `needs_phase1b_conversion_count=0`, `raw_only_count=55`, `invalid_manifest_count=0`, and `source_hash_mismatch_count=0`.
-- Active next scope: get explicit approval to continue the remaining four parent-symbol `status` zero-cost repair commands with a longer command timeout. The approved sequence stopped after the first command exited with timeout `124`.
-- Missing Phase 1A `status` DBN market-years grouped by year after the 2010 parent-symbol partial repair:
-  - `2011`: `6C,HG,HO,LE,RB,UB,YM,ZB,ZF,ZM,ZN,ZS,ZT`
-  - `2012`: `6E,HO,LE,NQ,RB,UB,YM,ZB,ZF,ZL,ZM,ZN,ZT`
-  - `2013`: `6E,6M,HE,HO,KE,LE,RB,YM,ZL,ZM,ZS,ZT,ZW`
-  - `2014`: `6A,6B,6C,6E,6J,6M,ES,GC,HG,NQ,RB,SI,YM,ZC,ZM,ZT`
-- Existing `status` manifests use `schema=status`, `stype_in=continuous`, `stype_out=instrument_id`, and paths under `data/dbn/status/{market}/{year}/{start}_{end}.dbn.zst`.
-- Missing-status dry-run verification passed:
-  - Dry-run plan files: `reports/phase1A_status_repair_20260624/{2010,2011,2012,2013,2014}/databento_download_plan_dry_run.json`.
-  - Task counts by year: `2010=12`, `2011=13`, `2012=13`, `2013=13`, `2014=16`, total `67`.
-  - Planned unique market-years: `67`.
-  - Bad schema count: `0`; all planned tasks use `schema=status`.
-  - Bad output path count: `0`; all planned outputs target `data/dbn/status/...`.
-  - Exact set comparison against `reports/raw_readiness/raw_enriched_optional_schema_audit.json`: `audit_missing=67`, `planned=67`, `missing_not_planned=0`, `planned_not_missing=0`.
-- Latest read-only Phase 1A archive coverage check still fails: `status=FAIL expected_archives=1844 missing_archives=67 missing_manifests=67 missing_optional_archives=0 missing_optional_manifests=0 invalid_manifests=0 extra_market_dirs=0`.
-- Repeated approval-boundary recheck still fails with the same result: `status=FAIL expected_archives=1844 missing_archives=67 missing_manifests=67 missing_optional_archives=0 missing_optional_manifests=0 invalid_manifests=0 extra_market_dirs=0`.
-- Approved repair attempt status before the gate fix: stopped on the first batch. The 2010 continuous-symbol `status` command passed `ZERO_COST_GATE status=PASS downloadable=12 billable_size=0`, then exited `1` after all 12 selected tasks returned `422 data_no_data_found_for_request`.
-- Zero-size gate fix: `scripts/phase1A_download/download_databento_raw.py` now treats exact-zero-cost estimates with `billable_size=0` as provider-empty blockers, not downloadable DBN archives. The CLI prints `provider_empty=<count>` in zero-cost gate summaries.
-- Refreshed 2010 continuous-symbol gate evidence: `reports/phase1A_status_repair_20260624/2010/databento_zero_cost_gate.json` now shows `status=FAIL`, `downloadable_zero_cost_task_count=0`, `provider_empty_estimate_count=12`, `selected_task_count=0`.
-- Revised 2010 parent-symbol estimate-only probe: `reports/phase1A_status_repair_20260624/probe_parent_2010/databento_zero_cost_gate.json` shows `status=PASS`, `downloadable_zero_cost_task_count=12`, `provider_empty_estimate_count=0`, `zero_cost_billable_size=141320`. This indicates the 2010 blocker is request semantics (`continuous` status no-data), not provider absence for `status` itself.
-- Parent-symbol estimate-only probes for the remaining missing `status` batches:
-  - `probe_parent_2011`: `status=PASS`, `downloadable=13`, `provider_empty=0`, `billable_size=217400`.
-  - `probe_parent_2012`: `status=PASS`, `downloadable=13`, `provider_empty=0`, `billable_size=144240`.
-  - `probe_parent_2013`: `status=FAIL`, `downloadable=12`, `provider_empty=1`, `billable_size=223760`; only provider-empty estimate is `KE 2013`.
-  - `probe_parent_2013_no_ke`: `status=PASS`, `downloadable=12`, `provider_empty=0`, `billable_size=223760`.
-  - `probe_parent_2014`: `status=PASS`, `downloadable=16`, `provider_empty=0`, `billable_size=239200`.
-- `KE 2013 status` provider-empty evidence: parent-symbol probe has `billable_size=0`, continuous-symbol probe under `reports/phase1A_status_repair_20260624/probe_continuous_KE_2013/` also has `status=FAIL`, `downloadable=0`, `provider_empty=1`, `billable_size=0`. Local `KE 2013` `ohlcv-1m`, `definition`, and `statistics` manifests exist; the gap is status-specific.
-- Approved repair execution status: the first parent-symbol repair command (`parent_2010`) exited with timeout `124` after 600 seconds, so the remaining four repair commands were not run. Read-only inspection showed `reports/phase1A_status_repair_20260624/parent_2010/databento_download_results.json` contains 12 records, all `status=ok`, all `schema=status`, all `stype_in=parent`, products `6C,6J,GC,HO,LE,RB,UB,ZB,ZC,ZF,ZN,ZT`, and `total_bytes=68405`.
-- Current Phase 1A archive coverage after the 2010 parent-symbol repair attempt: `status=FAIL expected_archives=1844 missing_archives=55 missing_manifests=55 missing_optional_archives=0 missing_optional_manifests=0 invalid_manifests=0 extra_market_dirs=0`.
-- Professional end-state wording: "Complete the `tier_3_research` research pipeline from validated four-schema L0 Databento `.dbn.zst` archives (`ohlcv-1m`, `definition`, `statistics`, `status`) for every configured market-year, through source-matched raw market-year parquet, raw/DBN provenance validation, normalized causal-gated parquet, leakage-safe labels/features, purged walk-forward splits, train-only WFA predictions, cost-aware Phase 8 model/policy evaluation, and Phase 9 hypothesis/robustness gates with manifests, hashes, row counts, warnings, and failures recorded at every stage."
-- Missing from the user's raw-to-complete wording: explicit manifests/hashes, raw/DBN alignment, as-of joins for definitions/status/statistics, session/calendar/roll/tick/cost assumptions, causal gating, leakage checks, target timing, purge/embargo, locked holdout/forward separation, generated artifact hygiene, WFA prediction evidence, Phase 8 cost/selection gates, and Phase 9 hypothesis registry/robustness evidence.
-- Latest approved Phase 2 evidence:
-  - Inputs/evidence roots: `data/causally_gated_normalized/_bounded_phase2_58_20260623` and `reports/phase_restart/bounded_phase2_58_20260623`.
-  - Output membership at last review: expected `58`, actual `58`, missing `0`, extra `0`.
-  - Deferred rows present in bounded outputs: `0`.
-  - Manifest output path issues: `0`.
-  - Scoped config status at last review showed no changes to `configs/data_manifest.yaml` or `configs/alpha_tiered.yaml`.
-- Batch validation status at last review:
-  - `KE`: `WARN`, rows `PASS=4 WARN=8 FAIL=0`, warnings `8`, failures `0`; warning category `roll maturity sequence not monotonic=8`.
-  - `SR1`: `WARN`, rows `PASS=0 WARN=9 FAIL=0`, warnings `12`, failures `0`; warning categories `roll maturity sequence not monotonic=9`, `roll exclusion threshold breached=3`.
-  - `TN`: `PASS`, rows `PASS=11 WARN=0 FAIL=0`, warnings `0`, failures `0`.
-  - `ZL`: `WARN`, rows `PASS=7 WARN=7 FAIL=0`, warnings `7`, failures `0`; warning category `roll maturity sequence not monotonic=7`.
-  - `ZM`: `WARN`, rows `PASS=4 WARN=8 FAIL=0`, warnings `8`, failures `0`; warning category `roll maturity sequence not monotonic=8`.
-- Interpretation: the bounded packet is approved for downstream Phase 3 planning only. `WARN` batches are accepted caveats with zero failures, not clean `PASS`.
+- Worktree is dirty in pre-existing tracked/untracked files. No staging or commit was performed.
+- Provider/network commands were not run.
+- Latest canonical mutation was approved and limited to `data\causally_gated_normalized\KE\2023.parquet`.
+- Latest generated artifacts were limited to ZS 2021/2022 fail-closed decision packet reports under `reports\phase2_readiness`.
+- Latest tracked mutations are the focused decision-packet tooling/tests and this handoff refresh.
 
-## Important Prior Evidence
+## Current PASS Canonical Evidence
 
-- Phase 2 readiness accepted-exception fail-fast fix was made in `scripts/phase2_causal_base/build_causal_base_data.py`; focused regression result at the time: `1 passed, 69 deselected`.
-- Bounded readiness-only later passed for all five batches: `KE=12`, `SR1=9`, `TN=11`, `ZL=14`, `ZM=12`, total `58`, with `pending=0`, `blockers=0`, `failures=0`.
-- Bounded Phase 2 build commands exited `0` for `KE`, `SR1`, `TN`, `ZL`, and `ZM`; generated 58 causal parquet outputs under `data/causally_gated_normalized/_bounded_phase2_58_20260623`.
-- Phase 1C trades-derived raw provenance policy fix was made in `scripts/phase1C_validate/audit_raw_dbn_alignment.py`; focused validation at the time: `27 passed in 3.06s`; broad Phase 1C refresh status: `PASS`, expected `461`, raw `527`, needs Phase 1B `0`, raw-only `0`, invalid manifests `0`, source hash mismatches `0`.
-- Current L0 DBN schema presence from `reports/data_manifest/master_data_health_summary.md`: `ohlcv_1m=527/527`, `definition=527/527`, `statistics=527/527`, `status=460/527`.
-- Raw enriched schema audit is now strict for Phase 1B four-L0 readiness. Current result: `status=FAIL`, `core_raw_readiness=PASS`, `optional_status_readiness=FAIL`, `optional_statistics_readiness=PASS`, `file_failure_count=67`, `missing_status_archive_market_year_count=67`, `status_failure_count=67`.
-- Current Phase 1B evidence from `reports/data_manifest/master_data_health_summary.md` and `reports/raw_readiness/raw_enriched_optional_schema_audit.json`: `raw_parquet_present=527/527`, `file_count=527`, `row_count=130074125`, `schema_failure_count=0`, `source_hash_mismatch_count=0`; this is not sufficient for the new Phase 1B definition until `status` is complete for all `tier_3_research` market-years.
-- WFA prediction evidence remains separate and stale: `data/predictions` had `0` files and 24 historical `reports/wfa/*_predictions_manifest.json` references were missing current prediction parquet evidence. Do not treat those as current WFA evidence without a separately approved regeneration.
-- Live-ops docs remain not production-live ready. Previously recorded closeout evidence: focused live-ops/chart validation `71 passed`, smoke CLI `PASS live trading smoke scenarios=34 decision_cycles=34 audit_rows=34`, broad bounded pytest `732 passed, 58 warnings`.
+- `SR1 2020` and `SR3 2020` have current canonical raw and canonical Phase 2 causal PASS evidence:
+  - `reports\phase2_readiness\sr1_sr3_2020_phase2_causal_build_after_parent_overwrite_20260626\causal_base\causal_base_manifest.json`
+  - manifest `status=PASS`, `processed_market_year_count=2`, `summary.pass_count=2`, `summary.fail_count=0`, `failure_count=0`, `warning_count=0`, `summary.synthetic_rows=0`, `summary.degraded_bar_rows=0`
+- `KE 2019`, `KE 2021`, and `KE 2024` have current canonical raw and canonical Phase 2 causal PASS evidence under accepted `parent_sparse_ohlcv_no_trade`:
+  - `reports\phase2_readiness\ke_2019_2021_2024_phase2_causal_build_after_sparse_exception_correction_20260626\causal_base\causal_base_manifest.json`
+  - manifest `status=PASS`, `processed_market_year_count=3`, `summary.pass_count=3`, `summary.fail_count=0`, `failure_count=0`, `accepted_exception_count=3`, `accepted_exception_failure_count=0`
+- `HE 2016`, `HE 2019`, `HE 2020`, `LE 2016`, and `LE 2020` have current canonical Phase 2 causal PASS evidence under row-specific accepted exceptions:
+  - `reports\phase2_readiness\he_le_accepted_phase2_causal_build_after_exception_correction_20260626\causal_base\causal_base_manifest.json`
+  - manifest `status=PASS`, `processed_market_year_count=5`, `summary.pass_count=5`, `summary.fail_count=0`, `failure_count=0`, `accepted_exception_count=5`, `accepted_exception_failure_count=0`
 
-## Files Changed
+## Latest KE 2023 Reports-Only Candidate Result
 
-- This run changed:
-  - `scripts/phase1_raw_contract.py`
-  - `scripts/validation/check_dbn_archive_coverage.py`
-  - `tests/phase1A_download/test_download_databento_raw.py`
-  - `tests/validation/test_check_dbn_archive_coverage.py`
-  - `CODEX_HANDOFF.md`
-- This wording/gap-map pass changed only `CODEX_HANDOFF.md`.
-- This missing-status command-plan pass changed only `CODEX_HANDOFF.md`.
-- This missing-status dry-run pass changed only `CODEX_HANDOFF.md` in tracked files. Dry-run JSON reports were generated under ignored `reports/phase1A_status_repair_20260624/`.
-- This approval-boundary recheck changed only `CODEX_HANDOFF.md`.
-- This repeated approval-boundary recheck changed only `CODEX_HANDOFF.md`.
-- This approved repair attempt changed `CODEX_HANDOFF.md` and generated ignored reports under `reports/phase1A_status_repair_20260624/2010/`. It did not complete the first status batch.
-- This zero-size gate repair changed `scripts/phase1A_download/download_databento_raw.py`, `tests/phase1A_download/test_download_databento_raw.py`, and `CODEX_HANDOFF.md`. It generated ignored refreshed/probe reports under `reports/phase1A_status_repair_20260624/`.
-- This parent-probe pass changed only `CODEX_HANDOFF.md` in tracked files. It generated ignored estimate-only reports under `reports/phase1A_status_repair_20260624/probe_parent_2011`, `probe_parent_2012`, `probe_parent_2013`, `probe_parent_2013_no_ke`, `probe_parent_2014`, and `probe_continuous_KE_2013`.
-- This continuation pass changed only `CODEX_HANDOFF.md`; no DBN/source/raw mutation was performed because the current user message did not explicitly approve the five parent-symbol repair commands.
-- This Phase 1B strict-readiness pass changed `scripts/validation/audit_enriched_raw_optional_schemas.py`, `tests/validation/test_audit_enriched_raw_optional_schemas.py`, and `CODEX_HANDOFF.md`. It refreshed ignored/raw-readiness reports but did not mutate DBN/source/raw data.
-- This Phase 1B wrapper-default pass changed `scripts/phase1B_convert/convert_databento_raw.py`, `tests/phase1A_download/test_download_databento_raw.py`, and `CODEX_HANDOFF.md`.
-- This Phase 1B pre-conversion gate pass changed `scripts/phase1A_download/download_databento_raw.py`, `tests/phase1A_download/test_download_databento_raw.py`, and `CODEX_HANDOFF.md`. It refreshed ignored/raw-readiness reports but did not mutate DBN/source/raw data.
-- This Phase 1C four-L0 alignment pass changed `scripts/phase1C_validate/audit_raw_dbn_alignment.py`, `tests/validation/test_audit_raw_dbn_alignment.py`, and `CODEX_HANDOFF.md`. It refreshed ignored/raw-ingest reports but did not mutate DBN/source/raw data.
-- This Phase 1A parent-symbol repair execution changed `CODEX_HANDOFF.md` in tracked files and generated/updated ignored data/report artifacts under `data/dbn/status/{6C,6J,GC,HO,LE,RB,UB,ZB,ZC,ZF,ZN,ZT}/2010/` and `reports/phase1A_status_repair_20260624/parent_2010/`.
-- This continuation pass changed only `CODEX_HANDOFF.md` in tracked files. It refreshed ignored reports under `reports/raw_readiness/` and `reports/raw_ingest/`, but did not mutate DBN/source/raw data or run downloads.
-- Pre-existing dirty files preserved:
-  - `.gitignore`
-  - `scripts/phase1C_validate/audit_raw_dbn_alignment.py`
-  - `scripts/phase2_causal_base/build_causal_base_data.py`
-  - `tests/phase2_causal_base/test_build_causal_base_data.py`
-  - `tests/validation/test_audit_raw_dbn_alignment.py`
-  - `codex-local.ps1`
-- No staging, commit, generated artifact preservation, cleanup, delete, move, DBN/source/raw mutation, Phase 3-8 run, WFA/model run, or config change was performed.
+- Source audit:
+  - command exited 0
+  - report: `reports\phase2_readiness\ke_2023_parent_candidate_20260626\source_audit.json`
+  - `status=PASS`
+  - `repair_source_ready_count=1`
+  - `blocked_count=0`
+- Verified KE 2023 parent source evidence:
+  - `data\dbn\ohlcv_1m_parent\KE\2023\2023-01-01_2024-01-01.dbn.zst` sha256 `9c039b073f9480327e5d7fd7f52f17c8cb8b97797f8fc74321db73b84a735fe0`, schema `ohlcv-1m`, `stype_in=parent`
+  - `data\dbn\status_parent\status\KE\2023\2023-01-01_2024-01-01.dbn.zst` sha256 `2da4c2bc412035dd486d501c6ef8fd9fb8a072c0cf28e86ae30f7899f20693f1`, schema `status`, `stype_in=parent`
+  - `data\dbn\statistics_parent\statistics\KE\2023\2023-01-01_2024-01-01.dbn.zst` sha256 `5dee0be3a302f26241ea3007528150eb0037035778b860c19fe10a06d1133b11`, schema `statistics`, `stype_in=parent`
+  - `data\dbn\definition\KE\2023\2023-01-01_2024-01-01.dbn.zst` sha256 `96ee1d9549404ec972ced7116798ddfcc33ee9bc8c79f3741bd640c5965f0f20`, schema `definition`, `stype_in=parent`
+- Candidate validation:
+  - command exited 0
+  - manifest: `reports\phase2_readiness\ke_2023_parent_candidate_20260626\sr_front_contract_candidate_manifest.json`
+  - raw alignment: `reports\phase2_readiness\ke_2023_parent_candidate_20260626\sr_front_contract_candidate_raw_alignment.json`
+  - manifest `status=PASS`, `output_count=1`, `failures=[]`
+  - raw alignment `status=PASS`, `expected_market_year_count=1`, `raw_market_year_count=1`, `missing_raw_count=0`, `raw_schema_failure_count=0`, `source_hash_mismatch_count=0`
+- Candidate raw output:
+  - `reports\phase2_readiness\ke_2023_parent_candidate_20260626\raw\KE\2023.parquet`
+  - sha256 `9496be59af2f0708bd8c6eecf3dc0a3258b093f03b9e75846b0c774f26010b83`
+  - length `2785064`
+  - rows `102470`
+  - market values only `KE`
+  - year values only `2023`
+  - source columns point to:
+    - `data/dbn/ohlcv_1m_parent/KE/2023/2023-01-01_2024-01-01.dbn.zst`
+    - `data/dbn/status_parent/status/KE/2023/2023-01-01_2024-01-01.dbn.zst`
+    - `data/dbn/statistics_parent/statistics/KE/2023/2023-01-01_2024-01-01.dbn.zst`
 
-## Commands Run In This Run
+## Latest KE 2023 Reports-Only Readiness Result
+
+- Focused parent-sparse tests passed:
+  - `python -m pytest tests\phase2_causal_base\test_build_causal_base_data.py -k "parent_sparse"`
+  - `13 passed, 101 deselected`
+- Corrected tracked contract/config:
+  - `scripts\phase2_causal_base\build_causal_base_data.py`: added exact allowlist row `("KE", 2023)` for `parent_sparse_ohlcv_no_trade`.
+  - `configs\alpha_tiered.yaml`: added exact KE 2023 `accepted_readiness_exceptions` row with warning `synthetic threshold breached: rows_pct=53.439024 max_gap_minutes=116` and KE 2023 candidate manifest/alignment evidence paths.
+  - `tests\phase2_causal_base\test_build_causal_base_data.py`: added focused KE 2023 parent-sparse accepted-exception coverage.
+- Reports-only readiness rerun command exited 0.
+- Report root: `reports\phase2_readiness\ke_2023_parent_candidate_readiness_after_sparse_exception_correction_20260626`
+- Generated files:
+  - `reports\phase2_readiness\ke_2023_parent_candidate_readiness_after_sparse_exception_correction_20260626\phase2_readiness.json`
+  - `reports\phase2_readiness\ke_2023_parent_candidate_readiness_after_sparse_exception_correction_20260626\phase2_readiness.jsonl`
+- `phase2_readiness.json`:
+  - `status=PASS`
+  - `selected_market_year_count=1`
+  - `expected_market_year_count=1`
+  - `checked_market_year_count=1`
+  - `pass_count=1`
+  - `blocker_count=0`
+  - `failure_count=0`
+  - `failures=[]`
+  - `reason_counts={}`
+  - enrichment totals are zero for status/statistics missing/stale rows.
+- `phase2_readiness.jsonl` contains one row:
+  - `market=KE`
+  - `year=2023`
+  - `status=PASS`
+  - `original_status=WARN`
+  - `output_rows=220077`
+  - `synthetic_rows=117607`
+  - `synthetic_rows_pct=53.439024`
+  - `max_synthetic_gap_minutes=116`
+  - `degraded_bar_rows=0`
+  - `warnings=["synthetic threshold breached: rows_pct=53.439024 max_gap_minutes=116"]`
+  - `accepted_readiness_exception.category=parent_sparse_ohlcv_no_trade`
+  - accepted evidence paths:
+    - `reports/phase2_readiness/ke_2023_parent_candidate_20260626/sr_front_contract_candidate_manifest.json`
+    - `reports/phase2_readiness/ke_2023_parent_candidate_20260626/sr_front_contract_candidate_raw_alignment.json`
+  - accepted exception status/statistics missing/stale rows are all zero.
+
+## Latest KE 2023 Canonical Raw Promotion Preflight Result
+
+- Result: `ke_2023_raw_promotion_preflight_blocked_conflicting_destination`
+- Candidate raw source:
+  - `reports\phase2_readiness\ke_2023_parent_candidate_20260626\raw\KE\2023.parquet`
+  - size `2785064`
+  - sha256 `9496be59af2f0708bd8c6eecf3dc0a3258b093f03b9e75846b0c774f26010b83`
+  - rows `102470`
+  - market values only `KE`
+  - year values only `2023`
+- Canonical destination:
+  - `data\raw\KE\2023.parquet`
+  - exists
+  - size `3763292`
+  - sha256 `bb0f99a710ea3cda235270d5a72a6d1e5cfaddfa6938560510805c3876775fc2`
+  - classification `conflicting`
+- No canonical raw copy, overwrite, promotion, provider command, Phase 2 causal build, or report generation was performed.
+
+## Latest KE 2023 Canonical Raw Conflict Audit Result
+
+- Result: `ke_2023_raw_conflict_audit_destination_stale_wrong_source`
+- Candidate raw:
+  - `reports\phase2_readiness\ke_2023_parent_candidate_20260626\raw\KE\2023.parquet`
+  - rows `102470`
+  - size `2785064`
+  - sha256 `9496be59af2f0708bd8c6eecf3dc0a3258b093f03b9e75846b0c774f26010b83`
+  - market values only `KE`
+  - year values only `2023`
+  - source file `data/dbn/ohlcv_1m_parent/KE/2023/2023-01-01_2024-01-01.dbn.zst`
+  - status source file `data/dbn/status_parent/status/KE/2023/2023-01-01_2024-01-01.dbn.zst`
+  - statistics source file `data/dbn/statistics_parent/statistics/KE/2023/2023-01-01_2024-01-01.dbn.zst`
+  - status/statistics missing/stale rows all zero
+  - degraded rows `0`
+  - duplicate timestamp rows `0`
+  - maturity backsteps `0`
+- Canonical destination:
+  - `data\raw\KE\2023.parquet`
+  - rows `141741`
+  - size `3763292`
+  - sha256 `bb0f99a710ea3cda235270d5a72a6d1e5cfaddfa6938560510805c3876775fc2`
+  - market values only `KE`
+  - year values only `2023`
+  - source file `data/dbn/ohlcv_1m/KE/2023/2023-01-01_2024-01-01.dbn.zst`
+  - status source file `data/dbn/status/KE/2023/2023-01-01_2024-01-01.dbn.zst`
+  - statistics source file `data/dbn/statistics/KE/2023/2023-01-01_2024-01-01.dbn.zst`
+  - status/statistics missing/stale rows all zero
+  - degraded rows `0`
+  - duplicate timestamp rows `0`
+  - maturity backsteps `0`
+- Candidate and destination source paths/source hashes are not equal. The canonical destination uses non-parent roots and is stale for the current parent-source repair path.
+- No canonical raw copy, overwrite, promotion, provider command, Phase 2 causal build, or report generation was performed.
+
+## Latest KE 2023 Canonical Raw Overwrite Result
+
+- Decision: `approve_ke_2023_canonical_raw_overwrite_parent_source_only`
+- Mutated only approved canonical raw file:
+  - `data\raw\KE\2023.parquet`
+- Source copied:
+  - `reports\phase2_readiness\ke_2023_parent_candidate_20260626\raw\KE\2023.parquet`
+  - pre-copy sha256 `9496be59af2f0708bd8c6eecf3dc0a3258b093f03b9e75846b0c774f26010b83`
+  - pre-copy rows `102470`
+  - parent source columns under `data/dbn/ohlcv_1m_parent`, `data/dbn/status_parent`, and `data/dbn/statistics_parent`
+- Destination before copy:
+  - `data\raw\KE\2023.parquet`
+  - sha256 `bb0f99a710ea3cda235270d5a72a6d1e5cfaddfa6938560510805c3876775fc2`
+  - rows `141741`
+  - non-parent source columns under `data/dbn/ohlcv_1m`, `data/dbn/status`, and `data/dbn/statistics`
+- Destination after copy:
+  - `data\raw\KE\2023.parquet`
+  - sha256 `9496be59af2f0708bd8c6eecf3dc0a3258b093f03b9e75846b0c774f26010b83`
+  - size `2785064`
+  - rows `102470`
+  - market values only `KE`
+  - year values only `2023`
+  - source file `data/dbn/ohlcv_1m_parent/KE/2023/2023-01-01_2024-01-01.dbn.zst`
+  - status source file `data/dbn/status_parent/status/KE/2023/2023-01-01_2024-01-01.dbn.zst`
+  - statistics source file `data/dbn/statistics_parent/statistics/KE/2023/2023-01-01_2024-01-01.dbn.zst`
+  - degraded rows `0`
+  - status/statistics missing/stale rows all zero
+  - duplicate timestamp rows `0`
+  - maturity backsteps `0`
+- No DBN source, provider, live/paper, WFA/model/feature/label/prediction, reports, tracked code/config/tests, staging, or commits were mutated.
+
+## Latest KE 2023 Canonical Raw Validation/Readiness Result
+
+- Report root: `reports\phase2_readiness\ke_2023_canonical_raw_after_parent_overwrite_20260626`
+- First alignment-only command with unsupported `--candidate-root` failed before writing `canonical_raw_alignment.json`.
+- Rerun with current supported CLI exited 0:
+  - `python -m scripts.validation.promote_sr_roll_repair_candidate --alignment-only-existing-raw --raw-root data\raw --candidate-manifest reports\phase2_readiness\ke_2023_parent_candidate_20260626\sr_front_contract_candidate_manifest.json --readiness-summary reports\phase2_readiness\ke_2023_parent_candidate_readiness_after_sparse_exception_correction_20260626\phase2_readiness.json --promoted-raw-alignment-out reports\phase2_readiness\ke_2023_canonical_raw_after_parent_overwrite_20260626\canonical_raw_alignment.json`
+- `canonical_raw_alignment.json`:
+  - `status=PASS`
+  - `raw_root=data/raw`
+  - `expected_market_year_count=1`
+  - `raw_market_year_count=1`
+  - `missing_raw_count=0`
+  - `raw_schema_failure_count=0`
+  - `source_hash_mismatch_count=0`
+  - market-years exactly `KE 2023`
+- Reports-only readiness command exited 0:
+  - `python -m scripts.validation.audit_phase2_readiness --profile tier_3_research --raw-root data\raw --raw-alignment-report reports\phase2_readiness\ke_2023_canonical_raw_after_parent_overwrite_20260626\canonical_raw_alignment.json --output-root reports\phase2_readiness\ke_2023_canonical_raw_after_parent_overwrite_20260626\causal_readiness_only --profile-config configs\alpha_tiered.yaml --session-config configs\market_sessions.yaml --markets KE --years 2023 --jobs 1 --summary-only --top-blockers 20 --json-out reports\phase2_readiness\ke_2023_canonical_raw_after_parent_overwrite_20260626\phase2_readiness.json --checkpoint-jsonl reports\phase2_readiness\ke_2023_canonical_raw_after_parent_overwrite_20260626\phase2_readiness.jsonl`
+- `phase2_readiness.json`:
+  - `status=PASS`
+  - `selected_market_year_count=1`
+  - `expected_market_year_count=1`
+  - `checked_market_year_count=1`
+  - `pass_count=1`
+  - `blocker_count=0`
+  - `failure_count=0`
+  - `failures=[]`
+  - `reason_counts={}`
+  - enrichment totals are zero for status/statistics missing/stale rows.
+- `phase2_readiness.jsonl` contains exactly `KE 2023`:
+  - `status=PASS`
+  - `original_status=WARN`
+  - `synthetic_rows=117607`
+  - `synthetic_rows_pct=53.439024`
+  - `max_synthetic_gap_minutes=116`
+  - `degraded_bar_rows=0`
+  - `accepted_readiness_exception.category=parent_sparse_ohlcv_no_trade`
+  - accepted warning preserved: `synthetic threshold breached: rows_pct=53.439024 max_gap_minutes=116`
+  - status/statistics missing/stale rows all zero.
+
+## Latest KE 2023 Phase 2 Causal Build Preflight Result
+
+- Result: `ke_2023_phase2_build_preflight_pass`
+- Verified canonical alignment:
+  - `reports\phase2_readiness\ke_2023_canonical_raw_after_parent_overwrite_20260626\canonical_raw_alignment.json`
+  - `status=PASS`
+  - `raw_root=data/raw`
+  - `expected_market_year_count=1`
+  - `raw_market_year_count=1`
+  - `missing_raw_count=0`
+  - `raw_schema_failure_count=0`
+  - `source_hash_mismatch_count=0`
+  - market-years exactly `KE 2023`
+- Verified canonical readiness:
+  - `reports\phase2_readiness\ke_2023_canonical_raw_after_parent_overwrite_20260626\phase2_readiness.json`
+  - `status=PASS`
+  - `pass_count=1`
+  - `blocker_count=0`
+  - `failure_count=0`
+  - `failures=[]`
+- Verified readiness JSONL has exactly `KE 2023 PASS` with `accepted_readiness_exception.category=parent_sparse_ohlcv_no_trade`, degraded rows `0`, and status/statistics missing/stale rows `0`.
+- Verified canonical raw hash:
+  - `data\raw\KE\2023.parquet` sha256 `9496be59af2f0708bd8c6eecf3dc0a3258b093f03b9e75846b0c774f26010b83`
+- Current build CLI supports `--raw-root`, `--output-root`, `--reports-root`, `--profile-config`, `--session-config`, `--raw-alignment-report`, and `--market-year-include-list`.
+- Future output root is absent:
+  - `reports\phase2_readiness\ke_2023_phase2_causal_build_after_parent_overwrite_20260626`
+
+## Latest KE 2023 Reports-Only Phase 2 Causal Build Result
+
+- Report root: `reports\phase2_readiness\ke_2023_phase2_causal_build_after_parent_overwrite_20260626`
+- Include list:
+  - `reports\phase2_readiness\ke_2023_phase2_causal_build_after_parent_overwrite_20260626\eligible_market_years.json`
+  - exact content: `[{"market":"KE","year":2023}]`
+- Build command exited 0:
+  - `python -m scripts.phase2_causal_base.build_causal_base_data --profile tier_3_research --raw-root data\raw --output-root reports\phase2_readiness\ke_2023_phase2_causal_build_after_parent_overwrite_20260626\causally_gated_normalized --reports-root reports\phase2_readiness\ke_2023_phase2_causal_build_after_parent_overwrite_20260626\causal_base --profile-config configs\alpha_tiered.yaml --session-config configs\market_sessions.yaml --raw-alignment-report reports\phase2_readiness\ke_2023_canonical_raw_after_parent_overwrite_20260626\canonical_raw_alignment.json --market-year-include-list reports\phase2_readiness\ke_2023_phase2_causal_build_after_parent_overwrite_20260626\eligible_market_years.json`
+- Build stdout preserved original warning evidence:
+  - `WARN KE 2023: raw=102470 out=220077 synthetic=117607 warnings=1 failures=0`
+  - `local_trade_ohlcv_gap_gate status=SKIPPED`
+- `causal_base_validation.json`:
+  - `status=PASS`
+  - `summary.file_count=1`
+  - `summary.pass_count=1`
+  - `summary.fail_count=0`
+  - `failure_count=0`
+  - `summary.warn_count=0`
+  - `warning_count=1` because original warning evidence is retained
+  - `accepted_exception_count=1`
+  - `accepted_exception_failure_count=0`
+  - `accepted_readiness_exception_failures=[]`
+  - `summary.synthetic_rows=117607`
+  - `summary.degraded_bar_rows=0`
+  - `summary.causal_valid_rows=102297`
+  - `summary.causal_invalid_rows=117780`
+- `causal_base_manifest.json`:
+  - `status=PASS`
+  - `processed_market_year_count=1`
+  - processed market-years exactly `KE 2023`
+  - `summary.pass_count=1`
+  - `summary.fail_count=0`
+  - `summary.warn_count=0`
+  - `accepted_exception_count=1`
+  - `accepted_exception_failure_count=0`
+  - original warning preserved under `accepted_readiness_exception.category=parent_sparse_ohlcv_no_trade`
+- Reports-only output:
+  - `reports\phase2_readiness\ke_2023_phase2_causal_build_after_parent_overwrite_20260626\causally_gated_normalized\KE\2023.parquet`
+  - size `7009186`
+  - sha256 `e22c229bb4f10c09b24aab62255e141d64a8be1dcf34aed94d12a0e04956e55d`
+- No canonical causal output, provider state, live/paper, WFA/model/feature/label/prediction, staging, or commits were mutated.
+
+## Latest KE 2023 Canonical Phase 2 Causal Promotion Preflight Result
+
+- Result: `ke_2023_phase2_causal_promotion_preflight_pass_destination_missing_or_identical`
+- Reports-only causal validation:
+  - `reports\phase2_readiness\ke_2023_phase2_causal_build_after_parent_overwrite_20260626\causal_base\causal_base_validation.json`
+  - `status=PASS`
+  - `summary.pass_count=1`
+  - `summary.fail_count=0`
+  - `failure_count=0`
+  - `accepted_exception_count=1`
+  - `accepted_exception_failure_count=0`
+  - `accepted_readiness_exception_failures=[]`
+  - `summary.degraded_bar_rows=0`
+  - original KE 2023 synthetic warning preserved as accepted exception evidence.
+- Reports-only causal manifest:
+  - `reports\phase2_readiness\ke_2023_phase2_causal_build_after_parent_overwrite_20260626\causal_base\causal_base_manifest.json`
+  - `status=PASS`
+  - `processed_market_year_count=1`
+  - processed market-years exactly `KE 2023`
+  - `summary.pass_count=1`
+  - `summary.fail_count=0`
+  - `accepted_exception_count=1`
+  - `accepted_exception_failure_count=0`
+- Reports-only causal source output:
+  - `reports\phase2_readiness\ke_2023_phase2_causal_build_after_parent_overwrite_20260626\causally_gated_normalized\KE\2023.parquet`
+  - size `7009186`
+  - sha256 `e22c229bb4f10c09b24aab62255e141d64a8be1dcf34aed94d12a0e04956e55d`
+- Canonical destination:
+  - `data\causally_gated_normalized\KE\2023.parquet`
+  - classification `missing`
+- No canonical causal copy, overwrite, provider command, Phase 2 rebuild, WFA/model/feature/label/prediction, staging, or commits were performed.
+
+## Latest KE 2023 Canonical Phase 2 Causal Promotion Result
+
+- Decision: `approve_ke_2023_phase2_causal_promotion_canonical_only`
+- Mutated only approved canonical Phase 2 causal file:
+  - `data\causally_gated_normalized\KE\2023.parquet`
+- Source copied:
+  - `reports\phase2_readiness\ke_2023_phase2_causal_build_after_parent_overwrite_20260626\causally_gated_normalized\KE\2023.parquet`
+  - pre-copy sha256 `e22c229bb4f10c09b24aab62255e141d64a8be1dcf34aed94d12a0e04956e55d`
+  - pre-copy size `7009186`
+- Destination before copy:
+  - `data\causally_gated_normalized\KE\2023.parquet`
+  - classification `missing`
+- Destination after copy:
+  - `data\causally_gated_normalized\KE\2023.parquet`
+  - sha256 `e22c229bb4f10c09b24aab62255e141d64a8be1dcf34aed94d12a0e04956e55d`
+  - size `7009186`
+- Verified supporting reports before copy:
+  - `causal_base_validation.json` status `PASS`, `summary.pass_count=1`, `summary.fail_count=0`, `failure_count=0`, `accepted_exception_count=1`, `accepted_exception_failure_count=0`, `summary.degraded_bar_rows=0`
+  - `causal_base_manifest.json` status `PASS`, `processed_market_year_count=1`, processed market-years exactly `KE 2023`
+- No `data\raw`, DBN source, provider, live/paper, WFA/model/feature/label/prediction, reports, tracked code/config/tests, staging, or commits were mutated.
+
+## Latest KE 2023 Canonical Phase 2 Causal Validation Result
+
+- Result: `ke_2023_canonical_phase2_causal_validation_pass`
+- Canonical file is byte-identical to the reports-only source:
+  - canonical: `data\causally_gated_normalized\KE\2023.parquet`
+  - reports-only source: `reports\phase2_readiness\ke_2023_phase2_causal_build_after_parent_overwrite_20260626\causally_gated_normalized\KE\2023.parquet`
+  - sha256 `e22c229bb4f10c09b24aab62255e141d64a8be1dcf34aed94d12a0e04956e55d`
+  - size `7009186`
+- Read-only parquet inspection:
+  - rows `220077`
+  - `market=KE` only
+  - `year=2023` only
+  - `is_synthetic_true=117607`
+  - `data_quality_degraded_true=0`
+  - `session_data_quality_degraded_true=0`
+  - `status_missing_true=0`
+  - `status_stale_true=0`
+  - `statistics_missing_true=0`
+  - `statistics_stale_true=0`
+  - `source_path=data/raw/KE/2023.parquet`
+  - `source_file_hash=9496be59af2f0708bd8c6eecf3dc0a3258b093f03b9e75846b0c774f26010b83`
+  - `causal_valid_true=102297`
+  - `causal_valid_false=117780`
+  - invalid reasons: blank `102297`, `raw_row_missing|synthetic=117544`, `raw_row_missing|synthetic|roll_window=63`, `roll_window=92`, `outside_session=81`
+- No file changed during the read-only validation after the approved canonical promotion.
+
+## Latest ZC 2019-2024 Read-Only Source/Readiness Audit Result
+
+- Result: `zc_2019_2024_fail_closed_wrong_source_type_no_parent_source`
+- Current local parent/explicit source evidence:
+  - `data\dbn\ohlcv_1m_parent\ZC\2019` through `data\dbn\ohlcv_1m_parent\ZC\2024`: missing
+  - `data\dbn\status_parent\status\ZC\2019` through `data\dbn\status_parent\status\ZC\2024`: missing
+  - `data\dbn\statistics_parent\statistics\ZC\2019` through `data\dbn\statistics_parent\statistics\ZC\2024`: missing
+  - `data\dbn\definition\ZC\2019` through `data\dbn\definition\ZC\2024`: present, manifest readable, schema `definition`, `stype_in=parent`, size/hash metadata matched
+- Current local continuous source evidence:
+  - `data\dbn\ohlcv_1m\ZC\2019` through `data\dbn\ohlcv_1m\ZC\2024`: present, manifest readable, schema `ohlcv-1m`, `stype_in=continuous`, `symbols_requested=["ZC.v.0"]`, size/hash metadata matched
+  - `data\dbn\status\ZC\2019` through `data\dbn\status\ZC\2024`: present, manifest readable, schema `status`, `stype_in=continuous`, `symbols_requested=["ZC.v.0"]`, size/hash metadata matched
+  - `data\dbn\statistics\ZC\2019` through `data\dbn\statistics\ZC\2024`: present, manifest readable, schema `statistics`, `stype_in=continuous`, `symbols_requested=["ZC.v.0"]`, size/hash metadata matched
+- Current canonical raw source columns:
+  - `data\raw\ZC\2019.parquet`: rows `188301`, source `data/dbn/ohlcv_1m/ZC/2019/2019-01-01_2020-01-01.dbn.zst`, status/statistics missing/stale rows all `0`
+  - `data\raw\ZC\2020.parquet`: rows `209069`, source `data/dbn/ohlcv_1m/ZC/2020/2020-01-01_2021-01-01.dbn.zst`, status/statistics missing/stale rows all `0`
+  - `data\raw\ZC\2021.parquet`: rows `239474`, source `data/dbn/ohlcv_1m/ZC/2021/2021-01-01_2022-01-01.dbn.zst`, status/statistics missing/stale rows all `0`
+  - `data\raw\ZC\2022.parquet`: rows `231953`, source `data/dbn/ohlcv_1m/ZC/2022/2022-01-01_2023-01-01.dbn.zst`, status/statistics missing/stale rows all `0`
+  - `data\raw\ZC\2023.parquet`: rows `213492`, source `data/dbn/ohlcv_1m/ZC/2023/2023-01-01_2024-01-01.dbn.zst`, status/statistics missing/stale rows all `0`
+  - `data\raw\ZC\2024.parquet`: rows `198626`, source `data/dbn/ohlcv_1m/ZC/2024/2024-01-01_2025-01-01.dbn.zst`, status/statistics missing/stale rows all `0`
+- Current report/config evidence:
+  - `configs\alpha_tiered.yaml` has no `accepted_readiness_exceptions` row for `ZC`.
+  - `scripts\phase2_causal_base\build_causal_base_data.py` `PARENT_SPARSE_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS` includes only `KE 2019`, `KE 2021`, `KE 2023`, and `KE 2024`, not `ZC`.
+  - Existing ZC decision packets remain `ACTION_REQUIRED` and fail-closed:
+    - `reports\phase2_readiness\ZC_2019_scope_20260624\ZC_2019_decision_packet_20260624.json`: `decision=keep_fail_closed_move_to_next_eligible_blocker`, `synthetic_rows=85270`, `synthetic_rows_pct=31.169239`, `max_synthetic_gap_minutes=58`, `degraded_bar_rows=2405`
+    - `reports\phase2_readiness\ZC_2020_scope_20260624\ZC_2020_decision_packet_20260624.json`: `decision=keep_fail_closed_move_to_next_eligible_blocker`, `synthetic_rows=65635`, `synthetic_rows_pct=23.89299`, `max_synthetic_gap_minutes=99`, `degraded_bar_rows=1683`
+    - `reports\phase2_readiness\ZC_2021_scope_20260624\ZC_2021_decision_packet_20260624.json`: `decision=keep_fail_closed`, `synthetic_rows=36032`, `synthetic_rows_pct=13.078481`, `max_synthetic_gap_minutes=73`, `degraded_bar_rows=0`
+    - `reports\phase2_readiness\ZC_2022_scope_20260624\ZC_2022_decision_packet_20260624.json`: `decision=keep_fail_closed_move_to_next_eligible_blocker`, `synthetic_rows=41642`, `synthetic_rows_pct=15.220307`, `max_synthetic_gap_minutes=48`, `degraded_bar_rows=0`
+    - `reports\phase2_readiness\ZC_2023_scope_20260624\ZC_2023_decision_packet_20260624.json`: `decision=keep_fail_closed_move_to_next_eligible_blocker`, `synthetic_rows=58193`, `synthetic_rows_pct=21.419291`, `max_synthetic_gap_minutes=46`, `degraded_bar_rows=0`
+    - `reports\phase2_readiness\ZC_2024_scope_20260624\ZC_2024_decision_packet_20260624.json`: `decision=keep_fail_closed_move_to_next_eligible_blocker`, `synthetic_rows=75184`, `synthetic_rows_pct=27.458457`, `max_synthetic_gap_minutes=46`, `degraded_bar_rows=0`
+- ZC compact evidence matrix:
+  - `ZC 2019`: `wrong_source_type`
+  - `ZC 2020`: `wrong_source_type`
+  - `ZC 2021`: `wrong_source_type`
+  - `ZC 2022`: `wrong_source_type`
+  - `ZC 2023`: `wrong_source_type`
+  - `ZC 2024`: `wrong_source_type`
+- No files or reports were generated during the read-only audit. No provider, build, promotion, WFA/model/feature/label, staging, or commit action was performed.
+
+## Latest ZL 2019-2023 Read-Only Source/Readiness Audit Result
+
+- Result: `zl_2019_2023_fail_closed_wrong_source_type_no_parent_source`
+- Current local parent/explicit source evidence:
+  - `data\dbn\ohlcv_1m_parent\ZL\2019` through `data\dbn\ohlcv_1m_parent\ZL\2023`: missing
+  - `data\dbn\status_parent\status\ZL\2019` through `data\dbn\status_parent\status\ZL\2023`: missing
+  - `data\dbn\statistics_parent\statistics\ZL\2019` through `data\dbn\statistics_parent\statistics\ZL\2023`: missing
+  - `data\dbn\definition\ZL\2019` through `data\dbn\definition\ZL\2023`: present, manifest readable, schema `definition`, `stype_in=parent`, size/hash metadata matched
+- Current local continuous source evidence:
+  - `data\dbn\ohlcv_1m\ZL\2019` through `data\dbn\ohlcv_1m\ZL\2023`: present, manifest readable, schema `ohlcv-1m`, `stype_in=continuous`, size/hash metadata matched
+  - `data\dbn\status\ZL\2019` through `data\dbn\status\ZL\2023`: present, manifest readable, schema `status`, `stype_in=continuous`, size/hash metadata matched
+  - `data\dbn\statistics\ZL\2019` through `data\dbn\statistics\ZL\2023`: present, manifest readable, schema `statistics`, `stype_in=continuous`, size/hash metadata matched
+- Current canonical raw source columns:
+  - `data\raw\ZL\2019.parquet`: rows `197664`, source `data/dbn/ohlcv_1m/ZL/2019/2019-01-01_2020-01-01.dbn.zst`, status/statistics missing/stale rows all `0`
+  - `data\raw\ZL\2020.parquet`: rows `238335`, source `data/dbn/ohlcv_1m/ZL/2020/2020-01-01_2021-01-01.dbn.zst`, status/statistics missing/stale rows all `0`
+  - `data\raw\ZL\2021.parquet`: rows `237368`, source `data/dbn/ohlcv_1m/ZL/2021/2021-01-01_2022-01-01.dbn.zst`, status/statistics missing/stale rows all `0`
+  - `data\raw\ZL\2022.parquet`: rows `220438`, source `data/dbn/ohlcv_1m/ZL/2022/2022-01-01_2023-01-01.dbn.zst`, status/statistics missing/stale rows all `0`
+  - `data\raw\ZL\2023.parquet`: rows `219695`, source `data/dbn/ohlcv_1m/ZL/2023/2023-01-01_2024-01-01.dbn.zst`, status/statistics missing/stale rows all `0`
+- Current report/config evidence:
+  - `configs\alpha_tiered.yaml` has no `accepted_readiness_exceptions` row for `ZL`.
+  - `scripts\phase2_causal_base\build_causal_base_data.py` `PARENT_SPARSE_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS` does not include `ZL`.
+  - Existing ZL decision packets remain `ACTION_REQUIRED` and fail-closed:
+    - `reports\phase2_readiness\ZL_2019_scope_20260624\ZL_2019_decision_packet_20260624.json`: `decision=keep_fail_closed_move_to_next_eligible_blocker`, `synthetic_rows=75483`, `synthetic_rows_pct=27.63457`, `max_synthetic_gap_minutes=117`, `degraded_bar_rows=2886`
+    - `reports\phase2_readiness\ZL_2020_scope_20260624\ZL_2020_decision_packet_20260624.json`: `decision=keep_fail_closed`, `synthetic_rows=36163`, `synthetic_rows_pct=13.174231`, `max_synthetic_gap_minutes=109`, `degraded_bar_rows=1756`
+    - `reports\phase2_readiness\ZL_2021_scope_20260624\ZL_2021_decision_packet_20260624.json`: `decision=keep_fail_closed`, `synthetic_rows=38137`, `synthetic_rows_pct=13.84258`, `max_synthetic_gap_minutes=46`, `degraded_bar_rows=0`
+    - `reports\phase2_readiness\ZL_2022_scope_20260624\ZL_2022_decision_packet_20260624.json`: `decision=keep_fail_closed_move_to_next_eligible_blocker`, `synthetic_rows=53157`, `synthetic_rows_pct=19.429083`, `max_synthetic_gap_minutes=46`, `degraded_bar_rows=0`
+    - `reports\phase2_readiness\ZL_2023_scope_20260624\ZL_2023_decision_packet_20260624.json`: `decision=keep_fail_closed_move_to_next_eligible_blocker`, `synthetic_rows=51990`, `synthetic_rows_pct=19.136132`, `max_synthetic_gap_minutes=46`, `degraded_bar_rows=0`
+- ZL compact evidence matrix:
+  - `ZL 2019`: `wrong_source_type`
+  - `ZL 2020`: `wrong_source_type`
+  - `ZL 2021`: `wrong_source_type`
+  - `ZL 2022`: `wrong_source_type`
+  - `ZL 2023`: `wrong_source_type`
+- No files or reports were generated during the read-only audit. No provider, build, promotion, WFA/model/feature/label, staging, or commit action was performed.
+
+## Latest ZM 2019-2024 Read-Only Source/Readiness Audit Result
+
+- Result: `zm_2019_2024_fail_closed_wrong_source_type_no_parent_source`
+- Current local parent/explicit source evidence:
+  - `data\dbn\ohlcv_1m_parent\ZM\2019` through `data\dbn\ohlcv_1m_parent\ZM\2024`: missing
+  - `data\dbn\status_parent\status\ZM\2019` through `data\dbn\status_parent\status\ZM\2024`: missing
+  - `data\dbn\statistics_parent\statistics\ZM\2019` through `data\dbn\statistics_parent\statistics\ZM\2024`: missing
+  - `data\dbn\definition\ZM\2019` through `data\dbn\definition\ZM\2024`: present, manifest readable, schema `definition`, `stype_in=parent`, size/hash metadata matched
+- Current local continuous source evidence:
+  - `data\dbn\ohlcv_1m\ZM\2019` through `data\dbn\ohlcv_1m\ZM\2024`: present, manifest readable, schema `ohlcv-1m`, `stype_in=continuous`, size/hash metadata matched
+  - `data\dbn\status\ZM\2019` through `data\dbn\status\ZM\2024`: present, manifest readable, schema `status`, `stype_in=continuous`, size/hash metadata matched
+  - `data\dbn\statistics\ZM\2019` through `data\dbn\statistics\ZM\2024`: present, manifest readable, schema `statistics`, `stype_in=continuous`, size/hash metadata matched
+- Current canonical raw source columns:
+  - `data\raw\ZM\2019.parquet`: rows `174022`, source `data/dbn/ohlcv_1m/ZM/2019/2019-01-01_2020-01-01.dbn.zst`, status/statistics missing/stale rows all `0`
+  - `data\raw\ZM\2020.parquet`: rows `196479`, source `data/dbn/ohlcv_1m/ZM/2020/2020-01-01_2021-01-01.dbn.zst`, status/statistics missing/stale rows all `0`
+  - `data\raw\ZM\2021.parquet`: rows `214610`, source `data/dbn/ohlcv_1m/ZM/2021/2021-01-01_2022-01-01.dbn.zst`, status/statistics missing/stale rows all `0`
+  - `data\raw\ZM\2022.parquet`: rows `205667`, source `data/dbn/ohlcv_1m/ZM/2022/2022-01-01_2023-01-01.dbn.zst`, status/statistics missing/stale rows all `0`
+  - `data\raw\ZM\2023.parquet`: rows `207959`, source `data/dbn/ohlcv_1m/ZM/2023/2023-01-01_2024-01-01.dbn.zst`, status/statistics missing/stale rows all `0`
+  - `data\raw\ZM\2024.parquet`: rows `209903`, source `data/dbn/ohlcv_1m/ZM/2024/2024-01-01_2025-01-01.dbn.zst`, status/statistics missing/stale rows all `0`
+- Current report/config evidence:
+  - `configs\alpha_tiered.yaml` has no `accepted_readiness_exceptions` row for `ZM`.
+  - `scripts\phase2_causal_base\build_causal_base_data.py` `PARENT_SPARSE_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS` does not include `ZM`.
+  - Existing ZM decision packets remain `ACTION_REQUIRED` and fail-closed:
+    - `reports\phase2_readiness\ZM_2019_scope_20260624\ZM_2019_decision_packet_20260624.json`: `decision=record ZM 2019 fail-closed and move to the next eligible blocker`, `synthetic_rows=98800`, `synthetic_rows_pct=36.214088`, `max_synthetic_gap_minutes=114`, `degraded_bar_rows=2751`
+    - `reports\phase2_readiness\ZM_2020_scope_20260624\ZM_2020_decision_packet_20260624.json`: `decision=keep_fail_closed_move_to_next_eligible_blocker`, `synthetic_rows=78201`, `synthetic_rows_pct=28.469856`, `max_synthetic_gap_minutes=109`, `degraded_bar_rows=1260`
+    - `reports\phase2_readiness\ZM_2021_scope_20260624\ZM_2021_decision_packet_20260624.json`: `decision=keep_fail_closed_move_to_next_eligible_blocker`, `synthetic_rows=60895`, `synthetic_rows_pct=22.103047`, `max_synthetic_gap_minutes=47`, `degraded_bar_rows=0`
+    - `reports\phase2_readiness\ZM_2022_scope_20260624\ZM_2022_decision_packet_20260624.json`: `decision=keep_fail_closed_move_to_next_eligible_blocker`, `synthetic_rows=67802`, `synthetic_rows_pct=24.793304`, `max_synthetic_gap_minutes=65`, `degraded_bar_rows=0`
+    - `reports\phase2_readiness\ZM_2023_scope_20260624\ZM_2023_decision_packet_20260624.json`: `decision=keep_fail_closed_move_to_next_eligible_blocker`, `synthetic_rows=63726`, `synthetic_rows_pct=23.45584`, `max_synthetic_gap_minutes=46`, `degraded_bar_rows=0`
+    - `reports\phase2_readiness\ZM_2024_scope_20260624\ZM_2024_decision_packet_20260624.json`: `decision=keep_fail_closed_move_to_next_eligible_blocker`, `synthetic_rows=63907`, `synthetic_rows_pct=23.339907`, `max_synthetic_gap_minutes=46`, `degraded_bar_rows=0`
+- ZM compact evidence matrix:
+  - `ZM 2019`: `wrong_source_type`
+  - `ZM 2020`: `wrong_source_type`
+  - `ZM 2021`: `wrong_source_type`
+  - `ZM 2022`: `wrong_source_type`
+  - `ZM 2023`: `wrong_source_type`
+  - `ZM 2024`: `wrong_source_type`
+- No files or reports were generated during the read-only audit. No provider, build, promotion, WFA/model/feature/label, staging, or commit action was performed.
+
+## Latest ZS 2019-2024 Read-Only Source/Readiness Audit Result
+
+- Result: `zs_2019_2024_partial_fail_closed_missing_decision_packets`
+- Current local parent/explicit source evidence:
+  - `data\dbn\ohlcv_1m_parent\ZS\2019` through `data\dbn\ohlcv_1m_parent\ZS\2024`: missing
+  - `data\dbn\status_parent\status\ZS\2019` through `data\dbn\status_parent\status\ZS\2024`: missing
+  - `data\dbn\statistics_parent\statistics\ZS\2019` through `data\dbn\statistics_parent\statistics\ZS\2024`: missing
+  - `data\dbn\definition\ZS\2019` through `data\dbn\definition\ZS\2024`: present, manifest readable, schema `definition`, `stype_in=parent`
+- Current local continuous source evidence:
+  - `data\dbn\ohlcv_1m\ZS\2019` through `data\dbn\ohlcv_1m\ZS\2024`: present, manifest readable, schema `ohlcv-1m`, `stype_in=continuous`, size/hash metadata matched
+  - `data\dbn\status\ZS\2019` through `data\dbn\status\ZS\2024`: present, manifest readable, schema `status`, `stype_in=continuous`, size/hash metadata matched
+  - `data\dbn\statistics\ZS\2019` through `data\dbn\statistics\ZS\2024`: present, manifest readable, schema `statistics`, `stype_in=continuous`, size/hash metadata matched
+- Current canonical raw source columns:
+  - `data\raw\ZS\2019.parquet`: rows `211193`, sha256 `671ea02a47dcf04e5e704bb72cffdae0ca7a2bc8a184dbbb2c32e13991de42f4`, source `data/dbn/ohlcv_1m/ZS/2019/2019-01-01_2020-01-01.dbn.zst`, status/statistics missing/stale rows all `0`, degraded rows `3063`
+  - `data\raw\ZS\2020.parquet`: rows `234627`, sha256 `dd804d48561d081a23f688749f4257bd7937b9d8f576b3ca127fe5c374b6e6c5`, source `data/dbn/ohlcv_1m/ZS/2020/2020-01-01_2021-01-01.dbn.zst`, status/statistics missing/stale rows all `0`, degraded rows `1746`
+  - `data\raw\ZS\2021.parquet`: rows `245785`, sha256 `794f429a950dde451468495d47ff95862d6845ecafc3aeb15b65e1ea716d37b5`, source `data/dbn/ohlcv_1m/ZS/2021/2021-01-01_2022-01-01.dbn.zst`, status/statistics missing/stale rows all `0`, degraded rows `0`
+  - `data\raw\ZS\2022.parquet`: rows `243037`, sha256 `abb8f21867bdc9301fb6c6b36732b71f840e95ea3c330422abf4699969c896ef`, source `data/dbn/ohlcv_1m/ZS/2022/2022-01-01_2023-01-01.dbn.zst`, status/statistics missing/stale rows all `0`, degraded rows `0`
+  - `data\raw\ZS\2023.parquet`: rows `238574`, sha256 `d355e716af72e345a6fe57949c7c46873629c7fb387a41d314a48b07b51310dd`, source `data/dbn/ohlcv_1m/ZS/2023/2023-01-01_2024-01-01.dbn.zst`, status/statistics missing/stale rows all `0`, degraded rows `0`
+  - `data\raw\ZS\2024.parquet`: rows `234475`, sha256 `4dec7baff8b6aacbada095fd91cb771982c8a9a8f88d6eebba39ae08e060edad`, source `data/dbn/ohlcv_1m/ZS/2024/2024-01-01_2025-01-01.dbn.zst`, status/statistics missing/stale rows all `0`, degraded rows `0`
+- Current report/config evidence:
+  - `configs\alpha_tiered.yaml` has no `accepted_readiness_exceptions` row for `ZS`.
+  - `scripts\phase2_causal_base\build_causal_base_data.py` `PARENT_SPARSE_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS` does not include `ZS`.
+  - Existing decision packets are fail-closed for `ZS 2019`, `ZS 2020`, `ZS 2023`, and `ZS 2024`.
+  - `ZS 2019`: `decision=keep_fail_closed_move_to_next_eligible_blocker`, `synthetic_rows=62144`, `synthetic_rows_pct=22.735305`, `max_synthetic_gap_minutes=89`, `degraded_bar_rows=3063`
+  - `ZS 2020`: `decision=keep_fail_closed`, `synthetic_rows=39997`, `synthetic_rows_pct=14.564277`, `max_synthetic_gap_minutes=99`, `degraded_bar_rows=1746`
+  - `ZS 2023`: `decision_policy_result.decision=keep_fail_closed`, `synthetic_rows=33111`, `synthetic_rows_pct=12.187276`, `max_synthetic_gap_minutes=46`, `degraded_bar_rows=0`
+  - `ZS 2024`: `decision=keep_fail_closed`, `synthetic_rows=39335`, `synthetic_rows_pct=14.365801`, `max_synthetic_gap_minutes=46`, `degraded_bar_rows=0`
+  - No decision packet exists for `ZS 2021` or `ZS 2022`.
+  - Current JSONL WARN evidence exists for `ZS 2021` and `ZS 2022` in `reports\phase2_readiness\tier3_research_after_status_sparse_exceptions_20260624.jsonl` and `reports\phase2_readiness\tier3_research_after_phase1b_rebuild_20260624_bounded10.jsonl`.
+  - `ZS 2021`: `status=WARN`, warnings `roll maturity sequence not monotonic: backsteps=1` and `synthetic threshold breached: rows_pct=10.787787 max_gap_minutes=46`, `synthetic_rows=29721`, `degraded_bar_rows=0`, status/statistics missing/stale rows all `0`
+  - `ZS 2022`: `status=WARN`, warning `synthetic threshold breached: rows_pct=11.169064 max_gap_minutes=46`, `synthetic_rows=30558`, `degraded_bar_rows=0`, status/statistics missing/stale rows all `0`
+- ZS compact evidence matrix:
+  - `ZS 2019`: `wrong_source_type` with fail-closed decision packet
+  - `ZS 2020`: `wrong_source_type` with fail-closed decision packet
+  - `ZS 2021`: `stale_or_ambiguous`; parent source missing and no decision packet
+  - `ZS 2022`: `stale_or_ambiguous`; parent source missing and no decision packet
+  - `ZS 2023`: `wrong_source_type` with fail-closed decision packet
+  - `ZS 2024`: `wrong_source_type` with fail-closed decision packet
+- Current script discovery found no exact supported decision-packet generator. Existing supported CLIs cover repair work orders, blocker summaries, and drilldowns:
+  - `python -m scripts.validation.build_phase2_repair_work_order --help`
+  - `python -m scripts.validation.diagnose_phase2_readiness_blockers --help`
+  - `python -m scripts.validation.drilldown_phase2_readiness_blockers --help`
+  - `python -m scripts.validation.summarize_phase2_readiness_blockers --help`
+- No files or reports were generated during the read-only audit. No provider, build, promotion, WFA/model/feature/label, staging, or commit action was performed.
+
+## Latest ZS 2021-2022 Fail-Closed Decision Packet Result
+
+- Added focused tracked tooling:
+  - `scripts\validation\build_phase2_decision_packets.py`
+  - `tests\validation\test_build_phase2_decision_packets.py`
+- Focused test command passed:
+  - `python -m pytest tests\validation\test_build_phase2_decision_packets.py`
+  - `4 passed`
+- Generated only approved packet artifacts:
+  - `reports\phase2_readiness\ZS_2021_scope_20260626\ZS_2021_decision_packet_20260626.json`
+  - `reports\phase2_readiness\ZS_2021_scope_20260626\ZS_2021_decision_packet_20260626.md`
+  - `reports\phase2_readiness\ZS_2022_scope_20260626\ZS_2022_decision_packet_20260626.json`
+  - `reports\phase2_readiness\ZS_2022_scope_20260626\ZS_2022_decision_packet_20260626.md`
+- Verification:
+  - `ZS 2021`: `status=ACTION_REQUIRED`, `decision_status=BLOCKED_REPAIR_OR_EXPLICIT_EXCLUSION_REQUIRED`, `decision=keep_fail_closed`, `accepted_readiness_exception_added=false`, `diagnostic_use_approved=false`, `thresholds_loosened=false`, `provider_command_approved=false`, `source_repair_approved=false`, `canonical_raw_overwrite_approved=false`, `canonical_phase2_rebuild_approved=false`
+  - `ZS 2021`: `synthetic_rows=29721`, `synthetic_rows_pct=10.787787`, `max_synthetic_gap_minutes=46`, `roll_maturity_backstep_count=1`, `degraded_bar_rows=0`, status/statistics missing/stale rows all `0`
+  - `ZS 2021`: canonical raw row count `245785`, sha256 `794f429a950dde451468495d47ff95862d6845ecafc3aeb15b65e1ea716d37b5`, raw source `data/dbn/ohlcv_1m/ZS/2021/2021-01-01_2022-01-01.dbn.zst`
+  - `ZS 2022`: `status=ACTION_REQUIRED`, `decision_status=BLOCKED_REPAIR_OR_EXPLICIT_EXCLUSION_REQUIRED`, `decision=keep_fail_closed`, `accepted_readiness_exception_added=false`, `diagnostic_use_approved=false`, `thresholds_loosened=false`, `provider_command_approved=false`, `source_repair_approved=false`, `canonical_raw_overwrite_approved=false`, `canonical_phase2_rebuild_approved=false`
+  - `ZS 2022`: `synthetic_rows=30558`, `synthetic_rows_pct=11.169064`, `max_synthetic_gap_minutes=46`, `roll_maturity_backstep_count=0`, `degraded_bar_rows=0`, status/statistics missing/stale rows all `0`
+  - `ZS 2022`: canonical raw row count `243037`, sha256 `abb8f21867bdc9301fb6c6b36732b71f840e95ea3c330422abf4699969c896ef`, raw source `data/dbn/ohlcv_1m/ZS/2022/2022-01-01_2023-01-01.dbn.zst`
+- No data/raw, DBN source, canonical Phase 2, provider, live/paper, WFA/model/feature/label, staging, or commit action was performed.
+
+## Latest ZW 2019/2020/2022/2023/2024 Read-Only Source/Readiness Audit Result
+
+- Result: `zw_2019_2020_2022_2023_2024_fail_closed_wrong_source_type_no_parent_source`
+- Current local parent/explicit source evidence:
+  - `data\dbn\ohlcv_1m_parent\ZW\2019`, `2020`, `2022`, `2023`, `2024`: missing
+  - `data\dbn\status_parent\status\ZW\2019`, `2020`, `2022`, `2023`, `2024`: missing
+  - `data\dbn\statistics_parent\statistics\ZW\2019`, `2020`, `2022`, `2023`, `2024`: missing
+  - `data\dbn\definition\ZW\2019`, `2020`, `2022`, `2023`, `2024`: present, manifest readable, schema `definition`, `stype_in=parent`
+- Current local continuous source evidence:
+  - `data\dbn\ohlcv_1m\ZW\2019`, `2020`, `2022`, `2023`, `2024`: present, manifest readable, schema `ohlcv-1m`, `stype_in=continuous`, size/hash metadata matched
+  - `data\dbn\status\ZW\2019`, `2020`, `2022`, `2023`, `2024`: present, manifest readable, schema `status`, `stype_in=continuous`, size/hash metadata matched
+  - `data\dbn\statistics\ZW\2019`, `2020`, `2022`, `2023`, `2024`: present, manifest readable, schema `statistics`, `stype_in=continuous`, size/hash metadata matched
+- Current canonical raw source columns:
+  - `data\raw\ZW\2019.parquet`: rows `192334`, sha256 `fccbe9d1fe3e0ffa40c0417f700548f4e24f044fb61d0c2388dd33305bd7afb2`, source `data/dbn/ohlcv_1m/ZW/2019/2019-01-01_2020-01-01.dbn.zst`, status/statistics missing/stale rows all `0`, degraded rows `3166`
+  - `data\raw\ZW\2020.parquet`: rows `212535`, sha256 `71d2a3d5597400096c05c328909feaf84cda150717006d4a851e266f40458adc`, source `data/dbn/ohlcv_1m/ZW/2020/2020-01-01_2021-01-01.dbn.zst`, status/statistics missing/stale rows all `0`, degraded rows `2152`
+  - `data\raw\ZW\2022.parquet`: rows `212406`, sha256 `a2619771660483182f23d0fa529ce2a71a0b028ed6581dccaf27dd924698ed84`, source `data/dbn/ohlcv_1m/ZW/2022/2022-01-01_2023-01-01.dbn.zst`, status/statistics missing/stale rows all `0`, degraded rows `0`
+  - `data\raw\ZW\2023.parquet`: rows `205147`, sha256 `1780ef9d573613f381f0e30bc204ecde9fdc238fb15828f77286605562a2674a`, source `data/dbn/ohlcv_1m/ZW/2023/2023-01-01_2024-01-01.dbn.zst`, status/statistics missing/stale rows all `0`, degraded rows `0`
+  - `data\raw\ZW\2024.parquet`: rows `205094`, sha256 `157c85bc0cd87f30c7f11d227ade4ad9c578e42b1944b5412762f0778adf4aff`, source `data/dbn/ohlcv_1m/ZW/2024/2024-01-01_2025-01-01.dbn.zst`, status/statistics missing/stale rows all `0`, degraded rows `0`
+- Existing ZW decision packets are `ACTION_REQUIRED` and fail-closed:
+  - `ZW 2019`: `decision=keep_fail_closed_move_to_next_eligible_blocker`, `synthetic_rows=81236`, `synthetic_rows_pct=29.694776`, `max_synthetic_gap_minutes=53`, `degraded_bar_rows=3166`
+  - `ZW 2020`: `decision=keep_fail_closed_move_to_next_eligible_blocker`, `synthetic_rows=62491`, `synthetic_rows_pct=22.721852`, `max_synthetic_gap_minutes=98`, `degraded_bar_rows=2152`
+  - `ZW 2022`: `decision=keep_fail_closed_move_to_next_eligible_blocker`, `synthetic_rows=61187`, `synthetic_rows_pct=22.364242`, `max_synthetic_gap_minutes=118`, `degraded_bar_rows=0`
+  - `ZW 2023`: `decision=keep_fail_closed_move_to_next_eligible_blocker`, `synthetic_rows=66536`, `synthetic_rows_pct=24.490307`, `max_synthetic_gap_minutes=46`, `degraded_bar_rows=0`
+  - `ZW 2024`: `decision=keep_fail_closed_move_to_next_eligible_blocker`, `synthetic_rows=68716`, `synthetic_rows_pct=25.096235`, `max_synthetic_gap_minutes=46`, `degraded_bar_rows=0`
+- ZW compact evidence matrix:
+  - `ZW 2019`: `wrong_source_type` with fail-closed decision packet
+  - `ZW 2020`: `wrong_source_type` with fail-closed decision packet
+  - `ZW 2022`: `wrong_source_type` with fail-closed decision packet
+  - `ZW 2023`: `wrong_source_type` with fail-closed decision packet
+  - `ZW 2024`: `wrong_source_type` with fail-closed decision packet
+- No files or reports were generated during the ZW read-only audit. No provider, build, promotion, WFA/model/feature/label, staging, or commit action was performed.
+
+## Latest Global Phase 1-2 Completion Reconciliation Result
+
+- Result: `complete_for_current_approved_scope`
+- Command shape: read-only Python reconciliation to stdout, plus `git status --short`.
+- Verified campaign rows:
+  - `canonical_phase2_pass`: 11 rows (`SR1 2020`, `SR3 2020`, `KE 2019`, `KE 2021`, `KE 2023`, `KE 2024`, `HE 2016`, `HE 2019`, `HE 2020`, `LE 2016`, `LE 2020`)
+  - `fail_closed_with_decision_packet`: 28 rows (`ZC 2019-2024`, `ZL 2019-2023`, `ZM 2019-2024`, `ZS 2019-2024`, `ZW 2019`, `ZW 2020`, `ZW 2022`, `ZW 2023`, `ZW 2024`)
+  - `unresolved`: 0 rows
+- PASS rows were verified against current `causal_base_manifest.json` reports and current canonical `data\causally_gated_normalized` hashes.
+- Fail-closed rows were verified against current decision packet JSON or Markdown and current raw/source posture. Seven rows used Markdown fallback because their JSON packet files are unreadable/empty: `ZC 2021`, `ZC 2022`, `ZL 2020`, `ZL 2021`, `ZS 2020`, `ZS 2023`, `ZS 2024`.
+- Current `git status --short` remains dirty in pre-existing tracked/untracked files. No staging or commit was performed.
+
+## Latest Report-Only Master Data Health Refresh Result
+
+- Result: `complete_report_only_master_data_health_refresh`.
+- Stuck-command resolution: repeated `apply_patch` and Python launches were blocked by the Windows sandbox helper before project code ran. The stale Codex PowerShell AST helper was stopped, then bounded local-only commands were used; sandbox pre-launch failures were rerun with scoped approval. No provider/network command was run.
+- Added report-only refresh tooling:
+  - `scripts\validation\refresh_master_data_health_matrix.py`
+  - `tests\validation\test_refresh_master_data_health_matrix.py`
+- Focused test passed:
+  - `python -m pytest tests\validation\test_refresh_master_data_health_matrix.py`
+  - result: `3 passed`
+- Regenerated report-only outputs:
+  - `reports\data_manifest\master_data_health_matrix.json`
+  - `reports\data_manifest\master_data_health_summary.md`
+- Current refreshed outline:
+  - expected rows: `527`
+  - `OK_SOURCE_PRESENT`: `45`
+  - `POLICY_REVIEW_REQUIRED`: `473`
+  - `EXCLUDED_FROM_PHASE2`: `9`
+  - `UNKNOWN_REVIEW_REQUIRED`: `0`
+  - raw parquet: `527/527`
+  - OHLCV DBN: `527/527`
+  - definition DBN: `527/527`
+  - statistics DBN: `527/527`
+  - status DBN: `460/527`, missing `67`
+  - current canonical causal parquet: `107/527`, missing `420`
+  - approved PASS rows: `11/11` present in current canonical causal parquet
+  - fail-closed rows with decision packet: `28`
+  - unresolved rows: `0`
+- Stale/conflicting evidence now called out in the summary:
+  - prior matrix generated at `2026-06-23T02:42:17Z` reported causal parquet `461/527`
+  - current canonical filesystem evidence reports causal parquet `107/527`, correction `-354`
+  - row-level matrix status DBN evidence remains `460/527`, while current raw optional audit status-archive evidence reports `status_archive_market_year_count=529` and `missing_status_archive_market_year_count=0`; these are preserved as separate evidence scopes.
+- Safety: no data/raw, DBN source, data/causally_gated_normalized, provider state, live/paper path, WFA/model/features/labels, staging, or commit action was performed.
+
+## Commands Run In Latest Report Refresh Run
 
 - `Get-Location`
 - `git status --short`
-- `rg -n "futures_intraday_model|CODEX_HANDOFF|handoff" C:\Users\donny\.codex\memories\MEMORY.md`
+- `Get-Content reports\data_manifest\master_data_health_summary.md -TotalCount 140`
+- `python -m pytest tests\validation\test_refresh_master_data_health_matrix.py`
+- `python -m scripts.validation.refresh_master_data_health_matrix --repo-root .`
+- `git diff -- reports/data_manifest/master_data_health_summary.md`
+- Local-only Python writer commands for the requested script/test and handoff update, used because `apply_patch` repeatedly hung.
+
+## Files Changed In Latest Report Refresh Run
+
+- `CODEX_HANDOFF.md`
+- `scripts\validation\refresh_master_data_health_matrix.py`
+- `tests\validation\test_refresh_master_data_health_matrix.py`
+- `reports\data_manifest\master_data_health_matrix.json`
+- `reports\data_manifest\master_data_health_summary.md`
+
+## Remaining Blockers
+
+- No unresolved rows remain from the known LE-like synthetic-blocker list for the current approved scope.
+- Worktree remains dirty in pre-existing tracked/untracked files and approved data-readiness code/config/test changes. This is now the remaining Phase 1-2 completion blocker.
+- Do not proceed to WFA/model/features/labels until the intended modeling scope is backed by current source/raw/alignment/causal evidence or explicit fail-closed exclusions.
+
+## Commands Run In Latest Run
+
+- `Get-Location`
+- `git status --short`
 - `Get-Content -Raw CODEX_HANDOFF.md`
-- `git diff -- CODEX_HANDOFF.md`
-- `rg -n "^(## |### Next recommended step|Next selected scope:|## Current selected scope|## Current Tier 1|## Current WFA|## Current SR1|## Data health|## Live-ops|## Latest run:|## Previous run:)" CODEX_HANDOFF.md`
-- `Get-Content CODEX_HANDOFF.md -Tail 220`
-- `Get-Date -AsUTC -Format "yyyy-MM-ddTHH:mm:ssZ"` failed because this PowerShell version lacks `-AsUTC`.
-- `[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')`
+- `rg -n "ZS|ZS\.v\.0|parent_sparse_ohlcv_no_trade|accepted_readiness_exception|accepted_readiness_exceptions|source_audit|canonical_raw_alignment|decision_packet" configs scripts tests reports\phase2_readiness reports\raw_ingest reports\raw_readiness reports\data_manifest -S`
+- `Get-ChildItem -Recurse -File data\dbn\ohlcv_1m_parent\ZS,data\dbn\status_parent\status\ZS,data\dbn\statistics_parent\statistics\ZS,data\dbn\definition\ZS,data\dbn\ohlcv_1m\ZS,data\dbn\status\ZS,data\dbn\statistics\ZS -ErrorAction SilentlyContinue`
+- `Get-ChildItem -Recurse -File reports\phase2_readiness -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'ZS_20(19|20|21|22|23|24)|zs_20(19|20|21|22|23|24)|ZS|zs' }`
+- Parsed ZS 2019-2024 DBN manifests, source type, schema, file size, and hash/size metadata matches.
+- Parsed ZS 2019-2024 canonical raw source columns, row counts, source files, status/statistics missing/stale counts, degraded rows, market values, and year values.
+- Parsed ZS 2019, ZS 2020, ZS 2023, and ZS 2024 decision packets under `reports\phase2_readiness\ZS_*_scope_20260624`.
+- Parsed ZS 2021 and ZS 2022 WARN rows from `reports\phase2_readiness\tier3_research_after_status_sparse_exceptions_20260624.jsonl` and `reports\phase2_readiness\tier3_research_after_phase1b_rebuild_20260624_bounded10.jsonl`.
+- `rg -n "decision_packet|decision packet|ACTION_REQUIRED|keep_fail_closed|phase2.*decision|BLOCKED_REPAIR_OR_EXPLICIT_EXCLUSION_REQUIRED|repair_work_order|decision_policy_result|policy_decision" scripts tests docs CODEX_HANDOFF.md -S`
+- `rg --files scripts tests docs | rg "decision|packet|phase2|readiness|blocker|repair"`
+- `python -m scripts.validation.build_phase2_repair_work_order --help`
+- `python -m scripts.validation.diagnose_phase2_readiness_blockers --help`
+- `python -m scripts.validation.drilldown_phase2_readiness_blockers --help`
+- `python -m scripts.validation.summarize_phase2_readiness_blockers --help`
+- Added `scripts\validation\build_phase2_decision_packets.py`.
+- Added `tests\validation\test_build_phase2_decision_packets.py`.
+- `python -m pytest tests\validation\test_build_phase2_decision_packets.py`
+- `Test-Path -LiteralPath reports\phase2_readiness\ZS_2021_scope_20260626`
+- `Test-Path -LiteralPath reports\phase2_readiness\ZS_2022_scope_20260626`
+- `python -m scripts.validation.build_phase2_decision_packets --checkpoint-jsonl reports\phase2_readiness\tier3_research_after_status_sparse_exceptions_20260624.jsonl --raw-root data\raw --reports-root reports\phase2_readiness --markets ZS --years 2021 2022 --date-tag 20260626`
+- Parsed and verified generated ZS 2021/2022 decision packet JSON fields.
+- Parsed ZW 2019/2020/2022/2023/2024 DBN manifests, source type, schema, file size, and hash/size metadata matches.
+- Parsed ZW 2019/2020/2022/2023/2024 canonical raw source columns, row counts, source files, status/statistics missing/stale counts, degraded rows, market values, and year values.
+- Parsed ZW 2019/2020/2022/2023/2024 decision packets under `reports\phase2_readiness\ZW_*_scope_20260624`.
+- Read-only global reconciliation verified 11 `canonical_phase2_pass` rows, 28 `fail_closed_with_decision_packet` rows, and 0 unresolved rows.
 - `git status --short`
-- `Get-Content CODEX_HANDOFF.md -TotalCount 80`
-- `(Get-Content CODEX_HANDOFF.md).Count`
-- `Get-Content reports\data_manifest\master_data_health_summary.md -TotalCount 45`
-- `[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')`
-- `rg -n "Phase 1A|phase1A|phase 1A|dbn_present|ohlcv_1m_dbn_present|definition_dbn_present|statistics_dbn_present|status_dbn_present|missing_status|downstream readiness|readiness" scripts tests configs -S`
-- `Get-Content scripts\validation\check_dbn_archive_coverage.py -TotalCount 260`
-- `Get-Content scripts\audit_data_manifest.py -TotalCount 280`
-- `Get-Content tests\validation\test_check_dbn_archive_coverage.py -TotalCount 260`
-- `Get-Content scripts\phase1_raw_contract.py -TotalCount 140`
-- `python -m pytest tests/validation/test_check_dbn_archive_coverage.py tests/phase1A_download/test_download_databento_raw.py`
-- `python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data/dbn`
-- `rg --files scripts configs tests | rg "phase[1-9]|wfa|feature|label|causal|model|selection|prediction|promot|gate|manifest"`
-- targeted reads of `configs/alpha_tiered.yaml`, `configs/models.yaml`, Phase 2/3/4/5/7/8/9 script headers/argument and manifest paths
-- `Get-ChildItem -Path data\dbn\status -Recurse -Filter *.manifest.json | Select-Object -First 3 -ExpandProperty FullName`
-- `Get-Content data\dbn\status\6A\2010\2010-06-06_2011-01-01.dbn.zst.manifest.json -TotalCount 80`
-- PowerShell extraction from `reports\raw_readiness\raw_enriched_optional_schema_audit.json` to list and group the 67 missing `status` market-years.
-- Targeted read of `scripts\phase1A_download\download_databento_raw.py` around `dbn_schema_root`, task output paths, and zero-cost gate behavior.
-- Five Phase 1A missing-status `--dry-run` commands under `reports\phase1A_status_repair_20260624\{2010,2011,2012,2013,2014}`.
-- `Get-ChildItem -Path reports\phase1A_status_repair_20260624 -Recurse -File`
-- PowerShell verification of the five dry-run JSON plans for plan count, task counts, schema, output paths, unique planned keys, and exact set match against the 67 missing audit keys.
-- `git status --short -- reports\phase1A_status_repair_20260624`
-- `python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data\dbn`
-- Repeated `python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data\dbn`
-- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6C,6J,GC,HO,LE,RB,UB,ZB,ZC,ZF,ZN,ZT --start 2010-01-01 --end 2011-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2010 --workers 4 --resume --zero-cost-only` failed in sandbox before launchable download because Databento cost checks could not reach the proxy target.
-- Same 2010 command retried with scoped network approval. Zero-cost gate passed, then the command exited `1` after 12 Databento `422 data_no_data_found_for_request` download errors.
-- `Get-ChildItem -Path reports\phase1A_status_repair_20260624\2010 -File | Select-Object Name,Length,LastWriteTime`
-- `Get-Content reports\phase1A_status_repair_20260624\2010\databento_download_results.json -TotalCount 80`
-- `Get-Content reports\phase1A_status_repair_20260624\2010\databento_zero_cost_gate.json -TotalCount 60`
-- PowerShell summary of `databento_download_results.json` status counts: `download_error=12`.
-- Inspected current handoff, Phase 1A readiness checker, data-manifest exception patterns, downloader zero-cost gate logic, and local 2010 status manifests.
-- `python -m pytest tests/phase1A_download/test_download_databento_raw.py tests/validation/test_check_dbn_archive_coverage.py`
-- Repeated after CLI summary change: `python -m pytest tests/phase1A_download/test_download_databento_raw.py tests/validation/test_check_dbn_archive_coverage.py`
-- Reran the 2010 continuous-symbol zero-cost command after the gate fix. It exited `1` at the gate with `ZERO_COST_GATE status=FAIL downloadable=0 billable_size=0` and no batch submissions.
-- `python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data\dbn`
-- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6C,6J,GC,HO,LE,RB,UB,ZB,ZC,ZF,ZN,ZT --start 2010-01-01 --end 2011-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\probe_parent_2010 --workers 1 --resume --estimate-cost --zero-cost-only`
-- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6C,HG,HO,LE,RB,UB,YM,ZB,ZF,ZM,ZN,ZS,ZT --start 2011-01-01 --end 2012-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\probe_parent_2011 --workers 1 --resume --estimate-cost --zero-cost-only`
-- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6E,HO,LE,NQ,RB,UB,YM,ZB,ZF,ZL,ZM,ZN,ZT --start 2012-01-01 --end 2013-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\probe_parent_2012 --workers 1 --resume --estimate-cost --zero-cost-only`
-- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6E,6M,HE,HO,KE,LE,RB,YM,ZL,ZM,ZS,ZT,ZW --start 2013-01-01 --end 2014-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\probe_parent_2013 --workers 1 --resume --estimate-cost --zero-cost-only`
-- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6A,6B,6C,6E,6J,6M,ES,GC,HG,NQ,RB,SI,YM,ZC,ZM,ZT --start 2014-01-01 --end 2015-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\probe_parent_2014 --workers 1 --resume --estimate-cost --zero-cost-only`
-- Checked local `KE 2013` manifests for `ohlcv-1m`, `definition`, and `statistics`.
-- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets KE --start 2013-01-01 --end 2014-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\probe_continuous_KE_2013 --workers 1 --resume --estimate-cost --zero-cost-only`
-- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6E,6M,HE,HO,LE,RB,YM,ZL,ZM,ZS,ZT,ZW --start 2013-01-01 --end 2014-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\probe_parent_2013_no_ke --workers 1 --resume --estimate-cost --zero-cost-only`
-- Continuation check: `python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data\dbn`
-- Targeted Phase 1B readiness search/read of `scripts/validation/audit_enriched_raw_optional_schemas.py`, `tests/validation/test_audit_enriched_raw_optional_schemas.py`, `scripts/phase1C_validate/audit_raw_dbn_alignment.py`, and `scripts/audit_data_manifest.py`.
-- `python -m pytest tests/validation/test_audit_enriched_raw_optional_schemas.py`
-- `python -m scripts.validation.audit_enriched_raw_optional_schemas`
-- `python -m pytest tests/phase1A_download/test_download_databento_raw.py tests/validation/test_audit_enriched_raw_optional_schemas.py`
-- Repeated after Phase 1B pre-conversion gate change: `python -m pytest tests/phase1A_download/test_download_databento_raw.py tests/validation/test_audit_enriched_raw_optional_schemas.py`
-- Repeated after Phase 1B pre-conversion gate change: `python -m scripts.validation.audit_enriched_raw_optional_schemas`
-- `python -m pytest tests/validation/test_audit_raw_dbn_alignment.py` failed before fixture updates because clean two-L0 fixtures no longer satisfy the four-L0 alignment contract.
-- Repeated after fixture/output updates: `python -m pytest tests/validation/test_audit_raw_dbn_alignment.py`
-- `python -m scripts.phase1C_validate.audit_raw_dbn_alignment --skip-definition-join`
-- `Get-Location`
-- `git status --short`
-- `Get-Content -Path CODEX_HANDOFF.md -TotalCount 260`
-- `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6C,6J,GC,HO,LE,RB,UB,ZB,ZC,ZF,ZN,ZT --start 2010-01-01 --end 2011-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\parent_2010 --workers 4 --resume --zero-cost-only` timed out with exit `124` after 600 seconds.
-- `Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" | Select-Object ProcessId,ParentProcessId,CreationDate,CommandLine | Format-List`
-- `Get-ChildItem -Path reports\phase1A_status_repair_20260624\parent_2010 -File | Select-Object Name,Length,LastWriteTime`
-- `python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data\dbn`
-- PowerShell summaries of `reports\phase1A_status_repair_20260624\parent_2010\databento_download_results.json` for count/status/schema/stype/products/bytes.
-- `git status --short -- data\dbn reports\phase1A_status_repair_20260624`
-- `[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')`
-- `Get-Location`
-- `git status --short`
-- `Get-Content -Path CODEX_HANDOFF.md -TotalCount 280`
-- `python -m scripts.validation.audit_enriched_raw_optional_schemas` printed `status=FAIL files=527 rows=130074125 core=PASS status_optional=FAIL statistics_optional=PASS file_failures=55`, but the shell call timed out with exit `124`.
-- `python -m scripts.phase1C_validate.audit_raw_dbn_alignment --skip-definition-join` printed `status=FAIL expected=461 raw=527 missing_status=55 missing_statistics=0 needs_phase1b=0 raw_only=55 invalid_manifests=0 source_hash_mismatches=0 definition_join_status=skipped definition_join_mismatches=0`, but the shell call timed out with exit `124`.
-- `python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data\dbn`
-- `Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" | Select-Object ProcessId,ParentProcessId,CreationDate,CommandLine | Format-List`
-- Read-only summaries of `reports\raw_readiness\raw_enriched_optional_schema_audit.json` and `reports\raw_ingest\raw_dbn_alignment.json`.
-- `Get-Item reports\raw_readiness\raw_enriched_optional_schema_audit.json, reports\raw_ingest\raw_dbn_alignment.json | Select-Object Name,Length,LastWriteTime`
-- `[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')`
 
-## Test And Validation Results
+## Files Changed In Latest Run
 
-- Current evidence verifies Phase 1A is not complete under the new all-L0-including-status definition.
-- Current evidence verifies Phase 1B is not complete under the new convert/combine four-L0 definition because `status` archive coverage is `394/461` for `tier_3_research`.
-- Focused validation after code change: `python -m pytest tests/validation/test_check_dbn_archive_coverage.py tests/phase1A_download/test_download_databento_raw.py` passed with `94 passed in 3.02s`.
-- Current Phase 1A readiness checker result after code change: `status=FAIL expected_archives=1844 missing_archives=67 missing_manifests=67 missing_optional_archives=0 missing_optional_manifests=0 invalid_manifests=0 extra_market_dirs=0`.
-- Current phase map evidence: Phase 6 is a compatibility wrapper over Phase 7 WFA; Phase 7 is the active train-only WFA prediction implementation used by current tests/reports.
-- Missing `status` repair dry-run was executed and verified in this pass. No API download, cost estimate, DBN/source mutation, conversion, or Phase 3+ command was run.
-- Latest read-only coverage recheck result: `status=FAIL expected_archives=1844 missing_archives=67 missing_manifests=67 missing_optional_archives=0 missing_optional_manifests=0 invalid_manifests=0 extra_market_dirs=0`.
-- Repeated read-only coverage recheck result is unchanged: `status=FAIL expected_archives=1844 missing_archives=67 missing_manifests=67 missing_optional_archives=0 missing_optional_manifests=0 invalid_manifests=0 extra_market_dirs=0`.
-- Approved 2010 repair command result: `ZERO_COST_GATE status=PASS downloadable=12 billable_size=0`, then `download_error=12`; each selected task returned `422 data_no_data_found_for_request`.
-- Phase 1A coverage validation was not rerun after the failed repair because the approved stop condition required stopping on the first nonzero download command.
-- Focused validation after the zero-size gate fix: `95 passed in 2.95s`.
-- Refreshed 2010 continuous-symbol gate result after the fix: `status=FAIL`, `downloadable_zero_cost_task_count=0`, `provider_empty_estimate_count=12`, `selected_task_count=0`; no batch submissions were made.
-- Current Phase 1A coverage validation remains failed: `status=FAIL expected_archives=1844 missing_archives=67 missing_manifests=67 missing_optional_archives=0 missing_optional_manifests=0 invalid_manifests=0 extra_market_dirs=0`.
-- Continuation Phase 1A coverage validation remains failed with the same result: `status=FAIL expected_archives=1844 missing_archives=67 missing_manifests=67 missing_optional_archives=0 missing_optional_manifests=0 invalid_manifests=0 extra_market_dirs=0`.
-- Focused Phase 1B strict-readiness tests passed: `6 passed in 1.47s`.
-- Current strict raw enriched audit result: `status=FAIL files=527 rows=130074125 core=PASS status_optional=FAIL statistics_optional=PASS file_failures=67`.
-- Current raw enriched audit summary: `missing_status_archive_market_year_count=67`, `status_failure_count=67`, `missing_statistics_archive_market_year_count=0`, `statistics_failure_count=0`, `source_hash_mismatch_count=0`, `schema_failure_count=0`.
-- Focused Phase 1B wrapper/default and raw enriched readiness tests passed: `93 passed in 3.59s`.
-- Focused Phase 1B gate/wrapper/default and raw enriched readiness tests passed: `95 passed in 3.68s`.
-- Current strict raw enriched audit remains correctly failed: `status=FAIL files=527 rows=130074125 core=PASS status_optional=FAIL statistics_optional=PASS file_failures=67`.
-- Current strict raw enriched audit summary remains: `missing_status_archive_market_year_count=67`, `status_failure_count=67`, `missing_statistics_archive_market_year_count=0`, `statistics_failure_count=0`, `source_hash_mismatch_count=0`, `schema_failure_count=0`.
-- Focused Phase 1C four-L0 alignment tests passed after fixture updates: `27 passed in 3.24s`.
-- Current partial Phase 1C raw/DBN alignment result: `status=FAIL expected=461 raw=527 missing_status_dbn_count=67 missing_statistics_dbn_count=0 needs_phase1b_conversion_count=0 raw_only_count=67 invalid_manifest_count=0 source_hash_mismatch_count=0 definition_join_status=skipped definition_join_mismatch_count=0`.
-- Revised 2010 parent-symbol estimate-only probe passed: `ZERO_COST_GATE status=PASS downloadable=12 provider_empty=0 billable_size=141320`.
-- Parent-symbol estimate-only repair scope now verified for 66 of 67 missing `status` market-years: `2010=12`, `2011=13`, `2012=13`, `2013_no_ke=12`, `2014=16`; all five exact repair subsets have `status=PASS`, `provider_empty=0`, and positive billable size.
-- `KE 2013 status` remains provider-empty under both `parent` and `continuous` estimate-only probes.
-- First approved parent-symbol repair command timed out with exit `124`, so the remaining four commands were not run. The generated `parent_2010` results file contains 12 records and all are `status=ok`, `schema=status`, `stype_in=parent`, with `bad_status=0`, `bad_schema=0`, `bad_stype=0`, `total_bytes=68405`.
-- Current Phase 1A coverage validation after the `parent_2010` repair attempt: `status=FAIL expected_archives=1844 missing_archives=55 missing_manifests=55 missing_optional_archives=0 missing_optional_manifests=0 invalid_manifests=0 extra_market_dirs=0`.
-- Refreshed strict raw enriched audit report after the `parent_2010` repair attempt: `status=FAIL files=527 rows=130074125 file_failure_count=55 missing_status_archive_market_year_count=55 status_failure_count=55 missing_statistics_archive_market_year_count=0 statistics_failure_count=0`.
-- Refreshed partial Phase 1C raw/DBN alignment report after the `parent_2010` repair attempt: `status=FAIL expected=461 raw=527 missing_status_dbn_count=55 missing_statistics_dbn_count=0 needs_phase1b_conversion_count=0 raw_only_count=55 invalid_manifest_count=0 source_hash_mismatch_count=0`.
-- Caveat: the two refreshed audit commands printed complete summaries but exited by shell timeout `124`; the JSON report files were refreshed and read successfully afterward.
+- `CODEX_HANDOFF.md`
+- `scripts\validation\build_phase2_decision_packets.py`
+- `tests\validation\test_build_phase2_decision_packets.py`
+- `reports\phase2_readiness\ZS_2021_scope_20260626\ZS_2021_decision_packet_20260626.json`
+- `reports\phase2_readiness\ZS_2021_scope_20260626\ZS_2021_decision_packet_20260626.md`
+- `reports\phase2_readiness\ZS_2022_scope_20260626\ZS_2022_decision_packet_20260626.json`
+- `reports\phase2_readiness\ZS_2022_scope_20260626\ZS_2022_decision_packet_20260626.md`
 
-## Remaining Work
-
-- Do not treat Phase 1A as done until `status` DBN coverage is either repaired to `527/527` or the user explicitly changes the definition again.
-- Do not treat Phase 1B as done until all `tier_3_research` market-year raw parquet files contain valid combined/enriched data for the four L0 schemas and match the downloaded Phase 1A DBN evidence.
-- Phase 1B strict audit now fails closed on missing required `status`/`statistics` DBN coverage instead of treating status as a warning-only optional enrichment.
-- Phase 1B conversion wrapper now defaults to required `status,statistics` enrichment; explicit overrides are still respected for test or diagnostic use.
-- Phase 1B pre-conversion DBN gate now checks required status/statistics archives before conversion when strict mode is active.
-- Phase 1C raw/DBN alignment now fails closed on missing required status/statistics DBN coverage, so it no longer reports four-L0 raw alignment as complete while `status` archives are missing.
-- Do not rerun the continuous-symbol 2010 repair command; it is now proven provider-empty for these 12 market-years.
-- Run the revised parent-symbol 2010 zero-cost repair command only after explicit approval because it mutates `data/dbn/status`.
-- Continue the remaining four parent-symbol repair commands only after explicit approval because the approved sequence stopped on timeout `124`. Do not rerun `parent_2010` unless read-only evidence later contradicts its 12 `ok` results.
-- Decide whether `KE 2013 status` should remain a severe blocker, be documented as a provider-unavailable explicit exception, or be excluded from the readiness universe. Do not silently pass Phase 1A while `KE 2013 status` is missing.
-- Do not execute Phase 3, WFA/model selection, cleanup, quarantine, DBN/source/raw mutation, generated artifact staging, commits, or config changes unless explicitly approved.
-- Phase 3 planning from the bounded Phase 2 packet should wait behind the Phase 1A status-coverage decision if strict all-L0 completeness is required before downstream work.
-- Carry forward accepted WARN caveats for `KE`, `SR1`, `ZL`, and `ZM`; `SR1` includes roll exclusion threshold warnings.
-- Keep deferred rows excluded unless separately approved: `KE:2013`, `KE:2014`, `ZL:2012`, `ZL:2013`, `ZM:2011`, `ZM:2012`, `ZM:2013`, `ZM:2014`.
-
-## Next Recommended Step
+## Exact Next Recommended Step
 
 ```text
 Continue from CODEX_HANDOFF.md.
-Next selected scope: user approval to continue the remaining Phase 1A `status` parent-symbol repair after the 2010 command timed out.
+
+Next selected scope: Review and disposition the report-only master data health refresh.
+
 Rules:
-- Do not run cleanup, Phase 1B conversion, Phase 2+, WFA/model selection, generated artifact staging, commits, or config changes.
-- Do not rerun any old continuous-symbol repair commands.
-- Do not rerun `parent_2010` unless current read-only evidence contradicts `reports/phase1A_status_repair_20260624/parent_2010/databento_download_results.json` showing 12 `ok` records.
-- Do not include `KE` in the 2013 repair command; both parent and continuous estimate-only probes show `KE 2013 status` is provider-empty.
-- Do not mutate DBN/source data unless the user explicitly approves the four remaining parent-symbol commands below.
-- Treat Phase 1A and Phase 1B as incomplete until `python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data/dbn` passes.
-- Use a longer command timeout than 600 seconds for each remaining repair command.
-- Use current evidence first: `reports/phase1A_status_repair_20260624/parent_2010/databento_download_results.json`, `reports/phase1A_status_repair_20260624/probe_parent_{2011,2012,2013_no_ke,2014}/databento_zero_cost_gate.json`, and `reports/phase1A_status_repair_20260624/probe_continuous_KE_2013/databento_zero_cost_gate.json`.
+- Do not mutate data\raw, data\dbn, data\dbn_sr_parent_candidate, data\causally_gated_normalized, provider state, live/paper paths, WFA/model/features/labels, or canonical outputs.
+- Do not run provider/network commands.
+- Do not stage generated artifacts under data\, reports\, models\, outputs\, artifacts\, logs\, cache\, or .runtime\.
+- Do not commit unless explicitly approved.
+
 Task:
-- If the user approves DBN mutation, run only these four revised zero-cost commands:
-  `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6C,HG,HO,LE,RB,UB,YM,ZB,ZF,ZM,ZN,ZS,ZT --start 2011-01-01 --end 2012-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\parent_2011 --workers 4 --resume --zero-cost-only`
-  `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6E,HO,LE,NQ,RB,UB,YM,ZB,ZF,ZL,ZM,ZN,ZT --start 2012-01-01 --end 2013-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\parent_2012 --workers 4 --resume --zero-cost-only`
-  `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6E,6M,HE,HO,LE,RB,YM,ZL,ZM,ZS,ZT,ZW --start 2013-01-01 --end 2014-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\parent_2013_no_ke --workers 4 --resume --zero-cost-only`
-  `python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in parent --stype-out instrument_id --markets 6A,6B,6C,6E,6J,6M,ES,GC,HG,NQ,RB,SI,YM,ZC,ZM,ZT --start 2014-01-01 --end 2015-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\parent_2014 --workers 4 --resume --zero-cost-only`
-- Stop immediately if any zero-cost gate fails, any command exits nonzero, or any planned task is nonzero-cost.
-- If all four commands pass, rerun `python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data\dbn`.
+- Establish state with Get-Location and git status --short.
+- Re-read CODEX_HANDOFF.md, scripts\validation\refresh_master_data_health_matrix.py, tests\validation\test_refresh_master_data_health_matrix.py, reports\data_manifest\master_data_health_matrix.json, and reports\data_manifest\master_data_health_summary.md.
+- Verify the refreshed report-only outline still shows current causal parquet 107/527, approved PASS rows 11/11, fail-closed rows 28, and unresolved rows 0.
+- If staging is approved, stage only explicitly selected source/test/docs/handoff files and leave generated reports untracked/unstaged.
+
 Stop when:
-- The remaining 54 downloadable status archives are repaired and coverage is rechecked, or the first zero-cost/download/validation blocker is recorded. Expect `KE 2013 status` to remain the next unresolved policy blocker unless separately addressed.
-```
-
-## Obsolete Phase 1A Status Repair Command Plan
-
-Do not run these continuous-symbol commands for the 2010 blocker. The 2010 continuous-symbol gate is proven provider-empty (`provider_empty_estimate_count=12`), while the parent-symbol probe is zero-cost with positive billable size. Keep this block only as historical evidence for the original dry-run set comparison.
-
-Historical dry-run planning commands:
-
-```powershell
-python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6C,6J,GC,HO,LE,RB,UB,ZB,ZC,ZF,ZN,ZT --start 2010-01-01 --end 2011-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2010 --workers 4 --resume --dry-run
-python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6C,HG,HO,LE,RB,UB,YM,ZB,ZF,ZM,ZN,ZS,ZT --start 2011-01-01 --end 2012-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2011 --workers 4 --resume --dry-run
-python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6E,HO,LE,NQ,RB,UB,YM,ZB,ZF,ZL,ZM,ZN,ZT --start 2012-01-01 --end 2013-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2012 --workers 4 --resume --dry-run
-python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6E,6M,HE,HO,KE,LE,RB,YM,ZL,ZM,ZS,ZT,ZW --start 2013-01-01 --end 2014-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2013 --workers 4 --resume --dry-run
-python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6A,6B,6C,6E,6J,6M,ES,GC,HG,NQ,RB,SI,YM,ZC,ZM,ZT --start 2014-01-01 --end 2015-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2014 --workers 4 --resume --dry-run
-```
-
-Obsolete continuous-symbol download commands:
-
-```powershell
-python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6C,6J,GC,HO,LE,RB,UB,ZB,ZC,ZF,ZN,ZT --start 2010-01-01 --end 2011-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2010 --workers 4 --resume --zero-cost-only
-python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6C,HG,HO,LE,RB,UB,YM,ZB,ZF,ZM,ZN,ZS,ZT --start 2011-01-01 --end 2012-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2011 --workers 4 --resume --zero-cost-only
-python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6E,HO,LE,NQ,RB,UB,YM,ZB,ZF,ZL,ZM,ZN,ZT --start 2012-01-01 --end 2013-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2012 --workers 4 --resume --zero-cost-only
-python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6E,6M,HE,HO,KE,LE,RB,YM,ZL,ZM,ZS,ZT,ZW --start 2013-01-01 --end 2014-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2013 --workers 4 --resume --zero-cost-only
-python -m scripts.phase1A_download.download_databento_raw --mode download-dbn --schema status --stype-in continuous --stype-out instrument_id --markets 6A,6B,6C,6E,6J,6M,ES,GC,HG,NQ,RB,SI,YM,ZC,ZM,ZT --start 2014-01-01 --end 2015-01-01 --chunk year --dbn-root data\dbn --reports-root reports\phase1A_status_repair_20260624\2014 --workers 4 --resume --zero-cost-only
-```
-
-Validate Phase 1A readiness after any approved repair:
-
-```powershell
-python -m scripts.validation.check_dbn_archive_coverage --config configs/alpha_tiered.yaml --profile tier_3_research --dbn-root data\dbn
+- The file-level disposition is reported with generated reports left unstaged, or an explicitly approved commit is complete without staged generated artifacts.
 ```

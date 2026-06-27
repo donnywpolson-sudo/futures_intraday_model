@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import os
@@ -177,6 +178,27 @@ OUTPUT_COLUMNS = [
     "roll_policy_status",
 ]
 RAW_ENRICHMENT_COLUMN_PREFIXES = ("status_", "stat_", "statistics_")
+SUPPORTED_CAUSAL_INVALID_REASONS = frozenset(
+    {
+        "raw_row_missing",
+        "synthetic",
+        "invalid_ohlcv",
+        "outside_session",
+        "degraded_session",
+        "roll_window",
+        "boundary_session",
+        "missing_required_raw_cols",
+    }
+)
+CAUSAL_INVALID_REASON_GATES = {
+    "raw_row_missing": ("raw_row_present", False),
+    "synthetic": ("is_synthetic", True),
+    "invalid_ohlcv": ("valid_ohlcv", False),
+    "outside_session": ("inside_session", False),
+    "degraded_session": ("session_data_quality_degraded", True),
+    "roll_window": ("roll_window_flag", True),
+    "boundary_session": ("boundary_session_flag", True),
+}
 
 SESSION_TEMPLATE = "cme_globex_17_16_ct"
 EXCHANGE_TZ = "America/Chicago"
@@ -188,9 +210,70 @@ DEFAULT_MAX_ROLL_WINDOW_ROWS_PCT = 1.0
 DEFAULT_SYNTHETIC_GAP_THRESHOLD_ACTION = "warn"
 SYNTHETIC_GAP_THRESHOLD_ACTIONS = {"warn", "diagnostic"}
 ROLL_MATURITY_EXCEPTION_CATEGORY = "roll_maturity"
+STATUS_SPARSE_EXCEPTION_CATEGORY = "status_sparse"
+DEGRADED_RAW_QUALITY_EXCEPTION_CATEGORY = "degraded_raw_quality"
+VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY = "vendor_trusted_ohlcv_no_trade"
+PARENT_SPARSE_OHLCV_NO_TRADE_EXCEPTION_CATEGORY = "parent_sparse_ohlcv_no_trade"
+ACCEPTED_READINESS_EXCEPTION_CATEGORIES = {
+    ROLL_MATURITY_EXCEPTION_CATEGORY,
+    STATUS_SPARSE_EXCEPTION_CATEGORY,
+    DEGRADED_RAW_QUALITY_EXCEPTION_CATEGORY,
+    VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY,
+    PARENT_SPARSE_OHLCV_NO_TRADE_EXCEPTION_CATEGORY,
+}
 ROLL_MATURITY_EXCEPTION_WARNING_PREFIXES = (
     "roll maturity sequence not monotonic",
     "roll exclusion threshold breached",
+)
+VENDOR_TRUSTED_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS = frozenset(
+    {
+        ("HE", 2016),
+        ("HE", 2019),
+        ("HE", 2020),
+        ("LE", 2016),
+        ("LE", 2020),
+    }
+)
+VENDOR_TRUSTED_OHLCV_NO_TRADE_DEGRADED_ALLOWED_MARKET_YEARS = frozenset(
+    {
+        ("HE", 2019),
+        ("HE", 2020),
+    }
+)
+VENDOR_TRUSTED_OHLCV_NO_TRADE_BROAD_MARKETS = frozenset({"HE", "LE"})
+VENDOR_TRUSTED_OHLCV_NO_TRADE_REQUIRED_EVIDENCE_SUFFIXES = (
+    "reports/raw_ingest/raw_dbn_alignment.json",
+    "reports/raw_readiness/raw_enriched_optional_schema_audit.json",
+)
+VENDOR_TRUSTED_OHLCV_NO_TRADE_RAW_ALIGNMENT_ZERO_FIELDS = (
+    "missing_raw_count",
+    "raw_schema_failure_count",
+    "source_hash_mismatch_count",
+    "missing_ohlcv_dbn_count",
+    "missing_definition_dbn_count",
+    "invalid_manifest_count",
+    "definition_join_mismatch_count",
+)
+VENDOR_TRUSTED_OHLCV_NO_TRADE_RAW_READINESS_ZERO_FIELDS = (
+    "summary.missing_source_file_count",
+    "summary.source_hash_mismatch_count",
+    "summary.schema_failure_count",
+    "summary.status_failure_count",
+    "summary.statistics_failure_count",
+    "summary.missing_status_archive_market_year_count",
+    "summary.missing_statistics_archive_market_year_count",
+)
+PARENT_SPARSE_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS = frozenset(
+    {
+        ("KE", 2019),
+        ("KE", 2021),
+        ("KE", 2023),
+        ("KE", 2024),
+    }
+)
+PARENT_SPARSE_OHLCV_NO_TRADE_REQUIRED_EVIDENCE_SUFFIXES = (
+    "sr_front_contract_candidate_manifest.json",
+    "sr_front_contract_candidate_raw_alignment.json",
 )
 DEFAULT_REQUIRE_ROLL_METADATA_PROFILES = {
     "tier_1",
@@ -407,6 +490,464 @@ def _evidence_path_exists(path_value: str) -> bool:
     return path.exists()
 
 
+def _resolve_evidence_path(path_value: str) -> Path:
+    path = Path(path_value)
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return path
+
+
+def _path_matches_suffix(path_value: str, suffix: str) -> bool:
+    return Path(path_value).as_posix().replace("\\", "/").endswith(suffix)
+
+
+def _nested_value(payload: dict[str, object], dotted_key: str) -> object:
+    value: object = payload
+    for part in dotted_key.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
+
+
+def _zero_field_failures(
+    payload: dict[str, object],
+    *,
+    fields: Iterable[str],
+    label: str,
+) -> list[str]:
+    failures: list[str] = []
+    for field in fields:
+        value = _nested_value(payload, field)
+        if value != 0:
+            failures.append(f"{label}.{field} expected 0 got {value!r}")
+    return failures
+
+
+def _vendor_trusted_ohlcv_no_trade_evidence_failures(
+    evidence_paths: Iterable[str],
+) -> list[str]:
+    paths = tuple(evidence_paths)
+    failures: list[str] = []
+    located: dict[str, str] = {}
+    for suffix in VENDOR_TRUSTED_OHLCV_NO_TRADE_REQUIRED_EVIDENCE_SUFFIXES:
+        matches = [path for path in paths if _path_matches_suffix(path, suffix)]
+        if not matches:
+            failures.append(f"required evidence path missing: {suffix}")
+            continue
+        located[suffix] = matches[0]
+
+    for suffix, path_value in located.items():
+        path = _resolve_evidence_path(path_value)
+        if not path.exists():
+            failures.append(f"evidence missing: {path_value}")
+            continue
+        try:
+            payload = _read_json(path)
+        except Exception as exc:
+            failures.append(f"evidence unreadable: {path_value} ({exc})")
+            continue
+        if payload.get("status") != "PASS":
+            failures.append(
+                f"evidence status not PASS: {path_value} status={payload.get('status')!r}"
+            )
+        if suffix.endswith("raw_ingest/raw_dbn_alignment.json"):
+            failures.extend(
+                _zero_field_failures(
+                    payload,
+                    fields=VENDOR_TRUSTED_OHLCV_NO_TRADE_RAW_ALIGNMENT_ZERO_FIELDS,
+                    label=path_value,
+                )
+            )
+        elif suffix.endswith("raw_readiness/raw_enriched_optional_schema_audit.json"):
+            failures.extend(
+                _zero_field_failures(
+                    payload,
+                    fields=VENDOR_TRUSTED_OHLCV_NO_TRADE_RAW_READINESS_ZERO_FIELDS,
+                    label=path_value,
+                )
+            )
+    return failures
+
+
+def _manifest_value(payload: dict[str, object], *keys: str) -> object:
+    for key in keys:
+        if key in payload:
+            return payload[key]
+    return None
+
+
+def _locate_required_evidence_paths(
+    evidence_paths: Iterable[str],
+    *,
+    suffixes: Iterable[str],
+) -> tuple[dict[str, str], list[str]]:
+    paths = tuple(evidence_paths)
+    located: dict[str, str] = {}
+    failures: list[str] = []
+    for suffix in suffixes:
+        matches = [path for path in paths if _path_matches_suffix(path, suffix)]
+        if not matches:
+            failures.append(f"required evidence path missing: {suffix}")
+            continue
+        located[suffix] = matches[0]
+    return located, failures
+
+
+def _source_dbn_manifest_failures(
+    *,
+    paths: Iterable[str],
+    expected_kind: str,
+    expected_market: str,
+    expected_year: int,
+) -> list[str]:
+    schema_values = {
+        "ohlcv": {"ohlcv-1m", "ohlcv_1m"},
+        "definition": {"definition", "definitions"},
+        "status": {"status"},
+        "statistics": {"statistics"},
+    }
+    failures: list[str] = []
+    for path_value in paths:
+        dbn_path = _resolve_evidence_path(path_value)
+        if not dbn_path.exists() or not dbn_path.is_file():
+            failures.append(f"{expected_kind} DBN missing: {path_value}")
+            continue
+        if dbn_path.stat().st_size <= 0:
+            failures.append(f"{expected_kind} DBN zero-size: {path_value}")
+            continue
+        manifest_path = Path(str(dbn_path) + ".manifest.json")
+        if not manifest_path.exists():
+            failures.append(f"{expected_kind} manifest missing: {manifest_path}")
+            continue
+        try:
+            manifest = _read_json(manifest_path)
+        except Exception as exc:
+            failures.append(f"{expected_kind} manifest unreadable: {manifest_path} ({exc})")
+            continue
+
+        schema = str(_manifest_value(manifest, "schema") or "")
+        if schema not in schema_values[expected_kind]:
+            failures.append(
+                f"{expected_kind} wrong schema: {manifest_path} schema={schema!r}"
+            )
+        if str(_manifest_value(manifest, "market") or "") != expected_market:
+            failures.append(
+                f"{expected_kind} wrong market: {manifest_path} "
+                f"market={_manifest_value(manifest, 'market')!r}"
+            )
+        start = str(_manifest_value(manifest, "start", "start_date") or "")
+        end = str(_manifest_value(manifest, "end", "end_date") or "")
+        if start != f"{expected_year}-01-01" or end != f"{expected_year + 1}-01-01":
+            failures.append(
+                f"{expected_kind} wrong year range: {manifest_path} "
+                f"start={start!r} end={end!r}"
+            )
+        if str(_manifest_value(manifest, "stype_in") or "") != "parent":
+            failures.append(
+                f"{expected_kind} wrong source type: {manifest_path} "
+                f"stype_in={_manifest_value(manifest, 'stype_in')!r}"
+            )
+        if _manifest_value(manifest, "request_status", "status") != "ok":
+            failures.append(
+                f"{expected_kind} request_status not ok: {manifest_path} "
+                f"status={_manifest_value(manifest, 'request_status', 'status')!r}"
+            )
+        expected_symbol = f"{expected_market}.FUT"
+        symbols = _manifest_value(manifest, "symbols_requested", "symbols") or []
+        if expected_symbol not in {str(symbol) for symbol in symbols}:
+            failures.append(
+                f"{expected_kind} symbols_requested missing {expected_symbol}: "
+                f"{manifest_path}"
+            )
+        dbn_hash = sha256_file(dbn_path)
+        manifest_hash = _manifest_value(manifest, "file_sha256", "sha256")
+        if manifest_hash and dbn_hash != manifest_hash:
+            failures.append(f"{expected_kind} hash mismatch: {path_value}")
+        manifest_size = _manifest_value(manifest, "file_size_bytes", "size_bytes")
+        if manifest_size is not None and int(manifest_size) != dbn_path.stat().st_size:
+            failures.append(f"{expected_kind} size mismatch: {path_value}")
+    return failures
+
+
+def _raw_source_column_failures(
+    df: pd.DataFrame,
+    *,
+    output: dict[str, object],
+) -> list[str]:
+    failures: list[str] = []
+    expected_ohlcv_paths = {str(path) for path in output.get("ohlcv_input_paths", [])}
+    expected_status_paths = {str(path) for path in output.get("status_paths", [])}
+    expected_statistics_paths = {
+        str(path) for path in output.get("statistics_paths", [])
+    }
+
+    if expected_ohlcv_paths and "source_file" in df.columns:
+        values = set(df["source_file"].dropna().astype(str))
+        if values != expected_ohlcv_paths:
+            failures.append(f"raw source_file mismatch: {sorted(values)!r}")
+    if expected_status_paths and "status_source_file" in df.columns:
+        values = set(df["status_source_file"].dropna().astype(str))
+        if values != expected_status_paths:
+            failures.append(f"raw status_source_file mismatch: {sorted(values)!r}")
+    if expected_statistics_paths:
+        stat_source_cols = [
+            col for col in df.columns if col.startswith("stat_") and col.endswith("_source_file")
+        ]
+        values = set()
+        for col in stat_source_cols:
+            values.update(df[col].dropna().astype(str))
+        if not values or values - expected_statistics_paths:
+            failures.append(f"raw statistics source_file mismatch: {sorted(values)!r}")
+    return failures
+
+
+def _parent_sparse_gap_contract_failures(
+    df: pd.DataFrame,
+    *,
+    max_gap_minutes: int,
+) -> list[str]:
+    failures: list[str] = []
+    if "ts_event" not in df.columns:
+        return ["raw parquet missing ts_event"]
+    ordered = df.sort_values("ts_event").reset_index(drop=True)
+    ts = pd.to_datetime(ordered["ts_event"])
+    diffs = ts.diff().dt.total_seconds().div(60)
+    gap_indices = ordered.index[(diffs > 1) & (diffs <= max_gap_minutes)].tolist()
+    if not gap_indices:
+        return ["no bounded sparse OHLCV gaps found"]
+
+    required_cols = [
+        "status_is_trading",
+        "status_is_quoting",
+        "status_missing",
+        "status_stale",
+        "statistics_missing",
+        "statistics_stale",
+        "data_quality_degraded",
+    ]
+    missing_cols = [col for col in required_cols if col not in ordered.columns]
+    if missing_cols:
+        return ["raw parquet missing gap endpoint columns: " + ",".join(missing_cols)]
+
+    bool_cols = {
+        col: ordered[col].fillna(False).astype(bool) for col in required_cols
+    }
+    endpoint_failures = 0
+    for index in gap_indices:
+        prev_index = index - 1
+        if not (
+            bool_cols["status_is_trading"].iloc[index]
+            and bool_cols["status_is_trading"].iloc[prev_index]
+            and bool_cols["status_is_quoting"].iloc[index]
+            and bool_cols["status_is_quoting"].iloc[prev_index]
+            and not bool_cols["status_missing"].iloc[index]
+            and not bool_cols["status_missing"].iloc[prev_index]
+            and not bool_cols["status_stale"].iloc[index]
+            and not bool_cols["status_stale"].iloc[prev_index]
+            and not bool_cols["statistics_missing"].iloc[index]
+            and not bool_cols["statistics_missing"].iloc[prev_index]
+            and not bool_cols["statistics_stale"].iloc[index]
+            and not bool_cols["statistics_stale"].iloc[prev_index]
+            and not bool_cols["data_quality_degraded"].iloc[index]
+            and not bool_cols["data_quality_degraded"].iloc[prev_index]
+        ):
+            endpoint_failures += 1
+    if endpoint_failures:
+        failures.append(f"bounded sparse gap endpoint failures: {endpoint_failures}")
+    return failures
+
+
+def _parent_sparse_ohlcv_no_trade_evidence_failures(
+    result: ValidationResult,
+    evidence_paths: Iterable[str],
+) -> list[str]:
+    failures: list[str] = []
+    located, missing = _locate_required_evidence_paths(
+        evidence_paths,
+        suffixes=PARENT_SPARSE_OHLCV_NO_TRADE_REQUIRED_EVIDENCE_SUFFIXES,
+    )
+    failures.extend(missing)
+    if failures:
+        return failures
+
+    manifest_path = _resolve_evidence_path(
+        located["sr_front_contract_candidate_manifest.json"]
+    )
+    alignment_path = _resolve_evidence_path(
+        located["sr_front_contract_candidate_raw_alignment.json"]
+    )
+    try:
+        manifest = _read_json(manifest_path)
+        alignment = _read_json(alignment_path)
+    except Exception as exc:
+        return [f"parent sparse evidence unreadable: {exc}"]
+
+    if manifest.get("status") != "PASS":
+        failures.append(f"candidate manifest status not PASS: {manifest_path}")
+    source_audit = manifest.get("source_audit")
+    if not isinstance(source_audit, dict) or source_audit.get("status") != "PASS":
+        failures.append(f"candidate source audit status not PASS: {manifest_path}")
+    if alignment.get("status") != "PASS":
+        failures.append(f"raw alignment status not PASS: {alignment_path}")
+    failures.extend(
+        _zero_field_failures(
+            alignment,
+            fields=(
+                "missing_raw_count",
+                "raw_schema_failure_count",
+                "source_hash_mismatch_count",
+                "missing_ohlcv_dbn_count",
+                "missing_definition_dbn_count",
+                "invalid_manifest_count",
+                "definition_join_mismatch_count",
+            ),
+            label=str(alignment_path),
+        )
+    )
+
+    outputs = [
+        output
+        for output in manifest.get("outputs", [])
+        if isinstance(output, dict)
+        and output.get("market") == result.market
+        and int(output.get("year", -1)) == result.year
+    ]
+    if len(outputs) != 1:
+        failures.append(
+            f"candidate manifest output count for {result.market} {result.year} "
+            f"expected 1 got {len(outputs)}"
+        )
+        return failures
+    output = outputs[0]
+    raw_path = _resolve_evidence_path(str(output.get("output_path", "")))
+    if not raw_path.exists() or not raw_path.is_file():
+        failures.append(f"candidate raw parquet missing: {raw_path}")
+        return failures
+    if output.get("output_hash") and sha256_file(raw_path) != output.get("output_hash"):
+        failures.append(f"candidate raw parquet hash mismatch: {raw_path}")
+    try:
+        df = pd.read_parquet(raw_path)
+    except Exception as exc:
+        failures.append(f"candidate raw parquet unreadable: {raw_path} ({exc})")
+        return failures
+    if int(output.get("candidate_rows", -1)) != len(df):
+        failures.append(
+            f"candidate raw row count mismatch: expected={output.get('candidate_rows')!r} "
+            f"actual={len(df)}"
+        )
+
+    bool_zero_cols = {
+        "status_missing": "status missing rows",
+        "status_stale": "status stale rows",
+        "statistics_missing": "statistics missing rows",
+        "statistics_stale": "statistics stale rows",
+        "data_quality_degraded": "degraded rows",
+    }
+    for col, label in bool_zero_cols.items():
+        if col not in df.columns:
+            failures.append(f"candidate raw missing column: {col}")
+            continue
+        count = int(df[col].fillna(False).astype(bool).sum())
+        if count:
+            failures.append(f"{label} expected 0 got {count}")
+    if "volume" not in df.columns:
+        failures.append("candidate raw missing column: volume")
+    elif int((pd.to_numeric(df["volume"], errors="coerce").fillna(0) == 0).sum()):
+        failures.append("zero-volume rows present")
+    if df.duplicated(subset=["ts_event"]).any():
+        failures.append(f"duplicate timestamp rows present: {raw_path}")
+    if {"open", "high", "low", "close"} <= set(df.columns):
+        bad_ohlc = (
+            df["high"].lt(df[["open", "low", "close"]].max(axis=1))
+            | df["low"].gt(df[["open", "high", "close"]].min(axis=1))
+        )
+        if bad_ohlc.any():
+            failures.append(f"bad OHLC rows present: rows={int(bad_ohlc.sum())}")
+    else:
+        failures.append("candidate raw missing OHLC columns")
+
+    ordered = df.sort_values("ts_event").reset_index(drop=True)
+    if "expiration" in ordered.columns:
+        expiration = pd.to_datetime(ordered["expiration"])
+        maturity_backsteps = int((expiration.diff().dt.total_seconds() < 0).sum())
+    elif {"maturity_year", "maturity_month"} <= set(ordered.columns):
+        maturity_key = (
+            pd.to_numeric(ordered["maturity_year"], errors="coerce") * 100
+            + pd.to_numeric(ordered["maturity_month"], errors="coerce")
+        )
+        maturity_backsteps = int((maturity_key.diff() < 0).sum())
+    else:
+        maturity_backsteps = 0
+    if maturity_backsteps:
+        failures.append(f"maturity backsteps present: {maturity_backsteps}")
+
+    max_gap_minutes = max(DEFAULT_MAX_SYNTHETIC_GAP_MINUTES, result.max_synthetic_gap_minutes)
+    failures.extend(
+        _parent_sparse_gap_contract_failures(df, max_gap_minutes=max_gap_minutes)
+    )
+    failures.extend(_raw_source_column_failures(df, output=output))
+
+    source_path_groups = {
+        "ohlcv": output.get("ohlcv_input_paths", []),
+        "definition": output.get("definition_paths", []),
+        "status": output.get("status_paths", []),
+        "statistics": output.get("statistics_paths", []),
+    }
+    for kind, paths in source_path_groups.items():
+        failures.extend(
+            _source_dbn_manifest_failures(
+                paths=[str(path) for path in paths],
+                expected_kind=kind,
+                expected_market=result.market,
+                expected_year=result.year,
+            )
+        )
+    return failures
+
+
+def _matching_vendor_trusted_ohlcv_no_trade_exception(
+    result: ValidationResult,
+    config: CausalBaseConfig,
+) -> AcceptedReadinessException | None:
+    if (result.market, result.year) not in (
+        VENDOR_TRUSTED_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS
+    ):
+        return None
+    if (
+        not result.synthetic_gap_threshold_breached
+        or result.synthetic_rows <= 0
+        or result.status_enrichment_missing_rows
+        or result.status_enrichment_stale_rows
+        or result.statistics_enrichment_missing_rows
+        or result.statistics_enrichment_stale_rows
+    ):
+        return None
+    for exception in config.accepted_readiness_exceptions:
+        if (
+            exception.market == result.market
+            and exception.year == result.year
+            and exception.category == VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY
+            and tuple(result.warnings) == exception.warning_prefixes
+            and not _vendor_trusted_ohlcv_no_trade_evidence_failures(
+                exception.evidence_paths
+            )
+            and all(_evidence_path_exists(path) for path in exception.evidence_paths)
+        ):
+            return exception
+    return None
+
+
+def _degraded_raw_quality_requires_vendor_trusted_ohlcv_no_trade(
+    market: str,
+    year: int,
+) -> bool:
+    return (
+        market,
+        year,
+    ) in VENDOR_TRUSTED_OHLCV_NO_TRADE_DEGRADED_ALLOWED_MARKET_YEARS
+
+
 def _accepted_readiness_exception_for_result(
     result: ValidationResult,
     config: CausalBaseConfig,
@@ -416,12 +957,83 @@ def _accepted_readiness_exception_for_result(
     for exception in config.accepted_readiness_exceptions:
         if exception.market != result.market or exception.year != result.year:
             continue
-        if exception.category != ROLL_MATURITY_EXCEPTION_CATEGORY:
-            continue
-        if not all(
-            any(warning.startswith(prefix) for prefix in exception.warning_prefixes)
-            for warning in result.warnings
-        ):
+        if exception.category == ROLL_MATURITY_EXCEPTION_CATEGORY:
+            if not all(
+                any(warning.startswith(prefix) for prefix in exception.warning_prefixes)
+                for warning in result.warnings
+            ):
+                continue
+        elif exception.category == STATUS_SPARSE_EXCEPTION_CATEGORY:
+            if (
+                result.status_enrichment_missing_rows <= 0
+                and result.status_enrichment_stale_rows <= 0
+            ):
+                continue
+            if tuple(result.warnings) != exception.warning_prefixes:
+                continue
+        elif exception.category == DEGRADED_RAW_QUALITY_EXCEPTION_CATEGORY:
+            if (
+                not result.degraded_threshold_breached
+                or result.degraded_bar_rows <= 0
+            ):
+                continue
+            if tuple(result.warnings) != exception.warning_prefixes:
+                continue
+            if _degraded_raw_quality_requires_vendor_trusted_ohlcv_no_trade(
+                result.market, result.year
+            ):
+                if _vendor_trusted_ohlcv_no_trade_evidence_failures(
+                    exception.evidence_paths
+                ):
+                    continue
+                if (
+                    _matching_vendor_trusted_ohlcv_no_trade_exception(result, config)
+                    is None
+                ):
+                    continue
+        elif exception.category == VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY:
+            if (result.market, result.year) not in (
+                VENDOR_TRUSTED_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS
+            ):
+                continue
+            if (
+                not result.synthetic_gap_threshold_breached
+                or result.synthetic_rows <= 0
+                or result.degraded_threshold_breached
+                or result.status_enrichment_missing_rows
+                or result.status_enrichment_stale_rows
+                or result.statistics_enrichment_missing_rows
+                or result.statistics_enrichment_stale_rows
+            ):
+                continue
+            if tuple(result.warnings) != exception.warning_prefixes:
+                continue
+            if _vendor_trusted_ohlcv_no_trade_evidence_failures(
+                exception.evidence_paths
+            ):
+                continue
+        elif exception.category == PARENT_SPARSE_OHLCV_NO_TRADE_EXCEPTION_CATEGORY:
+            if (result.market, result.year) not in (
+                PARENT_SPARSE_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS
+            ):
+                continue
+            if (
+                not result.synthetic_gap_threshold_breached
+                or result.synthetic_rows <= 0
+                or result.degraded_threshold_breached
+                or result.status_enrichment_missing_rows
+                or result.status_enrichment_stale_rows
+                or result.statistics_enrichment_missing_rows
+                or result.statistics_enrichment_stale_rows
+            ):
+                continue
+            if tuple(result.warnings) != exception.warning_prefixes:
+                continue
+            if _parent_sparse_ohlcv_no_trade_evidence_failures(
+                result, exception.evidence_paths
+            ):
+                continue
+        else:
             continue
         if not all(_evidence_path_exists(path) for path in exception.evidence_paths):
             continue
@@ -430,8 +1042,111 @@ def _accepted_readiness_exception_for_result(
             "reason": exception.reason,
             "evidence_paths": list(exception.evidence_paths),
             "accepted_warnings": list(result.warnings),
+            "status_enrichment_missing_rows": result.status_enrichment_missing_rows,
+            "status_enrichment_stale_rows": result.status_enrichment_stale_rows,
+            "statistics_enrichment_missing_rows": result.statistics_enrichment_missing_rows,
+            "statistics_enrichment_stale_rows": result.statistics_enrichment_stale_rows,
+            "degraded_bar_rows": result.degraded_bar_rows,
+            "degraded_session_rows": result.degraded_session_rows,
+            "degraded_rows_pct": result.degraded_rows_pct,
         }
     return None
+
+
+def _accepted_readiness_exception_key(
+    exception: AcceptedReadinessException,
+) -> tuple[str, int, str]:
+    return (exception.market, exception.year, exception.category)
+
+
+def _accepted_readiness_exception_failures(
+    *,
+    config: CausalBaseConfig,
+    processed_results: dict[tuple[str, int], ValidationResult],
+    accepted_keys: set[tuple[str, int, str]],
+) -> list[str]:
+    failures: list[str] = []
+    seen: set[tuple[str, int, str]] = set()
+    for exception in config.accepted_readiness_exceptions:
+        key = _accepted_readiness_exception_key(exception)
+        if key in seen:
+            failures.append(
+                "duplicate accepted_readiness_exception configured: "
+                f"{exception.category} {exception.market} {exception.year}"
+            )
+            continue
+        seen.add(key)
+        result = processed_results.get((exception.market, exception.year))
+        if result is None:
+            continue
+        missing_evidence = [
+            path for path in exception.evidence_paths if not _evidence_path_exists(path)
+        ]
+        if missing_evidence:
+            failures.append(
+                "accepted_readiness_exception evidence missing for "
+                f"{exception.category} {exception.market} {exception.year}: "
+                + ",".join(missing_evidence)
+            )
+            continue
+        if exception.category == VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY:
+            evidence_failures = _vendor_trusted_ohlcv_no_trade_evidence_failures(
+                exception.evidence_paths
+            )
+            if evidence_failures:
+                failures.append(
+                    "accepted_readiness_exception evidence invalid for "
+                    f"{exception.category} {exception.market} {exception.year}: "
+                    + "; ".join(evidence_failures)
+                )
+                continue
+        if exception.category == PARENT_SPARSE_OHLCV_NO_TRADE_EXCEPTION_CATEGORY:
+            evidence_failures = _parent_sparse_ohlcv_no_trade_evidence_failures(
+                result,
+                exception.evidence_paths,
+            )
+            if evidence_failures:
+                failures.append(
+                    "accepted_readiness_exception evidence invalid for "
+                    f"{exception.category} {exception.market} {exception.year}: "
+                    + "; ".join(evidence_failures)
+                )
+                continue
+        if (
+            exception.category == DEGRADED_RAW_QUALITY_EXCEPTION_CATEGORY
+            and _degraded_raw_quality_requires_vendor_trusted_ohlcv_no_trade(
+                exception.market, exception.year
+            )
+        ):
+            evidence_failures = _vendor_trusted_ohlcv_no_trade_evidence_failures(
+                exception.evidence_paths
+            )
+            if evidence_failures:
+                failures.append(
+                    "accepted_readiness_exception evidence invalid for "
+                    f"{exception.category} {exception.market} {exception.year}: "
+                    + "; ".join(evidence_failures)
+                )
+                continue
+        if key not in accepted_keys:
+            if (
+                exception.category == VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY
+                and _degraded_raw_quality_requires_vendor_trusted_ohlcv_no_trade(
+                    exception.market, exception.year
+                )
+                and (
+                    exception.market,
+                    exception.year,
+                    DEGRADED_RAW_QUALITY_EXCEPTION_CATEGORY,
+                )
+                in accepted_keys
+            ):
+                continue
+            failures.append(
+                "accepted_readiness_exception is stale or unmatched for "
+                f"{exception.category} {exception.market} {exception.year}"
+            )
+    return failures
 
 
 def hash_optional_file(path: Path) -> str | None:
@@ -720,10 +1435,10 @@ def _parse_accepted_readiness_exceptions(
                 f"accepted_readiness_exceptions[{index}] must be a mapping"
             )
         category = str(entry.get("category", "")).strip()
-        if category != ROLL_MATURITY_EXCEPTION_CATEGORY:
+        if category not in ACCEPTED_READINESS_EXCEPTION_CATEGORIES:
             raise ValueError(
-                "accepted_readiness_exceptions only supports category "
-                f"{ROLL_MATURITY_EXCEPTION_CATEGORY!r}"
+                "accepted_readiness_exceptions only supports categories "
+                f"{sorted(ACCEPTED_READINESS_EXCEPTION_CATEGORIES)!r}"
             )
         market = str(entry.get("market", "")).strip()
         if not market:
@@ -736,6 +1451,26 @@ def _parse_accepted_readiness_exceptions(
             raise ValueError(
                 f"accepted_readiness_exceptions[{index}].year must be an integer"
             ) from exc
+        if (
+            category == VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY
+            and (market, year)
+            not in VENDOR_TRUSTED_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS
+        ):
+            allowed = sorted(VENDOR_TRUSTED_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS)
+            raise ValueError(
+                f"accepted_readiness_exceptions[{index}] category "
+                f"{category!r} is limited to exact market-years {allowed!r}"
+            )
+        if (
+            category == PARENT_SPARSE_OHLCV_NO_TRADE_EXCEPTION_CATEGORY
+            and (market, year)
+            not in PARENT_SPARSE_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS
+        ):
+            allowed = sorted(PARENT_SPARSE_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS)
+            raise ValueError(
+                f"accepted_readiness_exceptions[{index}] category "
+                f"{category!r} is limited to exact market-years {allowed!r}"
+            )
         reason = str(entry.get("reason", "")).strip()
         if not reason:
             raise ValueError(
@@ -745,13 +1480,33 @@ def _parse_accepted_readiness_exceptions(
             entry.get("evidence_paths", entry.get("evidence")),
             field_name=f"accepted_readiness_exceptions[{index}].evidence_paths",
         )
+        raw_warning_prefixes = entry.get("warning_prefixes")
+        if raw_warning_prefixes is None and category == ROLL_MATURITY_EXCEPTION_CATEGORY:
+            raw_warning_prefixes = list(ROLL_MATURITY_EXCEPTION_WARNING_PREFIXES)
+        elif raw_warning_prefixes is None:
+            raise ValueError(
+                f"accepted_readiness_exceptions[{index}].warning_prefixes is required "
+                f"for category {category!r}"
+            )
         warning_prefixes = _as_nonempty_str_list(
-            entry.get(
-                "warning_prefixes",
-                list(ROLL_MATURITY_EXCEPTION_WARNING_PREFIXES),
-            ),
+            raw_warning_prefixes,
             field_name=f"accepted_readiness_exceptions[{index}].warning_prefixes",
         )
+        if (
+            category
+            in {
+                STATUS_SPARSE_EXCEPTION_CATEGORY,
+                DEGRADED_RAW_QUALITY_EXCEPTION_CATEGORY,
+                VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY,
+                PARENT_SPARSE_OHLCV_NO_TRADE_EXCEPTION_CATEGORY,
+            }
+            and any(": " not in prefix for prefix in warning_prefixes)
+        ):
+            raise ValueError(
+                f"accepted_readiness_exceptions[{index}].warning_prefixes must be "
+                "exact current warning strings for category "
+                f"{category!r}"
+            )
         exceptions.append(
             AcceptedReadinessException(
                 market=market,
@@ -813,6 +1568,30 @@ def load_causal_base_config(
             "synthetic_gap_threshold_action must be one of "
             f"{sorted(SYNTHETIC_GAP_THRESHOLD_ACTIONS)}"
         )
+    vendor_trusted_ohlcv_no_trade_markets = tuple(
+        sorted(
+            {
+                str(item)
+                for item in (
+                    causal_base.get(
+                        "vendor_trusted_ohlcv_no_trade_markets",
+                        defaults.get("vendor_trusted_ohlcv_no_trade_markets", []),
+                    )
+                    or []
+                )
+            }
+        )
+    )
+    broad_vendor_trusted_overlap = sorted(
+        set(vendor_trusted_ohlcv_no_trade_markets)
+        & VENDOR_TRUSTED_OHLCV_NO_TRADE_BROAD_MARKETS
+    )
+    if broad_vendor_trusted_overlap:
+        raise ValueError(
+            "vendor_trusted_ohlcv_no_trade_markets cannot include HE/LE; "
+            "use exact accepted_readiness_exceptions rows for "
+            f"{broad_vendor_trusted_overlap!r}"
+        )
 
     return CausalBaseConfig(
         max_synthetic_rows_pct=get_float(
@@ -851,20 +1630,7 @@ def load_causal_base_config(
                 ),
             )
         ),
-        vendor_trusted_ohlcv_no_trade_markets=tuple(
-            sorted(
-                {
-                    str(item)
-                    for item in (
-                        causal_base.get(
-                            "vendor_trusted_ohlcv_no_trade_markets",
-                            defaults.get("vendor_trusted_ohlcv_no_trade_markets", []),
-                        )
-                        or []
-                    )
-                }
-            )
-        ),
+        vendor_trusted_ohlcv_no_trade_markets=vendor_trusted_ohlcv_no_trade_markets,
         require_roll_metadata_for_profiles=tuple(str(item) for item in required),
         accepted_readiness_exceptions=_parse_accepted_readiness_exceptions(
             profile_config.get(
@@ -1056,6 +1822,229 @@ def resolve_profile_inputs(
         for year in profile_years[resolved_profile]:
             inputs.append((market, year, raw_root / market / f"{year}.parquet"))
     return inputs
+
+
+def market_year_rows(pairs: Iterable[tuple[str, int]]) -> list[dict[str, Any]]:
+    return [
+        {"market": market, "year": int(year)}
+        for market, year in sorted(
+            {(str(market), int(year)) for market, year in pairs},
+            key=lambda pair: (pair[0], pair[1]),
+        )
+    ]
+
+
+def _coerce_market_year_pair(item: Any, *, field_name: str) -> tuple[str, int]:
+    if isinstance(item, dict):
+        try:
+            market = str(item["market"]).strip()
+            year = int(item["year"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"{field_name} requires market and integer year") from exc
+    elif isinstance(item, (list, tuple)) and len(item) >= 2:
+        try:
+            market = str(item[0]).strip()
+            year = int(item[1])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field_name} requires market and integer year") from exc
+    else:
+        raise ValueError(f"{field_name} must be an object or two-item array")
+    if not market:
+        raise ValueError(f"{field_name}.market is required")
+    return market, year
+
+
+def load_market_year_include_list(path: Path) -> list[tuple[str, int]]:
+    if not path.exists():
+        raise ValueError(f"market-year include list missing: {relative_source_path(path)}")
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            rows = None
+            for key in (
+                "market_years",
+                "include_market_years",
+                "eligible_market_years",
+                "rows",
+            ):
+                if key in payload:
+                    rows = payload[key]
+                    break
+            if rows is None:
+                raise ValueError(
+                    "market-year include list JSON object must contain one of "
+                    "market_years, include_market_years, eligible_market_years, or rows"
+                )
+        else:
+            rows = payload
+        if not isinstance(rows, list):
+            raise ValueError("market-year include list JSON rows must be a list")
+        pairs = [
+            _coerce_market_year_pair(item, field_name=f"market_years[{index}]")
+            for index, item in enumerate(rows)
+        ]
+    elif suffix == ".csv":
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if reader.fieldnames is None or not {"market", "year"} <= set(
+                reader.fieldnames
+            ):
+                raise ValueError("market-year include list CSV requires market,year columns")
+            pairs = [
+                _coerce_market_year_pair(row, field_name=f"market_years[{index}]")
+                for index, row in enumerate(reader)
+            ]
+    else:
+        raise ValueError("market-year include list must be .json or .csv")
+
+    if not pairs:
+        raise ValueError("market-year include list is empty")
+    seen: set[tuple[str, int]] = set()
+    duplicates: list[tuple[str, int]] = []
+    for pair in pairs:
+        if pair in seen:
+            duplicates.append(pair)
+        seen.add(pair)
+    if duplicates:
+        duplicate_text = ", ".join(f"{market} {year}" for market, year in duplicates)
+        raise ValueError(f"market-year include list contains duplicates: {duplicate_text}")
+    return pairs
+
+
+@dataclass(frozen=True)
+class Phase2InputSelection:
+    inputs: list[tuple[str, int, Path]]
+    failures: list[str]
+    metadata: dict[str, Any]
+
+
+def select_phase2_inputs(
+    *,
+    profile: str,
+    raw_root: Path,
+    raw_alignment: dict[str, Any],
+    profile_config_path: Path = DEFAULT_PROFILE_CONFIG,
+    markets: Iterable[str] | None = None,
+    years: Iterable[int] | None = None,
+    include_market_years: Iterable[tuple[str, int]] | None = None,
+    include_list_path: Path | None = None,
+) -> Phase2InputSelection:
+    market_filter = {str(market) for market in markets} if markets else None
+    year_filter = {int(year) for year in years} if years else None
+    requested_pairs = (
+        {(str(market), int(year)) for market, year in include_market_years}
+        if include_market_years is not None
+        else None
+    )
+
+    def market_year_selected(market: str, year: int) -> bool:
+        if market_filter is not None and market not in market_filter:
+            return False
+        if year_filter is not None and year not in year_filter:
+            return False
+        return True
+
+    failures: list[str] = []
+    profile_inputs = resolve_profile_inputs(profile, raw_root, profile_config_path)
+    aligned_inputs, missing_expected_pairs = filter_inputs_by_raw_alignment(
+        profile_inputs,
+        raw_alignment,
+    )
+    expected_pairs = raw_alignment_expected_market_years(raw_alignment)
+    aligned_pairs = {(market, year) for market, year, _input_path in aligned_inputs}
+    profile_pairs = {(market, year) for market, year, _input_path in profile_inputs}
+    universe_pairs = expected_pairs if expected_pairs else aligned_pairs
+    selected_expected_pairs = {
+        pair for pair in universe_pairs if market_year_selected(pair[0], pair[1])
+    }
+    selected_inputs = [
+        (market, year, input_path)
+        for market, year, input_path in aligned_inputs
+        if market_year_selected(market, year)
+    ]
+    selected_missing_expected_pairs = {
+        pair for pair in missing_expected_pairs if market_year_selected(pair[0], pair[1])
+    }
+
+    selection_mode = "profile"
+    exact_excluded_pairs: set[tuple[str, int]] = set()
+    missing_from_profile: set[tuple[str, int]] = set()
+    missing_from_raw_alignment: set[tuple[str, int]] = set()
+    missing_raw_files: set[tuple[str, int]] = set()
+    if requested_pairs is not None:
+        selection_mode = "exact_market_year_include_list"
+        if market_filter is not None or year_filter is not None:
+            failures.append(
+                "market-year include list cannot be combined with market/year filters"
+            )
+        missing_from_profile = requested_pairs - profile_pairs
+        missing_from_raw_alignment = requested_pairs - universe_pairs
+        available_inputs = {
+            (market, year): input_path
+            for market, year, input_path in selected_inputs
+            if (market, year) in requested_pairs
+        }
+        missing_raw_files = {
+            pair for pair, input_path in available_inputs.items() if not input_path.exists()
+        }
+        exact_excluded_pairs = selected_expected_pairs - requested_pairs
+        selected_inputs = [
+            (market, year, input_path)
+            for market, year, input_path in selected_inputs
+            if (market, year) in requested_pairs
+        ]
+        selected_missing_expected_pairs = requested_pairs - set(available_inputs)
+        if missing_from_profile:
+            failures.append(
+                "include-list market-years missing from profile config: "
+                f"{len(missing_from_profile)}"
+            )
+        if missing_from_raw_alignment:
+            failures.append(
+                "include-list market-years missing from raw alignment: "
+                f"{len(missing_from_raw_alignment)}"
+            )
+        if missing_raw_files:
+            failures.append(
+                "include-list raw parquet files missing: " f"{len(missing_raw_files)}"
+            )
+        if not selected_inputs:
+            failures.append("market-year include list selected no eligible Phase 2 inputs")
+
+    metadata: dict[str, Any] = {
+        "selection_mode": selection_mode,
+        "market_filter": sorted(market_filter) if market_filter else None,
+        "year_filter": sorted(year_filter) if year_filter else None,
+        "market_year_include_list_path": (
+            relative_source_path(include_list_path) if include_list_path else None
+        ),
+        "market_year_include_count": (
+            len(requested_pairs) if requested_pairs is not None else None
+        ),
+        "requested_market_years": (
+            market_year_rows(requested_pairs) if requested_pairs is not None else []
+        ),
+        "profile_scope_market_year_count": len(profile_pairs),
+        "raw_alignment_expected_market_year_count": len(universe_pairs),
+        "selected_expected_market_year_count": len(selected_expected_pairs),
+        "excluded_market_year_count": len(exact_excluded_pairs),
+        "excluded_market_years": market_year_rows(exact_excluded_pairs),
+        "missing_include_profile_market_years": market_year_rows(missing_from_profile),
+        "missing_include_raw_alignment_market_years": market_year_rows(
+            missing_from_raw_alignment
+        ),
+        "missing_include_raw_files": market_year_rows(missing_raw_files),
+    }
+    if requested_pairs is None and selected_missing_expected_pairs:
+        failures.append(
+            "raw alignment eligible market-years missing from profile config: "
+            f"{len(selected_missing_expected_pairs)}"
+        )
+        metadata["missing_expected_market_years"] = market_year_rows(
+            selected_missing_expected_pairs
+        )
+    return Phase2InputSelection(selected_inputs, failures, metadata)
 
 
 def raw_alignment_guard_failures(
@@ -1760,6 +2749,87 @@ def _build_causal_invalid_reason(df: pd.DataFrame, missing_required_raw_cols: li
     return reasons
 
 
+def _bool_contract_column(df: pd.DataFrame, column: str, default: bool) -> pd.Series:
+    if column not in df.columns:
+        return pd.Series(default, index=df.index, dtype=bool)
+    return df[column].fillna(default).astype(bool)
+
+
+def causal_gate_contract_failures(
+    df: pd.DataFrame, missing_required_raw_cols: Iterable[str] | None = None
+) -> list[str]:
+    failures: list[str] = []
+    required = {"causal_valid", "causal_invalid_reason"}
+    missing_columns = sorted(required - set(df.columns))
+    if missing_columns:
+        return [
+            "causal gate contract missing required columns: "
+            + ", ".join(missing_columns)
+        ]
+
+    causal_valid = df["causal_valid"].fillna(False).astype(bool)
+    reasons = df["causal_invalid_reason"].fillna("").astype(str).str.strip()
+    valid_with_reason = causal_valid & reasons.ne("")
+    if valid_with_reason.any():
+        failures.append(
+            "causal_valid=true rows with non-empty causal_invalid_reason: "
+            f"rows={int(valid_with_reason.sum())}"
+        )
+
+    invalid = ~causal_valid
+    invalid_blank_reason = invalid & reasons.eq("")
+    if invalid_blank_reason.any():
+        failures.append(
+            "causal_valid=false rows with blank causal_invalid_reason: "
+            f"rows={int(invalid_blank_reason.sum())}"
+        )
+
+    reason_sets = reasons.where(reasons.ne(""), "").map(
+        lambda value: frozenset(part for part in value.split("|") if part)
+    )
+    observed_reasons = sorted(
+        {reason for row_reasons in reason_sets.loc[invalid] for reason in row_reasons}
+    )
+    unsupported = [
+        reason
+        for reason in observed_reasons
+        if reason not in SUPPORTED_CAUSAL_INVALID_REASONS
+    ]
+    if unsupported:
+        failures.append(
+            "unsupported causal_invalid_reason values: " + ", ".join(unsupported)
+        )
+
+    for reason, (column, expected_value) in CAUSAL_INVALID_REASON_GATES.items():
+        reason_mask = invalid & reason_sets.map(lambda parts, reason=reason: reason in parts)
+        if not reason_mask.any():
+            continue
+        if column not in df.columns:
+            failures.append(
+                f"causal_invalid_reason {reason} requires missing column {column}: "
+                f"rows={int(reason_mask.sum())}"
+            )
+            continue
+        column_values = _bool_contract_column(df, column, default=not expected_value)
+        inconsistent = reason_mask & column_values.ne(expected_value)
+        if inconsistent.any():
+            failures.append(
+                f"inconsistent causal_invalid_reason {reason} for {column}: "
+                f"rows={int(inconsistent.sum())}"
+            )
+
+    missing_required_reason = invalid & reason_sets.map(
+        lambda parts: "missing_required_raw_cols" in parts
+    )
+    if missing_required_reason.any() and not tuple(missing_required_raw_cols or ()):
+        failures.append(
+            "causal_invalid_reason missing_required_raw_cols present without "
+            f"missing required raw columns: rows={int(missing_required_reason.sum())}"
+        )
+
+    return failures
+
+
 def _raw_enrichment_columns(df: pd.DataFrame) -> list[str]:
     return [
         column
@@ -2135,6 +3205,11 @@ def process_file(
     df["causal_invalid_reason"] = _build_causal_invalid_reason(
         df, result.missing_required_raw_cols
     )
+    result.failures.extend(
+        causal_gate_contract_failures(
+            df, missing_required_raw_cols=result.missing_required_raw_cols
+        )
+    )
 
     result.output_rows = len(df)
     result.synthetic_rows = int(df["is_synthetic"].sum())
@@ -2218,13 +3293,77 @@ def write_reports(
     input_root: Path | None = None,
     output_root: Path | None = None,
     local_trade_gap_gate: dict[str, Any] | None = None,
+    selection_metadata: dict[str, Any] | None = None,
 ) -> None:
     reports_root.mkdir(parents=True, exist_ok=True)
-    rows = [result.to_dict() for result in results]
+    result_list = list(results)
+    config = load_causal_base_config(profile_config_path, profile)
+    processed_results = {
+        (result.market, result.year): result for result in result_list
+    }
+    rows: list[dict[str, object]] = []
+    csv_rows: list[dict[str, object]] = []
+    accepted_keys: set[tuple[str, int, str]] = set()
+    accepted_exceptions: list[dict[str, Any]] = []
+    for result in result_list:
+        row = result.to_dict()
+        csv_row = result.to_csv_row()
+        if result.status != "PASS":
+            accepted_exception = _accepted_readiness_exception_for_result(result, config)
+            if accepted_exception is not None:
+                row["original_status"] = row["status"]
+                row["status"] = "PASS"
+                row["accepted_readiness_exception"] = accepted_exception
+                csv_row["original_status"] = result.status
+                csv_row["status"] = "PASS"
+                csv_row["accepted_readiness_exception"] = json.dumps(
+                    accepted_exception, sort_keys=True
+                )
+                accepted_keys.add(
+                    (
+                        result.market,
+                        result.year,
+                        str(accepted_exception["category"]),
+                    )
+                )
+                accepted_exceptions.append(
+                    {
+                        "market": result.market,
+                        "year": result.year,
+                        "original_status": result.status,
+                        "category": accepted_exception["category"],
+                        "reason": accepted_exception["reason"],
+                        "evidence_paths": accepted_exception["evidence_paths"],
+                        "warnings": list(result.warnings),
+                        "status_enrichment_missing_rows": accepted_exception[
+                            "status_enrichment_missing_rows"
+                        ],
+                        "status_enrichment_stale_rows": accepted_exception[
+                            "status_enrichment_stale_rows"
+                        ],
+                        "statistics_enrichment_missing_rows": accepted_exception[
+                            "statistics_enrichment_missing_rows"
+                        ],
+                        "statistics_enrichment_stale_rows": accepted_exception[
+                            "statistics_enrichment_stale_rows"
+                        ],
+                        "degraded_bar_rows": accepted_exception["degraded_bar_rows"],
+                        "degraded_session_rows": accepted_exception[
+                            "degraded_session_rows"
+                        ],
+                        "degraded_rows_pct": accepted_exception["degraded_rows_pct"],
+                    }
+                )
+        rows.append(row)
+        csv_rows.append(csv_row)
+    exception_failures = _accepted_readiness_exception_failures(
+        config=config,
+        processed_results=processed_results,
+        accepted_keys=accepted_keys,
+    )
     report_rows = [
         _with_local_trade_validation_fields(row, local_trade_gap_gate) for row in rows
     ]
-    csv_rows = [result.to_csv_row() for result in results]
     script_path = Path(__file__).resolve()
     resolved_input_root = input_root or infer_artifact_root(rows, "input_path")
     resolved_output_root = output_root or infer_artifact_root(rows, "output_path")
@@ -2237,10 +3376,17 @@ def write_reports(
             "market": row["market"],
             "year": row["year"],
             "failures": row["failures"],
-        }
+            }
         for row in rows
         if row["failures"]
     ]
+    if exception_failures:
+        run_failures.append(
+            {
+                "gate": "accepted_readiness_exceptions",
+                "failures": exception_failures,
+            }
+        )
     gate_failed = (
         local_trade_gap_gate is not None and local_trade_gap_gate.get("status") != "PASS"
     )
@@ -2252,11 +3398,15 @@ def write_reports(
                 "failures": local_trade_gap_gate.get("failures", []),
             }
         )
-    failure_count = int(sum(row["failure_count"] for row in rows)) + (1 if gate_failed else 0)
+    failure_count = (
+        int(sum(row["failure_count"] for row in rows))
+        + (1 if gate_failed else 0)
+        + len(exception_failures)
+    )
     warning_count = int(sum(row["warning_count"] for row in rows))
     status = (
         "FAIL"
-        if gate_failed or any(row["status"] == "FAIL" for row in rows)
+        if gate_failed or exception_failures or any(row["status"] == "FAIL" for row in rows)
         else "WARN"
         if any(row["status"] == "WARN" for row in rows)
         else "PASS"
@@ -2291,7 +3441,15 @@ def write_reports(
         "warning_count": warning_count,
         "failure_count": failure_count,
         "failures": run_failures,
+        "configured_accepted_exception_count": len(
+            config.accepted_readiness_exceptions
+        ),
+        "accepted_exception_count": len(accepted_exceptions),
+        "accepted_readiness_exceptions": accepted_exceptions,
+        "accepted_exception_failure_count": len(exception_failures),
+        "accepted_readiness_exception_failures": exception_failures,
         **authority,
+        **(selection_metadata or {}),
     }
 
     validation_json = {
@@ -2434,11 +3592,19 @@ def write_reports(
                     "local_trade_gap_gate_report_json"
                 ],
                 "local_trade_gap_gate_caveat": row["local_trade_gap_gate_caveat"],
+                "original_status": row.get("original_status"),
+                "accepted_readiness_exception": row.get(
+                    "accepted_readiness_exception"
+                ),
                 "status": row["status"],
             }
             for row in report_rows
         ],
         "summary": validation_json["summary"],
+        "processed_market_year_count": len(rows),
+        "processed_market_years": market_year_rows(
+            (str(row["market"]), int(row["year"])) for row in rows
+        ),
     }
 
     (reports_root / "causal_base_validation.json").write_text(
@@ -2466,6 +3632,9 @@ def write_readiness_report(report: dict[str, Any], json_path: Path, markdown_pat
         f"- Pending market-years: {report.get('pending_market_year_count')}",
         f"- Blockers: {report.get('blocker_count')}",
         f"- Failures: {report.get('failure_count')}",
+        f"- Configured accepted exceptions: {report.get('configured_accepted_exception_count')}",
+        f"- Accepted exceptions: {report.get('accepted_exception_count')}",
+        f"- Accepted exception failures: {report.get('accepted_exception_failure_count')}",
         "",
         "## Failures",
         "",
@@ -2603,6 +3772,8 @@ def build_phase2_readiness_report(
     progress: bool = False,
     markets: Iterable[str] | None = None,
     years: Iterable[int] | None = None,
+    include_market_years: Iterable[tuple[str, int]] | None = None,
+    include_list_path: Path | None = None,
     skip_market_years: Iterable[tuple[str, int]] | None = None,
     checkpoint_row_callback: Callable[[dict[str, Any]], None] | None = None,
     max_market_years: int | None = None,
@@ -2644,53 +3815,48 @@ def build_phase2_readiness_report(
         "resumed_market_year_count": 0,
         "pending_market_year_count": 0,
         "blocker_count": 0,
+        "configured_accepted_exception_count": 0,
         "accepted_exception_count": 0,
+        "accepted_exception_failure_count": 0,
         "failure_count": len(failures),
         "failures": failures,
         "blockers": [],
         "accepted_readiness_exceptions": [],
+        "accepted_readiness_exception_failures": [],
     }
     if failures:
         return report
 
     raw_alignment = _read_json(raw_alignment_report)
-    expected_pairs = raw_alignment_expected_market_years(raw_alignment)
-    selected_expected_pairs = {
-        pair for pair in expected_pairs if market_year_selected(pair[0], pair[1])
-    }
-    inputs, missing_expected_pairs = filter_inputs_by_raw_alignment(
-        resolve_profile_inputs(profile, raw_root, profile_config_path),
-        raw_alignment,
+    selection = select_phase2_inputs(
+        profile=profile,
+        raw_root=raw_root,
+        raw_alignment=raw_alignment,
+        profile_config_path=profile_config_path,
+        markets=markets,
+        years=years,
+        include_market_years=include_market_years,
+        include_list_path=include_list_path,
     )
-    inputs = [
-        (market, year, input_path)
-        for market, year, input_path in inputs
-        if market_year_selected(market, year)
-    ]
-    missing_expected_pairs = {
-        pair for pair in missing_expected_pairs if market_year_selected(pair[0], pair[1])
-    }
-    if (market_filter or year_filter) and not inputs:
+    report.update(selection.metadata)
+    inputs = selection.inputs
+    failures.extend(selection.failures)
+    if (market_filter or year_filter) and not inputs and not failures:
         failures.append("market/year filters selected no eligible Phase 2 inputs")
         report["status"] = "FAIL"
         report["failure_count"] = len(failures)
         report["failures"] = failures
         return report
-    if missing_expected_pairs:
-        failures.append(
-            "raw alignment eligible market-years missing from profile config: "
-            f"{len(missing_expected_pairs)}"
-        )
+    if failures:
         report["status"] = "FAIL"
         report["failure_count"] = len(failures)
         report["failures"] = failures
-        report["missing_expected_market_years"] = [
-            {"market": market, "year": year}
-            for market, year in missing_expected_pairs
-        ]
         return report
 
     config = load_causal_base_config(profile_config_path, profile)
+    report["configured_accepted_exception_count"] = len(
+        config.accepted_readiness_exceptions
+    )
     effective_max_gap = (
         config.max_synthetic_gap_minutes
         if max_synthetic_gap_minutes == DEFAULT_MAX_SYNTHETIC_GAP_MINUTES
@@ -2698,6 +3864,8 @@ def build_phase2_readiness_report(
     )
     blockers: list[dict[str, Any]] = []
     accepted_exceptions: list[dict[str, Any]] = []
+    accepted_keys: set[tuple[str, int, str]] = set()
+    processed_results: dict[tuple[str, int], ValidationResult] = {}
     checked_count = 0
     resumed_count = len(
         {
@@ -2729,6 +3897,7 @@ def build_phase2_readiness_report(
     blocker_limit = int(stop_after_blockers) if stop_after_blockers is not None else None
 
     def record_result(result: ValidationResult) -> dict[str, Any]:
+        processed_results[(result.market, result.year)] = result
         row = phase2_readiness_result_row(result, resolved_profile=resolved_profile)
         if result.status != "PASS":
             accepted_exception = _accepted_readiness_exception_for_result(result, config)
@@ -2738,6 +3907,13 @@ def build_phase2_readiness_report(
                 row["original_status"] = row["status"]
                 row["status"] = "PASS"
                 row["accepted_readiness_exception"] = accepted_exception
+                accepted_keys.add(
+                    (
+                        result.market,
+                        result.year,
+                        str(accepted_exception["category"]),
+                    )
+                )
                 accepted_exceptions.append(
                     {
                         "market": result.market,
@@ -2747,6 +3923,23 @@ def build_phase2_readiness_report(
                         "reason": accepted_exception["reason"],
                         "evidence_paths": accepted_exception["evidence_paths"],
                         "warnings": list(result.warnings),
+                        "status_enrichment_missing_rows": accepted_exception[
+                            "status_enrichment_missing_rows"
+                        ],
+                        "status_enrichment_stale_rows": accepted_exception[
+                            "status_enrichment_stale_rows"
+                        ],
+                        "statistics_enrichment_missing_rows": accepted_exception[
+                            "statistics_enrichment_missing_rows"
+                        ],
+                        "statistics_enrichment_stale_rows": accepted_exception[
+                            "statistics_enrichment_stale_rows"
+                        ],
+                        "degraded_bar_rows": accepted_exception["degraded_bar_rows"],
+                        "degraded_session_rows": accepted_exception[
+                            "degraded_session_rows"
+                        ],
+                        "degraded_rows_pct": accepted_exception["degraded_rows_pct"],
                     }
                 )
         if checkpoint_row_callback is not None:
@@ -2788,26 +3981,40 @@ def build_phase2_readiness_report(
                     break
     blockers = sorted(blockers, key=lambda row: (str(row["market"]), int(row["year"])))
     pending_count = max(0, len(inputs) - checked_count - resumed_count)
+    exception_failures = _accepted_readiness_exception_failures(
+        config=config,
+        processed_results=processed_results,
+        accepted_keys=accepted_keys,
+    )
 
     report.update(
         {
-            "status": "FAIL" if blockers or pending_count else "PASS",
+            "status": (
+                "FAIL" if blockers or pending_count or exception_failures else "PASS"
+            ),
             "jobs": effective_jobs,
             "selected_market_year_count": len(inputs),
             "scheduled_market_year_count": len(tasks),
             "total_unskipped_market_year_count": total_unskipped_count,
             "expected_market_year_count": (
-                len(selected_expected_pairs) if selected_expected_pairs else len(inputs)
+                report.get("market_year_include_count")
+                or report.get("selected_expected_market_year_count")
+                or len(inputs)
             ),
             "checked_market_year_count": checked_count + resumed_count,
             "resumed_market_year_count": resumed_count,
             "pending_market_year_count": pending_count,
             "blocker_count": len(blockers),
+            "configured_accepted_exception_count": len(
+                config.accepted_readiness_exceptions
+            ),
             "accepted_exception_count": len(accepted_exceptions),
-            "failure_count": 0,
-            "failures": [],
+            "accepted_exception_failure_count": len(exception_failures),
+            "failure_count": len(exception_failures),
+            "failures": exception_failures,
             "blockers": blockers,
             "accepted_readiness_exceptions": accepted_exceptions,
+            "accepted_readiness_exception_failures": exception_failures,
         }
     )
     return report
@@ -2862,6 +4069,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile-config", default=str(DEFAULT_PROFILE_CONFIG))
     parser.add_argument("--session-config", default=str(DEFAULT_SESSION_CONFIG))
     parser.add_argument("--raw-alignment-report", default=str(DEFAULT_RAW_ALIGNMENT_REPORT))
+    parser.add_argument(
+        "--market-year-include-list",
+        help=(
+            "JSON or CSV file containing exact market/year rows to process. "
+            "Rows outside this list are excluded even when present in the profile."
+        ),
+    )
     parser.add_argument("--allow-hardcoded-calendar", action="store_true")
     parser.add_argument("--roll-window-bars", type=int, default=DEFAULT_ROLL_WINDOW_BARS)
     parser.add_argument(
@@ -2888,6 +4102,18 @@ def main() -> int:
     profile_config_path = Path(args.profile_config)
     session_config_path = Path(args.session_config)
     raw_alignment_report = Path(args.raw_alignment_report)
+    include_list_path = (
+        Path(args.market_year_include_list) if args.market_year_include_list else None
+    )
+    try:
+        include_market_years = (
+            load_market_year_include_list(include_list_path)
+            if include_list_path is not None
+            else None
+        )
+    except ValueError as exc:
+        print(f"FAIL market_year_include_list: {exc}")
+        return 1
     raw_alignment_failures = raw_alignment_guard_failures(
         report_path=raw_alignment_report,
         raw_root=raw_root,
@@ -2900,10 +4126,19 @@ def main() -> int:
         return 1
     config = load_causal_base_config(profile_config_path, args.profile)
     raw_alignment = _read_json(raw_alignment_report)
-    inputs, _ = filter_inputs_by_raw_alignment(
-        resolve_profile_inputs(args.profile, raw_root, profile_config_path),
-        raw_alignment,
+    selection = select_phase2_inputs(
+        profile=args.profile,
+        raw_root=raw_root,
+        raw_alignment=raw_alignment,
+        profile_config_path=profile_config_path,
+        include_market_years=include_market_years,
+        include_list_path=include_list_path,
     )
+    if selection.failures:
+        for failure in selection.failures:
+            print(f"FAIL input_selection: {failure}")
+        return 1
+    inputs = selection.inputs
     if not args.readiness_only:
         output_root_failures = output_root_guard_failures(
             output_root=output_root,
@@ -2928,6 +4163,8 @@ def main() -> int:
         max_synthetic_gap_minutes=config.max_synthetic_gap_minutes,
         allow_hardcoded_calendar=args.allow_hardcoded_calendar,
         fail_fast=True,
+        include_market_years=include_market_years,
+        include_list_path=include_list_path,
     )
     if args.readiness_only:
         json_path = Path(args.readiness_json_out) if args.readiness_json_out else reports_root / "phase2_readiness_summary.json"
@@ -2989,6 +4226,7 @@ def main() -> int:
         input_root=raw_root,
         output_root=output_root,
         local_trade_gap_gate=local_trade_gap_gate,
+        selection_metadata=selection.metadata,
     )
     return phase2_exit_code(results, local_trade_gap_gate)
 

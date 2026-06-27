@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 from scripts.phase2_causal_base.build_causal_base_data import raw_alignment_guard_failures
@@ -30,6 +31,75 @@ def _write_candidate_file(root: Path, market: str, year: int, content: bytes) ->
         "candidate_rows": 3,
         "maturity_backstep_count": 0,
     }
+
+
+def _write_dbn_source(
+    root: Path,
+    *,
+    schema_dir: str,
+    schema: str,
+    market: str,
+    year: int,
+    stype_in: str = "parent",
+) -> Path:
+    path = root / schema_dir / market / str(year) / f"{year}-01-01_{year + 1}-01-01.dbn.zst"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(f"{schema}-{market}-{year}-{stype_in}".encode("utf-8"))
+    symbols = [f"{market}.v.0"] if stype_in == "continuous" else [f"{market}.FUT"]
+    manifest = {
+        "schema": schema,
+        "market": market,
+        "symbols_requested": symbols,
+        "start": f"{year}-01-01",
+        "end": f"{year + 1}-01-01",
+        "stype_in": stype_in,
+        "path": path.as_posix(),
+        "file_size_bytes": path.stat().st_size,
+        "file_sha256": _sha256(path),
+    }
+    path.with_name(f"{path.name}.manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return path
+
+
+def _attach_parent_sources(
+    output: dict[str, object],
+    dbn_root: Path,
+    *,
+    stype_in: str = "parent",
+) -> dict[str, object]:
+    market = str(output["market"])
+    year = int(output["year"])
+    output["ohlcv_input_paths"] = [
+        _write_dbn_source(
+            dbn_root,
+            schema_dir="ohlcv_1m",
+            schema="ohlcv-1m",
+            market=market,
+            year=year,
+            stype_in=stype_in,
+        ).as_posix()
+    ]
+    output["status_paths"] = [
+        _write_dbn_source(
+            dbn_root,
+            schema_dir="status",
+            schema="status",
+            market=market,
+            year=year,
+            stype_in=stype_in,
+        ).as_posix()
+    ]
+    output["statistics_paths"] = [
+        _write_dbn_source(
+            dbn_root,
+            schema_dir="statistics",
+            schema="statistics",
+            market=market,
+            year=year,
+            stype_in=stype_in,
+        ).as_posix()
+    ]
+    return output
 
 
 def _manifest(candidate_root: Path, outputs: list[dict[str, object]]) -> dict[str, object]:
@@ -220,3 +290,182 @@ def test_refuses_output_for_excluded_market_year(tmp_path: Path) -> None:
     assert report["status"] == "FAIL"
     assert "candidate output includes excluded market-year: SR3 2018" in report["failures"]
     assert not (raw_root / "SR3" / "2018.parquet").exists()
+
+
+def test_alignment_only_writes_report_for_existing_matching_raw(tmp_path: Path) -> None:
+    candidate_root = tmp_path / "candidate"
+    raw_root = tmp_path / "data" / "raw"
+    dbn_root = candidate_root / "dbn"
+    outputs = [
+        _attach_parent_sources(
+            _write_candidate_file(candidate_root, "SR1", 2018, b"sr1-2018"),
+            dbn_root,
+        ),
+        _attach_parent_sources(
+            _write_candidate_file(candidate_root, "SR3", 2019, b"sr3-2019"),
+            dbn_root,
+        ),
+    ]
+    for row in outputs:
+        target = raw_root / str(row["market"]) / f"{row['year']}.parquet"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((candidate_root / str(row["market"]) / f"{row['year']}.parquet").read_bytes())
+
+    manifest_path = tmp_path / "reports" / "manifest.json"
+    readiness_path = tmp_path / "reports" / "readiness.json"
+    alignment_path = tmp_path / "reports" / "alignment.json"
+    _write_json(manifest_path, _manifest(candidate_root, outputs))
+    _write_json(readiness_path, _readiness(len(outputs)))
+
+    report = promoter.promote_candidate(
+        candidate_manifest=manifest_path,
+        readiness_summary=readiness_path,
+        raw_root=raw_root,
+        expected_exclusions={("SR3", 2018)},
+        promoted_raw_alignment_out=alignment_path,
+        alignment_only_existing_raw=True,
+    )
+
+    assert report["status"] == "PASS"
+    assert report["promoted_count"] == 0
+    assert report["alignment_only_existing_raw"] is True
+    alignment = json.loads(alignment_path.read_text(encoding="utf-8"))
+    assert alignment["status"] == "PASS"
+    assert alignment["raw_root"] == raw_root.as_posix()
+    assert alignment["expected_market_year_count"] == 2
+    assert alignment["raw_market_year_count"] == 2
+    assert alignment["source_hash_mismatch_count"] == 0
+    assert alignment["raw_file_metrics"][0]["output_hash"] == outputs[0]["output_hash"]
+
+
+def test_alignment_only_refuses_missing_canonical_target(tmp_path: Path) -> None:
+    candidate_root = tmp_path / "candidate"
+    dbn_root = candidate_root / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    outputs = [
+        _attach_parent_sources(
+            _write_candidate_file(candidate_root, "SR1", 2018, b"sr1-2018"),
+            dbn_root,
+        )
+    ]
+    manifest_path = tmp_path / "reports" / "manifest.json"
+    readiness_path = tmp_path / "reports" / "readiness.json"
+    alignment_path = tmp_path / "reports" / "alignment.json"
+    _write_json(manifest_path, _manifest(candidate_root, outputs))
+    _write_json(readiness_path, _readiness(len(outputs)))
+
+    report = promoter.promote_candidate(
+        candidate_manifest=manifest_path,
+        readiness_summary=readiness_path,
+        raw_root=raw_root,
+        expected_exclusions={("SR3", 2018)},
+        promoted_raw_alignment_out=alignment_path,
+        alignment_only_existing_raw=True,
+    )
+
+    assert report["status"] == "FAIL"
+    assert any("canonical target missing" in failure for failure in report["failures"])
+    assert not alignment_path.exists()
+
+
+def test_alignment_only_refuses_mismatched_canonical_target_hash(tmp_path: Path) -> None:
+    candidate_root = tmp_path / "candidate"
+    dbn_root = candidate_root / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    outputs = [
+        _attach_parent_sources(
+            _write_candidate_file(candidate_root, "SR1", 2018, b"sr1-2018"),
+            dbn_root,
+        )
+    ]
+    target = raw_root / "SR1" / "2018.parquet"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"different")
+    manifest_path = tmp_path / "reports" / "manifest.json"
+    readiness_path = tmp_path / "reports" / "readiness.json"
+    alignment_path = tmp_path / "reports" / "alignment.json"
+    _write_json(manifest_path, _manifest(candidate_root, outputs))
+    _write_json(readiness_path, _readiness(len(outputs)))
+
+    report = promoter.promote_candidate(
+        candidate_manifest=manifest_path,
+        readiness_summary=readiness_path,
+        raw_root=raw_root,
+        expected_exclusions={("SR3", 2018)},
+        promoted_raw_alignment_out=alignment_path,
+        alignment_only_existing_raw=True,
+    )
+
+    assert report["status"] == "FAIL"
+    assert any("canonical target hash mismatch" in failure for failure in report["failures"])
+    assert target.read_bytes() == b"different"
+    assert not alignment_path.exists()
+
+
+def test_alignment_only_does_not_copy_matching_raw_file(tmp_path: Path) -> None:
+    candidate_root = tmp_path / "candidate"
+    dbn_root = candidate_root / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    outputs = [
+        _attach_parent_sources(
+            _write_candidate_file(candidate_root, "SR1", 2018, b"sr1-2018"),
+            dbn_root,
+        )
+    ]
+    target = raw_root / "SR1" / "2018.parquet"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"sr1-2018")
+    os.utime(target, (1_700_000_000, 1_700_000_000))
+    before = target.stat().st_mtime_ns
+    manifest_path = tmp_path / "reports" / "manifest.json"
+    readiness_path = tmp_path / "reports" / "readiness.json"
+    alignment_path = tmp_path / "reports" / "alignment.json"
+    _write_json(manifest_path, _manifest(candidate_root, outputs))
+    _write_json(readiness_path, _readiness(len(outputs)))
+
+    report = promoter.promote_candidate(
+        candidate_manifest=manifest_path,
+        readiness_summary=readiness_path,
+        raw_root=raw_root,
+        expected_exclusions={("SR3", 2018)},
+        promoted_raw_alignment_out=alignment_path,
+        alignment_only_existing_raw=True,
+    )
+
+    assert report["status"] == "PASS"
+    assert target.read_bytes() == b"sr1-2018"
+    assert target.stat().st_mtime_ns == before
+
+
+def test_alignment_only_refuses_continuous_source_evidence(tmp_path: Path) -> None:
+    candidate_root = tmp_path / "candidate"
+    dbn_root = candidate_root / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    outputs = [
+        _attach_parent_sources(
+            _write_candidate_file(candidate_root, "SR1", 2018, b"sr1-2018"),
+            dbn_root,
+            stype_in="continuous",
+        )
+    ]
+    target = raw_root / "SR1" / "2018.parquet"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"sr1-2018")
+    manifest_path = tmp_path / "reports" / "manifest.json"
+    readiness_path = tmp_path / "reports" / "readiness.json"
+    alignment_path = tmp_path / "reports" / "alignment.json"
+    _write_json(manifest_path, _manifest(candidate_root, outputs))
+    _write_json(readiness_path, _readiness(len(outputs)))
+
+    report = promoter.promote_candidate(
+        candidate_manifest=manifest_path,
+        readiness_summary=readiness_path,
+        raw_root=raw_root,
+        expected_exclusions={("SR3", 2018)},
+        promoted_raw_alignment_out=alignment_path,
+        alignment_only_existing_raw=True,
+    )
+
+    assert report["status"] == "FAIL"
+    assert any("stype_in is continuous" in failure for failure in report["failures"])
+    assert not alignment_path.exists()

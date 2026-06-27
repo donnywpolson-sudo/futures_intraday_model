@@ -59,6 +59,49 @@ def _touch_expected_archive(row: dict[str, object]) -> None:
     )
 
 
+def _write_provider_empty_evidence(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"status": "FAIL", "provider_empty_estimate_count": 1}, indent=2),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _write_exception_config(
+    path: Path,
+    *,
+    evidence_path: Path | None,
+    market: str = "KE",
+    year: int = 2013,
+    schema: str = "status",
+    start: str = "2013-01-01",
+    end: str = "2014-01-01",
+) -> Path:
+    evidence_paths = [] if evidence_path is None else [evidence_path.as_posix()]
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "required_schema_exceptions": [
+                    {
+                        "schema": schema,
+                        "market": market,
+                        "year": year,
+                        "start": start,
+                        "end": end,
+                        "reason": "provider_empty",
+                        "evidence_paths": evidence_paths,
+                    }
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def test_dbn_archive_coverage_fails_closed_for_missing_strict_tier3_v2_roots(tmp_path: Path) -> None:
     config = _write_config(tmp_path / "alpha_tiered.yaml", ["SR1", "TN", "ZL", "ZM", "KE"], [2024])
 
@@ -170,6 +213,128 @@ def test_dbn_archive_coverage_still_fails_missing_required_schema(tmp_path: Path
     assert report["status"] == "FAIL"
     assert report["missing_archive_count"] == 2
     assert report["missing_archives_by_schema"] == {"definition": 1, "status": 1}
+
+
+def test_required_status_exception_passes_exact_provider_empty_gap(tmp_path: Path) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["KE"], [2013])
+    dbn_root = tmp_path / "data" / "dbn"
+    seed = build_report(
+        config_path=config,
+        profile="tier_3_research",
+        dbn_root=dbn_root,
+        required_schema_exceptions_config=None,
+    )
+    for row in seed["missing_archives"]:
+        if row["schema"] != "status":
+            _touch_expected_archive(row)
+    evidence = _write_provider_empty_evidence(tmp_path / "probe_parent_2013.json")
+    exceptions = _write_exception_config(tmp_path / "exceptions.yaml", evidence_path=evidence)
+
+    report = build_report(
+        config_path=config,
+        profile="tier_3_research",
+        dbn_root=dbn_root,
+        required_schema_exceptions_config=exceptions,
+    )
+
+    assert report["status"] == "PASS"
+    assert report["missing_archive_count"] == 0
+    assert report["missing_manifest_count"] == 0
+    assert report["required_schema_exception_count"] == 1
+    assert report["required_schema_exceptions"][0]["market"] == "KE"
+    assert report["required_schema_exceptions"][0]["schema"] == "status"
+
+
+def test_missing_required_status_without_exception_still_fails(tmp_path: Path) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["KE"], [2013])
+    dbn_root = tmp_path / "data" / "dbn"
+    seed = build_report(
+        config_path=config,
+        profile="tier_3_research",
+        dbn_root=dbn_root,
+        required_schema_exceptions_config=None,
+    )
+    for row in seed["missing_archives"]:
+        if row["schema"] != "status":
+            _touch_expected_archive(row)
+
+    report = build_report(
+        config_path=config,
+        profile="tier_3_research",
+        dbn_root=dbn_root,
+        required_schema_exceptions_config=None,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["missing_archive_count"] == 1
+    assert report["missing_archives"][0]["market"] == "KE"
+    assert report["missing_archives"][0]["schema"] == "status"
+
+
+def test_required_status_exception_fails_when_wrong_market_year_or_missing_evidence(tmp_path: Path) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["KE"], [2013])
+    dbn_root = tmp_path / "data" / "dbn"
+    seed = build_report(
+        config_path=config,
+        profile="tier_3_research",
+        dbn_root=dbn_root,
+        required_schema_exceptions_config=None,
+    )
+    for row in seed["missing_archives"]:
+        if row["schema"] != "status":
+            _touch_expected_archive(row)
+    evidence = _write_provider_empty_evidence(tmp_path / "probe_parent_2013.json")
+    wrong_year = _write_exception_config(tmp_path / "wrong_year.yaml", evidence_path=evidence, year=2014)
+    missing_evidence = _write_exception_config(
+        tmp_path / "missing_evidence.yaml",
+        evidence_path=tmp_path / "missing.json",
+    )
+
+    wrong_report = build_report(
+        config_path=config,
+        profile="tier_3_research",
+        dbn_root=dbn_root,
+        required_schema_exceptions_config=wrong_year,
+    )
+    missing_evidence_report = build_report(
+        config_path=config,
+        profile="tier_3_research",
+        dbn_root=dbn_root,
+        required_schema_exceptions_config=missing_evidence,
+    )
+
+    assert wrong_report["status"] == "FAIL"
+    assert wrong_report["missing_archive_count"] == 1
+    assert wrong_report["required_schema_exception_count"] == 0
+    assert missing_evidence_report["status"] == "FAIL"
+    assert missing_evidence_report["required_schema_exception_failure_count"] == 1
+
+
+def test_required_status_exception_fails_when_stale(tmp_path: Path) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["KE"], [2013])
+    dbn_root = tmp_path / "data" / "dbn"
+    seed = build_report(
+        config_path=config,
+        profile="tier_3_research",
+        dbn_root=dbn_root,
+        required_schema_exceptions_config=None,
+    )
+    for row in seed["missing_archives"]:
+        _touch_expected_archive(row)
+    evidence = _write_provider_empty_evidence(tmp_path / "probe_parent_2013.json")
+    exceptions = _write_exception_config(tmp_path / "exceptions.yaml", evidence_path=evidence)
+
+    report = build_report(
+        config_path=config,
+        profile="tier_3_research",
+        dbn_root=dbn_root,
+        required_schema_exceptions_config=exceptions,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["missing_archive_count"] == 0
+    assert report["required_schema_exception_failure_count"] == 1
+    assert "stale" in report["required_schema_exception_failures"][0]
 
 
 def test_dbn_archive_coverage_uses_partial_current_year_end_date(tmp_path: Path) -> None:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build SR1/SR3 front-contract raw candidates from parent OHLCV DBNs."""
+"""Build front-contract raw candidates from parent OHLCV DBNs."""
 
 from __future__ import annotations
 
@@ -41,6 +41,12 @@ RAW_ALIGNMENT_NAME = "sr_front_contract_candidate_raw_alignment.json"
 MANIFEST_NAME = "sr_front_contract_candidate_manifest.json"
 QUARTERLY_MONTH_CODES = frozenset("HMUZ")
 QUARTERLY_CHAIN_MARKETS = frozenset({"SR3"})
+FRONT_CONTRACT_POLICY_NAME = "deterministic_causal_front_contract_from_definition_metadata"
+FRONT_CONTRACT_POLICY_DESCRIPTION = (
+    "Select the earliest-expiring active outright futures contract at each OHLCV "
+    "timestamp using only local definition metadata available at or before that "
+    "timestamp; drop deferred contracts and timestamps with no active front contract."
+)
 
 
 class DatabentoStore(Protocol):
@@ -356,6 +362,8 @@ def build_front_contract_candidate_frame(
         for symbol, rows in selected["raw_symbol"].astype(str).value_counts().head(20).items()
     ] if "raw_symbol" in selected.columns else []
     metrics = {
+        "selection_policy": FRONT_CONTRACT_POLICY_NAME,
+        "selection_policy_description": FRONT_CONTRACT_POLICY_DESCRIPTION,
         "raw_parent_ohlcv_rows": raw_parent_ohlcv_rows,
         "outright_ohlcv_rows": full_outright_rows,
         "contract_universe_ohlcv_rows": int(len(work)),
@@ -418,6 +426,12 @@ def _write_raw_alignment_manifest(
         "stage": "raw_dbn_alignment_audit",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "status": status,
+        "candidate_policy": {
+            "name": FRONT_CONTRACT_POLICY_NAME,
+            "description": FRONT_CONTRACT_POLICY_DESCRIPTION,
+            "causal": True,
+            "uses_definition_metadata": True,
+        },
         "audit_completeness": "full",
         "definition_join_skipped": False,
         "definition_join_status": "checked",
@@ -503,6 +517,12 @@ def build_candidate_outputs(
         report = {
             "stage": "sr_front_contract_candidate_build",
             "status": "FAIL",
+            "candidate_policy": {
+                "name": FRONT_CONTRACT_POLICY_NAME,
+                "description": FRONT_CONTRACT_POLICY_DESCRIPTION,
+                "causal": True,
+                "uses_definition_metadata": True,
+            },
             "source_audit": source_audit,
             "outputs": [],
             "failures": ["source audit failed; no candidate raw files written"],
@@ -618,6 +638,12 @@ def build_candidate_outputs(
         "stage": "sr_front_contract_candidate_build",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "status": "PASS" if not failures and outputs else "FAIL",
+        "candidate_policy": {
+            "name": FRONT_CONTRACT_POLICY_NAME,
+            "description": FRONT_CONTRACT_POLICY_DESCRIPTION,
+            "causal": True,
+            "uses_definition_metadata": True,
+        },
         "source_audit": source_audit,
         "candidate_dbn_root": candidate_dbn_root.as_posix(),
         "sidecar_dbn_root": sidecar_dbn_root.as_posix(),
@@ -670,7 +696,7 @@ def main(argv: list[str] | None = None) -> int:
         overwrite_candidate=bool(args.overwrite_candidate),
     )
     print(
-        f"{report['status']} SR front-contract candidate build: "
+        f"{report['status']} front-contract candidate build: "
         f"outputs={report.get('output_count', 0)} failures={len(report.get('failures', []))}"
     )
     return 0 if report["status"] == "PASS" else 1

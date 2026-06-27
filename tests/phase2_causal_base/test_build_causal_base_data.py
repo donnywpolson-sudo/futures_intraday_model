@@ -1,10 +1,12 @@
 ﻿from __future__ import annotations
 
 import json
+import hashlib
 import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -14,9 +16,11 @@ from scripts.phase2_causal_base.build_causal_base_data import (
     LOCAL_TRADE_GAP_VALIDATED_STATUS,
     OUTPUT_COLUMNS,
     build_phase2_readiness_report,
+    causal_gate_contract_failures,
     discover_raw_inputs,
     filter_inputs_by_raw_alignment,
     load_causal_base_config,
+    load_market_year_include_list,
     main as phase2_main,
     output_root_guard_failures,
     phase2_exit_code,
@@ -25,6 +29,7 @@ from scripts.phase2_causal_base.build_causal_base_data import (
     raw_alignment_guard_failures,
     raw_alignment_expected_market_years,
     resolve_profile_inputs,
+    select_phase2_inputs,
     write_reports,
 )
 
@@ -335,6 +340,541 @@ def _write_roll_maturity_exception_config(
     )
 
 
+STATUS_SPARSE_TEST_WARNING = "synthetic threshold breached: rows_pct=81.818182 max_gap_minutes=10"
+DEGRADED_RAW_QUALITY_TEST_WARNING = (
+    "degraded threshold breached: rows_pct=66.666667 bars=2 sessions=1"
+)
+VENDOR_TRUSTED_OHLCV_NO_TRADE_TEST_WARNING = (
+    "synthetic threshold breached: rows_pct=81.818182 max_gap_minutes=10"
+)
+VENDOR_TRUSTED_OHLCV_NO_TRADE_DEGRADED_TEST_WARNING = (
+    "degraded threshold breached: rows_pct=100.0 bars=2 sessions=1"
+)
+PARENT_SPARSE_OHLCV_NO_TRADE_TEST_WARNING = (
+    "synthetic threshold breached: rows_pct=81.818182 max_gap_minutes=10"
+)
+
+
+def _write_status_sparse_exception_config(
+    path: Path,
+    *,
+    profile_market: str,
+    exception_market: str,
+    evidence_path: Path,
+    warning: str = STATUS_SPARSE_TEST_WARNING,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "defaults:",
+                "  years: [2024]",
+                "  max_synthetic_gap_minutes: 120",
+                "  max_synthetic_rows_pct: 2.0",
+                "  max_degraded_rows_pct: 1.0",
+                "  max_roll_window_rows_pct: 1.0",
+                "  require_roll_metadata_for_profiles: []",
+                "profiles:",
+                "  tier_0:",
+                f"    markets: [{profile_market}]",
+                "    years: [2024]",
+                "    accepted_readiness_exceptions:",
+                "      - category: status_sparse",
+                f"        market: {exception_market}",
+                "        year: 2024",
+                "        reason: accepted test status-sparse review",
+                "        evidence_paths:",
+                f"          - {evidence_path.as_posix()}",
+                "        warning_prefixes:",
+                f"          - '{warning}'",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_degraded_raw_quality_exception_config(
+    path: Path,
+    *,
+    profile_market: str,
+    exception_market: str,
+    evidence_path: Path,
+    warning: str = DEGRADED_RAW_QUALITY_TEST_WARNING,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "defaults:",
+                "  years: [2024]",
+                "  max_synthetic_gap_minutes: 120",
+                "  max_synthetic_rows_pct: 100.0",
+                "  max_degraded_rows_pct: 1.0",
+                "  max_roll_window_rows_pct: 1.0",
+                "  require_roll_metadata_for_profiles: []",
+                "profiles:",
+                "  tier_0:",
+                f"    markets: [{profile_market}]",
+                "    years: [2024]",
+                "    accepted_readiness_exceptions:",
+                "      - category: degraded_raw_quality",
+                f"        market: {exception_market}",
+                "        year: 2024",
+                "        reason: accepted test degraded raw-quality review",
+                "        evidence_paths:",
+                f"          - {evidence_path.as_posix()}",
+                "        warning_prefixes:",
+                f"          - '{warning}'",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_vendor_trusted_ohlcv_evidence_reports(
+    root: Path,
+    *,
+    market: str = "HE",
+    year: int = 2016,
+    raw_readiness_overrides: dict[str, object] | None = None,
+) -> tuple[Path, Path]:
+    raw_alignment_path = root / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    raw_readiness_path = (
+        root / "reports" / "raw_readiness" / "raw_enriched_optional_schema_audit.json"
+    )
+    _write_raw_alignment_report(
+        raw_alignment_path,
+        raw_root=root / "data" / "raw",
+        profile="tier_0",
+        resolved_profile="tier_0",
+        overrides={
+            "markets": [market],
+            "years": [year],
+            "pre_availability_exemptions": [],
+            "expected_market_year_count": 1,
+            "market_years": [{"market": market, "year": year}],
+            "missing_ohlcv_dbn_count": 0,
+            "missing_definition_dbn_count": 0,
+            "definition_join_mismatch_count": 0,
+        },
+    )
+    summary: dict[str, object] = {
+        "missing_source_file_count": 0,
+        "source_hash_mismatch_count": 0,
+        "schema_failure_count": 0,
+        "status_failure_count": 0,
+        "statistics_failure_count": 0,
+        "missing_status_archive_market_year_count": 0,
+        "missing_statistics_archive_market_year_count": 0,
+    }
+    if raw_readiness_overrides:
+        summary.update(raw_readiness_overrides)
+    raw_readiness_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_readiness_path.write_text(
+        json.dumps({"status": "PASS", "summary": summary}),
+        encoding="utf-8",
+    )
+    return raw_alignment_path, raw_readiness_path
+
+
+def _write_vendor_trusted_ohlcv_no_trade_exception_config(
+    path: Path,
+    *,
+    profile_market: str = "HE",
+    profile_year: int = 2016,
+    exception_market: str = "HE",
+    exception_year: int = 2016,
+    raw_alignment_path: Path,
+    raw_readiness_path: Path,
+    warnings: list[str] | None = None,
+) -> None:
+    warnings = warnings or [VENDOR_TRUSTED_OHLCV_NO_TRADE_TEST_WARNING]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "defaults:",
+                f"  years: [{profile_year}]",
+                "  max_synthetic_gap_minutes: 120",
+                "  max_synthetic_rows_pct: 2.0",
+                "  max_degraded_rows_pct: 1.0",
+                "  max_roll_window_rows_pct: 1.0",
+                "  require_roll_metadata_for_profiles: []",
+                "profiles:",
+                "  tier_0:",
+                f"    markets: [{profile_market}]",
+                f"    years: [{profile_year}]",
+                "    accepted_readiness_exceptions:",
+                "      - category: vendor_trusted_ohlcv_no_trade",
+                f"        market: {exception_market}",
+                f"        year: {exception_year}",
+                "        reason: accepted test vendor-trusted OHLCV no-trade review",
+                "        evidence_paths:",
+                f"          - {raw_alignment_path.as_posix()}",
+                f"          - {raw_readiness_path.as_posix()}",
+                "        warning_prefixes:",
+                *[f"          - '{warning}'" for warning in warnings],
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_vendor_trusted_degraded_exception_config(
+    path: Path,
+    *,
+    include_vendor: bool = True,
+    raw_alignment_path: Path,
+    raw_readiness_path: Path,
+) -> None:
+    exception_lines: list[str] = []
+    if include_vendor:
+        exception_lines.extend(
+            [
+                "      - category: vendor_trusted_ohlcv_no_trade",
+                "        market: HE",
+                "        year: 2019",
+                "        reason: accepted test vendor-trusted OHLCV no-trade review",
+                "        evidence_paths: &vendor_trusted_ohlcv_no_trade_evidence",
+                f"          - {raw_alignment_path.as_posix()}",
+                f"          - {raw_readiness_path.as_posix()}",
+                "        warning_prefixes:",
+                f"          - '{VENDOR_TRUSTED_OHLCV_NO_TRADE_TEST_WARNING}'",
+                f"          - '{VENDOR_TRUSTED_OHLCV_NO_TRADE_DEGRADED_TEST_WARNING}'",
+            ]
+        )
+    evidence_lines = (
+        ["        evidence_paths: *vendor_trusted_ohlcv_no_trade_evidence"]
+        if include_vendor
+        else [
+            "        evidence_paths:",
+            f"          - {raw_alignment_path.as_posix()}",
+            f"          - {raw_readiness_path.as_posix()}",
+        ]
+    )
+    exception_lines.extend(
+        [
+            "      - category: degraded_raw_quality",
+            "        market: HE",
+            "        year: 2019",
+            "        reason: accepted test HE degraded raw-quality review",
+            *evidence_lines,
+            "        warning_prefixes:",
+            f"          - '{VENDOR_TRUSTED_OHLCV_NO_TRADE_TEST_WARNING}'",
+            f"          - '{VENDOR_TRUSTED_OHLCV_NO_TRADE_DEGRADED_TEST_WARNING}'",
+        ]
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "defaults:",
+                "  years: [2019]",
+                "  max_synthetic_gap_minutes: 120",
+                "  max_synthetic_rows_pct: 2.0",
+                "  max_degraded_rows_pct: 1.0",
+                "  max_roll_window_rows_pct: 1.0",
+                "  require_roll_metadata_for_profiles: []",
+                "profiles:",
+                "  tier_0:",
+                "    markets: [HE]",
+                "    years: [2019]",
+                "    accepted_readiness_exceptions:",
+                *exception_lines,
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_parent_sparse_exception_config(
+    path: Path,
+    *,
+    raw_alignment_path: Path,
+    candidate_manifest_path: Path,
+    market: str = "KE",
+    year: int = 2019,
+    warning: str = PARENT_SPARSE_OHLCV_NO_TRADE_TEST_WARNING,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "defaults:",
+                f"  years: [{year}]",
+                "  max_synthetic_gap_minutes: 120",
+                "  max_synthetic_rows_pct: 2.0",
+                "  max_degraded_rows_pct: 1.0",
+                "  max_roll_window_rows_pct: 1.0",
+                "  require_roll_metadata_for_profiles: []",
+                "profiles:",
+                "  tier_0:",
+                f"    markets: [{market}]",
+                f"    years: [{year}]",
+                "    accepted_readiness_exceptions:",
+                "      - category: parent_sparse_ohlcv_no_trade",
+                f"        market: {market}",
+                f"        year: {year}",
+                "        reason: accepted test parent sparse OHLCV no-trade review",
+                "        evidence_paths:",
+                f"          - {candidate_manifest_path.as_posix()}",
+                f"          - {raw_alignment_path.as_posix()}",
+                "        warning_prefixes:",
+                f"          - '{warning}'",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_parent_source_dbn(
+    root: Path,
+    *,
+    market: str,
+    year: int,
+    kind: str,
+    schema: str,
+    stype_in: str = "parent",
+) -> Path:
+    dbn_path = root / kind / market / str(year) / f"{year}-01-01_{year + 1}-01-01.dbn.zst"
+    dbn_path.parent.mkdir(parents=True, exist_ok=True)
+    dbn_path.write_bytes(f"{kind}-{market}-{year}".encode("ascii"))
+    manifest = {
+        "schema": schema,
+        "market": market,
+        "start": f"{year}-01-01",
+        "end": f"{year + 1}-01-01",
+        "stype_in": stype_in,
+        "symbols_requested": [f"{market}.FUT"],
+        "request_status": "ok",
+        "file_sha256": _file_sha256(dbn_path),
+        "file_size_bytes": dbn_path.stat().st_size,
+    }
+    Path(str(dbn_path) + ".manifest.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    return dbn_path
+
+
+def _parent_sparse_rows(
+    *,
+    market: str,
+    year: int,
+    ohlcv_path: Path,
+    status_path: Path,
+    statistics_path: Path,
+    zero_volume: bool = False,
+    status_missing: bool = False,
+    degraded: bool = False,
+    bad_ohlc: bool = False,
+    maturity_backstep: bool = False,
+    trade_date: str | None = None,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    date = trade_date or f"{year}-01-02"
+    for index, (ts_event, close) in enumerate(
+        [(f"{date}T15:00:00Z", 100.5), (f"{date}T15:10:00Z", 101.0)]
+    ):
+        row = _readiness_raw_row(ts_event, close=close, symbol=f"{market}H{str(year)[-1]}")
+        row.update(
+            {
+                "market": market,
+                "year": year,
+                "raw_symbol": f"{market}H{str(year)[-1]}",
+                "volume": 0 if zero_volume and index == 0 else 10,
+                "data_quality_degraded": degraded,
+                "status_missing": status_missing,
+                "status_stale": False,
+                "statistics_missing": False,
+                "statistics_stale": False,
+                "source_file": ohlcv_path.as_posix(),
+                "source_sha256": _file_sha256(ohlcv_path),
+                "status_source_file": status_path.as_posix(),
+                "status_source_sha256": _file_sha256(status_path),
+                "stat_open_interest_source_file": statistics_path.as_posix(),
+                "stat_open_interest_source_sha256": _file_sha256(statistics_path),
+                "maturity_year": year,
+                "maturity_month": 3,
+                "expiration": (
+                    pd.Timestamp(f"{year}-03-01T00:00:00Z")
+                    if not maturity_backstep or index == 0
+                    else pd.Timestamp(f"{year}-02-01T00:00:00Z")
+                ),
+            }
+        )
+        if bad_ohlc and index == 0:
+            row["high"] = row["low"] - 1.0
+        rows.append(row)
+    return rows
+
+
+def _write_parent_sparse_evidence_bundle(
+    root: Path,
+    *,
+    market: str = "KE",
+    year: int = 2019,
+    source_type: str = "parent",
+    zero_volume: bool = False,
+    status_missing: bool = False,
+    degraded: bool = False,
+    bad_ohlc: bool = False,
+    maturity_backstep: bool = False,
+    trade_date: str | None = None,
+) -> tuple[Path, Path, Path, Path]:
+    source_root = root / "data" / "dbn"
+    ohlcv_path = _write_parent_source_dbn(
+        source_root,
+        market=market,
+        year=year,
+        kind="ohlcv_1m_parent",
+        schema="ohlcv-1m",
+        stype_in=source_type,
+    )
+    definition_path = _write_parent_source_dbn(
+        source_root,
+        market=market,
+        year=year,
+        kind="definition",
+        schema="definition",
+        stype_in=source_type,
+    )
+    status_path = _write_parent_source_dbn(
+        source_root,
+        market=market,
+        year=year,
+        kind="status_parent/status",
+        schema="status",
+        stype_in=source_type,
+    )
+    statistics_path = _write_parent_source_dbn(
+        source_root,
+        market=market,
+        year=year,
+        kind="statistics_parent/statistics",
+        schema="statistics",
+        stype_in=source_type,
+    )
+    raw_root = root / "reports" / "candidate" / "raw"
+    raw_path = raw_root / market / f"{year}.parquet"
+    _write_raw(
+        raw_path,
+        _parent_sparse_rows(
+            market=market,
+            year=year,
+            ohlcv_path=ohlcv_path,
+            status_path=status_path,
+            statistics_path=statistics_path,
+            zero_volume=zero_volume,
+            status_missing=status_missing,
+            degraded=degraded,
+            bad_ohlc=bad_ohlc,
+            maturity_backstep=maturity_backstep,
+            trade_date=trade_date,
+        ),
+    )
+    candidate_manifest = root / "reports" / "candidate" / "sr_front_contract_candidate_manifest.json"
+    raw_alignment = root / "reports" / "candidate" / "sr_front_contract_candidate_raw_alignment.json"
+    candidate_manifest.parent.mkdir(parents=True, exist_ok=True)
+    candidate_manifest.write_text(
+        json.dumps(
+            {
+                "status": "PASS",
+                "output_count": 1,
+                "failures": [],
+                "source_audit": {
+                    "status": "PASS",
+                    "repair_source_ready_count": 1,
+                    "blocked_count": 0,
+                },
+                "outputs": [
+                    {
+                        "market": market,
+                        "year": year,
+                        "output_path": raw_path.as_posix(),
+                        "output_hash": _file_sha256(raw_path),
+                        "candidate_rows": 2,
+                        "duplicate_timestamp_rows": 0,
+                        "maturity_backstep_count": 0,
+                        "ohlcv_input_paths": [ohlcv_path.as_posix()],
+                        "definition_paths": [definition_path.as_posix()],
+                        "status_paths": [status_path.as_posix()],
+                        "statistics_paths": [statistics_path.as_posix()],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_raw_alignment_report(
+        raw_alignment,
+        raw_root=raw_root,
+        profile="tier_0",
+        resolved_profile="tier_0",
+        overrides={
+            "dbn_root": (source_root / "ohlcv_1m_parent").as_posix(),
+            "definition_dbn_root": (source_root / "definition").as_posix(),
+            "status_dbn_root": (source_root / "status_parent/status").as_posix(),
+            "statistics_dbn_root": (
+                source_root / "statistics_parent/statistics"
+            ).as_posix(),
+            "market_years": [{"market": market, "year": year}],
+            "markets": [market],
+            "years": [year],
+            "expected_market_year_count": 1,
+            "raw_market_year_count": 1,
+            "raw_file_metrics": json.loads(candidate_manifest.read_text())["outputs"],
+        },
+    )
+    return raw_root, raw_path, candidate_manifest, raw_alignment
+
+
+def _status_sparse_rows() -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for ts_event, close in [
+        ("2024-01-02T15:00:00Z", 100.5),
+        ("2024-01-02T15:10:00Z", 101.0),
+    ]:
+        row = _readiness_raw_row(ts_event, close=close)
+        row["status_missing"] = True
+        row["status_stale"] = True
+        rows.append(row)
+    return rows
+
+
+def _vendor_trusted_ohlcv_no_trade_rows(
+    *,
+    year: int = 2016,
+    degraded: bool = False,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    base_ts = pd.Timestamp(f"{year}-01-08T15:00:00Z")
+    for ts_event, close in [
+        (base_ts, 100.5),
+        (base_ts + pd.Timedelta(minutes=10), 101.0),
+    ]:
+        row = _readiness_raw_row(ts_event, close=close, symbol="HEG6")
+        row["data_quality_degraded"] = degraded
+        rows.append(row)
+    return rows
+
+
+def _degraded_raw_quality_rows() -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for index, degraded in enumerate([True, True, False]):
+        row = _readiness_raw_row(
+            pd.Timestamp("2024-01-02T15:00:00Z") + pd.Timedelta(minutes=index),
+            close=100.5 + index,
+        )
+        row["data_quality_status"] = "degraded" if degraded else "available"
+        row["data_quality_degraded"] = degraded
+        rows.append(row)
+    return rows
+
+
 def _write_non_monotonic_roll_raw(path: Path, market: str) -> None:
     rows = []
     for ts_event, close, instrument_id, month_code, maturity_month in [
@@ -370,6 +910,26 @@ def _write_tier0_alignment(path: Path, raw_root: Path, *, status: str = "PASS") 
             "years": [2024],
             "pre_availability_exemptions": [],
             "expected_market_year_count": 1,
+        },
+    )
+
+
+def _write_tier0_multi_alignment(
+    path: Path,
+    raw_root: Path,
+    *,
+    market_years: list[tuple[str, int]],
+) -> None:
+    _write_raw_alignment_report(
+        path,
+        raw_root=raw_root,
+        profile="tier_0",
+        resolved_profile="tier_0",
+        overrides={
+            "market_years": [
+                {"market": market, "year": year} for market, year in market_years
+            ],
+            "expected_market_year_count": len(market_years),
         },
     )
 
@@ -510,6 +1070,151 @@ def test_output_root_guard_allows_empty_new_candidate_root(tmp_path: Path) -> No
         output_root=tmp_path / "data" / "new_candidate",
         reports_root=tmp_path / "reports" / "new_candidate",
     ) == []
+
+
+def test_market_year_include_list_loads_json_rows(tmp_path: Path) -> None:
+    include_path = tmp_path / "eligible.json"
+    include_path.write_text(
+        json.dumps({"market_years": [{"market": "ES", "year": 2024}]}),
+        encoding="utf-8",
+    )
+
+    assert load_market_year_include_list(include_path) == [("ES", 2024)]
+
+
+def test_select_phase2_inputs_exact_include_list_excludes_unrequested_rows(
+    tmp_path: Path,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(profile_config, tier0_markets=["CL", "ES"])
+    raw_root = tmp_path / "data" / "raw"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_multi_alignment(
+        report_path,
+        raw_root,
+        market_years=[("CL", 2024), ("ES", 2024)],
+    )
+    _write_raw(raw_root / "ES" / "2024.parquet", [_readiness_raw_row("2024-01-02T15:00:00Z")])
+    raw_alignment = json.loads(report_path.read_text(encoding="utf-8"))
+
+    selection = select_phase2_inputs(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment=raw_alignment,
+        profile_config_path=profile_config,
+        include_market_years=[("ES", 2024)],
+        include_list_path=tmp_path / "eligible.json",
+    )
+
+    assert selection.failures == []
+    assert [(market, year) for market, year, _ in selection.inputs] == [("ES", 2024)]
+    assert selection.metadata["selection_mode"] == "exact_market_year_include_list"
+    assert selection.metadata["market_year_include_count"] == 1
+    assert selection.metadata["requested_market_years"] == [
+        {"market": "ES", "year": 2024}
+    ]
+    assert selection.metadata["excluded_market_year_count"] == 1
+    assert selection.metadata["excluded_market_years"] == [
+        {"market": "CL", "year": 2024}
+    ]
+
+
+def test_phase2_readiness_exact_include_list_does_not_process_unlisted_warn(
+    tmp_path: Path,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(profile_config, tier0_markets=["CL", "ES"])
+    raw_root = tmp_path / "data" / "raw"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_multi_alignment(
+        report_path,
+        raw_root,
+        market_years=[("CL", 2024), ("ES", 2024)],
+    )
+    _write_raw(raw_root / "CL" / "2024.parquet", _status_sparse_rows())
+    _write_raw(
+        raw_root / "ES" / "2024.parquet",
+        [
+            _readiness_raw_row("2024-01-02T15:00:00Z", close=100.5),
+            _readiness_raw_row("2024-01-02T15:01:00Z", close=100.75),
+            _readiness_raw_row("2024-01-02T15:02:00Z", close=101.0),
+        ],
+    )
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        profile_config_path=profile_config,
+        include_market_years=[("ES", 2024)],
+    )
+
+    assert report["status"] == "PASS"
+    assert report["checked_market_year_count"] == 1
+    assert report["selected_market_year_count"] == 1
+    assert report["blocker_count"] == 0
+    assert report["excluded_market_years"] == [{"market": "CL", "year": 2024}]
+
+
+def test_phase2_readiness_exact_include_list_fails_included_warn(
+    tmp_path: Path,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(profile_config, tier0_markets=["CL", "ES"])
+    raw_root = tmp_path / "data" / "raw"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_multi_alignment(
+        report_path,
+        raw_root,
+        market_years=[("CL", 2024), ("ES", 2024)],
+    )
+    _write_raw(raw_root / "CL" / "2024.parquet", _status_sparse_rows())
+    _write_raw(
+        raw_root / "ES" / "2024.parquet",
+        [_readiness_raw_row("2024-01-02T15:00:00Z", close=100.5)],
+    )
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        profile_config_path=profile_config,
+        include_market_years=[("CL", 2024)],
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["checked_market_year_count"] == 1
+    assert report["blocker_count"] == 1
+    assert report["blockers"][0]["market"] == "CL"
+    assert report["excluded_market_years"] == [{"market": "ES", "year": 2024}]
+
+
+def test_phase2_readiness_exact_include_list_fails_missing_raw_file(
+    tmp_path: Path,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(profile_config, tier0_markets=["CL", "ES"])
+    raw_root = tmp_path / "data" / "raw"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_multi_alignment(
+        report_path,
+        raw_root,
+        market_years=[("CL", 2024), ("ES", 2024)],
+    )
+    _write_raw(raw_root / "ES" / "2024.parquet", [_readiness_raw_row("2024-01-02T15:00:00Z")])
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        profile_config_path=profile_config,
+        include_market_years=[("CL", 2024)],
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["failure_count"] == 1
+    assert "raw parquet files missing" in report["failures"][0]
+    assert report["missing_include_raw_files"] == [{"market": "CL", "year": 2024}]
 
 
 def test_phase2_readiness_fails_missing_raw_alignment_report(tmp_path: Path) -> None:
@@ -1001,6 +1706,740 @@ def test_phase2_readiness_blocks_unlisted_roll_maturity_exception(
     assert "roll maturity sequence not monotonic" in blocker["top_blocker_reason"]
 
 
+def test_phase2_readiness_accepts_exact_status_sparse_exception(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "reports" / "status_sparse_decision.md"
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text("accepted status-sparse test decision\n", encoding="utf-8")
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_status_sparse_exception_config(
+        profile_config,
+        profile_market="ES",
+        exception_market="ES",
+        evidence_path=evidence_path,
+    )
+    raw_root = tmp_path / "data" / "raw"
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(raw_root / "ES" / "2024.parquet", _status_sparse_rows())
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        output_root=output_root,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "PASS"
+    assert report["blocker_count"] == 0
+    assert report["accepted_exception_count"] == 1
+    assert report["accepted_exception_failure_count"] == 0
+    accepted = report["accepted_readiness_exceptions"][0]
+    assert accepted["market"] == "ES"
+    assert accepted["year"] == 2024
+    assert accepted["category"] == "status_sparse"
+    assert accepted["warnings"] == [STATUS_SPARSE_TEST_WARNING]
+    assert accepted["status_enrichment_missing_rows"] == 2
+    assert accepted["status_enrichment_stale_rows"] == 2
+    assert not (output_root / "ES" / "2024.parquet").exists()
+
+
+def test_phase2_readiness_rejects_status_sparse_exception_missing_evidence(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "reports" / "missing_status_sparse_decision.md"
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_status_sparse_exception_config(
+        profile_config,
+        profile_market="ES",
+        exception_market="ES",
+        evidence_path=evidence_path,
+    )
+    raw_root = tmp_path / "data" / "raw"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(raw_root / "ES" / "2024.parquet", _status_sparse_rows())
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["blocker_count"] == 1
+    assert report["accepted_exception_count"] == 0
+    assert report["accepted_exception_failure_count"] == 1
+    assert "evidence missing" in report["accepted_readiness_exception_failures"][0]
+
+
+def test_phase2_readiness_rejects_status_sparse_exception_wrong_market_year(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "reports" / "status_sparse_decision.md"
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text("accepted status-sparse test decision\n", encoding="utf-8")
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_status_sparse_exception_config(
+        profile_config,
+        profile_market="ES",
+        exception_market="NQ",
+        evidence_path=evidence_path,
+    )
+    raw_root = tmp_path / "data" / "raw"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(raw_root / "ES" / "2024.parquet", _status_sparse_rows())
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["blocker_count"] == 1
+    assert report["accepted_exception_count"] == 0
+
+
+def test_phase2_readiness_rejects_stale_status_sparse_exception(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "reports" / "status_sparse_decision.md"
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text("accepted status-sparse test decision\n", encoding="utf-8")
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_status_sparse_exception_config(
+        profile_config,
+        profile_market="ES",
+        exception_market="ES",
+        evidence_path=evidence_path,
+    )
+    raw_root = tmp_path / "data" / "raw"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(
+        raw_root / "ES" / "2024.parquet",
+        [
+            _readiness_raw_row("2024-01-02T15:00:00Z", close=100.5),
+            _readiness_raw_row("2024-01-02T15:10:00Z", close=101.0),
+        ],
+    )
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["blocker_count"] == 1
+    assert report["accepted_exception_count"] == 0
+    assert report["accepted_exception_failure_count"] == 1
+    assert "stale or unmatched" in report["accepted_readiness_exception_failures"][0]
+
+
+def test_phase2_readiness_rejects_overbroad_status_sparse_warning_prefix(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "reports" / "status_sparse_decision.md"
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text("accepted status-sparse test decision\n", encoding="utf-8")
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_status_sparse_exception_config(
+        profile_config,
+        profile_market="ES",
+        exception_market="ES",
+        evidence_path=evidence_path,
+        warning="synthetic threshold breached",
+    )
+    raw_root = tmp_path / "data" / "raw"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(raw_root / "ES" / "2024.parquet", _status_sparse_rows())
+
+    with pytest.raises(ValueError, match="exact current warning strings"):
+        build_phase2_readiness_report(
+            profile="tier_0",
+            raw_root=raw_root,
+            raw_alignment_report=report_path,
+            profile_config_path=profile_config,
+        )
+
+
+def test_phase2_readiness_accepts_exact_degraded_raw_quality_exception(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "reports" / "degraded_raw_quality_decision.json"
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text("accepted degraded raw-quality test decision\n", encoding="utf-8")
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_degraded_raw_quality_exception_config(
+        profile_config,
+        profile_market="ES",
+        exception_market="ES",
+        evidence_path=evidence_path,
+    )
+    raw_root = tmp_path / "data" / "raw"
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(raw_root / "ES" / "2024.parquet", _degraded_raw_quality_rows())
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        output_root=output_root,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "PASS"
+    assert report["blocker_count"] == 0
+    assert report["accepted_exception_count"] == 1
+    assert report["accepted_exception_failure_count"] == 0
+    accepted = report["accepted_readiness_exceptions"][0]
+    assert accepted["market"] == "ES"
+    assert accepted["year"] == 2024
+    assert accepted["category"] == "degraded_raw_quality"
+    assert accepted["warnings"] == [DEGRADED_RAW_QUALITY_TEST_WARNING]
+    assert accepted["degraded_bar_rows"] == 2
+    assert accepted["degraded_session_rows"] == 1
+    assert accepted["degraded_rows_pct"] == 66.666667
+    assert not (output_root / "ES" / "2024.parquet").exists()
+
+
+def test_phase2_readiness_rejects_degraded_raw_quality_exception_missing_evidence(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "reports" / "missing_degraded_raw_quality_decision.json"
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_degraded_raw_quality_exception_config(
+        profile_config,
+        profile_market="ES",
+        exception_market="ES",
+        evidence_path=evidence_path,
+    )
+    raw_root = tmp_path / "data" / "raw"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(raw_root / "ES" / "2024.parquet", _degraded_raw_quality_rows())
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["blocker_count"] == 1
+    assert report["accepted_exception_count"] == 0
+    assert report["accepted_exception_failure_count"] == 1
+    assert "evidence missing" in report["accepted_readiness_exception_failures"][0]
+
+
+def test_phase2_readiness_rejects_stale_degraded_raw_quality_exception(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "reports" / "degraded_raw_quality_decision.json"
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text("accepted degraded raw-quality test decision\n", encoding="utf-8")
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_degraded_raw_quality_exception_config(
+        profile_config,
+        profile_market="ES",
+        exception_market="ES",
+        evidence_path=evidence_path,
+    )
+    raw_root = tmp_path / "data" / "raw"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(
+        raw_root / "ES" / "2024.parquet",
+        [
+            _readiness_raw_row("2024-01-02T15:00:00Z", close=100.5),
+            _readiness_raw_row("2024-01-02T15:01:00Z", close=101.0),
+            _readiness_raw_row("2024-01-02T15:02:00Z", close=101.5),
+        ],
+    )
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["blocker_count"] == 0
+    assert report["accepted_exception_count"] == 0
+    assert report["accepted_exception_failure_count"] == 1
+    assert "stale or unmatched" in report["accepted_readiness_exception_failures"][0]
+
+
+def test_phase2_readiness_rejects_overbroad_degraded_raw_quality_warning_prefix(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "reports" / "degraded_raw_quality_decision.json"
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text("accepted degraded raw-quality test decision\n", encoding="utf-8")
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_degraded_raw_quality_exception_config(
+        profile_config,
+        profile_market="ES",
+        exception_market="ES",
+        evidence_path=evidence_path,
+        warning="degraded threshold breached",
+    )
+    raw_root = tmp_path / "data" / "raw"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(raw_root / "ES" / "2024.parquet", _degraded_raw_quality_rows())
+
+    with pytest.raises(ValueError, match="exact current warning strings"):
+        build_phase2_readiness_report(
+            profile="tier_0",
+            raw_root=raw_root,
+            raw_alignment_report=report_path,
+            profile_config_path=profile_config,
+        )
+
+
+def test_phase2_readiness_accepts_exact_vendor_trusted_ohlcv_no_trade_exception(
+    tmp_path: Path,
+) -> None:
+    raw_alignment_path, raw_readiness_path = _write_vendor_trusted_ohlcv_evidence_reports(
+        tmp_path
+    )
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_vendor_trusted_ohlcv_no_trade_exception_config(
+        profile_config,
+        raw_alignment_path=raw_alignment_path,
+        raw_readiness_path=raw_readiness_path,
+    )
+    raw_root = tmp_path / "data" / "raw"
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    _write_raw(
+        raw_root / "HE" / "2016.parquet",
+        _vendor_trusted_ohlcv_no_trade_rows(),
+    )
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=raw_alignment_path,
+        output_root=output_root,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "PASS"
+    assert report["blocker_count"] == 0
+    assert report["accepted_exception_count"] == 1
+    assert report["accepted_exception_failure_count"] == 0
+    accepted = report["accepted_readiness_exceptions"][0]
+    assert accepted["market"] == "HE"
+    assert accepted["year"] == 2016
+    assert accepted["category"] == "vendor_trusted_ohlcv_no_trade"
+    assert accepted["warnings"] == [VENDOR_TRUSTED_OHLCV_NO_TRADE_TEST_WARNING]
+    assert accepted["status_enrichment_missing_rows"] == 0
+    assert accepted["statistics_enrichment_stale_rows"] == 0
+    assert not (output_root / "HE" / "2016.parquet").exists()
+
+
+def test_phase2_readiness_rejects_vendor_trusted_ohlcv_missing_evidence(
+    tmp_path: Path,
+) -> None:
+    raw_alignment_path, raw_readiness_path = _write_vendor_trusted_ohlcv_evidence_reports(
+        tmp_path
+    )
+    raw_readiness_path.unlink()
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_vendor_trusted_ohlcv_no_trade_exception_config(
+        profile_config,
+        raw_alignment_path=raw_alignment_path,
+        raw_readiness_path=raw_readiness_path,
+    )
+    raw_root = tmp_path / "data" / "raw"
+    _write_raw(
+        raw_root / "HE" / "2016.parquet",
+        _vendor_trusted_ohlcv_no_trade_rows(),
+    )
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=raw_alignment_path,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["blocker_count"] == 1
+    assert report["accepted_exception_count"] == 0
+    assert report["accepted_exception_failure_count"] == 1
+    assert "evidence missing" in report["accepted_readiness_exception_failures"][0]
+
+
+def test_phase2_readiness_rejects_vendor_trusted_ohlcv_invalid_evidence_report(
+    tmp_path: Path,
+) -> None:
+    raw_alignment_path, raw_readiness_path = _write_vendor_trusted_ohlcv_evidence_reports(
+        tmp_path,
+        raw_readiness_overrides={"source_hash_mismatch_count": 1},
+    )
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_vendor_trusted_ohlcv_no_trade_exception_config(
+        profile_config,
+        raw_alignment_path=raw_alignment_path,
+        raw_readiness_path=raw_readiness_path,
+    )
+    raw_root = tmp_path / "data" / "raw"
+    _write_raw(
+        raw_root / "HE" / "2016.parquet",
+        _vendor_trusted_ohlcv_no_trade_rows(),
+    )
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=raw_alignment_path,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["blocker_count"] == 1
+    assert report["accepted_exception_count"] == 0
+    assert report["accepted_exception_failure_count"] == 1
+    assert "source_hash_mismatch_count expected 0 got 1" in (
+        report["accepted_readiness_exception_failures"][0]
+    )
+
+
+def test_phase2_readiness_rejects_he_le_broad_vendor_trusted_market_waiver(
+    tmp_path: Path,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(
+        profile_config,
+        tier0_markets=["HE"],
+        vendor_trusted_markets=["HE"],
+    )
+
+    with pytest.raises(ValueError, match="cannot include HE/LE"):
+        load_causal_base_config(profile_config, "tier_0")
+
+
+def test_phase2_readiness_rejects_session_scope_unresolved_vendor_trusted_row(
+    tmp_path: Path,
+) -> None:
+    raw_alignment_path, raw_readiness_path = _write_vendor_trusted_ohlcv_evidence_reports(
+        tmp_path,
+        market="KE",
+        year=2019,
+    )
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_vendor_trusted_ohlcv_no_trade_exception_config(
+        profile_config,
+        profile_market="KE",
+        profile_year=2019,
+        exception_market="KE",
+        exception_year=2019,
+        raw_alignment_path=raw_alignment_path,
+        raw_readiness_path=raw_readiness_path,
+    )
+    raw_root = tmp_path / "data" / "raw"
+    _write_raw(
+        raw_root / "KE" / "2019.parquet",
+        _vendor_trusted_ohlcv_no_trade_rows(),
+    )
+
+    with pytest.raises(ValueError, match="limited to exact market-years"):
+        build_phase2_readiness_report(
+            profile="tier_0",
+            raw_root=raw_root,
+            raw_alignment_report=raw_alignment_path,
+            profile_config_path=profile_config,
+        )
+
+
+def _parent_sparse_report(
+    tmp_path: Path,
+    *,
+    market: str = "KE",
+    year: int = 2019,
+    source_type: str = "parent",
+    zero_volume: bool = False,
+    status_missing: bool = False,
+    degraded: bool = False,
+    bad_ohlc: bool = False,
+    maturity_backstep: bool = False,
+    trade_date: str | None = None,
+) -> tuple[dict[str, object], Path, Path, Path]:
+    raw_root, raw_path, candidate_manifest, raw_alignment = (
+        _write_parent_sparse_evidence_bundle(
+            tmp_path,
+            market=market,
+            year=year,
+            source_type=source_type,
+            zero_volume=zero_volume,
+            status_missing=status_missing,
+            degraded=degraded,
+            bad_ohlc=bad_ohlc,
+            maturity_backstep=maturity_backstep,
+            trade_date=trade_date,
+        )
+    )
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_parent_sparse_exception_config(
+        profile_config,
+        raw_alignment_path=raw_alignment,
+        candidate_manifest_path=candidate_manifest,
+        market=market,
+        year=year,
+    )
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=raw_alignment,
+        profile_config_path=profile_config,
+    )
+    return report, raw_path, candidate_manifest, raw_alignment
+
+
+def test_phase2_readiness_accepts_exact_ke_parent_sparse_ohlcv_exception(
+    tmp_path: Path,
+) -> None:
+    report, _, _, _ = _parent_sparse_report(tmp_path)
+
+    assert report["status"] == "PASS"
+    assert report["blocker_count"] == 0
+    assert report["accepted_exception_count"] == 1
+    assert report["accepted_exception_failure_count"] == 0
+    accepted = report["accepted_readiness_exceptions"][0]
+    assert accepted["market"] == "KE"
+    assert accepted["year"] == 2019
+    assert accepted["category"] == "parent_sparse_ohlcv_no_trade"
+    assert accepted["warnings"] == [PARENT_SPARSE_OHLCV_NO_TRADE_TEST_WARNING]
+
+
+def test_phase2_readiness_accepts_exact_ke_2023_parent_sparse_ohlcv_exception(
+    tmp_path: Path,
+) -> None:
+    report, _, _, _ = _parent_sparse_report(
+        tmp_path,
+        year=2023,
+        trade_date="2023-01-03",
+    )
+
+    assert report["status"] == "PASS"
+    assert report["blocker_count"] == 0
+    assert report["accepted_exception_count"] == 1
+    assert report["accepted_exception_failure_count"] == 0
+    accepted = report["accepted_readiness_exceptions"][0]
+    assert accepted["market"] == "KE"
+    assert accepted["year"] == 2023
+    assert accepted["category"] == "parent_sparse_ohlcv_no_trade"
+    assert accepted["warnings"] == [PARENT_SPARSE_OHLCV_NO_TRADE_TEST_WARNING]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected_failure"),
+    [
+        ({"source_type": "continuous"}, "wrong source type"),
+        ({"status_missing": True}, "status missing rows expected 0 got 2"),
+        ({"degraded": True}, "degraded rows expected 0 got 2"),
+        ({"zero_volume": True}, "zero-volume rows present"),
+        ({"bad_ohlc": True}, "bad OHLC rows present"),
+        ({"maturity_backstep": True}, "maturity backsteps present"),
+    ],
+)
+def test_phase2_readiness_rejects_parent_sparse_contract_breaks(
+    tmp_path: Path,
+    kwargs: dict[str, object],
+    expected_failure: str,
+) -> None:
+    report, _, _, _ = _parent_sparse_report(tmp_path, **kwargs)
+
+    assert report["status"] == "FAIL"
+    assert report["accepted_exception_count"] == 0
+    assert report["accepted_exception_failure_count"] == 1
+    assert expected_failure in report["accepted_readiness_exception_failures"][0]
+
+
+def test_phase2_readiness_rejects_parent_sparse_missing_evidence(
+    tmp_path: Path,
+) -> None:
+    raw_root, _, candidate_manifest, raw_alignment = _write_parent_sparse_evidence_bundle(
+        tmp_path
+    )
+    candidate_manifest.unlink()
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_parent_sparse_exception_config(
+        profile_config,
+        raw_alignment_path=raw_alignment,
+        candidate_manifest_path=candidate_manifest,
+    )
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=raw_alignment,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["accepted_exception_count"] == 0
+    assert report["accepted_exception_failure_count"] == 1
+    assert "evidence missing" in report["accepted_readiness_exception_failures"][0]
+
+
+def test_phase2_readiness_rejects_unsupported_parent_sparse_market_year(
+    tmp_path: Path,
+) -> None:
+    raw_root, _, candidate_manifest, raw_alignment = _write_parent_sparse_evidence_bundle(
+        tmp_path,
+        market="KE",
+        year=2020,
+    )
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_parent_sparse_exception_config(
+        profile_config,
+        raw_alignment_path=raw_alignment,
+        candidate_manifest_path=candidate_manifest,
+        market="KE",
+        year=2020,
+    )
+
+    with pytest.raises(ValueError, match="limited to exact market-years"):
+        build_phase2_readiness_report(
+            profile="tier_0",
+            raw_root=raw_root,
+            raw_alignment_report=raw_alignment,
+            profile_config_path=profile_config,
+        )
+
+
+def test_phase2_readiness_accepts_he_vendor_trusted_degraded_pair(
+    tmp_path: Path,
+) -> None:
+    raw_alignment_path, raw_readiness_path = _write_vendor_trusted_ohlcv_evidence_reports(
+        tmp_path,
+        market="HE",
+        year=2019,
+    )
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_vendor_trusted_degraded_exception_config(
+        profile_config,
+        raw_alignment_path=raw_alignment_path,
+        raw_readiness_path=raw_readiness_path,
+    )
+    raw_root = tmp_path / "data" / "raw"
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    _write_raw(
+        raw_root / "HE" / "2019.parquet",
+        _vendor_trusted_ohlcv_no_trade_rows(year=2019, degraded=True),
+    )
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=raw_alignment_path,
+        output_root=output_root,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "PASS"
+    assert report["blocker_count"] == 0
+    assert report["accepted_exception_count"] == 1
+    assert report["accepted_exception_failure_count"] == 0
+    accepted = report["accepted_readiness_exceptions"][0]
+    assert accepted["market"] == "HE"
+    assert accepted["year"] == 2019
+    assert accepted["category"] == "degraded_raw_quality"
+    assert accepted["warnings"] == [
+        VENDOR_TRUSTED_OHLCV_NO_TRADE_TEST_WARNING,
+        VENDOR_TRUSTED_OHLCV_NO_TRADE_DEGRADED_TEST_WARNING,
+    ]
+    assert not (output_root / "HE" / "2019.parquet").exists()
+
+
+def test_phase2_readiness_rejects_he_degraded_without_vendor_trusted_pair(
+    tmp_path: Path,
+) -> None:
+    raw_alignment_path, raw_readiness_path = _write_vendor_trusted_ohlcv_evidence_reports(
+        tmp_path,
+        market="HE",
+        year=2019,
+    )
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_vendor_trusted_degraded_exception_config(
+        profile_config,
+        include_vendor=False,
+        raw_alignment_path=raw_alignment_path,
+        raw_readiness_path=raw_readiness_path,
+    )
+    raw_root = tmp_path / "data" / "raw"
+    _write_raw(
+        raw_root / "HE" / "2019.parquet",
+        _vendor_trusted_ohlcv_no_trade_rows(year=2019, degraded=True),
+    )
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=raw_alignment_path,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["blocker_count"] == 1
+    assert report["accepted_exception_count"] == 0
+    assert report["accepted_exception_failure_count"] == 1
+    assert "stale or unmatched" in report["accepted_readiness_exception_failures"][0]
+
+
+def test_phase2_readiness_vendor_trusted_ohlcv_keeps_degraded_blocker_fail_closed(
+    tmp_path: Path,
+) -> None:
+    raw_alignment_path, raw_readiness_path = _write_vendor_trusted_ohlcv_evidence_reports(
+        tmp_path
+    )
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_vendor_trusted_ohlcv_no_trade_exception_config(
+        profile_config,
+        raw_alignment_path=raw_alignment_path,
+        raw_readiness_path=raw_readiness_path,
+        warnings=[
+            VENDOR_TRUSTED_OHLCV_NO_TRADE_TEST_WARNING,
+            VENDOR_TRUSTED_OHLCV_NO_TRADE_DEGRADED_TEST_WARNING,
+        ],
+    )
+    raw_root = tmp_path / "data" / "raw"
+    _write_raw(
+        raw_root / "HE" / "2016.parquet",
+        _vendor_trusted_ohlcv_no_trade_rows(degraded=True),
+    )
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=raw_alignment_path,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["blocker_count"] == 1
+    assert report["accepted_exception_count"] == 0
+    assert report["accepted_exception_failure_count"] == 1
+    assert "degraded threshold breached" in report["blockers"][0]["warnings"][1]
+
+
 def test_phase2_readiness_allows_configured_sparse_trade_derived_ohlcv_gap(
     tmp_path: Path,
 ) -> None:
@@ -1143,6 +2582,78 @@ def test_phase2_main_skips_local_trade_gate_for_smoke_profile(
     assert manifest["local_trade_ohlcv_gap_gate"] is None
     assert manifest["summary"]["local_trade_ohlcv_gap_gate_status"] == "NOT_RUN"
     assert manifest["outputs"][0]["local_trade_gap_gate_status"] == "NOT_RUN"
+
+
+def test_phase2_main_market_year_include_list_writes_exact_manifest(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(profile_config, tier0_markets=["CL", "ES"])
+    raw_root = tmp_path / "data" / "raw"
+    output_root = tmp_path / "reports" / "candidate" / "raw"
+    reports_root = tmp_path / "reports" / "candidate" / "causal_base"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    include_path = tmp_path / "reports" / "candidate" / "eligible_market_years.json"
+    _write_tier0_multi_alignment(
+        report_path,
+        raw_root,
+        market_years=[("CL", 2024), ("ES", 2024)],
+    )
+    include_path.parent.mkdir(parents=True, exist_ok=True)
+    include_path.write_text(
+        json.dumps({"market_years": [{"market": "ES", "year": 2024}]}),
+        encoding="utf-8",
+    )
+    _write_raw(
+        raw_root / "CL" / "2024.parquet",
+        [
+            _readiness_raw_row("2024-01-02T15:00:00Z", close=90.5),
+            _readiness_raw_row("2024-01-02T15:01:00Z", close=90.75),
+            _readiness_raw_row("2024-01-02T15:02:00Z", close=91.0),
+        ],
+    )
+    _write_raw(
+        raw_root / "ES" / "2024.parquet",
+        [
+            _readiness_raw_row("2024-01-02T15:00:00Z", close=100.5),
+            _readiness_raw_row("2024-01-02T15:01:00Z", close=100.75),
+            _readiness_raw_row("2024-01-02T15:02:00Z", close=101.0),
+        ],
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_causal_base_data.py",
+            "--profile",
+            "tier_0",
+            "--raw-root",
+            str(raw_root),
+            "--output-root",
+            str(output_root),
+            "--reports-root",
+            str(reports_root),
+            "--profile-config",
+            str(profile_config),
+            "--raw-alignment-report",
+            str(report_path),
+            "--market-year-include-list",
+            str(include_path),
+        ],
+    )
+
+    assert phase2_main() == 0
+
+    assert (output_root / "ES" / "2024.parquet").exists()
+    assert not (output_root / "CL" / "2024.parquet").exists()
+    manifest = json.loads((reports_root / "causal_base_manifest.json").read_text())
+    assert manifest["selection_mode"] == "exact_market_year_include_list"
+    assert manifest["market_year_include_count"] == 1
+    assert manifest["requested_market_years"] == [{"market": "ES", "year": 2024}]
+    assert manifest["processed_market_years"] == [{"market": "ES", "year": 2024}]
+    assert manifest["excluded_market_years"] == [{"market": "CL", "year": 2024}]
+    assert [item["market"] for item in manifest["outputs"]] == ["ES"]
 
 
 def test_phase2_main_readiness_only_writes_reports_without_outputs(
@@ -1502,6 +3013,149 @@ def test_roll_exclusion_is_not_warn_under_threshold(tmp_path: Path) -> None:
     assert not any("roll exclusion threshold breached" in item for item in result.warnings)
 
 
+def test_causal_gate_contract_allows_retained_reason_coded_invalid_rows() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "causal_valid": True,
+                "causal_invalid_reason": "",
+                "raw_row_present": True,
+                "is_synthetic": False,
+                "valid_ohlcv": True,
+                "inside_session": True,
+                "session_data_quality_degraded": False,
+                "roll_window_flag": False,
+                "boundary_session_flag": False,
+                "trainable_data_quality": True,
+            },
+            {
+                "causal_valid": False,
+                "causal_invalid_reason": "roll_window",
+                "raw_row_present": True,
+                "is_synthetic": False,
+                "valid_ohlcv": True,
+                "inside_session": True,
+                "session_data_quality_degraded": False,
+                "roll_window_flag": True,
+                "boundary_session_flag": False,
+                "trainable_data_quality": True,
+            },
+            {
+                "causal_valid": False,
+                "causal_invalid_reason": "outside_session",
+                "raw_row_present": True,
+                "is_synthetic": False,
+                "valid_ohlcv": True,
+                "inside_session": False,
+                "session_data_quality_degraded": False,
+                "roll_window_flag": False,
+                "boundary_session_flag": False,
+                "trainable_data_quality": True,
+            },
+            {
+                "causal_valid": False,
+                "causal_invalid_reason": "boundary_session",
+                "raw_row_present": True,
+                "is_synthetic": False,
+                "valid_ohlcv": True,
+                "inside_session": True,
+                "session_data_quality_degraded": False,
+                "roll_window_flag": False,
+                "boundary_session_flag": True,
+                "trainable_data_quality": True,
+            },
+        ]
+    )
+
+    assert causal_gate_contract_failures(frame) == []
+
+
+@pytest.mark.parametrize(
+    ("updates", "expected_failure"),
+    [
+        (
+            {"causal_invalid_reason": ""},
+            "causal_valid=false rows with blank causal_invalid_reason: rows=1",
+        ),
+        (
+            {"causal_invalid_reason": "unknown_gate"},
+            "unsupported causal_invalid_reason values: unknown_gate",
+        ),
+        (
+            {"roll_window_flag": False},
+            "inconsistent causal_invalid_reason roll_window for roll_window_flag: rows=1",
+        ),
+        (
+            {"causal_valid": True},
+            "causal_valid=true rows with non-empty causal_invalid_reason: rows=1",
+        ),
+        (
+            {
+                "causal_invalid_reason": "synthetic",
+                "is_synthetic": False,
+                "roll_window_flag": False,
+            },
+            "inconsistent causal_invalid_reason synthetic for is_synthetic: rows=1",
+        ),
+        (
+            {
+                "causal_invalid_reason": "degraded_session",
+                "session_data_quality_degraded": False,
+                "roll_window_flag": False,
+            },
+            (
+                "inconsistent causal_invalid_reason degraded_session for "
+                "session_data_quality_degraded: rows=1"
+            ),
+        ),
+    ],
+)
+def test_causal_gate_contract_rejects_bad_reason_states(
+    updates: dict[str, object], expected_failure: str
+) -> None:
+    row = {
+        "causal_valid": False,
+        "causal_invalid_reason": "roll_window",
+        "raw_row_present": True,
+        "is_synthetic": False,
+        "valid_ohlcv": True,
+        "inside_session": True,
+        "session_data_quality_degraded": False,
+        "roll_window_flag": True,
+        "boundary_session_flag": False,
+        "trainable_data_quality": True,
+    }
+    row.update(updates)
+
+    failures = causal_gate_contract_failures(pd.DataFrame([row]))
+
+    assert expected_failure in failures
+
+
+def test_feature_input_valid_requires_causal_valid_even_when_quality_trainable() -> None:
+    from scripts.phase4_features.build_baseline_features import compute_feature_input_valid
+
+    frame = pd.DataFrame(
+        [
+            {
+                "open": 1.0,
+                "high": 2.0,
+                "low": 0.5,
+                "close": 1.5,
+                "volume": 10,
+                "causal_valid": False,
+                "valid_ohlcv": True,
+                "is_synthetic": False,
+                "roll_window_flag": False,
+                "boundary_session_flag": False,
+                "trainable_data_quality": True,
+            }
+        ]
+    )
+
+    assert compute_feature_input_valid(frame).tolist() == [False]
+
+
 def test_missing_audit_columns_warn_but_output_required_columns(tmp_path: Path) -> None:
     raw_path = tmp_path / "data" / "raw" / "ZN" / "2024.parquet"
     out_path = tmp_path / "data" / "causally_gated_normalized" / "ZN" / "2024.parquet"
@@ -1666,6 +3320,134 @@ def test_reports_are_written(tmp_path: Path) -> None:
     assert validation["summary"]["roll_window_threshold_breached_files"] == 0
     assert validation["summary"]["degraded_threshold_breached_files"] == 0
     assert validation["files"][0]["output_path"].endswith("2024.parquet")
+
+
+def test_reports_accept_parent_sparse_ohlcv_exception(tmp_path: Path) -> None:
+    raw_root, raw_path, candidate_manifest, raw_alignment = (
+        _write_parent_sparse_evidence_bundle(tmp_path)
+    )
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_parent_sparse_exception_config(
+        profile_config,
+        raw_alignment_path=raw_alignment,
+        candidate_manifest_path=candidate_manifest,
+    )
+    output_root = tmp_path / "reports" / "candidate" / "causally_gated_normalized"
+    reports_root = tmp_path / "reports" / "candidate" / "causal_base"
+
+    result = process_file(
+        raw_path,
+        output_root / "KE" / "2019.parquet",
+        profile="tier_0",
+        profile_config_path=profile_config,
+    )
+    assert result.status == "WARN"
+
+    write_reports(
+        [result],
+        reports_root,
+        "tier_0",
+        profile_config_path=profile_config,
+        input_root=raw_root,
+        output_root=output_root,
+    )
+
+    manifest = json.loads((reports_root / "causal_base_manifest.json").read_text())
+    validation = json.loads((reports_root / "causal_base_validation.json").read_text())
+    assert manifest["status"] == "PASS"
+    assert validation["status"] == "PASS"
+    assert manifest["accepted_exception_count"] == 1
+    assert validation["accepted_exception_count"] == 1
+    assert validation["accepted_exception_failure_count"] == 0
+    assert validation["summary"]["pass_count"] == 1
+    assert validation["summary"]["warn_count"] == 0
+    assert validation["warning_count"] == 1
+    validation_file = validation["files"][0]
+    manifest_output = manifest["outputs"][0]
+    for row in [validation_file, manifest_output]:
+        assert row["status"] == "PASS"
+        assert row["original_status"] == "WARN"
+        assert row["warning_count"] == 1
+        assert row["warnings"] == [PARENT_SPARSE_OHLCV_NO_TRADE_TEST_WARNING]
+        assert row["synthetic_rows"] == 9
+        accepted = row["accepted_readiness_exception"]
+        assert accepted["category"] == "parent_sparse_ohlcv_no_trade"
+        assert accepted["accepted_warnings"] == [
+            PARENT_SPARSE_OHLCV_NO_TRADE_TEST_WARNING
+        ]
+
+
+def test_reports_keep_parent_sparse_ohlcv_warning_without_exception(
+    tmp_path: Path,
+) -> None:
+    raw_root, raw_path, _, _ = _write_parent_sparse_evidence_bundle(tmp_path)
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(profile_config)
+    output_root = tmp_path / "reports" / "candidate" / "causally_gated_normalized"
+    reports_root = tmp_path / "reports" / "candidate" / "causal_base"
+    result = process_file(
+        raw_path,
+        output_root / "KE" / "2019.parquet",
+        profile="tier_0",
+        profile_config_path=profile_config,
+    )
+    assert result.status == "WARN"
+
+    write_reports(
+        [result],
+        reports_root,
+        "tier_0",
+        profile_config_path=profile_config,
+        input_root=raw_root,
+        output_root=output_root,
+    )
+
+    validation = json.loads((reports_root / "causal_base_validation.json").read_text())
+    assert validation["status"] == "WARN"
+    assert validation["accepted_exception_count"] == 0
+    assert validation["accepted_exception_failure_count"] == 0
+    assert validation["summary"]["pass_count"] == 0
+    assert validation["summary"]["warn_count"] == 1
+    assert validation["files"][0]["status"] == "WARN"
+
+
+def test_reports_fail_parent_sparse_ohlcv_exception_with_missing_evidence(
+    tmp_path: Path,
+) -> None:
+    raw_root, raw_path, candidate_manifest, raw_alignment = (
+        _write_parent_sparse_evidence_bundle(tmp_path)
+    )
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_parent_sparse_exception_config(
+        profile_config,
+        raw_alignment_path=raw_alignment,
+        candidate_manifest_path=candidate_manifest,
+    )
+    output_root = tmp_path / "reports" / "candidate" / "causally_gated_normalized"
+    reports_root = tmp_path / "reports" / "candidate" / "causal_base"
+    result = process_file(
+        raw_path,
+        output_root / "KE" / "2019.parquet",
+        profile="tier_0",
+        profile_config_path=profile_config,
+    )
+    candidate_manifest.unlink()
+
+    write_reports(
+        [result],
+        reports_root,
+        "tier_0",
+        profile_config_path=profile_config,
+        input_root=raw_root,
+        output_root=output_root,
+    )
+
+    validation = json.loads((reports_root / "causal_base_validation.json").read_text())
+    assert validation["status"] == "FAIL"
+    assert validation["accepted_exception_count"] == 0
+    assert validation["accepted_exception_failure_count"] == 1
+    assert "evidence missing" in validation["accepted_readiness_exception_failures"][0]
+    assert validation["files"][0]["status"] == "WARN"
 
 
 def test_reports_mark_older_years_validated_by_local_trades_convention(

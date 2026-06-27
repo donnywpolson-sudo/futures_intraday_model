@@ -1,0 +1,15 @@
+# Explicit Phase 1A required-schema exceptions.
+#
+# These are not optional schemas and must stay narrow. Each row must match one
+# missing required archive exactly and must carry local provider-empty evidence.
+version: 1
+required_schema_exceptions:
+  - schema: status
+    market: KE
+    year: 2013
+    start: 2013-01-01
+    end: 2014-01-01
+    reason: provider_empty
+    evidence_paths:
+      - reports/phase1A_status_repair_20260624/probe_parent_2013/databento_zero_cost_gate.json
+      - reports/phase1A_status_repair_20260624/probe_continuous_KE_2013/databento_zero_cost_gate.json

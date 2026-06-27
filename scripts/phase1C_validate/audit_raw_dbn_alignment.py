@@ -32,8 +32,10 @@ from scripts.phase1A_download.download_databento_raw import (  # noqa: E402
     validate_raw_file_manifest,
 )
 from scripts.validation.check_dbn_archive_coverage import (  # noqa: E402
+    DEFAULT_REQUIRED_SCHEMA_EXCEPTIONS_CONFIG,
     _profile_markets_and_years,
     load_yaml,
+    required_schema_exception_keys,
     resolve_profile_name,
 )
 
@@ -641,6 +643,7 @@ def build_report(
     skip_definition_join: bool = False,
     repair_manifest_path: Path | None = None,
     expected_only: bool = False,
+    required_schema_exceptions_config: Path | None = DEFAULT_REQUIRED_SCHEMA_EXCEPTIONS_CONFIG,
 ) -> dict[str, Any]:
     ohlcv_index = _index_schema_dbns(dbn_root, SCHEMA)
     definition_index = _index_schema_dbns(dbn_root, "definition")
@@ -662,6 +665,16 @@ def build_report(
         markets = sorted({market for market, _ in expected})
         years = sorted({year for _, year in expected})
         pre_availability_exemptions = []
+    status_exception_keys, status_exceptions, exception_failures = required_schema_exception_keys(
+        required_schema_exceptions_config,
+        schema="status",
+    )
+    status_exception_keys &= expected
+    stale_status_exception_keys = sorted(status_exception_keys & set(status_index))
+    for market, year in stale_status_exception_keys:
+        exception_failures.append(
+            f"required schema exception is stale because status archive is present: {market} {year}"
+        )
     if expected_only:
         ohlcv_index = {key: value for key, value in ohlcv_index.items() if key in expected}
         definition_index = {key: value for key, value in definition_index.items() if key in expected}
@@ -676,11 +689,12 @@ def build_report(
 
     missing_ohlcv = sorted(expected - set(ohlcv_index))
     missing_definition = sorted(expected - set(definition_index))
-    missing_status = sorted(expected - set(status_index))
+    status_complete_keys = set(status_index) | status_exception_keys
+    missing_status = sorted(expected - status_complete_keys)
     missing_statistics = sorted(expected - set(statistics_index))
     missing_raw = sorted(expected - set(raw_index))
     complete_required_dbn_keys = (
-        set(ohlcv_index) & set(definition_index) & set(status_index) & set(statistics_index)
+        set(ohlcv_index) & set(definition_index) & status_complete_keys & set(statistics_index)
     )
     needs_phase1b = [
         _row(key, status="needs_phase1b_conversion")
@@ -749,6 +763,8 @@ def build_report(
         failures.append(f"invalid DBN manifests: {len(invalid_manifests)}")
     if repair_manifest_failures:
         failures.append(f"repair manifest failures: {len(repair_manifest_failures)}")
+    if exception_failures:
+        failures.append(f"required schema exception failures: {len(exception_failures)}")
     if raw_only:
         failures.append(f"raw-only market-years: {len(raw_only)}")
     if raw_schema_failures:
@@ -786,6 +802,8 @@ def build_report(
         "missing_definition_dbn_count": len(missing_definition),
         "missing_status_dbn_count": len(missing_status),
         "missing_statistics_dbn_count": len(missing_statistics),
+        "status_required_schema_exception_count": len(status_exception_keys),
+        "required_schema_exception_failure_count": len(exception_failures),
         "missing_raw_count": len(missing_raw),
         "needs_phase1b_conversion_count": len(needs_phase1b),
         "dbn_only_inventory_count": len(dbn_only_inventory),
@@ -796,6 +814,13 @@ def build_report(
         "repair_manifest_status": repair_manifest.get("status") if repair_manifest else "NOT_PROVIDED",
         "repair_manifest_failure_count": len(repair_manifest_failures),
         "repair_manifest_failures": repair_manifest_failures,
+        "required_schema_exceptions_config": (
+            required_schema_exceptions_config.as_posix()
+            if required_schema_exceptions_config is not None
+            else None
+        ),
+        "required_schema_exceptions": status_exceptions,
+        "required_schema_exception_failures": exception_failures,
         "accepted_repair_source_count": len(accepted_repair_sources),
         "accepted_repair_sources": accepted_repair_sources,
         "raw_schema_failure_count": len(raw_schema_failures),
@@ -837,11 +862,13 @@ def write_markdown(path: Path, report: dict[str, Any]) -> None:
         f"- Definition DBN market-years: {report['definition_dbn_market_year_count']}",
         f"- Status DBN market-years: {report['status_dbn_market_year_count']}",
         f"- Statistics DBN market-years: {report['statistics_dbn_market_year_count']}",
+        f"- Status required-schema exceptions: {report['status_required_schema_exception_count']}",
         f"- Needs Phase 1B conversion: {report['needs_phase1b_conversion_count']}",
         f"- Raw-only market-years: {report['raw_only_count']}",
         f"- Invalid manifests: {report['invalid_manifest_count']}",
         f"- Repair manifest status: {report['repair_manifest_status']}",
         f"- Repair manifest failures: {report['repair_manifest_failure_count']}",
+        f"- Required-schema exception failures: {report['required_schema_exception_failure_count']}",
         f"- Accepted repair sources: {report['accepted_repair_source_count']}",
         f"- Raw schema/value failures: {report['raw_schema_failure_count']}",
         f"- Source hash mismatches: {report['source_hash_mismatch_count']}",
@@ -888,6 +915,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Bound smoke scope to profile/discovery expected market-years instead of auditing all files under roots.",
     )
+    parser.add_argument(
+        "--required-schema-exceptions-config",
+        default=DEFAULT_REQUIRED_SCHEMA_EXCEPTIONS_CONFIG.as_posix(),
+    )
+    parser.add_argument("--disable-required-schema-exceptions", action="store_true")
     parser.add_argument("--json-out", default="reports/raw_ingest/raw_dbn_alignment.json")
     parser.add_argument("--md-out", default="reports/raw_ingest/raw_dbn_alignment.md")
     return parser.parse_args()
@@ -903,6 +935,9 @@ def main() -> int:
         skip_definition_join=bool(args.skip_definition_join),
         repair_manifest_path=Path(args.repair_manifest) if args.repair_manifest else None,
         expected_only=bool(args.expected_only),
+        required_schema_exceptions_config=(
+            None if args.disable_required_schema_exceptions else Path(args.required_schema_exceptions_config)
+        ),
     )
     write_json(Path(args.json_out), report)
     write_markdown(Path(args.md_out), report)
@@ -910,6 +945,8 @@ def main() -> int:
         "status={status} expected={expected_market_year_count} raw={raw_market_year_count} "
         "missing_status={missing_status_dbn_count} "
         "missing_statistics={missing_statistics_dbn_count} "
+        "required_exceptions={status_required_schema_exception_count} "
+        "exception_failures={required_schema_exception_failure_count} "
         "needs_phase1b={needs_phase1b_conversion_count} raw_only={raw_only_count} "
         "invalid_manifests={invalid_manifest_count} source_hash_mismatches={source_hash_mismatch_count} "
         "definition_join_status={definition_join_status} "
