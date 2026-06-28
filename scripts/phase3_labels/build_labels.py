@@ -25,6 +25,28 @@ DEFAULT_PROFILE = "all_causal"
 DISCOVERY_PROFILES = {"all_causal", "all_causal_data", "all_raw", "all_raw_data"}
 DEFAULT_PROFILE_CONFIG = Path("configs/alpha_tiered.yaml")
 DEFAULT_CAUSAL_BASE_MANIFEST = Path("reports/causal_base/causal_base_manifest.json")
+APPROVED_TIER1_CANDIDATE_ROOT = Path("data/causal_base_candidates/tier1_rebuild_v1")
+APPROVED_TIER1_ACCEPTED_EXCEPTIONS_PATH = Path(
+    "reports/data_audit/causal_base_repair_plan/tier1_candidate_v1/"
+    "accepted_readiness_exceptions.json"
+)
+APPROVED_TIER1_ACCEPTED_EXCEPTIONS = {
+    ("6E", 2023): {
+        "category": "vendor_trusted_ohlcv_no_trade",
+        "metric": "synthetic_rows_pct",
+        "observed": 2.057954,
+        "approved_limit": 2.1,
+        "warning": "synthetic threshold breached: rows_pct=2.057954 max_gap_minutes=48",
+    },
+    ("6E", 2024): {
+        "category": "vendor_trusted_ohlcv_no_trade",
+        "metric": "synthetic_rows_pct",
+        "observed": 2.539287,
+        "approved_limit": 2.6,
+        "warning": "synthetic threshold breached: rows_pct=2.539287 max_gap_minutes=54",
+    },
+}
+APPROVED_TIER1_GLOBAL_SYNTHETIC_THRESHOLD = 2.0
 CORE_PROFILE_MARKETS = ["ES", "CL", "ZN", "6E"]
 BALANCED_PROFILE_MARKETS = ["ES", "NQ", "CL", "NG", "GC", "HG", "SR3", "ZN", "ZB", "6E", "6J", "6B", "ZC", "ZS", "LE"]
 FULL_PROFILE_MARKETS = ["ES", "NQ", "RTY", "YM", "CL", "NG", "RB", "HO", "GC", "SI", "HG", "SR3", "SR1", "TN", "ZT", "ZF", "ZN", "ZB", "UB", "6A", "6B", "6C", "6E", "6J", "6M", "ZC", "ZS", "ZL", "ZM", "ZW", "KE", "LE", "HE"]
@@ -257,6 +279,13 @@ class LabelResult:
         return data
 
 
+@dataclass(frozen=True)
+class AcceptedReadinessExceptions:
+    path: Path
+    warning_messages: list[str]
+    exceptions: list[dict[str, object]]
+
+
 def relative_path(path: Path) -> str:
     try:
         return path.relative_to(Path.cwd()).as_posix()
@@ -319,6 +348,182 @@ def current_git_commit() -> str:
 
 def utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _resolved_path(path: Path) -> Path:
+    candidate = path if path.is_absolute() else Path.cwd() / path
+    return candidate.expanduser().resolve()
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    return _resolved_path(left) == _resolved_path(right)
+
+
+def load_accepted_readiness_exceptions(
+    exceptions_path: Path | None,
+    input_root: Path,
+) -> AcceptedReadinessExceptions | None:
+    if exceptions_path is None:
+        return None
+    if not _same_path(exceptions_path, APPROVED_TIER1_ACCEPTED_EXCEPTIONS_PATH):
+        raise SystemExit(
+            "accepted_readiness_exceptions path is not approved: "
+            f"{relative_path(exceptions_path)}"
+        )
+    if not _same_path(input_root, APPROVED_TIER1_CANDIDATE_ROOT):
+        raise SystemExit(
+            "accepted_readiness_exceptions require input-root "
+            f"{APPROVED_TIER1_CANDIDATE_ROOT.as_posix()}: "
+            f"{relative_path(input_root)}"
+        )
+    if not exceptions_path.exists():
+        raise SystemExit(
+            "accepted_readiness_exceptions file missing: "
+            f"{relative_path(exceptions_path)}"
+        )
+    try:
+        payload = json.loads(exceptions_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise SystemExit(
+            "accepted_readiness_exceptions file unreadable: "
+            f"{relative_path(exceptions_path)}: {exc}"
+        ) from exc
+    if not isinstance(payload, Mapping):
+        raise SystemExit("accepted_readiness_exceptions file is not a JSON object")
+    if payload.get("profile") != "tier_1":
+        raise SystemExit("accepted_readiness_exceptions profile is not tier_1")
+    if payload.get("resolved_profile") != "tier_1_research":
+        raise SystemExit(
+            "accepted_readiness_exceptions resolved_profile is not tier_1_research"
+        )
+    if float(payload.get("global_threshold", -1.0)) != APPROVED_TIER1_GLOBAL_SYNTHETIC_THRESHOLD:
+        raise SystemExit(
+            "accepted_readiness_exceptions global_threshold changed: "
+            f"{payload.get('global_threshold')!r}"
+        )
+
+    raw_exceptions = payload.get("exceptions")
+    if not isinstance(raw_exceptions, list):
+        raise SystemExit("accepted_readiness_exceptions exceptions is not a list")
+    if len(raw_exceptions) != len(APPROVED_TIER1_ACCEPTED_EXCEPTIONS):
+        raise SystemExit(
+            "accepted_readiness_exceptions count is not exactly "
+            f"{len(APPROVED_TIER1_ACCEPTED_EXCEPTIONS)}"
+        )
+
+    seen: set[tuple[str, int]] = set()
+    accepted: list[dict[str, object]] = []
+    for item in raw_exceptions:
+        if not isinstance(item, Mapping):
+            raise SystemExit("accepted_readiness_exceptions contains a non-object row")
+        try:
+            key = (str(item.get("market")), int(item.get("year")))  # type: ignore[arg-type]
+        except (TypeError, ValueError) as exc:
+            raise SystemExit(
+                "accepted_readiness_exceptions row has invalid market/year"
+            ) from exc
+        expected = APPROVED_TIER1_ACCEPTED_EXCEPTIONS.get(key)
+        if expected is None or key in seen:
+            raise SystemExit(
+                "accepted_readiness_exceptions row is not an approved market/year: "
+                f"{key[0]} {key[1]}"
+            )
+        seen.add(key)
+        for field_name in ("category", "metric"):
+            if item.get(field_name) != expected[field_name]:
+                raise SystemExit(
+                    "accepted_readiness_exceptions row has wrong "
+                    f"{field_name} for {key[0]} {key[1]}: {item.get(field_name)!r}"
+                )
+        for field_name in ("observed", "approved_limit"):
+            if float(item.get(field_name, -1.0)) != float(expected[field_name]):
+                raise SystemExit(
+                    "accepted_readiness_exceptions row has wrong "
+                    f"{field_name} for {key[0]} {key[1]}: {item.get(field_name)!r}"
+                )
+        warning_prefixes = item.get("warning_prefixes")
+        if warning_prefixes != [expected["warning"]]:
+            raise SystemExit(
+                "accepted_readiness_exceptions row has wrong warning for "
+                f"{key[0]} {key[1]}"
+            )
+        accepted.append(
+            {
+                "market": key[0],
+                "year": key[1],
+                "category": expected["category"],
+                "metric": expected["metric"],
+                "observed": expected["observed"],
+                "approved_limit": expected["approved_limit"],
+                "warning": expected["warning"],
+            }
+        )
+
+    missing = sorted(set(APPROVED_TIER1_ACCEPTED_EXCEPTIONS) - seen)
+    if missing:
+        raise SystemExit(f"accepted_readiness_exceptions missing rows: {missing}")
+
+    return AcceptedReadinessExceptions(
+        path=exceptions_path,
+        warning_messages=[
+            str(APPROVED_TIER1_ACCEPTED_EXCEPTIONS[key]["warning"])
+            for key in sorted(APPROVED_TIER1_ACCEPTED_EXCEPTIONS)
+        ],
+        exceptions=sorted(accepted, key=lambda row: (str(row["market"]), int(row["year"]))),
+    )
+
+
+def validate_manifest_accepted_readiness_exceptions(
+    manifest: Mapping[str, object] | None,
+    accepted: AcceptedReadinessExceptions | None,
+) -> None:
+    if accepted is None:
+        return
+    if manifest is None:
+        raise SystemExit("causal_base_manifest_gate returned no manifest")
+    expected_warnings = {
+        (str(row["market"]), int(row["year"])): str(row["warning"])
+        for row in accepted.exceptions
+    }
+    outputs = manifest.get("outputs")
+    if not isinstance(outputs, list):
+        raise SystemExit("causal_base_manifest outputs missing for accepted warnings")
+    failures: list[str] = []
+    seen: set[tuple[str, int]] = set()
+    for output in outputs:
+        if not isinstance(output, Mapping):
+            continue
+        try:
+            key = (str(output.get("market")), int(output.get("year")))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+        warnings = [str(item) for item in output.get("warnings", []) or []]
+        if not warnings:
+            continue
+        expected = expected_warnings.get(key)
+        if expected is None:
+            failures.append(f"unapproved warning row: {key[0]} {key[1]}")
+            continue
+        if warnings != [expected]:
+            failures.append(f"unexpected warning text for {key[0]} {key[1]}")
+            continue
+        seen.add(key)
+    missing = sorted(set(expected_warnings) - seen)
+    if missing:
+        failures.append(f"approved warnings not carried by manifest: {missing}")
+    if failures:
+        raise SystemExit("accepted_readiness_exceptions manifest check failed: " + "; ".join(failures))
+
+
+def annotate_gate_with_accepted_readiness_exceptions(
+    evidence: dict[str, object],
+    accepted: AcceptedReadinessExceptions | None,
+) -> None:
+    if accepted is None:
+        return
+    evidence["accepted_readiness_exceptions_path"] = relative_path(accepted.path)
+    evidence["accepted_readiness_exception_count"] = len(accepted.exceptions)
+    evidence["accepted_readiness_exceptions"] = accepted.exceptions
 
 
 def discover_inputs(input_root: Path) -> list[tuple[str, int, Path]]:
@@ -1074,6 +1279,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="auto",
         help="Path to Phase 2 causal_base_manifest.json, or 'auto' to find a matching PASS manifest under reports/.",
     )
+    parser.add_argument(
+        "--accepted-readiness-exceptions",
+        default=None,
+        help="Approved tier_1 candidate accepted-readiness exceptions JSON.",
+    )
     return parser
 
 
@@ -1087,6 +1297,12 @@ def main() -> int:
     inputs = resolve_profile_inputs(args.profile, input_root, profile_config)
     scope = load_profile_scope(args.profile, profile_config, strict=False)
     resolved_profile = scope.resolved_profile if scope is not None else None
+    accepted_readiness_exceptions = load_accepted_readiness_exceptions(
+        Path(args.accepted_readiness_exceptions)
+        if args.accepted_readiness_exceptions
+        else None,
+        input_root,
+    )
     causal_base_gate = resolve_upstream_manifest_gate(
         manifest_arg=args.causal_base_manifest,
         default_manifest_path=DEFAULT_CAUSAL_BASE_MANIFEST,
@@ -1097,6 +1313,19 @@ def main() -> int:
         expected_output_root=input_root,
         expected_market_years=((market, year) for market, year, _ in inputs),
         gate_name="causal_base_manifest_gate",
+        accepted_warning_messages=(
+            accepted_readiness_exceptions.warning_messages
+            if accepted_readiness_exceptions is not None
+            else None
+        ),
+    )
+    validate_manifest_accepted_readiness_exceptions(
+        causal_base_gate.manifest,
+        accepted_readiness_exceptions,
+    )
+    annotate_gate_with_accepted_readiness_exceptions(
+        causal_base_gate.evidence,
+        accepted_readiness_exceptions,
     )
 
     results: list[LabelResult] = []

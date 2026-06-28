@@ -73,6 +73,188 @@ def _write_upstream_manifest(
     return path
 
 
+def _write_tier1_profile_config(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "profiles:",
+                "  tier_1_research:",
+                "    markets: [6E]",
+                "    years: [2023, 2024]",
+                "aliases:",
+                "  tier_1: tier_1_research",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _tier1_warning(year: int) -> str:
+    return str(labels_mod.APPROVED_TIER1_ACCEPTED_EXCEPTIONS[("6E", year)]["warning"])
+
+
+def _write_tier1_candidate_inputs(root: Path) -> None:
+    for year in (2023, 2024):
+        path = root / "6E" / f"{year}.parquet"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"6E {year}".encode("utf-8"))
+
+
+def _write_tier1_candidate_manifest(
+    path: Path,
+    root: Path,
+    *,
+    extra_warning: str | None = None,
+    failure: bool = False,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    outputs = []
+    output_hashes = {}
+    for year in (2023, 2024):
+        output_path = root / "6E" / f"{year}.parquet"
+        warnings = [_tier1_warning(year)]
+        if extra_warning is not None and year == 2024:
+            warnings.append(extra_warning)
+        failures = ["failed"] if failure and year == 2024 else []
+        output_hashes[output_path.as_posix()] = file_sha256(output_path)
+        outputs.append(
+            {
+                "market": "6E",
+                "year": year,
+                "status": "PASS",
+                "warning_count": len(warnings),
+                "warnings": warnings,
+                "failure_count": len(failures),
+                "failures": failures,
+            }
+        )
+    payload = {
+        "stage": "causal_base",
+        "status": "PASS",
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "output_root": root.as_posix(),
+        "warning_count": 0,
+        "failure_count": 0,
+        "failures": [],
+        "summary": {"fail_count": 0, "warn_count": 0},
+        "output_file_hashes": output_hashes,
+        "outputs": outputs,
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _approved_exception_rows() -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for market, year in sorted(labels_mod.APPROVED_TIER1_ACCEPTED_EXCEPTIONS):
+        approved = labels_mod.APPROVED_TIER1_ACCEPTED_EXCEPTIONS[(market, year)]
+        rows.append(
+            {
+                "category": approved["category"],
+                "market": market,
+                "year": year,
+                "metric": approved["metric"],
+                "observed": approved["observed"],
+                "approved_limit": approved["approved_limit"],
+                "warning_prefixes": [approved["warning"]],
+            }
+        )
+    return rows
+
+
+def _write_accepted_exceptions(
+    path: Path,
+    *,
+    rows: list[dict[str, object]] | None = None,
+    global_threshold: float = 2.0,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "stage": "tier1_candidate_accepted_readiness_exceptions",
+        "status": "APPROVED_REPORT_ONLY",
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "global_threshold": global_threshold,
+        "exceptions": rows if rows is not None else _approved_exception_rows(),
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _patch_tier1_approval_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    candidate_root: Path,
+    exceptions_path: Path,
+) -> None:
+    monkeypatch.setattr(labels_mod, "APPROVED_TIER1_CANDIDATE_ROOT", candidate_root)
+    monkeypatch.setattr(
+        labels_mod,
+        "APPROVED_TIER1_ACCEPTED_EXCEPTIONS_PATH",
+        exceptions_path,
+    )
+
+
+def _run_tier1_candidate_main(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    input_root: Path,
+    manifest_path: Path,
+    exceptions_path: Path | None,
+) -> dict[str, object]:
+    profile_config = _write_tier1_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    captured: dict[str, object] = {}
+
+    def fake_process(
+        input_path: Path,
+        output_path: Path,
+        *,
+        profile: str,
+        costs_config: Path,
+    ) -> labels_mod.LabelResult:
+        return labels_mod.LabelResult(
+            profile=profile,
+            market=input_path.parent.name,
+            year=int(input_path.stem),
+            input_path=input_path.as_posix(),
+            output_path=output_path.as_posix(),
+        )
+
+    def fake_write_reports(*args: object, **kwargs: object) -> None:
+        captured["gate"] = kwargs["causal_base_gate"]
+
+    argv = [
+        "build_labels.py",
+        "--profile",
+        "tier_1",
+        "--input-root",
+        input_root.as_posix(),
+        "--output-root",
+        (tmp_path / "data" / "labeled").as_posix(),
+        "--reports-root",
+        (tmp_path / "reports" / "labels").as_posix(),
+        "--profile-config",
+        profile_config.as_posix(),
+        "--costs-config",
+        (tmp_path / "configs" / "costs.yaml").as_posix(),
+        "--causal-base-manifest",
+        manifest_path.as_posix(),
+    ]
+    if exceptions_path is not None:
+        argv.extend(["--accepted-readiness-exceptions", exceptions_path.as_posix()])
+
+    monkeypatch.setattr(labels_mod, "process_file", fake_process)
+    monkeypatch.setattr(labels_mod, "write_reports", fake_write_reports)
+    monkeypatch.setattr(sys, "argv", argv)
+
+    assert labels_mod.main() == 0
+    return captured
+
+
 def _base_rows(count: int = 40, market: str = "ES") -> list[dict[str, object]]:
     start = pd.Timestamp("2024-01-02T15:00:00Z")
     rows: list[dict[str, object]] = []
@@ -249,6 +431,241 @@ def test_phase3_main_accepts_passed_causal_base_manifest(
 
     assert labels_mod.main() == 0
     assert captured["gate"]["status"] == "PASS"  # type: ignore[index]
+
+
+def test_phase3_main_without_exception_flag_rejects_candidate_warnings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_root = tmp_path / "data" / "causal_base_candidates" / "tier1_rebuild_v1"
+    manifest = tmp_path / "reports" / "candidate" / "causal_base_manifest.json"
+    exceptions = tmp_path / "reports" / "candidate" / "accepted_readiness_exceptions.json"
+    _write_tier1_candidate_inputs(input_root)
+    _write_tier1_candidate_manifest(manifest, input_root)
+    _write_accepted_exceptions(exceptions)
+    _patch_tier1_approval_paths(
+        monkeypatch,
+        candidate_root=input_root,
+        exceptions_path=exceptions,
+    )
+
+    with pytest.raises(SystemExit, match="warnings are not accepted"):
+        _run_tier1_candidate_main(
+            tmp_path,
+            monkeypatch,
+            input_root=input_root,
+            manifest_path=manifest,
+            exceptions_path=None,
+        )
+
+
+def test_phase3_main_accepts_exact_tier1_candidate_exceptions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_root = tmp_path / "data" / "causal_base_candidates" / "tier1_rebuild_v1"
+    manifest = tmp_path / "reports" / "candidate" / "causal_base_manifest.json"
+    exceptions = tmp_path / "reports" / "candidate" / "accepted_readiness_exceptions.json"
+    _write_tier1_candidate_inputs(input_root)
+    _write_tier1_candidate_manifest(manifest, input_root)
+    _write_accepted_exceptions(exceptions)
+    _patch_tier1_approval_paths(
+        monkeypatch,
+        candidate_root=input_root,
+        exceptions_path=exceptions,
+    )
+
+    captured = _run_tier1_candidate_main(
+        tmp_path,
+        monkeypatch,
+        input_root=input_root,
+        manifest_path=manifest,
+        exceptions_path=exceptions,
+    )
+
+    gate = captured["gate"]
+    assert gate["status"] == "PASS"  # type: ignore[index]
+    assert gate["accepted_warning_count"] == 2  # type: ignore[index]
+    assert gate["accepted_readiness_exception_count"] == 2  # type: ignore[index]
+    assert gate["accepted_readiness_exceptions_path"] == exceptions.as_posix()  # type: ignore[index]
+
+
+def test_phase3_main_rejects_wrong_exception_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_root = tmp_path / "data" / "causal_base_candidates" / "tier1_rebuild_v1"
+    manifest = tmp_path / "reports" / "candidate" / "causal_base_manifest.json"
+    approved_exceptions = tmp_path / "reports" / "candidate" / "approved.json"
+    wrong_exceptions = tmp_path / "reports" / "candidate" / "wrong.json"
+    _write_tier1_candidate_inputs(input_root)
+    _write_tier1_candidate_manifest(manifest, input_root)
+    _write_accepted_exceptions(approved_exceptions)
+    _write_accepted_exceptions(wrong_exceptions)
+    _patch_tier1_approval_paths(
+        monkeypatch,
+        candidate_root=input_root,
+        exceptions_path=approved_exceptions,
+    )
+
+    with pytest.raises(SystemExit, match="path is not approved"):
+        _run_tier1_candidate_main(
+            tmp_path,
+            monkeypatch,
+            input_root=input_root,
+            manifest_path=manifest,
+            exceptions_path=wrong_exceptions,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "bad_value", "match"),
+    [
+        ("market", "ES", "market/year"),
+        ("year", 2025, "market/year"),
+        ("metric", "other_metric", "wrong metric"),
+        ("observed", 999.0, "wrong observed"),
+        ("approved_limit", 999.0, "wrong approved_limit"),
+    ],
+)
+def test_phase3_main_rejects_mutated_exception_row(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field_name: str,
+    bad_value: object,
+    match: str,
+) -> None:
+    input_root = tmp_path / "data" / "causal_base_candidates" / "tier1_rebuild_v1"
+    manifest = tmp_path / "reports" / "candidate" / "causal_base_manifest.json"
+    exceptions = tmp_path / "reports" / "candidate" / "accepted_readiness_exceptions.json"
+    rows = _approved_exception_rows()
+    rows[0][field_name] = bad_value
+    _write_tier1_candidate_inputs(input_root)
+    _write_tier1_candidate_manifest(manifest, input_root)
+    _write_accepted_exceptions(exceptions, rows=rows)
+    _patch_tier1_approval_paths(
+        monkeypatch,
+        candidate_root=input_root,
+        exceptions_path=exceptions,
+    )
+
+    with pytest.raises(SystemExit, match=match):
+        _run_tier1_candidate_main(
+            tmp_path,
+            monkeypatch,
+            input_root=input_root,
+            manifest_path=manifest,
+            exceptions_path=exceptions,
+        )
+
+
+def test_phase3_main_rejects_new_candidate_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_root = tmp_path / "data" / "causal_base_candidates" / "tier1_rebuild_v1"
+    manifest = tmp_path / "reports" / "candidate" / "causal_base_manifest.json"
+    exceptions = tmp_path / "reports" / "candidate" / "accepted_readiness_exceptions.json"
+    _write_tier1_candidate_inputs(input_root)
+    _write_tier1_candidate_manifest(
+        manifest,
+        input_root,
+        extra_warning="new candidate warning",
+    )
+    _write_accepted_exceptions(exceptions)
+    _patch_tier1_approval_paths(
+        monkeypatch,
+        candidate_root=input_root,
+        exceptions_path=exceptions,
+    )
+
+    with pytest.raises(SystemExit, match="warnings are not accepted"):
+        _run_tier1_candidate_main(
+            tmp_path,
+            monkeypatch,
+            input_root=input_root,
+            manifest_path=manifest,
+            exceptions_path=exceptions,
+        )
+
+
+def test_phase3_main_rejects_candidate_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_root = tmp_path / "data" / "causal_base_candidates" / "tier1_rebuild_v1"
+    manifest = tmp_path / "reports" / "candidate" / "causal_base_manifest.json"
+    exceptions = tmp_path / "reports" / "candidate" / "accepted_readiness_exceptions.json"
+    _write_tier1_candidate_inputs(input_root)
+    _write_tier1_candidate_manifest(manifest, input_root, failure=True)
+    _write_accepted_exceptions(exceptions)
+    _patch_tier1_approval_paths(
+        monkeypatch,
+        candidate_root=input_root,
+        exceptions_path=exceptions,
+    )
+
+    with pytest.raises(SystemExit, match="failure_count"):
+        _run_tier1_candidate_main(
+            tmp_path,
+            monkeypatch,
+            input_root=input_root,
+            manifest_path=manifest,
+            exceptions_path=exceptions,
+        )
+
+
+def test_phase3_main_rejects_stale_input_root_with_exceptions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approved_root = tmp_path / "data" / "causal_base_candidates" / "tier1_rebuild_v1"
+    stale_root = tmp_path / "data" / "causally_gated_normalized"
+    manifest = tmp_path / "reports" / "candidate" / "causal_base_manifest.json"
+    exceptions = tmp_path / "reports" / "candidate" / "accepted_readiness_exceptions.json"
+    _write_tier1_candidate_inputs(stale_root)
+    _write_tier1_candidate_manifest(manifest, stale_root)
+    _write_accepted_exceptions(exceptions)
+    _patch_tier1_approval_paths(
+        monkeypatch,
+        candidate_root=approved_root,
+        exceptions_path=exceptions,
+    )
+
+    with pytest.raises(SystemExit, match="require input-root"):
+        _run_tier1_candidate_main(
+            tmp_path,
+            monkeypatch,
+            input_root=stale_root,
+            manifest_path=manifest,
+            exceptions_path=exceptions,
+        )
+
+
+def test_phase3_main_rejects_changed_global_threshold(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_root = tmp_path / "data" / "causal_base_candidates" / "tier1_rebuild_v1"
+    manifest = tmp_path / "reports" / "candidate" / "causal_base_manifest.json"
+    exceptions = tmp_path / "reports" / "candidate" / "accepted_readiness_exceptions.json"
+    _write_tier1_candidate_inputs(input_root)
+    _write_tier1_candidate_manifest(manifest, input_root)
+    _write_accepted_exceptions(exceptions, global_threshold=2.5)
+    _patch_tier1_approval_paths(
+        monkeypatch,
+        candidate_root=input_root,
+        exceptions_path=exceptions,
+    )
+
+    with pytest.raises(SystemExit, match="global_threshold changed"):
+        _run_tier1_candidate_main(
+            tmp_path,
+            monkeypatch,
+            input_root=input_root,
+            manifest_path=manifest,
+            exceptions_path=exceptions,
+        )
 
 
 def _rows_with_gross_ticks(gross_ticks: float) -> list[dict[str, object]]:

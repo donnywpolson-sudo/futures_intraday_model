@@ -4,6 +4,7 @@ import json
 import hashlib
 import sys
 from pathlib import Path
+from typing import Callable
 
 import pandas as pd
 import pytest
@@ -515,6 +516,113 @@ def _write_vendor_trusted_ohlcv_no_trade_exception_config(
                 "        warning_prefixes:",
                 *[f"          - '{warning}'" for warning in warnings],
             ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_tier1_candidate_profile_config(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "defaults:",
+                "  years: [2023, 2024]",
+                "  max_synthetic_gap_minutes: 120",
+                "  max_synthetic_rows_pct: 2.0",
+                "  max_degraded_rows_pct: 1.0",
+                "  max_roll_window_rows_pct: 1.0",
+                "  require_roll_metadata_for_profiles: []",
+                "profiles:",
+                "  tier_0:",
+                "    markets: [6E]",
+                "    years: [2023, 2024]",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _next_cme_session_minute(ts: pd.Timestamp) -> pd.Timestamp:
+    if ts.hour == 22:
+        return ts.normalize() + pd.Timedelta(hours=23)
+    return ts
+
+
+def _tier1_candidate_synthetic_rows(
+    *,
+    year: int,
+    gap_minutes: int,
+    observed_rows: int,
+) -> list[dict[str, object]]:
+    base = pd.Timestamp(f"{year}-01-03T15:00:00Z")
+    rows = [
+        _readiness_raw_row(base, close=100.0, symbol=f"6E{year}"),
+        _readiness_raw_row(
+            base + pd.Timedelta(minutes=gap_minutes),
+            close=101.0,
+            symbol=f"6E{year}",
+        ),
+    ]
+    current = base + pd.Timedelta(minutes=gap_minutes + 1)
+    while len(rows) < observed_rows:
+        current = _next_cme_session_minute(current)
+        rows.append(
+            _readiness_raw_row(
+                current,
+                close=101.0 + len(rows) * 0.001,
+                symbol=f"6E{year}",
+            )
+        )
+        current += pd.Timedelta(minutes=1)
+    return rows
+
+
+def _write_tier1_candidate_external_exceptions(
+    path: Path,
+    *,
+    warning_by_year: dict[int, str] | None = None,
+    mutate: Callable[[list[dict[str, object]]], None] | None = None,
+) -> None:
+    warning_by_year = warning_by_year or {
+        2023: "synthetic threshold breached: rows_pct=2.057954 max_gap_minutes=48",
+        2024: "synthetic threshold breached: rows_pct=2.539287 max_gap_minutes=54",
+    }
+    exceptions: list[dict[str, object]] = [
+        {
+            "category": "vendor_trusted_ohlcv_no_trade",
+            "market": "6E",
+            "year": 2023,
+            "metric": "synthetic_rows_pct",
+            "observed": 2.057954,
+            "approved_limit": 2.10,
+            "reason": "test scoped 6E 2023 synthetic exception",
+            "evidence_paths": [path.as_posix()],
+            "warning_prefixes": [warning_by_year[2023]],
+        },
+        {
+            "category": "vendor_trusted_ohlcv_no_trade",
+            "market": "6E",
+            "year": 2024,
+            "metric": "synthetic_rows_pct",
+            "observed": 2.539287,
+            "approved_limit": 2.60,
+            "reason": "test scoped 6E 2024 synthetic exception",
+            "evidence_paths": [path.as_posix()],
+            "warning_prefixes": [warning_by_year[2024]],
+        },
+    ]
+    if mutate is not None:
+        mutate(exceptions)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "stage": "tier1_candidate_accepted_readiness_exceptions",
+                "status": "APPROVED_REPORT_ONLY",
+                "global_threshold": 2.0,
+                "exceptions": exceptions,
+            }
         ),
         encoding="utf-8",
     )
@@ -2051,6 +2159,186 @@ def test_phase2_readiness_accepts_exact_vendor_trusted_ohlcv_no_trade_exception(
     assert accepted["status_enrichment_missing_rows"] == 0
     assert accepted["statistics_enrichment_stale_rows"] == 0
     assert not (output_root / "HE" / "2016.parquet").exists()
+
+
+def _tier1_candidate_readiness_fixture(
+    tmp_path: Path,
+) -> tuple[Path, Path, Path, Path, dict[int, str]]:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_tier1_candidate_profile_config(profile_config)
+    raw_root = tmp_path / "data" / "raw"
+    raw_alignment_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_raw_alignment_report(
+        raw_alignment_path,
+        raw_root=raw_root,
+        profile="tier_0",
+        resolved_profile="tier_0",
+        overrides={
+            "markets": ["6E"],
+            "years": [2023, 2024],
+            "pre_availability_exemptions": [],
+            "expected_market_year_count": 2,
+            "market_years": [
+                {"market": "6E", "year": 2023},
+                {"market": "6E", "year": 2024},
+            ],
+        },
+    )
+    _write_raw(
+        raw_root / "6E" / "2023.parquet",
+        _tier1_candidate_synthetic_rows(
+            year=2023,
+            gap_minutes=48,
+            observed_rows=2240,
+        ),
+    )
+    _write_raw(
+        raw_root / "6E" / "2024.parquet",
+        _tier1_candidate_synthetic_rows(
+            year=2024,
+            gap_minutes=54,
+            observed_rows=2035,
+        ),
+    )
+
+    baseline = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=raw_alignment_path,
+        profile_config_path=profile_config,
+        fail_fast=False,
+    )
+    warning_by_year = {
+        int(blocker["year"]): list(blocker["warnings"])[0]
+        for blocker in baseline["blockers"]
+    }
+    exception_path = tmp_path / "reports" / "candidate" / "exceptions.json"
+    return profile_config, raw_root, raw_alignment_path, exception_path, warning_by_year
+
+
+def test_tier1_candidate_exception_flag_absent_preserves_fail_fast_behavior(
+    tmp_path: Path,
+) -> None:
+    profile_config, raw_root, raw_alignment_path, _, _ = (
+        _tier1_candidate_readiness_fixture(tmp_path)
+    )
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=raw_alignment_path,
+        profile_config_path=profile_config,
+        fail_fast=True,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["configured_accepted_exception_count"] == 0
+    assert report["accepted_exception_count"] == 0
+    assert report["checked_market_year_count"] == 1
+    assert report["pending_market_year_count"] == 1
+    assert report["blocker_count"] == 1
+
+
+def test_tier1_candidate_exception_flag_accepts_exact_6e_rows(
+    tmp_path: Path,
+) -> None:
+    profile_config, raw_root, raw_alignment_path, exception_path, warning_by_year = (
+        _tier1_candidate_readiness_fixture(tmp_path)
+    )
+    _write_tier1_candidate_external_exceptions(
+        exception_path,
+        warning_by_year=warning_by_year,
+    )
+
+    config = load_causal_base_config(
+        profile_config,
+        "tier_0",
+        accepted_readiness_exceptions_path=exception_path,
+    )
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=raw_alignment_path,
+        profile_config_path=profile_config,
+        accepted_readiness_exceptions_path=exception_path,
+        fail_fast=True,
+    )
+
+    assert config.max_synthetic_rows_pct == 2.0
+    assert report["status"] == "PASS"
+    assert report["configured_accepted_exception_count"] == 2
+    assert report["accepted_exception_count"] == 2
+    assert report["accepted_exception_failure_count"] == 0
+    assert report["checked_market_year_count"] == 2
+    accepted = report["accepted_readiness_exceptions"]
+    assert [(item["market"], item["year"]) for item in accepted] == [
+        ("6E", 2023),
+        ("6E", 2024),
+    ]
+    assert {item["source"] for item in accepted} == {
+        causal_base.TIER1_CANDIDATE_ACCEPTED_EXCEPTION_SOURCE
+    }
+    assert {item["metric"] for item in accepted} == {"synthetic_rows_pct"}
+
+
+@pytest.mark.parametrize(
+    "mutate, expected",
+    [
+        (lambda rows: rows[0].__setitem__("market", "ES"), "only supports exact rows"),
+        (lambda rows: rows[0].__setitem__("year", 2022), "only supports exact rows"),
+        (lambda rows: rows[0].__setitem__("metric", "volume"), "metric must be"),
+        (lambda rows: rows[0].__setitem__("observed", 2.057955), "observed must be"),
+        (
+            lambda rows: rows[0].__setitem__("approved_limit", 2.11),
+            "approved_limit must be",
+        ),
+    ],
+)
+def test_tier1_candidate_exception_file_rejects_wrong_scope_or_values(
+    tmp_path: Path,
+    mutate: Callable[[list[dict[str, object]]], None],
+    expected: str,
+) -> None:
+    exception_path = tmp_path / "reports" / "candidate" / "exceptions.json"
+    _write_tier1_candidate_external_exceptions(exception_path, mutate=mutate)
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_tier1_candidate_profile_config(profile_config)
+
+    with pytest.raises(ValueError, match=expected):
+        load_causal_base_config(
+            profile_config,
+            "tier_0",
+            accepted_readiness_exceptions_path=exception_path,
+        )
+
+
+def test_tier1_candidate_exception_file_does_not_accept_unrelated_warning(
+    tmp_path: Path,
+) -> None:
+    profile_config, raw_root, raw_alignment_path, exception_path, warning_by_year = (
+        _tier1_candidate_readiness_fixture(tmp_path)
+    )
+    warning_by_year[2023] = "synthetic threshold breached: rows_pct=1 max_gap_minutes=1"
+    _write_tier1_candidate_external_exceptions(
+        exception_path,
+        warning_by_year=warning_by_year,
+    )
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=raw_alignment_path,
+        profile_config_path=profile_config,
+        accepted_readiness_exceptions_path=exception_path,
+        fail_fast=True,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["configured_accepted_exception_count"] == 2
+    assert report["accepted_exception_count"] == 0
+    assert report["blocker_count"] == 1
+    assert report["blockers"][0]["market"] == "6E"
+    assert report["blockers"][0]["year"] == 2023
 
 
 def test_phase2_readiness_rejects_vendor_trusted_ohlcv_missing_evidence(

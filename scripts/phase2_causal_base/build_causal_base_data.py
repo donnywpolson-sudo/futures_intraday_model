@@ -11,7 +11,7 @@ import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -234,6 +234,21 @@ VENDOR_TRUSTED_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS = frozenset(
         ("LE", 2020),
     }
 )
+TIER1_CANDIDATE_ACCEPTED_EXCEPTION_SOURCE = (
+    "tier1_candidate_accepted_readiness_exceptions_file"
+)
+TIER1_CANDIDATE_SYNTHETIC_EXCEPTION_ROWS = {
+    ("6E", 2023): {
+        "metric": "synthetic_rows_pct",
+        "observed": 2.057954,
+        "approved_limit": 2.10,
+    },
+    ("6E", 2024): {
+        "metric": "synthetic_rows_pct",
+        "observed": 2.539287,
+        "approved_limit": 2.60,
+    },
+}
 VENDOR_TRUSTED_OHLCV_NO_TRADE_DEGRADED_ALLOWED_MARKET_YEARS = frozenset(
     {
         ("HE", 2019),
@@ -299,6 +314,10 @@ class AcceptedReadinessException:
     reason: str
     evidence_paths: tuple[str, ...]
     warning_prefixes: tuple[str, ...]
+    source: str = "profile_config"
+    metric: str | None = None
+    observed: float | None = None
+    approved_limit: float | None = None
 
 
 @dataclass(frozen=True)
@@ -568,6 +587,63 @@ def _vendor_trusted_ohlcv_no_trade_evidence_failures(
                 )
             )
     return failures
+
+
+def _tier1_candidate_accepted_exception_failures(
+    result: ValidationResult,
+    exception: AcceptedReadinessException,
+) -> list[str]:
+    failures: list[str] = []
+    expected = TIER1_CANDIDATE_SYNTHETIC_EXCEPTION_ROWS.get(
+        (exception.market, exception.year)
+    )
+    if expected is None:
+        failures.append(
+            "tier1 candidate exception is outside exact allowed rows: "
+            f"{exception.market} {exception.year}"
+        )
+        return failures
+    if exception.metric != expected["metric"]:
+        failures.append(
+            f"metric expected {expected['metric']!r} got {exception.metric!r}"
+        )
+    if not _float_matches(exception.observed, float(expected["observed"])):
+        failures.append(
+            f"observed expected {expected['observed']!r} got {exception.observed!r}"
+        )
+    if not _float_matches(exception.approved_limit, float(expected["approved_limit"])):
+        failures.append(
+            "approved_limit expected "
+            f"{expected['approved_limit']!r} got {exception.approved_limit!r}"
+        )
+    if result.failures:
+        failures.append("cannot accept warnings when runtime failures are present")
+    if not result.synthetic_gap_threshold_breached or result.synthetic_rows <= 0:
+        failures.append("synthetic threshold warning is not present")
+    if result.degraded_threshold_breached:
+        failures.append("degraded threshold warning is not scoped for this exception")
+    if (
+        exception.approved_limit is not None
+        and result.synthetic_rows_pct > exception.approved_limit + 0.000001
+    ):
+        failures.append(
+            "synthetic_rows_pct exceeds approved limit: "
+            f"{result.synthetic_rows_pct} > {exception.approved_limit}"
+        )
+    return failures
+
+
+def _accepted_readiness_exception_evidence_failures(
+    result: ValidationResult,
+    exception: AcceptedReadinessException,
+) -> list[str]:
+    if exception.source == TIER1_CANDIDATE_ACCEPTED_EXCEPTION_SOURCE:
+        return _tier1_candidate_accepted_exception_failures(result, exception)
+    if exception.category == VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY:
+        return _vendor_trusted_ohlcv_no_trade_evidence_failures(
+            exception.evidence_paths
+        )
+    return []
 
 
 def _manifest_value(payload: dict[str, object], *keys: str) -> object:
@@ -910,27 +986,27 @@ def _matching_vendor_trusted_ohlcv_no_trade_exception(
     result: ValidationResult,
     config: CausalBaseConfig,
 ) -> AcceptedReadinessException | None:
-    if (result.market, result.year) not in (
-        VENDOR_TRUSTED_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS
-    ):
-        return None
     if (
         not result.synthetic_gap_threshold_breached
         or result.synthetic_rows <= 0
-        or result.status_enrichment_missing_rows
-        or result.status_enrichment_stale_rows
-        or result.statistics_enrichment_missing_rows
-        or result.statistics_enrichment_stale_rows
     ):
         return None
     for exception in config.accepted_readiness_exceptions:
+        scoped_tier1_candidate_exception = (
+            exception.source == TIER1_CANDIDATE_ACCEPTED_EXCEPTION_SOURCE
+        )
         if (
             exception.market == result.market
             and exception.year == result.year
             and exception.category == VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY
             and tuple(result.warnings) == exception.warning_prefixes
-            and not _vendor_trusted_ohlcv_no_trade_evidence_failures(
-                exception.evidence_paths
+            and (
+                scoped_tier1_candidate_exception
+                or (result.market, result.year)
+                in VENDOR_TRUSTED_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS
+            )
+            and not _accepted_readiness_exception_evidence_failures(
+                result, exception
             )
             and all(_evidence_path_exists(path) for path in exception.evidence_paths)
         ):
@@ -992,25 +1068,33 @@ def _accepted_readiness_exception_for_result(
                 ):
                     continue
         elif exception.category == VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY:
-            if (result.market, result.year) not in (
-                VENDOR_TRUSTED_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS
+            scoped_tier1_candidate_exception = (
+                exception.source == TIER1_CANDIDATE_ACCEPTED_EXCEPTION_SOURCE
+            )
+            if (
+                not scoped_tier1_candidate_exception
+                and (result.market, result.year)
+                not in VENDOR_TRUSTED_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS
             ):
                 continue
             if (
                 not result.synthetic_gap_threshold_breached
                 or result.synthetic_rows <= 0
                 or result.degraded_threshold_breached
-                or result.status_enrichment_missing_rows
-                or result.status_enrichment_stale_rows
-                or result.statistics_enrichment_missing_rows
-                or result.statistics_enrichment_stale_rows
+                or (
+                    not scoped_tier1_candidate_exception
+                    and (
+                        result.status_enrichment_missing_rows
+                        or result.status_enrichment_stale_rows
+                        or result.statistics_enrichment_missing_rows
+                        or result.statistics_enrichment_stale_rows
+                    )
+                )
             ):
                 continue
             if tuple(result.warnings) != exception.warning_prefixes:
                 continue
-            if _vendor_trusted_ohlcv_no_trade_evidence_failures(
-                exception.evidence_paths
-            ):
+            if _accepted_readiness_exception_evidence_failures(result, exception):
                 continue
         elif exception.category == PARENT_SPARSE_OHLCV_NO_TRADE_EXCEPTION_CATEGORY:
             if (result.market, result.year) not in (
@@ -1041,6 +1125,10 @@ def _accepted_readiness_exception_for_result(
             "category": exception.category,
             "reason": exception.reason,
             "evidence_paths": list(exception.evidence_paths),
+            "source": exception.source,
+            "metric": exception.metric,
+            "observed": exception.observed,
+            "approved_limit": exception.approved_limit,
             "accepted_warnings": list(result.warnings),
             "status_enrichment_missing_rows": result.status_enrichment_missing_rows,
             "status_enrichment_stale_rows": result.status_enrichment_stale_rows,
@@ -1090,8 +1178,8 @@ def _accepted_readiness_exception_failures(
             )
             continue
         if exception.category == VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY:
-            evidence_failures = _vendor_trusted_ohlcv_no_trade_evidence_failures(
-                exception.evidence_paths
+            evidence_failures = _accepted_readiness_exception_evidence_failures(
+                result, exception
             )
             if evidence_failures:
                 failures.append(
@@ -1520,9 +1608,127 @@ def _parse_accepted_readiness_exceptions(
     return tuple(exceptions)
 
 
+def _float_matches(value: object, expected: float) -> bool:
+    try:
+        return abs(float(value) - float(expected)) <= 0.000001
+    except (TypeError, ValueError):
+        return False
+
+
+def _parse_tier1_candidate_accepted_readiness_exceptions(
+    path: Path | None,
+) -> tuple[AcceptedReadinessException, ...]:
+    if path is None:
+        return tuple()
+    payload = _read_json(path)
+    if not isinstance(payload, dict):
+        raise ValueError("--accepted-readiness-exceptions must point to a JSON object")
+    if payload.get("global_threshold") is not None and not _float_matches(
+        payload.get("global_threshold"), DEFAULT_MAX_SYNTHETIC_ROWS_PCT
+    ):
+        raise ValueError(
+            "--accepted-readiness-exceptions cannot change global threshold "
+            f"{DEFAULT_MAX_SYNTHETIC_ROWS_PCT}"
+        )
+    raw_exceptions = payload.get("exceptions")
+    if not isinstance(raw_exceptions, list):
+        raise ValueError("--accepted-readiness-exceptions JSON requires exceptions list")
+    if len(raw_exceptions) != len(TIER1_CANDIDATE_SYNTHETIC_EXCEPTION_ROWS):
+        raise ValueError(
+            "--accepted-readiness-exceptions must contain exactly "
+            f"{len(TIER1_CANDIDATE_SYNTHETIC_EXCEPTION_ROWS)} scoped rows"
+        )
+
+    exceptions: list[AcceptedReadinessException] = []
+    seen: set[tuple[str, int]] = set()
+    for index, raw_entry in enumerate(raw_exceptions):
+        entry = _as_mapping(raw_entry)
+        market = str(entry.get("market", "")).strip()
+        try:
+            year = int(entry["year"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"--accepted-readiness-exceptions[{index}].year must be an integer"
+            ) from exc
+        key = (market, year)
+        expected = TIER1_CANDIDATE_SYNTHETIC_EXCEPTION_ROWS.get(key)
+        if expected is None:
+            raise ValueError(
+                "--accepted-readiness-exceptions only supports exact rows "
+                f"{sorted(TIER1_CANDIDATE_SYNTHETIC_EXCEPTION_ROWS)!r}"
+            )
+        if key in seen:
+            raise ValueError(
+                "--accepted-readiness-exceptions contains duplicate row "
+                f"{market} {year}"
+            )
+        seen.add(key)
+        category = str(
+            entry.get("category", VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY)
+        ).strip()
+        if category != VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY:
+            raise ValueError(
+                f"--accepted-readiness-exceptions[{index}].category must be "
+                f"{VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY!r}"
+            )
+        metric = str(entry.get("metric", "")).strip()
+        if metric != expected["metric"]:
+            raise ValueError(
+                f"--accepted-readiness-exceptions[{index}].metric must be "
+                f"{expected['metric']!r}"
+            )
+        if not _float_matches(entry.get("observed"), float(expected["observed"])):
+            raise ValueError(
+                f"--accepted-readiness-exceptions[{index}].observed must be "
+                f"{expected['observed']!r}"
+            )
+        if not _float_matches(
+            entry.get("approved_limit"), float(expected["approved_limit"])
+        ):
+            raise ValueError(
+                f"--accepted-readiness-exceptions[{index}].approved_limit must be "
+                f"{expected['approved_limit']!r}"
+            )
+        reason = str(entry.get("reason", "")).strip()
+        if not reason:
+            raise ValueError(
+                f"--accepted-readiness-exceptions[{index}].reason is required"
+            )
+        evidence_paths = _as_nonempty_str_list(
+            entry.get("evidence_paths"),
+            field_name=f"--accepted-readiness-exceptions[{index}].evidence_paths",
+        )
+        warning_prefixes = _as_nonempty_str_list(
+            entry.get("warning_prefixes", entry.get("warnings")),
+            field_name=f"--accepted-readiness-exceptions[{index}].warning_prefixes",
+        )
+        exceptions.append(
+            AcceptedReadinessException(
+                market=market,
+                year=year,
+                category=category,
+                reason=reason,
+                evidence_paths=evidence_paths,
+                warning_prefixes=warning_prefixes,
+                source=TIER1_CANDIDATE_ACCEPTED_EXCEPTION_SOURCE,
+                metric=metric,
+                observed=float(entry["observed"]),
+                approved_limit=float(entry["approved_limit"]),
+            )
+        )
+
+    if seen != set(TIER1_CANDIDATE_SYNTHETIC_EXCEPTION_ROWS):
+        raise ValueError(
+            "--accepted-readiness-exceptions must contain exactly "
+            f"{sorted(TIER1_CANDIDATE_SYNTHETIC_EXCEPTION_ROWS)!r}"
+        )
+    return tuple(sorted(exceptions, key=lambda item: (item.market, item.year)))
+
+
 def load_causal_base_config(
     profile_config_path: Path = DEFAULT_PROFILE_CONFIG,
     profile: str = DEFAULT_PROFILE,
+    accepted_readiness_exceptions_path: Path | None = None,
 ) -> CausalBaseConfig:
     payload = _read_yaml(profile_config_path)
     defaults = _as_mapping(payload.get("defaults", {}))
@@ -1593,7 +1799,7 @@ def load_causal_base_config(
             f"{broad_vendor_trusted_overlap!r}"
         )
 
-    return CausalBaseConfig(
+    config = CausalBaseConfig(
         max_synthetic_rows_pct=get_float(
             "max_synthetic_rows_pct", DEFAULT_MAX_SYNTHETIC_ROWS_PCT
         ),
@@ -1642,6 +1848,17 @@ def load_causal_base_config(
             )
         ),
     )
+    extra_exceptions = _parse_tier1_candidate_accepted_readiness_exceptions(
+        accepted_readiness_exceptions_path
+    )
+    if not extra_exceptions:
+        return config
+    if config.accepted_readiness_exceptions:
+        raise ValueError(
+            "--accepted-readiness-exceptions cannot be combined with "
+            "profile-config accepted_readiness_exceptions"
+        )
+    return replace(config, accepted_readiness_exceptions=extra_exceptions)
 
 
 def load_profile_map(profile_config_path: Path = DEFAULT_PROFILE_CONFIG) -> tuple[
@@ -3292,12 +3509,17 @@ def write_reports(
     *,
     input_root: Path | None = None,
     output_root: Path | None = None,
+    accepted_readiness_exceptions_path: Path | None = None,
     local_trade_gap_gate: dict[str, Any] | None = None,
     selection_metadata: dict[str, Any] | None = None,
 ) -> None:
     reports_root.mkdir(parents=True, exist_ok=True)
     result_list = list(results)
-    config = load_causal_base_config(profile_config_path, profile)
+    config = load_causal_base_config(
+        profile_config_path,
+        profile,
+        accepted_readiness_exceptions_path=accepted_readiness_exceptions_path,
+    )
     processed_results = {
         (result.market, result.year): result for result in result_list
     }
@@ -3334,6 +3556,10 @@ def write_reports(
                         "category": accepted_exception["category"],
                         "reason": accepted_exception["reason"],
                         "evidence_paths": accepted_exception["evidence_paths"],
+                        "source": accepted_exception.get("source"),
+                        "metric": accepted_exception.get("metric"),
+                        "observed": accepted_exception.get("observed"),
+                        "approved_limit": accepted_exception.get("approved_limit"),
                         "warnings": list(result.warnings),
                         "status_enrichment_missing_rows": accepted_exception[
                             "status_enrichment_missing_rows"
@@ -3427,6 +3653,16 @@ def write_reports(
         "script_path": relative_source_path(script_path),
         "script_hash": sha256_file(script_path),
         "config_hash": hash_optional_file(profile_config_path),
+        "accepted_readiness_exceptions_path": (
+            relative_source_path(accepted_readiness_exceptions_path)
+            if accepted_readiness_exceptions_path is not None
+            else None
+        ),
+        "accepted_readiness_exceptions_hash": (
+            hash_optional_file(accepted_readiness_exceptions_path)
+            if accepted_readiness_exceptions_path is not None
+            else None
+        ),
         "input_root": resolved_input_root.as_posix() if resolved_input_root else None,
         "output_root": resolved_output_root.as_posix() if resolved_output_root else None,
         "reports_root": reports_root.as_posix(),
@@ -3763,6 +3999,7 @@ def build_phase2_readiness_report(
     raw_alignment_report: Path,
     output_root: Path = Path("data/causally_gated_normalized"),
     profile_config_path: Path = DEFAULT_PROFILE_CONFIG,
+    accepted_readiness_exceptions_path: Path | None = None,
     session_config_path: Path = DEFAULT_SESSION_CONFIG,
     roll_window_bars: int = DEFAULT_ROLL_WINDOW_BARS,
     max_synthetic_gap_minutes: int = DEFAULT_MAX_SYNTHETIC_GAP_MINUTES,
@@ -3807,6 +4044,11 @@ def build_phase2_readiness_report(
         "resolved_profile": resolved_profile,
         "raw_root": relative_source_path(raw_root),
         "raw_alignment_report": relative_source_path(raw_alignment_report),
+        "accepted_readiness_exceptions_path": (
+            relative_source_path(accepted_readiness_exceptions_path)
+            if accepted_readiness_exceptions_path is not None
+            else None
+        ),
         "market_filter": sorted(market_filter) if market_filter else None,
         "year_filter": sorted(year_filter) if year_filter else None,
         "selected_market_year_count": 0,
@@ -3853,7 +4095,11 @@ def build_phase2_readiness_report(
         report["failures"] = failures
         return report
 
-    config = load_causal_base_config(profile_config_path, profile)
+    config = load_causal_base_config(
+        profile_config_path,
+        profile,
+        accepted_readiness_exceptions_path=accepted_readiness_exceptions_path,
+    )
     report["configured_accepted_exception_count"] = len(
         config.accepted_readiness_exceptions
     )
@@ -3922,6 +4168,10 @@ def build_phase2_readiness_report(
                         "category": accepted_exception["category"],
                         "reason": accepted_exception["reason"],
                         "evidence_paths": accepted_exception["evidence_paths"],
+                        "source": accepted_exception.get("source"),
+                        "metric": accepted_exception.get("metric"),
+                        "observed": accepted_exception.get("observed"),
+                        "approved_limit": accepted_exception.get("approved_limit"),
                         "warnings": list(result.warnings),
                         "status_enrichment_missing_rows": accepted_exception[
                             "status_enrichment_missing_rows"
@@ -4070,6 +4320,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--session-config", default=str(DEFAULT_SESSION_CONFIG))
     parser.add_argument("--raw-alignment-report", default=str(DEFAULT_RAW_ALIGNMENT_REPORT))
     parser.add_argument(
+        "--accepted-readiness-exceptions",
+        help=(
+            "Optional JSON file carrying exact scoped readiness exceptions for "
+            "an isolated candidate build."
+        ),
+    )
+    parser.add_argument(
         "--market-year-include-list",
         help=(
             "JSON or CSV file containing exact market/year rows to process. "
@@ -4102,6 +4359,11 @@ def main() -> int:
     profile_config_path = Path(args.profile_config)
     session_config_path = Path(args.session_config)
     raw_alignment_report = Path(args.raw_alignment_report)
+    accepted_readiness_exceptions_path = (
+        Path(args.accepted_readiness_exceptions)
+        if args.accepted_readiness_exceptions
+        else None
+    )
     include_list_path = (
         Path(args.market_year_include_list) if args.market_year_include_list else None
     )
@@ -4124,7 +4386,11 @@ def main() -> int:
         for failure in raw_alignment_failures:
             print(f"FAIL raw_alignment_guard: {failure}")
         return 1
-    config = load_causal_base_config(profile_config_path, args.profile)
+    config = load_causal_base_config(
+        profile_config_path,
+        args.profile,
+        accepted_readiness_exceptions_path=accepted_readiness_exceptions_path,
+    )
     raw_alignment = _read_json(raw_alignment_report)
     selection = select_phase2_inputs(
         profile=args.profile,
@@ -4158,6 +4424,7 @@ def main() -> int:
         raw_alignment_report=raw_alignment_report,
         output_root=output_root,
         profile_config_path=profile_config_path,
+        accepted_readiness_exceptions_path=accepted_readiness_exceptions_path,
         session_config_path=session_config_path,
         roll_window_bars=args.roll_window_bars,
         max_synthetic_gap_minutes=config.max_synthetic_gap_minutes,
@@ -4225,6 +4492,7 @@ def main() -> int:
         profile_config_path,
         input_root=raw_root,
         output_root=output_root,
+        accepted_readiness_exceptions_path=accepted_readiness_exceptions_path,
         local_trade_gap_gate=local_trade_gap_gate,
         selection_metadata=selection.metadata,
     )
