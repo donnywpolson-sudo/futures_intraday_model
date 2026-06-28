@@ -23,6 +23,7 @@ from scripts.validation.audit_local_trade_ohlcv_gaps import (
     VERIFIED_NO_TRADE,
     build_arg_parser,
     build_report,
+    main,
 )
 
 
@@ -189,6 +190,34 @@ def test_requested_window_outside_local_trades_access_fails_closed(tmp_path: Pat
 
     with pytest.raises(ValueError, match="outside configured local trades schema access window"):
         build_report(args, trade_frame_reader=FakeTradeReader([]))
+
+
+def test_main_requires_explicit_causal_root(tmp_path: Path) -> None:
+    json_out = tmp_path / "reports" / "audit.json"
+    md_out = tmp_path / "reports" / "audit.md"
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "--profile-config",
+                str(tmp_path / "configs" / "alpha_tiered.yaml"),
+                "--profiles",
+                "tier_3_holdout",
+                "--dbn-root",
+                str(tmp_path / "data" / "dbn"),
+                "--raw-root",
+                str(tmp_path / "data" / "raw"),
+                "--json-out",
+                str(json_out),
+                "--md-out",
+                str(md_out),
+                "--inventory-only",
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert not json_out.exists()
+    assert not md_out.exists()
 
 
 def test_missing_trade_market_fails_closed(tmp_path: Path) -> None:

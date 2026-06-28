@@ -1140,7 +1140,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dbn-root", default="data/dbn")
     parser.add_argument("--raw-root", default="data/raw")
     parser.add_argument("--raw-overlay-root")
-    parser.add_argument("--causal-root", default="data/causally_gated_normalized")
+    parser.add_argument("--causal-root", default=None)
     parser.add_argument("--json-out", default="reports/pipeline_audit/local_trade_ohlcv_gap_crosscheck_2025_2026.json")
     parser.add_argument("--md-out", default="reports/pipeline_audit/local_trade_ohlcv_gap_crosscheck_2025_2026.md")
     parser.add_argument("--chunk-size", type=int, default=250_000)
@@ -1150,7 +1150,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_arg_parser().parse_args(argv)
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
+    if args.causal_root is None:
+        parser.error("--causal-root is required; pass an explicit causal root")
     report = build_report(args)
     write_json_report(report, Path(args.json_out))
     if args.md_out:
