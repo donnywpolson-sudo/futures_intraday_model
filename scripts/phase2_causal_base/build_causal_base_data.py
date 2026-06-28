@@ -3997,7 +3997,7 @@ def build_phase2_readiness_report(
     profile: str,
     raw_root: Path,
     raw_alignment_report: Path,
-    output_root: Path = Path("data/causally_gated_normalized"),
+    output_root: Path,
     profile_config_path: Path = DEFAULT_PROFILE_CONFIG,
     accepted_readiness_exceptions_path: Path | None = None,
     session_config_path: Path = DEFAULT_SESSION_CONFIG,
@@ -4314,7 +4314,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--raw-root", default="data/raw")
-    parser.add_argument("--output-root", default="data/causally_gated_normalized")
+    parser.add_argument("--output-root", default=None)
     parser.add_argument("--reports-root", default="reports/causal_base")
     parser.add_argument("--profile-config", default=str(DEFAULT_PROFILE_CONFIG))
     parser.add_argument("--session-config", default=str(DEFAULT_SESSION_CONFIG))
@@ -4352,7 +4352,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    args = build_arg_parser().parse_args()
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    if not args.output_root:
+        parser.error("--output-root is required; pass an explicit causal output root")
     raw_root = Path(args.raw_root)
     output_root = Path(args.output_root)
     reports_root = Path(args.reports_root)

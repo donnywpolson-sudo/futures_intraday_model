@@ -16,7 +16,7 @@ from scripts.phase2_causal_base.build_causal_base_data import (
     LOCAL_TRADE_GAP_FAILED_STATUS,
     LOCAL_TRADE_GAP_VALIDATED_STATUS,
     OUTPUT_COLUMNS,
-    build_phase2_readiness_report,
+    build_phase2_readiness_report as _build_phase2_readiness_report,
     causal_gate_contract_failures,
     discover_raw_inputs,
     filter_inputs_by_raw_alignment,
@@ -33,6 +33,14 @@ from scripts.phase2_causal_base.build_causal_base_data import (
     select_phase2_inputs,
     write_reports,
 )
+
+
+def build_phase2_readiness_report(**kwargs):
+    kwargs.setdefault(
+        "output_root",
+        kwargs["raw_root"].parent / "causally_gated_normalized",
+    )
+    return _build_phase2_readiness_report(**kwargs)
 
 
 def _write_raw(path: Path, rows: list[dict[str, object]]) -> None:
@@ -2816,6 +2824,37 @@ def test_phase2_main_exits_before_writing_when_readiness_fails(
     assert phase2_main() == 1
     assert not (output_root / "ES" / "2024.parquet").exists()
     assert not (reports_root / "causal_base_manifest.json").exists()
+
+
+def test_phase2_main_requires_explicit_output_root(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["build_causal_base_data.py"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        phase2_main()
+
+    assert exc_info.value.code == 2
+    assert (
+        "--output-root is required; pass an explicit causal output root"
+        in capsys.readouterr().err
+    )
+
+
+def test_phase2_cli_accepts_explicit_output_roots(tmp_path: Path) -> None:
+    canonical_root = Path("data/causally_gated_normalized")
+    report_root = tmp_path / "reports" / "phase2" / "causal_base_fixture"
+
+    canonical_args = causal_base.build_arg_parser().parse_args(
+        ["--output-root", canonical_root.as_posix()]
+    )
+    report_args = causal_base.build_arg_parser().parse_args(
+        ["--output-root", report_root.as_posix()]
+    )
+
+    assert Path(canonical_args.output_root).as_posix() == canonical_root.as_posix()
+    assert Path(report_args.output_root).as_posix() == report_root.as_posix()
 
 
 def test_phase2_main_skips_local_trade_gate_for_smoke_profile(
