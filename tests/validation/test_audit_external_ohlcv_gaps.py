@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from scripts.validation.audit_external_ohlcv_gaps import build_report, main
 
@@ -246,6 +247,35 @@ def test_missing_inputs_fail_closed_after_writing_reports(tmp_path: Path) -> Non
     assert report["status"] == "FAIL"
     assert "missing input" in " ".join(report["failures"])
     assert md_out.exists()
+
+
+def test_main_requires_explicit_causal_root_in_scan_mode(tmp_path: Path) -> None:
+    json_out = tmp_path / "reports" / "external.json"
+    md_out = tmp_path / "reports" / "external.md"
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "--markets",
+                "ZN",
+                "--years",
+                "2024",
+                "--raw-root",
+                str(tmp_path / "data" / "raw"),
+                "--session-config",
+                str(tmp_path / "configs" / "market_sessions.yaml"),
+                "--external-root",
+                str(tmp_path / "data" / "external_ohlcv_gap_checks"),
+                "--json-out",
+                str(json_out),
+                "--md-out",
+                str(md_out),
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert not json_out.exists()
+    assert not md_out.exists()
 
 
 def test_manifest_mode_classifies_present_external_gap_bar(tmp_path: Path) -> None:
