@@ -215,8 +215,8 @@ artifact_policy:
       classification: DO_NOT_TOUCH
       reason: "Source-like parent DBN folder; redundancy not proven."
     - path: data/raw/_repair_candidates
-      classification: STALE_OR_UNKNOWN
-      reason: "Repair candidate parquet folder needs explicit review."
+      classification: CLEANUP_CANDIDATE_AFTER_APPROVAL
+      reason: "Specific raw repair-candidate subtree reviewed as inactive in code/config references; cleanup still requires a dry-run plan and separate approval."
   audit_artifact_prefixes:
     - data/raw/_
     - data/causally_gated_normalized/_
