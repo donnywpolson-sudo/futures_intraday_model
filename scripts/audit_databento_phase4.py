@@ -669,7 +669,7 @@ def run_phase4(args: Any) -> dict[str, Any]:
     active_rows = active_pipeline_rows(data_refs, config_paths, quarantine_paths)
     lineage_rows = folder_lineage_rows(folder_rows)
     raw_root = repo_path(config_paths.get("raw_root", "data/raw"))
-    causal_root = repo_path(config_paths.get("causal_base_root", "data/causally_gated_normalized"))
+    causal_root = repo_path(required_config_path(config_paths, "causal_base_root"))
     labeled_root = repo_path(config_paths.get("labeled_root", "data/labeled"))
     feature_root = repo_path(required_config_path(config_paths, "feature_matrix_root"))
     raw_pairs = parquet_pairs(raw_root)

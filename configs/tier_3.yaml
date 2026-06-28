@@ -9,7 +9,7 @@ default_profile: tier_1
 
 paths:
   raw_root: data/raw
-  causal_base_root: data/causally_gated_normalized
+  causal_base_root: null
   labeled_root: data/labeled
   feature_matrix_root: null
   predictions_root: null

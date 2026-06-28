@@ -74,6 +74,25 @@ def test_feature_matrix_root_missing_fails_without_legacy_fallback(tmp_path: Pat
         required_config_path(config_paths, "feature_matrix_root")
 
 
+def test_causal_base_root_missing_fails_without_legacy_fallback(tmp_path: Path) -> None:
+    config = tmp_path / "alpha_tiered.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "paths:",
+                "  raw_root: data/raw",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config_paths = parse_paths_config(config)
+
+    with pytest.raises(ValueError, match="paths.causal_base_root is required; explicit root required"):
+        required_config_path(config_paths, "causal_base_root")
+
+
 def test_feature_matrix_root_null_fails_without_legacy_fallback(tmp_path: Path) -> None:
     config = tmp_path / "alpha_tiered.yaml"
     config.write_text(
@@ -93,6 +112,25 @@ def test_feature_matrix_root_null_fails_without_legacy_fallback(tmp_path: Path) 
         required_config_path(config_paths, "feature_matrix_root")
 
 
+def test_causal_base_root_null_fails_without_legacy_fallback(tmp_path: Path) -> None:
+    config = tmp_path / "alpha_tiered.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "paths:",
+                "  causal_base_root: null",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config_paths = parse_paths_config(config)
+
+    with pytest.raises(ValueError, match="paths.causal_base_root is required; explicit root required"):
+        required_config_path(config_paths, "causal_base_root")
+
+
 def test_feature_matrix_root_accepts_explicit_approved_rebuild(tmp_path: Path) -> None:
     config = tmp_path / "alpha_tiered.yaml"
     feature_root = "data/feature_matrices/baseline_tier1_rebuild_v1"
@@ -110,3 +148,22 @@ def test_feature_matrix_root_accepts_explicit_approved_rebuild(tmp_path: Path) -
     config_paths = parse_paths_config(config)
 
     assert required_config_path(config_paths, "feature_matrix_root") == feature_root
+
+
+def test_causal_base_root_accepts_explicit_rebuild(tmp_path: Path) -> None:
+    config = tmp_path / "alpha_tiered.yaml"
+    causal_root = "data/causally_gated_normalized_tier1_rebuild_v1"
+    config.write_text(
+        "\n".join(
+            [
+                "paths:",
+                f"  causal_base_root: {causal_root}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config_paths = parse_paths_config(config)
+
+    assert required_config_path(config_paths, "causal_base_root") == causal_root
