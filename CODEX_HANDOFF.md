@@ -1,5 +1,133 @@
 # Codex Handoff
 
+## Latest Cleanup Reference Readiness Run
+
+- Updated at UTC: 2026-06-28T06:56:47Z
+- Latest scoped pass: protected causal reference classification in allowed manifest/audit-policy files only.
+- Result: `data/causally_gated_normalized` remains a protected cleanup blocker; cleanup remains blocked and dry-run cleanup remains unsafe.
+- Files inspected in scoped pass:
+  - `configs\data_manifest.yaml`
+  - `scripts\audit_databento_phase0.py`
+  - `scripts\audit_databento_phase4.py`
+  - `scripts\audit_databento_phase5.py`
+  - `tests\test_audit_databento_phase0.py`
+  - `tests\test_audit_databento_phase4.py`
+  - `tests\test_audit_databento_phase5.py` was requested but is absent.
+- Safe references retired in scoped pass:
+  - `scripts\audit_databento_phase0.py`: stale final map text no longer names `data/causally_gated_normalized` as current causal/modeling base.
+  - `scripts\audit_databento_phase4.py`: labels expected source/trace fields now say `configured_modeling_input` instead of hardcoding `data/causally_gated_normalized`.
+  - `tests\test_audit_databento_phase4.py`: explicit rebuild fixture now preserves protected keep root `data/causal_base_candidates/tier1_rebuild_v1`.
+- Remaining protected final blockers in allowed scope:
+  - `configs\data_manifest.yaml`: canonical causal parquet pattern plus repair/audit artifact policy for `data/causally_gated_normalized`.
+  - `scripts\audit_databento_phase5.py`: approved causal base policy is hardcoded to `data/causally_gated_normalized` and has no focused test file in this repo.
+  - `scripts\audit_databento_phase0.py`: scanner/classifier strings for current derived and pre-replace backup classification.
+  - `scripts\audit_databento_phase4.py`: scanner/classifier/modeling-root strings and causal audit variables/rows.
+  - `tests\test_audit_databento_phase0.py`: pre-replace backup classification fixture.
+- Validation in scoped pass:
+  - `python -m pytest tests\test_audit_databento_phase0.py tests\test_audit_databento_phase4.py` -> `11 passed`
+  - Required `rg` including `tests\test_audit_databento_phase5.py` returned matches plus missing-file error for that absent test.
+  - Re-run `rg` on existing allowed files succeeded and showed only the documented protected/scanner/test references.
+  - `git diff --check -- ...` passed with CRLF warnings only.
+- Safety:
+  - No dry-run cleanup or actual cleanup.
+  - No `data/**` mutation.
+  - No raw path edits.
+  - No WFA/modeling/metrics or prediction/model artifacts.
+  - No staging or commit.
+
+- Updated at UTC: 2026-06-28T06:43:33Z
+- Purpose: cleanup-reference readiness review after retiring feature/causal root defaults.
+- Repo: `C:\Users\donny\Desktop\futures_intraday_model`
+- Result: cleanup remains blocked; dry-run cleanup remains unsafe; actual cleanup is not approved.
+
+### Current Status
+
+- Created focused commits:
+  - `21ea413 Neutralize central feature matrix root defaults`
+  - `d8609c1 Require explicit Phase 3 label input root`
+  - `1a9bbbf Require explicit Phase 2 causal output root`
+  - `e97603a Require explicit Phase 2 readiness output root`
+  - `03d7eb1 Require explicit raw session audit causal root`
+  - `fb7bc54 Require explicit external OHLCV audit causal root`
+  - `3de6d7f Require explicit OHLCV provenance causal root`
+  - `108e2bb Require explicit local trade audit causal root`
+  - `900fb95 Require explicit missing minute manifest causal root`
+  - `0f4e2df Require explicit tier coverage causal root`
+  - `cb7f2ef Neutralize central causal base root defaults`
+- Central configs now have `feature_matrix_root: null` and `causal_base_root: null`.
+- Direct Phase 2/3 causal defaults and validation `--causal-root` defaults were changed to require explicit roots.
+- Ignored final report summaries under `reports\data_audit\final\` were refreshed as report-only evidence and must remain unstaged unless explicitly approved.
+
+### Validation
+
+- `python -m pytest tests\phase4_features\test_build_baseline_features.py tests\test_audit_databento_phase4.py` -> `47 passed`
+- `python -m pytest tests\phase3_labels\test_build_labels.py` -> `28 passed`
+- `python -m pytest tests\phase2_causal_base\test_build_causal_base_data.py` -> `124 passed`
+- `python -m pytest tests\validation\test_audit_phase2_readiness.py` -> `13 passed`
+- `python -m pytest tests\validation\test_audit_raw_session_gaps.py` -> `5 passed`
+- `python -m pytest tests\validation\test_audit_external_ohlcv_gaps.py` -> `12 passed`
+- `python -m pytest tests\validation\test_audit_ohlcv_provenance_continuity.py` -> `6 passed`
+- `python -m pytest tests\validation\test_audit_local_trade_ohlcv_gaps.py` -> `12 passed`
+- `python -m pytest tests\validation\test_build_missing_minute_verification_manifest.py` -> `14 passed`
+- `python -m pytest tests\validation\test_tier_2_coverage.py` -> `20 passed`
+- `python -m pytest tests\test_audit_databento_phase4.py` -> `8 passed`
+- `git diff --check` passed before each committed batch; Git emitted only CRLF warnings.
+
+### Remaining Blockers
+
+- `data/causally_gated_normalized` remains an active cleanup blocker because current `rg` still finds protected manifest/audit-policy references:
+  - `configs\data_manifest.yaml` canonical causal pattern and repair/audit policy entries.
+  - `scripts\audit_databento_phase0.py`, `scripts\audit_databento_phase4.py`, and `scripts\audit_databento_phase5.py` audit policy labels/approved causal-base logic.
+  - `PIPELINE.md`, hygiene guards, and explicit test fixtures.
+- `data/raw` and `data/raw/_repair_candidates` remain active blockers and must be left for a separate raw-specific pass.
+- No dry-run cleanup or actual cleanup was run. No `data\` mutation, WFA/modeling/metrics, predictions, provider/network, or live/paper actions were run.
+
+### Files Changed In Latest Run
+
+- Source/config/test commits changed:
+  - `configs\alpha_tiered.yaml`
+  - `configs\tier_3.yaml`
+  - `scripts\phase3_labels\build_labels.py`
+  - `scripts\phase2_causal_base\build_causal_base_data.py`
+  - `scripts\validation\audit_phase2_readiness.py`
+  - `scripts\validation\audit_raw_session_gaps.py`
+  - `scripts\validation\audit_external_ohlcv_gaps.py`
+  - `scripts\validation\audit_ohlcv_provenance_continuity.py`
+  - `scripts\validation\audit_local_trade_ohlcv_gaps.py`
+  - `scripts\validation\build_missing_minute_verification_manifest.py`
+  - `scripts\validation\check_tier_2_coverage.py`
+  - `scripts\audit_databento_phase4.py`
+  - related focused tests under `tests\`
+- Report-only ignored files refreshed:
+  - `reports\data_audit\final\manual_review_classification_refresh.csv`
+  - `reports\data_audit\final\manual_review_classification_refresh.md`
+  - `reports\data_audit\final\manual_review_classification_safety_gate.json`
+  - `reports\data_audit\final\cleanup_blocker_refresh.csv`
+  - `reports\data_audit\final\cleanup_blocker_refresh.md`
+  - `reports\data_audit\final\cleanup_blocker_safety_gate.json`
+
+### Exact Next Recommended Step
+
+```text
+Continue from CODEX_HANDOFF.md.
+Next selected scope: decide and implement the disposition of remaining data/causally_gated_normalized cleanup blockers in protected manifest/audit-policy references only.
+Rules:
+- Do not run dry-run cleanup or actual cleanup.
+- Do not delete, move, rename, archive, quarantine, or mutate data/**.
+- Do not run WFA/modeling/metrics, generate predictions/model artifacts, or claim production/live readiness.
+- Do not touch raw-root defaults or data/raw cleanup blockers in this scope.
+- Do not stage generated reports or ignored artifacts.
+Task:
+- Establish state with Get-Location and git status --short, then read CODEX_HANDOFF.md.
+- Inspect only configs/data_manifest.yaml, scripts/audit_databento_phase0.py, scripts/audit_databento_phase4.py, scripts/audit_databento_phase5.py, and their focused tests.
+- Decide whether each data/causally_gated_normalized reference is an active protected policy reference that must remain a blocker, or a stale/default claim that can be safely changed to fail closed or point to explicit rebuilt evidence.
+- If a safe one-batch edit exists, implement only that batch and run its focused tests plus targeted rg; otherwise update the final blocker report/handoff without code changes.
+Stop when:
+- data/causally_gated_normalized is either fully retired from active manifest/audit-policy references, or the remaining protected references are documented as final blockers with cleanup_eligible_now=false and dry_run_cleanup_safe_next=false.
+```
+
+## Older Data-Readiness History
+
 - Updated at UTC: 2026-06-27T00:46:50Z
 - Purpose: Current futures data-readiness/provenance state after final global Phase 1-2 reconciliation of the approved campaign rows.
 - Repo: `C:\Users\donny\Desktop\futures_intraday_model`
@@ -692,21 +820,18 @@
 
 ```text
 Continue from CODEX_HANDOFF.md.
-
-Next selected scope: Review and disposition the report-only master data health refresh.
-
+Next selected scope: decide and implement the disposition of remaining data/causally_gated_normalized cleanup blockers in protected manifest/audit-policy references only.
 Rules:
-- Do not mutate data\raw, data\dbn, data\dbn_sr_parent_candidate, data\causally_gated_normalized, provider state, live/paper paths, WFA/model/features/labels, or canonical outputs.
-- Do not run provider/network commands.
-- Do not stage generated artifacts under data\, reports\, models\, outputs\, artifacts\, logs\, cache\, or .runtime\.
-- Do not commit unless explicitly approved.
-
+- Do not run dry-run cleanup or actual cleanup.
+- Do not delete, move, rename, archive, quarantine, or mutate data/**.
+- Do not run WFA/modeling/metrics, generate predictions/model artifacts, or claim production/live readiness.
+- Do not touch raw-root defaults or data/raw cleanup blockers in this scope.
+- Do not stage generated reports or ignored artifacts.
 Task:
 - Establish state with Get-Location and git status --short.
-- Re-read CODEX_HANDOFF.md, scripts\validation\refresh_master_data_health_matrix.py, tests\validation\test_refresh_master_data_health_matrix.py, reports\data_manifest\master_data_health_matrix.json, and reports\data_manifest\master_data_health_summary.md.
-- Verify the refreshed report-only outline still shows current causal parquet 107/527, approved PASS rows 11/11, fail-closed rows 28, and unresolved rows 0.
-- If staging is approved, stage only explicitly selected source/test/docs/handoff files and leave generated reports untracked/unstaged.
-
+- Read CODEX_HANDOFF.md, then inspect only configs/data_manifest.yaml, scripts/audit_databento_phase0.py, scripts/audit_databento_phase4.py, scripts/audit_databento_phase5.py, and their focused tests.
+- Decide whether each data/causally_gated_normalized reference is an active protected policy reference that must remain a blocker, or a stale/default claim that can be safely changed to fail closed or point to explicit rebuilt evidence.
+- If a safe one-batch edit exists, implement only that batch and run its focused tests plus targeted rg; otherwise update the final blocker report/handoff without code changes.
 Stop when:
-- The file-level disposition is reported with generated reports left unstaged, or an explicitly approved commit is complete without staged generated artifacts.
+- data/causally_gated_normalized is either fully retired from active manifest/audit-policy references, or the remaining protected references are documented as final blockers with cleanup_eligible_now=false and dry_run_cleanup_safe_next=false.
 ```

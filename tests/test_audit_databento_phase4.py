@@ -152,7 +152,7 @@ def test_feature_matrix_root_accepts_explicit_approved_rebuild(tmp_path: Path) -
 
 def test_causal_base_root_accepts_explicit_rebuild(tmp_path: Path) -> None:
     config = tmp_path / "alpha_tiered.yaml"
-    causal_root = "data/causally_gated_normalized_tier1_rebuild_v1"
+    causal_root = "data/causal_base_candidates/tier1_rebuild_v1"
     config.write_text(
         "\n".join(
             [

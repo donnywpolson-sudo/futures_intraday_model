@@ -188,7 +188,7 @@ def expected_source_for_stage(stage: str) -> str:
         "session_normalized": "data/raw",
         "causally_gated_modeling_base": "data/raw",
         "causal_backup": "data/raw",
-        "labels": "data/causally_gated_normalized",
+        "labels": "configured_modeling_input",
         "features": "data/labeled",
         "predictions": "data/feature_matrices/baseline",
     }.get(stage, "")
@@ -555,7 +555,7 @@ def labels_features_rows(labeled_root: Path, feature_root: Path) -> list[dict[st
                 "feature_columns_count": len(feature_columns),
                 "forbidden_feature_columns_count": len(forbidden_features),
                 "forbidden_feature_columns": "|".join(forbidden_features[:30]),
-                "trace_input_folder": "data/causally_gated_normalized" if stage == "labels" else "data/labeled",
+                "trace_input_folder": "configured_modeling_input" if stage == "labels" else "data/labeled",
                 "status": "pass" if status == "ok" and (stage == "labels" or not forbidden_features) else "review",
                 "issue": "forbidden feature columns present" if forbidden_features else "",
             }

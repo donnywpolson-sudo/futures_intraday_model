@@ -290,7 +290,7 @@ def render_canonical_map(folder_rows: list[dict[str, Any]]) -> str:
         "",
         "- Canonical raw Databento DBN source: `data/dbn`.",
         "- Current derived raw parquet: `data/raw` when present.",
-        "- Current causal/modeling base: `data/causally_gated_normalized` when present.",
+        "- Modeling input: explicit configured path required; no hardcoded derived default is approved.",
         "- Labels/features/predictions are derived outputs, not source evidence.",
         "- Parent/candidate/quarantine-like folders are review targets only; no action is authorized.",
         "",
