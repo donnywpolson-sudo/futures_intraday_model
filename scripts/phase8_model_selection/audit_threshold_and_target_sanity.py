@@ -34,6 +34,18 @@ def _numeric(frame: pd.DataFrame, column: str) -> pd.Series:
     return pd.to_numeric(frame[column], errors="coerce")
 
 
+def _side_aware_adverse_probability(frame: pd.DataFrame, position: pd.Series) -> pd.Series:
+    positions = pd.to_numeric(position, errors="coerce")
+    long_adverse = _numeric(frame, "p_trend_adverse_long_30m")
+    short_adverse = _numeric(frame, "p_trend_adverse_short_30m")
+    values = np.where(
+        positions.eq(1),
+        long_adverse,
+        np.where(positions.eq(-1), short_adverse, np.nan),
+    )
+    return pd.Series(values, index=frame.index)
+
+
 def _sum_float(series: pd.Series) -> float:
     return float(pd.to_numeric(series, errors="coerce").fillna(0.0).sum())
 
@@ -92,7 +104,11 @@ def _scenario_frame(
     position.loc[direction_margin.ge(direction_margin_threshold)] = 1
     position.loc[direction_margin.le(-direction_margin_threshold)] = -1
     fade_allowed = _numeric(frame, "p_fade_success").ge(min_fade_success).fillna(False)
-    trend_ok = _numeric(frame, "p_trend_danger").lt(max_trend_danger).fillna(False)
+    frame["scenario_trend_adverse_probability"] = _side_aware_adverse_probability(
+        frame,
+        position,
+    )
+    trend_ok = frame["scenario_trend_adverse_probability"].lt(max_trend_danger).fillna(False)
     frame["scenario_position"] = np.where(fade_allowed & trend_ok, position, 0).astype(int)
     frame["side"] = frame["scenario_position"].map({-1: "short", 0: "flat", 1: "long"}).fillna("unknown")
     frame["scenario_trade_count"] = frame["scenario_position"].ne(0).astype(int)
@@ -365,7 +381,7 @@ def _top_findings(
         (
             "Threshold scenario "
             f"margin={direction_margin_threshold:.2f}, fade>={min_fade_success:.2f}, "
-            f"trend<{max_trend_danger:.2f} produced "
+            f"adverse_trend<{max_trend_danger:.2f} produced "
             f"{threshold_assessment['total_trade_count']} trades and net "
             f"{threshold_assessment['net_return_dollars']:.2f}."
         )
@@ -419,6 +435,7 @@ def build_threshold_and_target_sanity(
             long_short_margin=0.05,
             min_fade_success=0.50,
             max_trend_danger=0.50,
+            side_aware_trend_blocks_fade_trades=True,
         ),
     )
     if failures:

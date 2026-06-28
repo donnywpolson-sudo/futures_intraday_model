@@ -34,7 +34,13 @@ POLICY_REQUIRED_TARGETS = {
     "expected_return": ("target_ret_15m", "y_pred_calibrated"),
     "direction": ("target_sign_with_deadzone", "p_long"),
     "fade": ("target_fade_success_15m", "p_fade_success"),
-    "trend": ("target_trend_danger_30m", "p_trend_danger"),
+}
+LEGACY_TREND_TARGET = ("target_trend_danger_30m", "p_trend_danger")
+SIDE_AWARE_TREND_TARGETS = {
+    "trend_adverse_long": ("target_trend_adverse_long_30m", "p_trend_adverse_long_30m"),
+    "trend_favorable_long": ("target_trend_favorable_long_30m", "p_trend_favorable_long_30m"),
+    "trend_adverse_short": ("target_trend_adverse_short_30m", "p_trend_adverse_short_30m"),
+    "trend_favorable_short": ("target_trend_favorable_short_30m", "p_trend_favorable_short_30m"),
 }
 PREDICTION_REQUIRED_COLUMNS = {
     "market",
@@ -53,6 +59,10 @@ PREDICTION_REQUIRED_COLUMNS = {
     "p_short",
     "p_flat",
     "p_fade_success",
+    "p_trend_adverse_long_30m",
+    "p_trend_favorable_long_30m",
+    "p_trend_adverse_short_30m",
+    "p_trend_favorable_short_30m",
     "p_trend_danger",
     "calibration_id",
     "model_config_hash",
@@ -85,6 +95,7 @@ class PolicyConfig:
     raw_return_prediction_direct_trading_allowed: bool = False
     p_trend_danger_blocks_fade_trades: bool = False
     p_fade_success_allows_fade_trades: bool = True
+    side_aware_trend_blocks_fade_trades: bool = False
 
 
 @dataclass(frozen=True)
@@ -151,6 +162,10 @@ def load_policy_config(
         p_fade_success_allows_fade_trades=_read_bool_config(
             position_policy.get("p_fade_success_allows_fade_trades"),
             True,
+        ),
+        side_aware_trend_blocks_fade_trades=_read_bool_config(
+            position_policy.get("side_aware_trend_blocks_fade_trades"),
+            False,
         ),
     )
 
@@ -588,13 +603,22 @@ def build_policy_frame(
         fade_values = fade_values.rename(columns={"y_true": "observed_fade_success_target"})
         base = base.merge(fade_values, on=key_cols, how="left")
 
-    trend_target, _ = POLICY_REQUIRED_TARGETS["trend"]
-    trend = predictions[predictions["target_name"] == trend_target]
-    if trend.empty:
-        failures.append(f"missing policy target predictions: {trend_target}")
-    else:
-        trend_values = _first_non_null(trend, key_cols, ["p_trend_danger", "y_true"])
-        trend_values = trend_values.rename(columns={"y_true": "observed_trend_danger_target"})
+    legacy_trend_target, _ = LEGACY_TREND_TARGET
+    legacy_trend = predictions[predictions["target_name"] == legacy_trend_target]
+    if not legacy_trend.empty:
+        legacy_values = _first_non_null(legacy_trend, key_cols, ["p_trend_danger", "y_true"])
+        legacy_values = legacy_values.rename(
+            columns={"y_true": "observed_legacy_trend_danger_target"}
+        )
+        base = base.merge(legacy_values, on=key_cols, how="left")
+
+    for side_key, (target_name, probability_column) in SIDE_AWARE_TREND_TARGETS.items():
+        trend = predictions[predictions["target_name"] == target_name]
+        if trend.empty:
+            failures.append(f"missing policy target predictions: {target_name}")
+            continue
+        trend_values = _first_non_null(trend, key_cols, [probability_column, "y_true"])
+        trend_values = trend_values.rename(columns={"y_true": f"observed_{side_key}_target"})
         base = base.merge(trend_values, on=key_cols, how="left")
 
     if failures:
@@ -607,9 +631,15 @@ def build_policy_frame(
         "p_short",
         "p_flat",
         "p_fade_success",
+        "p_trend_adverse_long_30m",
+        "p_trend_favorable_long_30m",
+        "p_trend_adverse_short_30m",
+        "p_trend_favorable_short_30m",
         "p_trend_danger",
         "expected_return",
     ):
+        if column not in base.columns:
+            base[column] = np.nan
         base[column] = pd.to_numeric(base[column], errors="coerce")
 
     missing_prices = base["execution_open"].isna() | base["execution_close"].isna()
@@ -628,12 +658,28 @@ def build_policy_frame(
     )
     base["direction_beats_flat"] = base["direction_probability"] > base["p_flat"]
     base["fade_allowed"] = base["p_fade_success"].ge(policy.min_fade_success).fillna(False)
-    trend_danger_condition = base["p_trend_danger"].isna() | base["p_trend_danger"].ge(
+    base["trend_adverse_probability"] = np.where(
+        base["base_position"].eq(1),
+        base["p_trend_adverse_long_30m"],
+        np.where(base["base_position"].eq(-1), base["p_trend_adverse_short_30m"], np.nan),
+    )
+    base["trend_favorable_probability"] = np.where(
+        base["base_position"].eq(1),
+        base["p_trend_favorable_long_30m"],
+        np.where(base["base_position"].eq(-1), base["p_trend_favorable_short_30m"], np.nan),
+    )
+    trend_danger_condition = base["trend_adverse_probability"].isna() | base[
+        "trend_adverse_probability"
+    ].ge(
         policy.max_trend_danger
     )
     base["trend_danger_block"] = (
-        trend_danger_condition if policy.p_trend_danger_blocks_fade_trades else False
+        trend_danger_condition if policy.side_aware_trend_blocks_fade_trades else False
     )
+    if policy.p_trend_danger_blocks_fade_trades:
+        warnings.append(
+            "p_trend_danger_blocks_fade_trades is ignored; aggregate p_trend_danger is legacy/context only"
+        )
     base["no_direction_signal"] = base["base_position"].eq(0)
     base["blocked_by_flat_probability"] = (
         base["base_position"].ne(0) & ~base["direction_beats_flat"].fillna(False)
@@ -984,6 +1030,9 @@ def _score_column_for_target(frame: pd.DataFrame, target_name: str) -> pd.Series
         return pd.to_numeric(frame["p_fade_success"], errors="coerce")
     if target_name == "target_trend_danger_30m":
         return pd.to_numeric(frame["p_trend_danger"], errors="coerce")
+    for side_target, probability_column in SIDE_AWARE_TREND_TARGETS.values():
+        if target_name == side_target:
+            return pd.to_numeric(frame[probability_column], errors="coerce")
     if target_name == "target_sign_with_deadzone":
         p_long = pd.to_numeric(frame["p_long"], errors="coerce").fillna(0.0)
         p_short = pd.to_numeric(frame["p_short"], errors="coerce").fillna(0.0)
@@ -1067,7 +1116,12 @@ def build_calibration_report(predictions: pd.DataFrame, models_config: dict[str,
         else "MIXED_OR_EXTERNAL_CALIBRATION_IDS"
     )
     curves: list[dict[str, Any]] = []
-    for target_name in ("target_fade_success_15m", "target_trend_danger_30m"):
+    calibration_targets = (
+        "target_fade_success_15m",
+        "target_trend_danger_30m",
+        *(target for target, _ in SIDE_AWARE_TREND_TARGETS.values()),
+    )
+    for target_name in calibration_targets:
         target_frame = predictions[predictions["target_name"] == target_name].copy()
         if target_frame.empty:
             continue

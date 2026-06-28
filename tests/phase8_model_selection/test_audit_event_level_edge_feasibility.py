@@ -15,6 +15,7 @@ from scripts.phase8_model_selection.audit_event_level_edge_feasibility import ( 
     main,
 )
 from scripts.phase8_model_selection.evaluate_predictions import PolicyConfig  # noqa: E402
+from tests.phase8_model_selection.side_aware_fixture import add_side_aware_trend_rows  # noqa: E402
 
 
 def _write_costs(path: Path, *, include_market: bool = True) -> Path:
@@ -134,6 +135,7 @@ def _add_policy_rows(rows: list[dict[str, object]], base: dict[str, object], ite
             "p_trend_danger": item["p_trend"],
         }
     )
+    add_side_aware_trend_rows(rows, base, item)
 
 
 def _write_predictions(
@@ -278,7 +280,7 @@ def test_event_level_audit_selects_non_overlapping_events(tmp_path: Path) -> Non
         policy=_policy(),
     )
 
-    assert report["source_prediction_rows"] == 16
+    assert report["source_prediction_rows"] == 32
     assert report["current_policy_traded_rows"] == 3
     assert report["direction_candidate_rows"] == 4
     assert report["non_overlapping_event_count"] == 3

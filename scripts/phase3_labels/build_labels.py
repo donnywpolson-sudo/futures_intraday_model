@@ -159,6 +159,10 @@ REGIME_LABEL_COLUMNS = [
     "target_fade_success_15m",
     "trend_danger_up_30m",
     "trend_danger_down_30m",
+    "target_trend_adverse_long_30m",
+    "target_trend_favorable_long_30m",
+    "target_trend_adverse_short_30m",
+    "target_trend_favorable_short_30m",
     "target_trend_danger_long_30m",
     "target_trend_danger_short_30m",
     "target_trend_danger_30m",
@@ -881,6 +885,7 @@ def add_labels(df: pd.DataFrame, config: MarketConfig) -> pd.DataFrame:
     profit_threshold_ticks = np.maximum(config.min_profit_ticks, 0.50 * atr_ref_ticks)
     adverse_threshold_ticks = np.maximum(config.min_stop_ticks, 1.00 * atr_ref_ticks)
     trend_adverse_threshold_ticks = np.maximum(config.min_stop_ticks, 1.50 * atr_ref_ticks)
+    trend_favorable_threshold_ticks = trend_adverse_threshold_ticks
 
     checks_15m = _future_path_checks(df, EXIT_OFFSET_BARS)
     checks_30m = _future_path_checks(df, REGIME_OFFSET_BARS)
@@ -967,12 +972,14 @@ def add_labels(df: pd.DataFrame, config: MarketConfig) -> pd.DataFrame:
     )
     future_high_30m = _future_extreme(df, "high", REGIME_OFFSET_BARS, "max")
     future_low_30m = _future_extreme(df, "low", REGIME_OFFSET_BARS, "min")
-    trend_danger_up = valid_30m & (
-        ((future_high_30m - entry_price) / tick_size) >= trend_adverse_threshold_ticks
-    )
-    trend_danger_down = valid_30m & (
-        ((entry_price - future_low_30m) / tick_size) >= trend_adverse_threshold_ticks
-    )
+    trend_up_ticks = (future_high_30m - entry_price) / tick_size
+    trend_down_ticks = (entry_price - future_low_30m) / tick_size
+    trend_danger_up = valid_30m & (trend_up_ticks >= trend_adverse_threshold_ticks)
+    trend_danger_down = valid_30m & (trend_down_ticks >= trend_adverse_threshold_ticks)
+    trend_adverse_long = valid_30m & (trend_down_ticks >= trend_adverse_threshold_ticks)
+    trend_favorable_long = valid_30m & (trend_up_ticks >= trend_favorable_threshold_ticks)
+    trend_adverse_short = valid_30m & (trend_up_ticks >= trend_adverse_threshold_ticks)
+    trend_favorable_short = valid_30m & (trend_down_ticks >= trend_favorable_threshold_ticks)
 
     vwap, session_mid = _past_session_levels(df)
     revert_to_vwap = valid_30m & (
@@ -1021,6 +1028,10 @@ def add_labels(df: pd.DataFrame, config: MarketConfig) -> pd.DataFrame:
     )
     df["trend_danger_up_30m"] = trend_danger_up.fillna(False).astype(bool)
     df["trend_danger_down_30m"] = trend_danger_down.fillna(False).astype(bool)
+    df["target_trend_adverse_long_30m"] = trend_adverse_long.fillna(False).astype(bool)
+    df["target_trend_favorable_long_30m"] = trend_favorable_long.fillna(False).astype(bool)
+    df["target_trend_adverse_short_30m"] = trend_adverse_short.fillna(False).astype(bool)
+    df["target_trend_favorable_short_30m"] = trend_favorable_short.fillna(False).astype(bool)
     df["target_trend_danger_long_30m"] = df["trend_danger_up_30m"].astype(bool)
     df["target_trend_danger_short_30m"] = df["trend_danger_down_30m"].astype(bool)
     df["target_trend_danger_30m"] = (

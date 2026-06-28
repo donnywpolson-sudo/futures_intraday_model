@@ -17,6 +17,7 @@ from scripts.phase8_model_selection.audit_mr_tail_risk import (  # noqa: E402
     build_mr_tail_policy_frame,
     main,
 )
+from tests.phase8_model_selection.side_aware_fixture import add_side_aware_trend_rows  # noqa: E402
 
 
 def _write_costs(path: Path) -> Path:
@@ -141,6 +142,7 @@ def _add_prediction_group(
             },
         ]
     )
+    add_side_aware_trend_rows(rows, base, item)
 
 
 def _write_predictions(path: Path) -> Path:
@@ -327,7 +329,7 @@ def test_mr_tail_audit_costs_trend_block_and_reports(tmp_path: Path) -> None:
     for suffix in OUTPUT_SUFFIXES.values():
         assert (output_root / f"fixture_{suffix}").exists()
 
-    assert report["prediction_count"] == 24
+    assert report["prediction_count"] == 48
     assert report["policy_row_count"] == 6
     assert report["overall"]["trade_count"] == 2
     assert report["overall"]["gross_return_dollars"] == 100.0

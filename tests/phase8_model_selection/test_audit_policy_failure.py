@@ -15,6 +15,7 @@ from scripts.phase8_model_selection.audit_policy_failure import (  # noqa: E402
     main,
 )
 from scripts.phase8_model_selection.evaluate_predictions import PolicyConfig  # noqa: E402
+from tests.phase8_model_selection.side_aware_fixture import add_side_aware_trend_rows  # noqa: E402
 
 
 def _write_costs(path: Path) -> Path:
@@ -118,6 +119,7 @@ def _write_predictions(path: Path) -> Path:
             "p_trend_danger": 0.20,
         },
     ]
+    add_side_aware_trend_rows(rows, base, {"p_trend": 0.20})
     pd.DataFrame(rows).to_parquet(path, index=False)
     return path
 
@@ -139,7 +141,7 @@ def test_build_failure_breakdown_writes_expected_slices(tmp_path: Path) -> None:
         ),
     )
 
-    assert report["prediction_count"] == 4
+    assert report["prediction_count"] == 8
     assert report["policy_row_count"] == 1
     assert report["trade_count"] == 1
     assert report["overall"]["net_return_dollars"] == 40.0
@@ -156,6 +158,10 @@ def test_build_failure_breakdown_writes_expected_slices(tmp_path: Path) -> None:
         "target_sign_with_deadzone",
         "target_fade_success_15m",
         "target_trend_danger_30m",
+        "target_trend_adverse_long_30m",
+        "target_trend_favorable_long_30m",
+        "target_trend_adverse_short_30m",
+        "target_trend_favorable_short_30m",
     }
     assert cost_components.loc[0, "slippage_cost_dollars"] == 6.25
     assert cost_components.loc[0, "commission_cost_dollars"] == 3.75

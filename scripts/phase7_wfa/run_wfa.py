@@ -65,6 +65,10 @@ PREDICTION_COLUMNS = [
     "p_short",
     "p_flat",
     "p_fade_success",
+    "p_trend_adverse_long_30m",
+    "p_trend_favorable_long_30m",
+    "p_trend_adverse_short_30m",
+    "p_trend_favorable_short_30m",
     "p_trend_danger",
     "calibration_id",
     "model_config_hash",
@@ -78,6 +82,25 @@ PREDICTION_COLUMNS = [
     "target_exit_ts",
     "minutes_until_session_close",
 ]
+PROBABILITY_COLUMNS = [
+    "p_long",
+    "p_short",
+    "p_flat",
+    "p_fade_success",
+    "p_trend_adverse_long_30m",
+    "p_trend_favorable_long_30m",
+    "p_trend_adverse_short_30m",
+    "p_trend_favorable_short_30m",
+    "p_trend_danger",
+]
+TARGET_PROBABILITY_COLUMNS = {
+    "target_fade_success_15m": "p_fade_success",
+    "target_trend_adverse_long_30m": "p_trend_adverse_long_30m",
+    "target_trend_favorable_long_30m": "p_trend_favorable_long_30m",
+    "target_trend_adverse_short_30m": "p_trend_adverse_short_30m",
+    "target_trend_favorable_short_30m": "p_trend_favorable_short_30m",
+    "target_trend_danger_30m": "p_trend_danger",
+}
 
 
 @dataclass(frozen=True)
@@ -632,23 +655,14 @@ def _classification_predictions(
     p_flat = _positive_probability(classes, probabilities, 0)
     p_true = _positive_probability(classes, probabilities, 1)
 
-    columns = {
-        "p_long": np.full(len(x_test), np.nan),
-        "p_short": np.full(len(x_test), np.nan),
-        "p_flat": np.full(len(x_test), np.nan),
-        "p_fade_success": np.full(len(x_test), np.nan),
-        "p_trend_danger": np.full(len(x_test), np.nan),
-    }
+    columns = {column: np.full(len(x_test), np.nan) for column in PROBABILITY_COLUMNS}
     if spec.target == "target_sign_with_deadzone":
         columns["p_long"] = p_long
         columns["p_short"] = p_short
         columns["p_flat"] = p_flat
         raw = np.nan_to_num(p_long, nan=0.0) - np.nan_to_num(p_short, nan=0.0)
-    elif "fade_success" in spec.target:
-        columns["p_fade_success"] = p_true
-        raw = p_true
-    elif "trend_danger" in spec.target:
-        columns["p_trend_danger"] = p_true
+    elif spec.target in TARGET_PROBABILITY_COLUMNS:
+        columns[TARGET_PROBABILITY_COLUMNS[spec.target]] = p_true
         raw = p_true
     else:
         raw = p_true
@@ -676,10 +690,8 @@ def classifier_collapse_failure(
         relevant = np.nan_to_num(probability_cols["p_long"], nan=0.0) - np.nan_to_num(
             probability_cols["p_short"], nan=0.0
         )
-    elif "fade_success" in spec.target:
-        relevant = probability_cols["p_fade_success"]
-    elif "trend_danger" in spec.target:
-        relevant = probability_cols["p_trend_danger"]
+    elif spec.target in TARGET_PROBABILITY_COLUMNS:
+        relevant = probability_cols[TARGET_PROBABILITY_COLUMNS[spec.target]]
     if _finite_std(np.asarray(relevant, dtype=float)) <= CLASSIFIER_COLLAPSE_STD_EPS:
         return f"{spec.model_id}: classifier probabilities collapsed to near-constant class-prior values"
     return None
@@ -729,7 +741,7 @@ def _prediction_frame(
             ).to_numpy(),
         }
     )
-    for column in ("p_long", "p_short", "p_flat", "p_fade_success", "p_trend_danger"):
+    for column in PROBABILITY_COLUMNS:
         if probability_cols is None:
             out[column] = np.nan
         else:

@@ -16,6 +16,7 @@ from scripts.phase8_model_selection.audit_policy_signal_alignment import (  # no
     main,
 )
 from scripts.phase8_model_selection.evaluate_predictions import PolicyConfig  # noqa: E402
+from tests.phase8_model_selection.side_aware_fixture import add_side_aware_trend_rows  # noqa: E402
 
 
 def _write_costs(path: Path) -> Path:
@@ -130,6 +131,7 @@ def _add_prediction_group(rows: list[dict[str, object]], base: dict[str, object]
             },
         ]
     )
+    add_side_aware_trend_rows(rows, base, item)
 
 
 def _write_predictions(path: Path) -> Path:
@@ -279,12 +281,13 @@ def test_policy_signal_alignment_detects_bad_traded_subset(tmp_path: Path) -> No
             long_short_margin=0.05,
             min_fade_success=0.50,
             max_trend_danger=0.50,
+            side_aware_trend_blocks_fade_trades=True,
         ),
     )
 
     for suffix in OUTPUT_SUFFIXES.values():
         assert (output_root / f"fixture_{suffix}").exists()
-    assert report["prediction_count"] == 24
+    assert report["prediction_count"] == 48
     assert report["policy_row_count"] == 6
     assert report["trade_count"] == 3
     assert report["decision"] == "direction_edge_calibration_issue_not_policy_logic_bug"

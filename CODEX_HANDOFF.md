@@ -1,5 +1,569 @@
 # Codex Handoff
 
+## Side-Aware Commit Execution - 2026-06-28
+
+- Updated at local time: 2026-06-28T15:49:59-07:00.
+- Scope selected: user explicitly approved staging and committing the verified side-aware commit candidate.
+- Staging rule for this run: stage only the files listed in `Side-Aware Commit Candidate - 2026-06-28`.
+- Exclusions remain active: `AGENTS.md`, `data/**`, preserved quarantine, smoke report roots, generated reports/data artifacts, logs, caches, model artifacts, and any unlisted live/production/model-promotion artifacts.
+- Safety checks before staging:
+  - Repo path verified as `C:\Users\donny\Desktop\futures_intraday_model`.
+  - `data\_quarantine\actual_cleanup_v1_20260628_130232` exists.
+  - `git diff --name-only -- data` returned no paths.
+- Commands for this selected scope: stage the candidate files, compare staged files to the candidate list, commit only if the staged scope matches, then report `git status --short` and `git log -1 --oneline` in the final response.
+- This commit execution still does not claim production/live readiness, model promotion, cleanup/archive approval, or approval of historical model results.
+
+### Exact Next Recommended Step
+
+```text
+None after the verified side-aware commit is created and remaining worktree state is reported.
+If staging reveals a scope mismatch, stop before committing and resolve the mismatch only.
+```
+
+## Side-Aware Commit Candidate - 2026-06-28
+
+- Updated at local time: 2026-06-28T13:20:55-07:00.
+- Scope executed: prepared a commit candidate for the accepted side-aware current work without staging or committing.
+- Final pre-commit verification:
+  - `git diff --check -- configs scripts tests CODEX_HANDOFF.md` -> passed; output contained CRLF conversion warnings only.
+  - `python -m scripts.validation.model_registry --config configs\models.yaml` -> passed; printed config hash `318ab6f793f17dfbb981886f601e91b68eefc1d5bb89c02e67462f6107bdc483`.
+  - `python -B -m pytest -p no:cacheprovider tests\phase8_model_selection tests\validation\test_model_registry.py tests\phase3_labels\test_build_labels.py::test_fade_and_30m_regime_labels tests\phase3_labels\test_build_labels.py::test_side_aware_30m_trend_labels_require_valid_30m_path tests\phase4_features\test_build_baseline_features.py::test_registry_excludes_targets_audit_source_and_forbidden_columns tests\phase7_wfa\test_run_wfa.py::test_classification_predictions_route_target_specific_probability_columns tests\live\test_live_shadow_runner.py tests\live\test_export_live_shadow_bundle.py` -> `123 passed, 58 warnings`.
+  - Pytest warnings were `PerformanceWarning` messages from `scripts\phase4_features\build_baseline_features.py` during live-shadow feature construction; no test failed.
+- Candidate files to include in a side-aware commit:
+  - `CODEX_HANDOFF.md`
+  - `configs\alpha_tiered.yaml`
+  - `configs\models.yaml`
+  - `configs\tier_3.yaml`
+  - `scripts\phase3_labels\build_labels.py`
+  - `scripts\phase4_features\build_baseline_features.py`
+  - `scripts\phase7_wfa\run_wfa.py`
+  - `scripts\phase8_model_selection\audit_direction_edge_calibration.py`
+  - `scripts\phase8_model_selection\audit_event_level_edge_feasibility.py`
+  - `scripts\phase8_model_selection\audit_label_feature_sanity.py`
+  - `scripts\phase8_model_selection\audit_mr_tail_risk.py`
+  - `scripts\phase8_model_selection\audit_policy_failure.py`
+  - `scripts\phase8_model_selection\audit_policy_run_level_overlap.py`
+  - `scripts\phase8_model_selection\audit_policy_signal_alignment.py`
+  - `scripts\phase8_model_selection\audit_signal_trade_quality.py`
+  - `scripts\phase8_model_selection\audit_threshold_and_target_sanity.py`
+  - `scripts\phase8_model_selection\audit_trade_failure_drilldown.py`
+  - `scripts\phase8_model_selection\evaluate_predictions.py`
+  - `scripts\validation\feature_leakage_guard.py`
+  - `scripts\validation\model_registry.py`
+  - `tests\phase3_labels\test_build_labels.py`
+  - `tests\phase4_features\test_build_baseline_features.py`
+  - `tests\phase7_wfa\test_run_wfa.py`
+  - `tests\phase8_model_selection\side_aware_fixture.py`
+  - `tests\phase8_model_selection\test_audit_direction_edge_calibration.py`
+  - `tests\phase8_model_selection\test_audit_event_level_edge_feasibility.py`
+  - `tests\phase8_model_selection\test_audit_label_feature_sanity.py`
+  - `tests\phase8_model_selection\test_audit_mr_tail_risk.py`
+  - `tests\phase8_model_selection\test_audit_policy_failure.py`
+  - `tests\phase8_model_selection\test_audit_policy_run_level_overlap.py`
+  - `tests\phase8_model_selection\test_audit_policy_signal_alignment.py`
+  - `tests\phase8_model_selection\test_audit_signal_trade_quality.py`
+  - `tests\phase8_model_selection\test_audit_threshold_and_target_sanity.py`
+  - `tests\phase8_model_selection\test_audit_trade_failure_drilldown.py`
+  - `tests\phase8_model_selection\test_evaluate_predictions.py`
+  - `tests\validation\test_model_registry.py`
+- Files and paths to exclude from this side-aware commit candidate:
+  - `AGENTS.md`
+  - `data/**`, including `data\_quarantine\actual_cleanup_v1_20260628_130232`
+  - `reports\side_aware_trend_smoke_v1`
+  - `reports\side_aware_trend_smoke_v2_tier1_core`
+  - `reports\side_aware_trend_smoke_v3_tier1_core`
+  - all generated parquet/dbn/zst/csv/json reports, logs, model artifacts, and cache/build outputs
+  - any live/production/model-promotion artifacts not explicitly listed in the candidate include list
+- Safety:
+  - No staging or commit was performed.
+  - No data files, quarantine folders, report evidence roots, cleanup/archive actions, or model artifact writers were touched.
+  - This candidate still does not claim production/live readiness, model promotion, cleanup/archive approval, or approval of historical model results.
+
+### Exact Next Recommended Step
+
+```text
+Continue from CODEX_HANDOFF.md.
+Next selected scope: stage and commit the verified side-aware commit candidate, only if the user explicitly wants a commit.
+Rules:
+- Do not delete, move, rename, archive, quarantine, or mutate data/**.
+- Preserve data/_quarantine/actual_cleanup_v1_20260628_130232 for rollback.
+- Do not delete or overwrite reports/side_aware_trend_smoke_v1, reports/side_aware_trend_smoke_v2_tier1_core, or reports/side_aware_trend_smoke_v3_tier1_core.
+- Do not include AGENTS.md.
+- Do not include generated reports, parquet/dbn/zst files, logs, caches, model artifacts, or data outputs.
+- Do not claim production/live readiness, model promotion, cleanup/archive approval, or approval of historical model results.
+Task:
+- Stage only the files listed under "Candidate files to include in a side-aware commit" in CODEX_HANDOFF.md.
+- Commit them with a message that describes the side-aware trend label/prediction/policy/live-shadow contract.
+- After committing, run git status --short and report any remaining uncommitted or excluded files.
+Stop when:
+- The verified side-aware commit is created and remaining worktree state is reported, or staging reveals a scope mismatch that must be resolved before committing.
+```
+
+## Final Side-Aware Diff Disposition - 2026-06-28
+
+- Updated at local time: 2026-06-28T13:22:00-07:00.
+- Scope executed: reviewed current dirty tracked side-aware source/config/test diffs, the successful report-scoped v3 smoke evidence, and live-shadow side-aware gating verification.
+- Final disposition: accept the preserved side-aware source/config/test diffs as intentional current work in the working tree.
+- Disposition applies to:
+  - `configs\alpha_tiered.yaml`
+  - `configs\models.yaml`
+  - `configs\tier_3.yaml`
+  - `scripts\phase3_labels\build_labels.py`
+  - `scripts\phase4_features\build_baseline_features.py`
+  - `scripts\phase7_wfa\run_wfa.py`
+  - `scripts\phase8_model_selection\audit_direction_edge_calibration.py`
+  - `scripts\phase8_model_selection\audit_event_level_edge_feasibility.py`
+  - `scripts\phase8_model_selection\audit_label_feature_sanity.py`
+  - `scripts\phase8_model_selection\audit_mr_tail_risk.py`
+  - `scripts\phase8_model_selection\audit_policy_failure.py`
+  - `scripts\phase8_model_selection\audit_policy_run_level_overlap.py`
+  - `scripts\phase8_model_selection\audit_policy_signal_alignment.py`
+  - `scripts\phase8_model_selection\audit_signal_trade_quality.py`
+  - `scripts\phase8_model_selection\audit_threshold_and_target_sanity.py`
+  - `scripts\phase8_model_selection\audit_trade_failure_drilldown.py`
+  - `scripts\phase8_model_selection\evaluate_predictions.py`
+  - `scripts\validation\feature_leakage_guard.py`
+  - `scripts\validation\model_registry.py`
+  - `tests\phase3_labels\test_build_labels.py`
+  - `tests\phase4_features\test_build_baseline_features.py`
+  - `tests\phase7_wfa\test_run_wfa.py`
+  - `tests\phase8_model_selection\test_audit_direction_edge_calibration.py`
+  - `tests\phase8_model_selection\test_audit_event_level_edge_feasibility.py`
+  - `tests\phase8_model_selection\test_audit_label_feature_sanity.py`
+  - `tests\phase8_model_selection\test_audit_mr_tail_risk.py`
+  - `tests\phase8_model_selection\test_audit_policy_failure.py`
+  - `tests\phase8_model_selection\test_audit_policy_run_level_overlap.py`
+  - `tests\phase8_model_selection\test_audit_policy_signal_alignment.py`
+  - `tests\phase8_model_selection\test_audit_signal_trade_quality.py`
+  - `tests\phase8_model_selection\test_audit_threshold_and_target_sanity.py`
+  - `tests\phase8_model_selection\test_audit_trade_failure_drilldown.py`
+  - `tests\phase8_model_selection\test_evaluate_predictions.py`
+  - `tests\validation\test_model_registry.py`
+  - `tests\phase8_model_selection\side_aware_fixture.py`
+- Evidence supporting acceptance:
+  - Focused side-aware implementation validation previously passed: Phase 8 tests, targeted Phase 3/4/7/model-registry tests, model registry validation, grep scans, and `git diff --check`.
+  - Report-scoped v3 smoke passed through fresh Phase 3 labels, Phase 4 features/manifest gate, Phase 5 splits, bounded Phase 6 predictions, prediction schema, and Phase 8 policy metrics under `reports\side_aware_trend_smoke_v3_tier1_core`.
+  - Live-shadow gating verification passed with side-aware adverse probabilities and aggregate-only trend danger failing closed: `python -m pytest tests\live\test_live_shadow_runner.py tests\live\test_export_live_shadow_bundle.py` -> `18 passed`.
+- Explicit limits:
+  - Acceptance means these diffs are intentional current source/config/test behavior in the working tree.
+  - Acceptance does not stage, commit, promote, or claim production/live readiness.
+  - Acceptance does not approve historical model results, archive decisions, cleanup decisions, closeout claims, or model promotion.
+  - `AGENTS.md` is not included in this side-aware disposition and remains outside this decision.
+- Minimum validation gate before any pipeline, model result, archive decision, cleanup decision, closeout claim, or promotion claim relies on the side-aware implementation:
+  1. Re-run static/source checks on the exact candidate worktree: `git diff --check -- configs scripts tests CODEX_HANDOFF.md` and `python -m scripts.validation.model_registry --config configs\models.yaml`.
+  2. Re-run focused tests covering side-aware labels, Phase 4 target registry/leakage guard, Phase 7 target-specific prediction routing, Phase 8 policy/audit behavior, model registry, and live-shadow bundle/gating.
+  3. Re-run or preserve a fresh report-scoped smoke equivalent to `reports\side_aware_trend_smoke_v3_tier1_core` from Phase 3 through Phase 8, using only report-scoped fresh labels/features/predictions/metrics and no historical prediction artifacts.
+  4. For any claim beyond structural smoke, run the intended pipeline scope from fresh current inputs and verify its own manifests, row counts, prediction schema, warnings/failures, cost assumptions, purge/embargo, and promotion/closeout gates. The v3 smoke is not sufficient for those broader claims by itself.
+  5. Verify `git diff --name-only -- data` remains empty unless a later user-approved task explicitly allows data mutation.
+- Safety:
+  - No data files, quarantine folders, report evidence roots, staging, or commits were changed in this disposition step.
+
+### Exact Next Recommended Step
+
+```text
+Continue from CODEX_HANDOFF.md.
+Next selected scope: prepare a user-approved commit candidate for the accepted side-aware current work.
+Rules:
+- Do not delete, move, rename, archive, quarantine, or mutate data/**.
+- Preserve data/_quarantine/actual_cleanup_v1_20260628_130232 for rollback.
+- Do not delete or overwrite reports/side_aware_trend_smoke_v1, reports/side_aware_trend_smoke_v2_tier1_core, or reports/side_aware_trend_smoke_v3_tier1_core.
+- Do not stage or commit unless explicitly requested in that prompt.
+- Do not include AGENTS.md in the side-aware commit scope unless the user explicitly says to include it.
+- Do not claim production/live readiness, model promotion, cleanup/archive approval, or approval of historical model results.
+Task:
+- Review the accepted side-aware source/config/test/handoff diff scope.
+- Run final pre-commit verification only: git diff --check -- configs scripts tests CODEX_HANDOFF.md, python -m scripts.validation.model_registry --config configs\models.yaml, and the focused side-aware/live-shadow pytest set documented in CODEX_HANDOFF.md.
+- Report the exact files that would be included in a side-aware commit and any files that must remain excluded.
+Stop when:
+- The commit candidate scope and final verification status are documented, with no staging or commit performed.
+```
+
+## Live-Shadow Side-Aware Trend Gating Decision - 2026-06-28
+
+- Updated at local time: 2026-06-28T13:14:14-07:00.
+- Scope executed: inspected `scripts\live_shadow_runner.py`, `tests\live\test_live_shadow_runner.py`, and `tests\live\test_export_live_shadow_bundle.py` only.
+- Decision: live-shadow uses side-aware adverse trend probabilities and fails closed when only legacy aggregate trend danger is available.
+- Verified current live-shadow contract:
+  - Required bundle targets are `target_ret_15m`, `target_sign_with_deadzone`, `target_fade_success_15m`, `target_trend_adverse_long_30m`, and `target_trend_adverse_short_30m`.
+  - Legacy aggregate `target_trend_danger_30m` is not a required live-shadow target.
+  - Model inference emits `p_trend_adverse_long_30m` and `p_trend_adverse_short_30m`.
+  - Long fade gating selects only `p_trend_adverse_long_30m`.
+  - Short fade gating selects only `p_trend_adverse_short_30m`.
+  - Missing selected side-aware adverse probability adds `missing_side_aware_trend_adverse_probability` and `trend_danger_block`.
+  - Legacy aggregate `p_trend_danger` is not included in the live-shadow signal payload and does not override side-aware adverse probabilities.
+- Focused validation:
+  - `python -m pytest tests\live\test_live_shadow_runner.py tests\live\test_export_live_shadow_bundle.py` -> `18 passed, 58 warnings`.
+  - Warnings were `PerformanceWarning` messages from `scripts\phase4_features\build_baseline_features.py` feature construction during focused live tests; no test failed.
+- Files changed in this scope:
+  - No source or test edits were required. `CODEX_HANDOFF.md` was updated to record the verified disposition.
+- Safety:
+  - No WFA/modeling, Phase 8 over repo predictions, prediction generation, label generation over repo data, or model artifact writers were run.
+  - No `data/**` mutation, cleanup, archive, quarantine deletion, report evidence deletion/overwrite, staging, or commit was performed.
+- Current evidence limits:
+  - This verifies the live-shadow code path is side-aware/fail-closed at the focused unit/export-test level.
+  - This still does not claim production/live readiness, model promotion, or approval of historical model results.
+
+### Exact Next Recommended Step
+
+```text
+Continue from CODEX_HANDOFF.md.
+Next selected scope: decide final disposition of the preserved side-aware implementation diffs after successful report-scoped smoke and live-shadow gating verification.
+Rules:
+- Do not delete, move, rename, archive, quarantine, or mutate data/**.
+- Preserve data/_quarantine/actual_cleanup_v1_20260628_130232 for rollback.
+- Do not delete or overwrite reports/side_aware_trend_smoke_v1, reports/side_aware_trend_smoke_v2_tier1_core, or reports/side_aware_trend_smoke_v3_tier1_core.
+- Do not stage or commit unless explicitly requested.
+- Do not claim production/live readiness, model promotion, cleanup/archive approval, or approval of historical model results.
+Task:
+- Review CODEX_HANDOFF.md sections for side-aware implementation, successful v3 smoke evidence, and live-shadow gating verification.
+- Decide whether the preserved side-aware source/config/test diffs should remain future unapproved work, be accepted as intentional current work, or be prepared for a user-approved commit.
+- If accepting as current work, define the minimum remaining validation needed before any pipeline, model result, archive decision, cleanup decision, closeout claim, or promotion claim relies on it.
+Stop when:
+- The preserved side-aware diffs have an explicit final disposition and any remaining validation gate is documented.
+```
+
+## Report-Scoped Side-Aware Smoke Success - 2026-06-28
+
+- Updated at local time: 2026-06-28T10:41:38-07:00.
+- Scope executed: completed a corrected report-scoped side-aware smoke under `reports\side_aware_trend_smoke_v3_tier1_core`.
+- Why v3 was required:
+  - The planned v2 command created `reports\side_aware_trend_smoke_v2_tier1_core` but stopped at Phase 3.
+  - Phase 3 rejected the tier-1 causal manifest because the command omitted the approved `--accepted-readiness-exceptions` file required for the documented 6E 2023/2024 synthetic-threshold warnings.
+  - No later phases were run under v2.
+  - v1 and v2 are preserved as stopped smoke evidence roots and were not deleted or overwritten.
+- Inputs used read-only:
+  - `data\causal_base_candidates\tier1_rebuild_v1`
+  - `reports\data_audit\causal_base_repair_plan\tier1_candidate_v1\causal_base_manifest.json`
+  - `reports\data_audit\causal_base_repair_plan\tier1_candidate_v1\accepted_readiness_exceptions.json`
+  - `reports\data_audit\wfa_research\tier1_rebuild_v1\preflight\data_audit_universe_tier1_rebuild_v1.json`
+- Generated v3 evidence:
+  - Phase 3 labels: `reports\side_aware_trend_smoke_v3_tier1_core\phase3\label_manifest.json`
+  - Phase 4 features: `reports\side_aware_trend_smoke_v3_tier1_core\phase4\baseline_feature_manifest.json`
+  - Phase 5 splits: `reports\side_aware_trend_smoke_v3_tier1_core\phase5\split_plan.json`
+  - Phase 6 predictions: `reports\side_aware_trend_smoke_v3_tier1_core\smoke_data\predictions\side_aware_trend_smoke_v3_tier1_core\oos_predictions.parquet`
+  - Phase 6 manifest: `reports\side_aware_trend_smoke_v3_tier1_core\phase6\side_aware_trend_smoke_v3_tier1_core_predictions_manifest.json`
+  - Phase 8 decision: `reports\side_aware_trend_smoke_v3_tier1_core\phase8\phase8\alpha_promotion_decision.json`
+- Successful checks:
+  - Preflight verified correct repo path, preserved rollback quarantine, preserved v1/v2 evidence roots, absent v3 root, no tracked `data/**` diff, PASS tier-1 causal manifest, eight causal input parquet files, and two approved report-only 6E readiness exceptions.
+  - Phase 3 generated labels for all 8 tier-1 market-years with zero failures.
+  - Label schema check found all four side-aware target columns in all 8 fresh label parquet files.
+  - Phase 4 generated all 8 feature matrices with `status=WARN`, `failure_count=0`, `warning_count=8`.
+  - Direct Phase 5-style manifest gate check passed with 8 accepted same-market intermarket warnings.
+  - Smoke-only feature-set manifest was written under `reports\side_aware_trend_smoke_v3_tier1_core\preflight\side_aware_trend_smoke_v3_feature_set.json` and validated with 122 features.
+  - Phase 5 produced a PASS WFA split plan: 48 folds, 4 markets, `feature_manifest_gate.status=PASS`, resolved purge bars `31`, failures `0`.
+  - Phase 6 command output ended with `PASS WFA baseline: predictions=231168 models=8 folds=1 failures=0`.
+  - Phase 6 shell wrapper returned a timeout code after the PASS line, so the artifacts were verified directly: prediction manifest exists with `failure_count=0`, `prediction_count=231168`, output hash present, and no failures.
+  - Prediction parquet schema check passed: 231168 rows, all four side-aware probability columns present, and all four side-aware target rows present.
+  - Phase 8 completed: `PASS model diagnostics: rows=28896 trades=50 net_dollars=-237.5 alpha_ready=False failures=0`.
+  - Phase 8 decision check passed: `failure_count=0`, `model_promotion_allowed=false`.
+  - Final safety check: `git diff --name-only -- data` returned no paths.
+- Current evidence limits:
+  - This smoke proves the future side-aware labels, Phase 4 manifest contract, Phase 5 gate, bounded Phase 6 WFA prediction generation, prediction manifest, prediction schema, and Phase 8 policy metrics can run end-to-end from fresh report-scoped artifacts.
+  - This remains structural smoke evidence only. It does not approve historical model results, archive decisions, cleanup decisions, closeout claims, live execution, production readiness, or model promotion.
+  - `scripts\live_shadow_runner.py` remains out of scope and still requires a separate side-aware gating decision before any live-shadow readiness claim.
+
+### Exact Next Recommended Step
+
+```text
+Continue from CODEX_HANDOFF.md.
+Next selected scope: decide whether to update or disable live-shadow trend gating after side-aware trend labels and the successful report-scoped side-aware smoke.
+Rules:
+- Do not run WFA/modeling, Phase 8 over repo predictions, prediction generation, label generation over repo data, or model artifact writers.
+- Do not mutate data/**, delete quarantine, run cleanup, delete/overwrite reports/side_aware_trend_smoke_v1, reports/side_aware_trend_smoke_v2_tier1_core, or reports/side_aware_trend_smoke_v3_tier1_core, or claim production/live readiness.
+- Do not stage or commit unless explicitly requested.
+- Keep aggregate p_trend_danger as legacy/context only; do not use it as a side-aware risk control.
+Task:
+- Inspect scripts/live_shadow_runner.py and its focused tests only.
+- Decide whether live-shadow should fail closed until side-aware estimators are available, or be updated to require target_trend_adverse_long_30m and target_trend_adverse_short_30m model outputs.
+- If a safe small edit exists, implement only that live-shadow gating contract and focused tests.
+- Otherwise document why live-shadow remains blocked for side-aware trend gating.
+Stop when:
+- live-shadow either blocks aggregate p_trend_danger gating explicitly or uses side-aware adverse trend probabilities with tests.
+```
+
+## Report-Scoped Side-Aware Smoke Attempt - 2026-06-28
+
+- Updated at UTC: 2026-06-28T16:37:43Z.
+- Scope executed: attempted the approved report-scoped side-aware smoke under `reports\side_aware_trend_smoke_v1`, reusing only `reports\data_path_audit_20260628T152225Z\phase2\causal_base_manifest.json` and `reports\data_path_audit_20260628T152225Z\smoke_data\causally_gated_normalized\ES\2024.parquet` as upstream causal input.
+- Stop status: stopped at Phase 5 as required by the smoke plan's first-failure stop condition. Phase 6 WFA prediction generation and Phase 8 policy evaluation were not run.
+- Files/artifacts generated under `reports\side_aware_trend_smoke_v1`:
+  - `phase3\label_manifest.json`
+  - `phase3\label_report.json`
+  - `phase4\baseline_feature_manifest.json`
+  - `phase4\baseline_feature_report.json`
+  - `phase4\feature_correlation_report.csv`
+  - `phase4\feature_registry.json`
+  - `smoke_data\labeled\ES\2024.parquet`
+  - `smoke_data\feature_matrices\baseline\ES\2024.parquet`
+  - `smoke_data\feature_matrices\baseline\feature_cols.json`
+  - `smoke_data\feature_matrices\baseline\target_cols.json`
+  - `smoke_data\feature_matrices\baseline\metadata_cols.json`
+  - `smoke_data\feature_matrices\baseline\excluded_cols.json`
+- Successful checks:
+  - Preflight verified correct repo path, preserved rollback quarantine exists, no tracked `data/**` diff existed before the smoke, the report root did not already exist, and the upstream Phase 2 causal manifest/input parquet existed.
+  - Phase 3 label generation completed: `PASS ES 2024: rows=355065 valid=337861 invalid=17204 warnings=0 failures=0`.
+  - Label schema check passed for `target_trend_adverse_long_30m`, `target_trend_favorable_long_30m`, `target_trend_adverse_short_30m`, and `target_trend_favorable_short_30m`.
+  - Phase 4 feature generation completed with zero failures: `WARN ES 2024: rows=355065 features=122 input_valid=349549 training_valid=337861 warnings=1 failures=0`.
+  - Phase 4 manifest check passed for the four side-aware target columns and `failure_count == 0`; manifest status is `WARN` with `warning_count == 1`.
+  - Post-failure safety check: `git diff --name-only -- data` returned no paths.
+- Phase 5 failed command:
+  - `python -m scripts.phase5_wfa.build_wfa_splits --profile tier_0 --input-root reports\side_aware_trend_smoke_v1\smoke_data\feature_matrices\baseline --reports-root reports\side_aware_trend_smoke_v1\phase5 --profile-config configs\alpha_tiered.yaml --models-config configs\models.yaml`
+- Failure evidence:
+  - CLI default for `--feature-manifest` is `auto`, so omitting the flag still triggers Phase 5's upstream feature manifest gate.
+  - The auto gate failed and reported: `feature_manifest_gate failed`.
+  - Direct check of the fresh manifest showed the fresh output hash exists, but the manifest gate still fails because the single-market tier-0 Phase 4 output warning is not in Phase 5's accepted warning set:
+    - `features fully unavailable: feature_rel_ret_vs_ES_15,feature_rel_ret_vs_ZN_15,feature_rel_ret_vs_CL_15,feature_rel_ret_vs_6E_15,feature_corr_vs_ES_60,feature_corr_vs_ZN_60,feature_corr_vs_CL_60,feature_corr_vs_6E_60,feature_es_zn_divergence_30,feature_cl_es_divergence_30,feature_tier1_direction_agreement_15,feature_tier1_return_dispersion_15,feature_tier1_risk_on_score_30,feature_es_zn_risk_regime_30,feature_cl_es_macro_divergence_30`
+  - The prior upstream causal fixture contains only `ES\2024.parquet`, so the planned tier-0/single-market smoke is not compatible with the current Phase 5 manifest warning policy.
+- Current evidence limits:
+  - Fresh side-aware labels and Phase 4 target manifest compatibility are smoke-verified only through Phase 4.
+  - No fresh WFA predictions, prediction manifest, Phase 8 metrics, Phase 8 promotion decision, model artifact, archive decision, cleanup decision, closeout claim, promotion claim, or live-readiness claim was produced or validated by this smoke.
+  - `reports\side_aware_trend_smoke_v1` now exists and should be treated as a failed/stopped smoke evidence root, not reused for a fresh rerun unless a future task explicitly approves overwriting or deleting report artifacts.
+
+### Exact Next Recommended Step
+
+```text
+Continue from CODEX_HANDOFF.md.
+Next selected scope: redesign the report-scoped side-aware smoke so Phase 5's feature_manifest_gate can pass without weakening validation.
+Rules:
+- Do not delete, move, rename, archive, quarantine, or mutate data/**.
+- Preserve data/_quarantine/actual_cleanup_v1_20260628_130232 for rollback.
+- Do not delete or overwrite reports/side_aware_trend_smoke_v1; treat it as failed/stopped smoke evidence.
+- Do not stage or commit unless explicitly asked.
+- Do not treat historical model results, archive decisions, cleanup decisions, closeout claims, promotion claims, or reports/side_aware_trend_smoke_v1 as side-aware-approved.
+Task:
+- Inspect Phase 5 feature_manifest_gate requirements and Phase 4 warning semantics.
+- Choose a corrected report-scoped smoke design that makes the upstream Phase 4 manifest gate pass, preferably by generating a fresh multi-market report-scoped input/feature fixture rather than weakening the gate.
+- Produce exact commands, output roots under a new reports/** root, success criteria, and stop conditions for rerunning Phase 3 through Phase 8.
+- Do not run Phase 6 or Phase 8 until Phase 5 succeeds under the corrected design.
+Stop when:
+- The corrected smoke plan is decision-complete, or it is proven that a source/config/test change is required before the smoke can validly run.
+```
+
+## Latest Side-Aware Trend Label Contract Implementation
+
+This section supersedes the older "Dirty Worktree Reconciliation" section only for side-aware implementation status. Older cleanup, quarantine, checkpoint, and data-path caveats remain in force.
+
+- Updated at UTC: 2026-06-28T16:18:28Z.
+- Purpose: implement and validate the side-aware adverse/favorable 30m trend label contract without generating repo labels, predictions, WFA outputs, model artifacts, cleanup, archive actions, or live-readiness claims.
+- Current status: implementation and focused validation complete. No staging or commit was performed.
+- Label schema added:
+  - `target_trend_adverse_long_30m`
+  - `target_trend_favorable_long_30m`
+  - `target_trend_adverse_short_30m`
+  - `target_trend_favorable_short_30m`
+- Implemented semantics:
+  - Entry anchor remains the next 1m open.
+  - 30m trend labels require the existing valid 30m path through `REGIME_OFFSET_BARS = 31`.
+  - Long adverse uses future low moving down by the adverse threshold.
+  - Long favorable uses future high moving up by the favorable threshold.
+  - Short adverse uses future high moving up by the adverse threshold.
+  - Short favorable uses future low moving down by the favorable threshold.
+  - Initial favorable threshold equals the adverse threshold.
+  - Legacy aggregate `target_trend_danger_30m` is preserved for context/backward compatibility.
+- Contract updates completed:
+  - Feature leakage guard and Phase 4 required label contract include the four new target columns.
+  - `configs\models.yaml` adds `side_aware_trend_target`, four required linear classifier controls, four side-aware prediction columns, side-aware policy inputs, and `side_aware_trend_blocks_fade_trades: true`.
+  - `p_trend_danger_blocks_fade_trades` remains `false`; model registry validation fails if aggregate `p_trend_danger` is re-enabled as a trend blocker.
+  - Purge policy now resolves to `entry_lag_bars + max(target_horizon_bars, trend_horizon_bars) = 31`, and `configs\alpha_tiered.yaml` / `configs\tier_3.yaml` defaults were updated to 31.
+  - Phase 7 prediction routing maps each side-aware target to its own probability column.
+  - Phase 8 policy evaluation and audit diagnostics require side-aware trend target rows and block using side-matched `trend_adverse_probability`, not aggregate `p_trend_danger`.
+- Validation run:
+  - `python -B -m pytest -p no:cacheprovider tests\phase8_model_selection` -> `87 passed`
+  - `python -B -m pytest -p no:cacheprovider tests\validation\test_model_registry.py tests\phase3_labels\test_build_labels.py::test_fade_and_30m_regime_labels tests\phase3_labels\test_build_labels.py::test_side_aware_30m_trend_labels_require_valid_30m_path tests\phase4_features\test_build_baseline_features.py::test_registry_excludes_targets_audit_source_and_forbidden_columns tests\phase7_wfa\test_run_wfa.py::test_classification_predictions_route_target_specific_probability_columns` -> `18 passed`
+  - `python -B scripts\validation\model_registry.py` -> exited 0 and printed config hash `318ab6f793f17dfbb981886f601e91b68eefc1d5bb89c02e67462f6107bdc483`
+  - Required post-change `rg` scan over `scripts tests configs docs` completed.
+  - `git diff --check` passed with CRLF warnings only.
+  - `git diff --name-status` and `git status --short` show tracked source/config/test/handoff edits plus untracked `tests\phase8_model_selection\side_aware_fixture.py`; no tracked `data/**` or `reports/**` changes.
+- Remaining blocker:
+  - `scripts\live_shadow_runner.py` still uses legacy aggregate `target_trend_danger_30m` / `p_trend_danger` for live-shadow trend gating. It was intentionally left unchanged because this run scoped research schema/contracts and explicitly did not claim production/live readiness.
+
+### Exact Next Recommended Step
+
+```text
+Continue from CODEX_HANDOFF.md.
+Next selected scope: decide whether to update or disable live-shadow trend gating after side-aware trend labels.
+Rules:
+- Do not run WFA/modeling, Phase 8 over repo predictions, prediction generation, label generation over repo data, or model artifact writers.
+- Do not mutate data/**, delete quarantine, run cleanup, or claim production/live readiness.
+- Do not stage or commit unless explicitly requested.
+- Keep aggregate p_trend_danger as legacy/context only; do not use it as a side-aware risk control.
+Task:
+- Inspect scripts/live_shadow_runner.py and its focused tests only.
+- Decide whether live-shadow should fail closed until side-aware estimators are available, or be updated to require target_trend_adverse_long_30m and target_trend_adverse_short_30m model outputs.
+- If a safe small edit exists, implement only that live-shadow gating contract and focused tests.
+- Otherwise document why live-shadow remains blocked for side-aware trend gating.
+Stop when:
+- live-shadow either blocks aggregate p_trend_danger gating explicitly or uses side-aware adverse trend probabilities with tests.
+```
+
+## Dirty Worktree Reconciliation - 2026-06-28
+
+This section is the current authoritative reconciliation for the dirty worktree. It supersedes older handoff sections where they conflict.
+
+- Current repo path verified: `C:\Users\donny\Desktop\futures_intraday_model`.
+- Current `HEAD` verified: `99b028a Disable aggregate trend-danger hard blocker`.
+- External checkpoint reviewed: `C:\Users\donny\Desktop\You_are_here_updated_current_FINAL_20260628.txt`.
+- The checkpoint is useful but not fully current: cleanup/quarantine and Phase 8 closeout claims are repo-supported, but its `Git worktree: CLEAN` claim is false in the current workspace.
+
+### Verified checkpoint facts
+
+- Cleanup/quarantine evidence exists:
+  - `reports\data_audit\final\actual_cleanup_v1\actual_cleanup_summary.md`
+  - `reports\data_audit\final\actual_cleanup_v1\actual_cleanup_safety_gate.json`
+  - `reports\data_audit\final\actual_cleanup_v1\actual_cleanup_candidate_counts_before_after.csv`
+  - `reports\data_audit\final\post_cleanup_validation_v1\post_cleanup_validation_summary.md`
+  - `reports\data_audit\final\post_cleanup_validation_v1\post_cleanup_validation_safety_gate.json`
+- Quarantine root exists: `data\_quarantine\actual_cleanup_v1_20260628_130232`.
+- Old candidate paths are absent at their original locations:
+  - `data\causally_gated_normalized`
+  - `data\raw\_repair_candidates`
+  - `data\feature_matrices\baseline`
+  - `data\predictions`
+  - `data\dbn_sr_parent_candidate`
+- Cleanup was reversible quarantine/move only: deletion executed `false`, counts matched `true`, bytes matched `true`, protected path overlap found `false`, rollback available `true`.
+- Phase 8 closeout evidence exists and says the current policy line is `stopped_non_viable`.
+- `reports\data_audit\wfa_research\tier1_rebuild_v1\metrics_artifacts\diagnostics\current_phase8_policy_line_closeout_v1\closeout_safety_gate.json` verifies: `config_changed=false`, `scripts_changed=false`, `tests_changed=false`, `predictions_generated=false`, `wfa_modeling_rerun=false`, `data_modified=false`, and `quarantine_deleted=false`.
+
+### Dirty worktree disposition
+
+- Expected checkpoint/handoff work:
+  - `CODEX_HANDOFF.md`: expected documentation drift from the data-path audit, supplemental checkpoint review, reconciliation note, and this disposition update.
+- Disposition selected for source/config/test drift: preserve as unapproved future side-aware trend implementation work. Do not treat these diffs as current approved pipeline behavior, current closeout work, model-result evidence, or archive-decision evidence.
+- Preserved tracked future-work diffs:
+  - `configs\alpha_tiered.yaml`
+  - `configs\models.yaml`
+  - `configs\tier_3.yaml`
+  - `scripts\phase3_labels\build_labels.py`
+  - `scripts\phase4_features\build_baseline_features.py`
+  - `scripts\phase7_wfa\run_wfa.py`
+  - `scripts\phase8_model_selection\audit_direction_edge_calibration.py`
+  - `scripts\phase8_model_selection\audit_event_level_edge_feasibility.py`
+  - `scripts\phase8_model_selection\audit_label_feature_sanity.py`
+  - `scripts\phase8_model_selection\audit_mr_tail_risk.py`
+  - `scripts\phase8_model_selection\audit_policy_failure.py`
+  - `scripts\phase8_model_selection\audit_policy_run_level_overlap.py`
+  - `scripts\phase8_model_selection\audit_policy_signal_alignment.py`
+  - `scripts\phase8_model_selection\audit_signal_trade_quality.py`
+  - `scripts\phase8_model_selection\audit_threshold_and_target_sanity.py`
+  - `scripts\phase8_model_selection\audit_trade_failure_drilldown.py`
+  - `scripts\phase8_model_selection\evaluate_predictions.py`
+  - `scripts\validation\feature_leakage_guard.py`
+  - `scripts\validation\model_registry.py`
+  - `tests\phase3_labels\test_build_labels.py`
+  - `tests\phase4_features\test_build_baseline_features.py`
+  - `tests\phase7_wfa\test_run_wfa.py`
+  - `tests\phase8_model_selection\test_audit_direction_edge_calibration.py`
+  - `tests\phase8_model_selection\test_audit_event_level_edge_feasibility.py`
+  - `tests\phase8_model_selection\test_audit_label_feature_sanity.py`
+  - `tests\phase8_model_selection\test_audit_mr_tail_risk.py`
+  - `tests\phase8_model_selection\test_audit_policy_failure.py`
+  - `tests\phase8_model_selection\test_audit_policy_run_level_overlap.py`
+  - `tests\phase8_model_selection\test_audit_policy_signal_alignment.py`
+  - `tests\phase8_model_selection\test_audit_signal_trade_quality.py`
+  - `tests\phase8_model_selection\test_audit_threshold_and_target_sanity.py`
+  - `tests\phase8_model_selection\test_audit_trade_failure_drilldown.py`
+  - `tests\phase8_model_selection\test_evaluate_predictions.py`
+  - `tests\validation\test_model_registry.py`
+- Preserved untracked future-work support file:
+  - `tests\phase8_model_selection\side_aware_fixture.py`
+
+### Side-aware future-work scope
+
+- The preserved diffs span label generation, feature contract columns, WFA prediction schema/routing, Phase 8 policy evaluation, Phase 8 audit behavior, model registry validation, purge horizon config, and tests.
+- The implementation appears internally coherent as future work, but it is not validated for current pipeline use.
+- The verified Phase 8 closeout evidence allows only plan-only or diagnostic-only future research paths and explicitly does not approve implementation/config/script/test behavior changes.
+- Before any pipeline run, model result, archive decision, cleanup decision, closeout claim, or promotion claim relies on these diffs, a separate implementation validation plan is required.
+
+### Current safety rules
+
+- Do not delete quarantine.
+- Do not mutate `data/**`.
+- Do not treat the side-aware implementation diffs as approved current pipeline behavior without a separate validation plan and explicit user confirmation.
+- Do not stage or commit unless explicitly asked.
+- Do not revert any tracked source/config/test change unless explicitly requested.
+- Do not run pipeline phases, WFA/modeling, model selection, cleanup, dry-run cleanup, archive, or quarantine workflows to validate these diffs in this disposition-only scope.
+
+### Exact Next Recommended Step
+
+```text
+Continue from CODEX_HANDOFF.md.
+Next selected scope: build a validation plan for preserved future side-aware trend implementation diffs.
+Rules:
+- Do not delete, move, rename, archive, quarantine, or mutate data/**.
+- Preserve data/_quarantine/actual_cleanup_v1_20260628_130232 for rollback.
+- Do not stage or commit unless explicitly asked.
+- Do not revert tracked source/config/test changes unless explicitly requested.
+Task:
+- Treat the side-aware code/config/test diffs and tests/phase8_model_selection/side_aware_fixture.py as preserved future implementation work, not approved current pipeline behavior.
+- Design a validation plan that proves or rejects the side-aware trend implementation before any pipeline run, model result, archive decision, cleanup decision, closeout claim, or promotion claim relies on it.
+- Include required static checks, focused tests, schema/manifest compatibility checks, and explicit stop conditions for any failing validation.
+Stop when:
+- The future side-aware implementation has a decision-complete validation plan, or the user explicitly chooses to revert or accept the diffs as intentional current work.
+```
+
+## Latest Data Path Audit Smoke Run
+
+- Updated at UTC: 2026-06-28T15:48:31Z.
+- Purpose: map Phase 1A, 1B, 1C, and 2 smoke data paths; verify tested scripts against the project pipeline entrypoints; compare active/smoke-used folders to every discovered `.parquet` and `.dbn.zst` artifact folder; identify strict archive candidates; and complete a Phase 1-9 smoke excluding archive candidates.
+- Run root: `reports\data_path_audit_20260628T152225Z`.
+- Summary report: `reports\data_layout_audit_20260628.md`.
+- Evidence JSON: `reports\data_path_audit_20260628T152225Z\data_path_audit_evidence.json`.
+- Artifact folder inventory: `reports\data_path_audit_20260628T152225Z\artifact_dirs.csv` captured 4274 pre-smoke artifact folders. A post-smoke whole-repo refresh found 4279 artifact folders after adding 5 report-scoped smoke output dirs under `reports\data_path_audit_20260628T152225Z\smoke_data\...`; those 5 are active smoke evidence, not archive candidates.
+- Worktree before the run was clean. Generated audit outputs are under ignored `reports\`.
+- No `data/**` folder or file was deleted, moved, archived, quarantined, renamed, or intentionally mutated.
+- Supplemental checkpoint reviewed: `C:\Users\donny\Desktop\You_are_here_updated_current_FINAL_20260628.txt`.
+- Valuable verified checkpoint information was incorporated into the audit report:
+  - Actual cleanup evidence exists under `reports\data_audit\final\actual_cleanup_v1`.
+  - Post-cleanup validation evidence exists under `reports\data_audit\final\post_cleanup_validation_v1`.
+  - Quarantine root exists: `data\_quarantine\actual_cleanup_v1_20260628_130232`.
+  - Old candidate paths are absent at their original locations: `data\causally_gated_normalized`, `data\raw\_repair_candidates`, `data\feature_matrices\baseline`, `data\predictions`, and `data\dbn_sr_parent_candidate`.
+  - Actual cleanup was reversible quarantine/move only: deletion executed `false`, counts matched `true`, bytes matched `true`, protected path overlap found `false`, rollback available `true`.
+  - These five stale roots are not current archive candidates because they have already been quarantined and must be preserved for rollback until explicitly approved for deletion.
+- Supplemental checkpoint caveat: its `Git worktree: CLEAN` claim is stale for the current workspace. Current `git status --short` shows tracked modifications in source/config/test files plus `CODEX_HANDOFF.md`; do not treat the external checkpoint as a fully current handoff until that is reconciled.
+- Pipeline entrypoint check:
+  - Phase 1A: `scripts.phase1A_download.download_databento_raw`, matched `PIPELINE.md`.
+  - Phase 1B: `scripts.phase1B_convert.convert_databento_raw`, matched `PIPELINE.md` wrapper over convert-parquet.
+  - Phase 1C: `scripts.phase1C_validate.audit_raw_dbn_alignment`, matched `PIPELINE.md`.
+  - Phase 2: `scripts.phase2_causal_base.build_causal_base_data`, actual CLI requires explicit `--output-root`.
+  - Phase 3: `scripts.phase3_labels.build_labels`, actual CLI requires explicit `--input-root`.
+  - Phase 4: `scripts.phase4_features.build_baseline_features`, actual CLI requires explicit `--output-root`.
+  - Phase 5: `scripts.phase5_wfa.build_wfa_splits`, actual CLI requires explicit `--input-root`.
+  - Phase 6: `scripts.phase6_wfa.run_wfa`, wrapper imports Phase 7 implementation.
+  - Phase 7: `scripts.phase7_wfa.run_wfa`, legacy implementation package.
+  - Phase 8: `scripts.phase8_model_selection.evaluate_predictions`, explicit prediction path required.
+  - Phase 9: `scripts.phase9_research.directional_path_quality_target_harness`, representative implemented harness.
+- Phase/data path smoke results:
+  - Phase 1A dry run exited 0 and planned `data\dbn\ohlcv_1m` plus `reports\data_path_audit_20260628T152225Z\phase1a`.
+  - Phase 1B staged ES 2024 exited 0 using `data\dbn\ohlcv_1m` and `data\dbn\definition`, writing staged raw parquet under `reports\data_path_audit_20260628T152225Z\smoke_data\raw`.
+  - Phase 1C alignment exited 0 using `data\dbn` and staged raw parquet, writing `reports\data_path_audit_20260628T152225Z\phase1c\raw_dbn_alignment.json`.
+  - Phase 2 exited 0 using staged raw parquet, writing staged causal parquet under `reports\data_path_audit_20260628T152225Z\smoke_data\causally_gated_normalized`.
+  - Phase 3 exited 0 using staged causal parquet, writing staged labels under `reports\data_path_audit_20260628T152225Z\smoke_data\labeled`.
+  - Phase 4 exited 0 using staged labels, writing staged features under `reports\data_path_audit_20260628T152225Z\smoke_data\feature_matrices\baseline`; the staged feature manifest carried a warning because only ES 2024 was staged and intermarket features were unavailable.
+  - Staged Phase 5 Tier 0 exited 1 because `feature_manifest_gate` rejected unavailable intermarket feature warnings.
+  - Active protected Tier 1 Phase 5 fallback exited 0 using `data\feature_matrices\baseline_tier1_rebuild_v1`, `reports\data_audit\wfa_research\tier1_rebuild_v1\preflight\data_audit_universe_tier1_rebuild_v1.json`, and `reports\data_audit\wfa_research\tier1_rebuild_v1\preflight\tier1_rebuild_v1_feature_set.json`; output root was `reports\data_path_audit_20260628T152225Z\phase5_tier1_active`.
+  - Initial Phase 6 ES one-fold Tier 1 smoke timed out after 900 seconds with empty stdout/stderr and no new prediction output under `reports\data_path_audit_20260628T152225Z\smoke_data\predictions` or `reports\data_path_audit_20260628T152225Z\phase6`.
+  - Follow-up Phase 6 bounded ZN smoke exited 0 using the same active protected Tier 1 input root, split plan, feature set, data-audit universe, and models config. It selected `ZN_research_0011` with `--markets ZN --fold-shard-count 12 --fold-shard-index 11 --max-folds 1`, wrote `reports\data_path_audit_20260628T152225Z\smoke_data\predictions_zn_min\data_path_smoke_20260628T152225Z_zn_min\oos_predictions.parquet`, and wrote manifest `reports\data_path_audit_20260628T152225Z\phase6_zn_min\data_path_smoke_20260628T152225Z_zn_min_predictions_manifest.json`.
+  - Follow-up Phase 6 manifest result: `failure_count=0`, `artifact_evidence_ready=true`, `prediction_count=84608`, `fold_count=1`, `prediction_markets=["ZN"]`, `prediction_years=[2024]`.
+  - Follow-up Phase 8 exited 0 against the fresh bounded Phase 6 prediction artifact and manifest, writing reports under `reports\data_path_audit_20260628T152225Z\phase8_zn_min`.
+  - Follow-up Phase 8 result: `failure_count=0`, `warning_count=1`, `research_policy_metrics_ready=true`, `row_count=21152`, `trade_count=16`, `gross_return_dollars=562.5`, `cost_dollars=553.44`, `net_return_dollars=9.059999999999945`, `research_alpha_ready=false`, `model_promotion_allowed=false`, `live_execution_ready=false`.
+  - Phase 9 active Tier 1 directional harness exited 0 using `data\feature_matrices\baseline_tier1_rebuild_v1` and `reports\data_path_audit_20260628T152225Z\phase5_tier1_active\split_plan.json`; output root was `reports\data_path_audit_20260628T152225Z\phase9`.
+- Data folder comparison:
+  - Discovered artifact folders with `.parquet` or `.dbn.zst`: `4279` current; `4274` in the pre-smoke inventory CSV plus 5 generated report-scoped smoke output folders.
+  - Suspicious/classified roots: `53`.
+  - Active/protected roots: `53`.
+  - Safe archive candidates under denylist-only rules: `0`.
+  - Physical-exclusion-test blockers: `0`.
+  - Proceed status: `yes with medium blockers` because the supplemental checkpoint's worktree-clean claim is not current.
+- Archive decision:
+  - No folder is approved as safe to archive from this run.
+  - No physical exclusion smoke test was needed because no strict archive candidates were found.
+  - Keep `data\dbn`, `data\raw`, `data\causal_base_candidates\tier1_rebuild_v1`, `data\labeled\tier1_rebuild_v1`, `data\feature_matrices\baseline_tier1_rebuild_v1`, and `reports\data_audit\**` protected.
+  - Keep `data\_quarantine\actual_cleanup_v1_20260628_130232` preserved for rollback; do not delete quarantine without a new explicit approval workflow.
+
+### Exact Next Recommended Step
+
+Reconcile the dirty tracked worktree before treating `C:\Users\donny\Desktop\You_are_here_updated_current_FINAL_20260628.txt` as a fully current handoff. Do not delete, move, rename, archive, quarantine, or mutate `data/**`; preserve `data\_quarantine\actual_cleanup_v1_20260628_130232` for rollback unless a new explicit approval workflow authorizes deletion.
+
 ## Latest Phase 8 Research Metrics Run
 
 - Updated at UTC: 2026-06-28.

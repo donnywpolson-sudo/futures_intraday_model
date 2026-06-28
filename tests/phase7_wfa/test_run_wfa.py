@@ -4,6 +4,7 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 from sklearn.exceptions import ConvergenceWarning
@@ -92,6 +93,11 @@ def _write_feature_matrix(root: Path, *, market: str = "ES", year: int = 2024) -
             "target_fade_success_15m": [idx % 2 == 0 for idx in range(len(ts))],
             "fade_long_success_15m": [idx % 2 == 0 for idx in range(len(ts))],
             "fade_short_success_15m": False,
+            "target_trend_danger_30m": [idx % 3 == 0 for idx in range(len(ts))],
+            "target_trend_adverse_long_30m": [idx % 3 == 0 for idx in range(len(ts))],
+            "target_trend_favorable_long_30m": [idx % 3 == 1 for idx in range(len(ts))],
+            "target_trend_adverse_short_30m": [idx % 3 == 2 for idx in range(len(ts))],
+            "target_trend_favorable_short_30m": [idx % 3 == 0 for idx in range(len(ts))],
             "feature_train_only_marker": train_marker,
             "feature_signal": signal,
             "feature_fade_signal": fade_signal,
@@ -609,6 +615,10 @@ def test_feature_set_rejects_non_frozen_manifest(tmp_path: Path) -> None:
         "entry_price",
         "exit_price",
         "trend_danger_up_30m",
+        "target_trend_adverse_long_30m",
+        "target_trend_favorable_long_30m",
+        "target_trend_adverse_short_30m",
+        "target_trend_favorable_short_30m",
         "label_semantics",
         "feature_future_return_15m",
     ],
@@ -624,6 +634,48 @@ def test_feature_set_rejects_forbidden_leakage_columns(
 
     with pytest.raises(SystemExit, match="forbidden columns"):
         wfa.load_feature_set(feature_set)
+
+
+@pytest.mark.parametrize(
+    ("target_name", "probability_column"),
+    [
+        ("target_fade_success_15m", "p_fade_success"),
+        ("target_trend_adverse_long_30m", "p_trend_adverse_long_30m"),
+        ("target_trend_favorable_long_30m", "p_trend_favorable_long_30m"),
+        ("target_trend_adverse_short_30m", "p_trend_adverse_short_30m"),
+        ("target_trend_favorable_short_30m", "p_trend_favorable_short_30m"),
+        ("target_trend_danger_30m", "p_trend_danger"),
+    ],
+)
+def test_classification_predictions_route_target_specific_probability_columns(
+    target_name: str,
+    probability_column: str,
+) -> None:
+    class FixedEstimator:
+        classes_ = [0, 1]
+
+        def predict_proba(self, x_test: pd.DataFrame) -> np.ndarray:
+            return np.array([[0.80, 0.20], [0.10, 0.90]])
+
+    spec = wfa.ModelSpec(
+        model_id="fixture_model",
+        stage="fixture",
+        family="logistic_regression",
+        task="classification",
+        target=target_name,
+        config_hash="hash",
+    )
+    _, probability_cols = wfa._classification_predictions(
+        FixedEstimator(),
+        spec,
+        pd.DataFrame({"feature_signal": [1.0, 2.0]}),
+    )
+
+    assert probability_column in PREDICTION_COLUMNS
+    assert probability_cols[probability_column].tolist() == [0.20, 0.90]
+    for column, values in probability_cols.items():
+        if column != probability_column:
+            assert pd.Series(values).isna().all()
 
 
 def test_feature_set_rejects_feature_cols_override_together(tmp_path: Path) -> None:

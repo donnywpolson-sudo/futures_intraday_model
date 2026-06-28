@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.phase8_model_selection.evaluate_predictions import (  # noqa: E402
     PolicyConfig,
     PromotionGateConfig,
+    SIDE_AWARE_TREND_TARGETS,
     build_arg_parser,
     evaluate_predictions,
     load_policy_config,
@@ -46,9 +47,15 @@ markets:
     return path
 
 
-def _write_models(path: Path, *, p_trend_danger_blocks_fade_trades: bool = False) -> Path:
+def _write_models(
+    path: Path,
+    *,
+    p_trend_danger_blocks_fade_trades: bool = False,
+    side_aware_trend_blocks_fade_trades: bool = True,
+) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     trend_block = str(p_trend_danger_blocks_fade_trades).lower()
+    side_aware_trend_block = str(side_aware_trend_blocks_fade_trades).lower()
     path.write_text(
         f"""
 calibration:
@@ -58,6 +65,7 @@ calibration:
   preserve_raw_and_calibrated_scores: true
 position_policy:
   p_trend_danger_blocks_fade_trades: {trend_block}
+  side_aware_trend_blocks_fade_trades: {side_aware_trend_block}
   p_fade_success_allows_fade_trades: true
   raw_return_prediction_direct_trading_allowed: false
 """.strip(),
@@ -72,6 +80,7 @@ def _policy() -> PolicyConfig:
         min_fade_success=0.50,
         max_trend_danger=0.50,
         p_trend_danger_blocks_fade_trades=False,
+        side_aware_trend_blocks_fade_trades=True,
     )
 
 
@@ -124,13 +133,79 @@ def _write_predictions(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     timestamps = pd.date_range("2024-01-02T14:30:00Z", periods=5, freq="15min")
     policy_inputs = [
-        {"p_long": 0.70, "p_short": 0.20, "p_flat": 0.10, "p_fade": 0.80, "p_trend": 0.20, "entry": 100.0, "exit": 101.0},
-        {"p_long": 0.20, "p_short": 0.75, "p_flat": 0.05, "p_fade": 0.85, "p_trend": 0.90, "entry": 101.0, "exit": 100.0},
-        {"p_long": 0.68, "p_short": 0.20, "p_flat": 0.12, "p_fade": 0.40, "p_trend": 0.20, "entry": 100.0, "exit": 101.0},
-        {"p_long": 0.15, "p_short": 0.75, "p_flat": 0.10, "p_fade": 0.90, "p_trend": 0.10, "entry": 101.0, "exit": 100.0},
-        {"p_long": 0.35, "p_short": 0.20, "p_flat": 0.45, "p_fade": 0.90, "p_trend": 0.10, "entry": 100.0, "exit": 101.0},
+        {
+            "p_long": 0.70,
+            "p_short": 0.20,
+            "p_flat": 0.10,
+            "p_fade": 0.80,
+            "p_trend": 0.20,
+            "p_trend_adverse_long": 0.20,
+            "p_trend_favorable_long": 0.80,
+            "p_trend_adverse_short": 0.80,
+            "p_trend_favorable_short": 0.20,
+            "entry": 100.0,
+            "exit": 101.0,
+        },
+        {
+            "p_long": 0.20,
+            "p_short": 0.75,
+            "p_flat": 0.05,
+            "p_fade": 0.85,
+            "p_trend": 0.90,
+            "p_trend_adverse_long": 0.90,
+            "p_trend_favorable_long": 0.10,
+            "p_trend_adverse_short": 0.20,
+            "p_trend_favorable_short": 0.85,
+            "entry": 101.0,
+            "exit": 100.0,
+        },
+        {
+            "p_long": 0.68,
+            "p_short": 0.20,
+            "p_flat": 0.12,
+            "p_fade": 0.40,
+            "p_trend": 0.20,
+            "p_trend_adverse_long": 0.20,
+            "p_trend_favorable_long": 0.75,
+            "p_trend_adverse_short": 0.75,
+            "p_trend_favorable_short": 0.20,
+            "entry": 100.0,
+            "exit": 101.0,
+        },
+        {
+            "p_long": 0.15,
+            "p_short": 0.75,
+            "p_flat": 0.10,
+            "p_fade": 0.90,
+            "p_trend": 0.10,
+            "p_trend_adverse_long": 0.75,
+            "p_trend_favorable_long": 0.15,
+            "p_trend_adverse_short": 0.10,
+            "p_trend_favorable_short": 0.80,
+            "entry": 101.0,
+            "exit": 100.0,
+        },
+        {
+            "p_long": 0.35,
+            "p_short": 0.20,
+            "p_flat": 0.45,
+            "p_fade": 0.90,
+            "p_trend": 0.10,
+            "p_trend_adverse_long": 0.10,
+            "p_trend_favorable_long": 0.65,
+            "p_trend_adverse_short": 0.65,
+            "p_trend_favorable_short": 0.10,
+            "entry": 100.0,
+            "exit": 101.0,
+        },
     ]
     rows: list[dict[str, object]] = []
+    side_aware_score_keys = {
+        "target_trend_adverse_long_30m": "p_trend_adverse_long",
+        "target_trend_favorable_long_30m": "p_trend_favorable_long",
+        "target_trend_adverse_short_30m": "p_trend_adverse_short",
+        "target_trend_favorable_short_30m": "p_trend_favorable_short",
+    }
     for idx, item in enumerate(policy_inputs):
         base = _prediction_rows(timestamps[idx], entry=item["entry"], exit_=item["exit"])
         rows.append(
@@ -195,6 +270,24 @@ def _write_predictions(path: Path) -> Path:
                 "p_trend_danger": item["p_trend"],
             }
         )
+        for side_key, (target_name, probability_column) in SIDE_AWARE_TREND_TARGETS.items():
+            score = item[side_aware_score_keys[target_name]]
+            rows.append(
+                {
+                    **base,
+                    "model_id": f"logistic_{side_key}_v1",
+                    "target_name": target_name,
+                    "y_true": int(score >= 0.5),
+                    "y_pred_raw": score,
+                    "y_pred_calibrated": score,
+                    "p_long": None,
+                    "p_short": None,
+                    "p_flat": None,
+                    "p_fade_success": None,
+                    probability_column: score,
+                    "p_trend_danger": None,
+                }
+            )
     pd.DataFrame(rows).to_parquet(path, index=False)
     return path
 
@@ -235,7 +328,7 @@ def _write_manifest(
         "prediction_markets": ["ES"],
         "prediction_years": [2024],
         "prediction_path": prediction_path.as_posix(),
-        "prediction_count": 20,
+        "prediction_count": int(len(pd.read_parquet(prediction_path))),
         "output_file_hashes": {prediction_path.as_posix(): _sha256(prediction_path)},
         "input_file_hashes": {split_plan.as_posix(): _sha256(split_plan)},
         "split_plan_path": split_plan.as_posix(),
@@ -281,14 +374,16 @@ def test_cli_accepts_explicit_report_scoped_predictions(tmp_path: Path) -> None:
     assert Path(args.predictions).as_posix() == prediction_path.as_posix()
 
 
-def test_policy_config_reads_trend_danger_blocker_flag(tmp_path: Path) -> None:
+def test_policy_config_reads_side_aware_trend_blocker_flag(tmp_path: Path) -> None:
     disabled_models = _write_models(
         tmp_path / "configs" / "models_disabled.yaml",
         p_trend_danger_blocks_fade_trades=False,
+        side_aware_trend_blocks_fade_trades=False,
     )
     enabled_models = _write_models(
         tmp_path / "configs" / "models_enabled.yaml",
         p_trend_danger_blocks_fade_trades=True,
+        side_aware_trend_blocks_fade_trades=True,
     )
 
     disabled_policy = load_policy_config(
@@ -305,7 +400,9 @@ def test_policy_config_reads_trend_danger_blocker_flag(tmp_path: Path) -> None:
     )
 
     assert disabled_policy.p_trend_danger_blocks_fade_trades is False
+    assert disabled_policy.side_aware_trend_blocks_fade_trades is False
     assert enabled_policy.p_trend_danger_blocks_fade_trades is True
+    assert enabled_policy.side_aware_trend_blocks_fade_trades is True
 
 
 def test_policy_metrics_do_not_hard_block_aggregate_trend_danger(tmp_path: Path) -> None:
@@ -353,6 +450,7 @@ def test_policy_metrics_do_not_hard_block_aggregate_trend_danger(tmp_path: Path)
     assert metrics["research_alpha_ready"] is False
     assert metrics["model_promotion_allowed"] is False
     assert metrics["policy_config"]["p_trend_danger_blocks_fade_trades"] is False
+    assert metrics["policy_config"]["side_aware_trend_blocks_fade_trades"] is True
     assert phase8_metrics["metrics"]["overall"]["net_return_dollars"] == 120.0
     assert decision["promoted"] is False
     assert decision["model_promotion_allowed"] is False
@@ -371,9 +469,86 @@ def test_policy_metrics_do_not_hard_block_aggregate_trend_danger(tmp_path: Path)
         "logistic_direction_v1",
         "logistic_fade_success_v1",
         "logistic_trend_danger_v1",
+        "logistic_trend_adverse_long_v1",
+        "logistic_trend_favorable_long_v1",
+        "logistic_trend_adverse_short_v1",
+        "logistic_trend_favorable_short_v1",
     }
     assert calibration["calibration_curve_count"] > 0
     assert turnover.loc[0, "trade_count"] == 3
+
+
+def test_policy_metrics_block_side_aware_adverse_trend_probability(tmp_path: Path) -> None:
+    prediction_path = _write_predictions(
+        tmp_path / "data" / "predictions" / "baseline" / "oos_predictions.parquet"
+    )
+    predictions = pd.read_parquet(prediction_path)
+    first_timestamp = sorted(predictions["timestamp"].dropna().unique())[0]
+    adverse_long = predictions["target_name"].eq("target_trend_adverse_long_30m")
+    first_row = predictions["timestamp"].eq(first_timestamp)
+    predictions.loc[first_row & adverse_long, "p_trend_adverse_long_30m"] = 0.90
+    predictions.loc[first_row & adverse_long, "y_pred_raw"] = 0.90
+    predictions.loc[first_row & adverse_long, "y_pred_calibrated"] = 0.90
+    predictions.loc[first_row & adverse_long, "y_true"] = 1
+    predictions.to_parquet(prediction_path, index=False)
+    manifest_path = _write_manifest(
+        tmp_path / "reports" / "wfa" / "baseline_predictions_manifest.json",
+        prediction_path,
+    )
+    costs_path = _write_costs(tmp_path / "configs" / "costs.yaml")
+    models_path = _write_models(tmp_path / "configs" / "models.yaml")
+
+    result = evaluate_predictions(
+        predictions_path=prediction_path,
+        predictions_manifest=manifest_path,
+        costs_config=costs_path,
+        models_config=models_path,
+        metrics_root=tmp_path / "reports" / "metrics",
+        model_selection_root=tmp_path / "reports" / "model_selection",
+        run="baseline",
+        policy=_policy(),
+        promotion_gate=_promotion_gate(),
+    )
+
+    overall = result["policy_metrics"]["overall"]
+    assert result["failure_count"] == 0
+    assert overall["blocked_by_trend_danger"] == 1
+    assert overall["trade_count"] == 2
+    assert overall["gross_return_dollars"] == 100.0
+    assert overall["net_return_dollars"] == 80.0
+
+
+def test_policy_metrics_rejects_aggregate_trend_without_side_aware_targets(tmp_path: Path) -> None:
+    prediction_path = _write_predictions(
+        tmp_path / "data" / "predictions" / "baseline" / "oos_predictions.parquet"
+    )
+    predictions = pd.read_parquet(prediction_path)
+    side_targets = {target_name for target_name, _ in SIDE_AWARE_TREND_TARGETS.values()}
+    predictions = predictions[~predictions["target_name"].isin(side_targets)].copy()
+    predictions.to_parquet(prediction_path, index=False)
+    manifest_path = _write_manifest(
+        tmp_path / "reports" / "wfa" / "baseline_predictions_manifest.json",
+        prediction_path,
+    )
+    costs_path = _write_costs(tmp_path / "configs" / "costs.yaml")
+    models_path = _write_models(tmp_path / "configs" / "models.yaml")
+
+    result = evaluate_predictions(
+        predictions_path=prediction_path,
+        predictions_manifest=manifest_path,
+        costs_config=costs_path,
+        models_config=models_path,
+        metrics_root=tmp_path / "reports" / "metrics",
+        model_selection_root=tmp_path / "reports" / "model_selection",
+        run="baseline",
+        policy=_policy(),
+        promotion_gate=_promotion_gate(),
+    )
+
+    failures = " ".join(result["failures"])
+    assert result["failure_count"] > 0
+    assert "missing policy target predictions: target_trend_adverse_long_30m" in failures
+    assert "missing policy target predictions: target_trend_adverse_short_30m" in failures
 
 
 def test_policy_metrics_net_overlapping_target_windows_before_costs(tmp_path: Path) -> None:
@@ -398,6 +573,10 @@ def test_policy_metrics_net_overlapping_target_windows_before_costs(tmp_path: Pa
         predictions.loc[predictions["timestamp"].eq(timestamp), "p_short"] = 0.20
         predictions.loc[predictions["timestamp"].eq(timestamp), "p_flat"] = 0.10
         predictions.loc[predictions["timestamp"].eq(timestamp), "p_fade_success"] = 0.80
+        predictions.loc[predictions["timestamp"].eq(timestamp), "p_trend_adverse_long_30m"] = 0.20
+        predictions.loc[predictions["timestamp"].eq(timestamp), "p_trend_favorable_long_30m"] = 0.80
+        predictions.loc[predictions["timestamp"].eq(timestamp), "p_trend_adverse_short_30m"] = 0.20
+        predictions.loc[predictions["timestamp"].eq(timestamp), "p_trend_favorable_short_30m"] = 0.80
         predictions.loc[predictions["timestamp"].eq(timestamp), "p_trend_danger"] = 0.20
         predictions.loc[predictions["timestamp"].eq(timestamp), "execution_open"] = 100.0
         predictions.loc[predictions["timestamp"].eq(timestamp), "execution_close"] = 101.0

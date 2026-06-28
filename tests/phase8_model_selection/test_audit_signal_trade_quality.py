@@ -15,7 +15,10 @@ from scripts.phase8_model_selection.audit_signal_trade_quality import (  # noqa:
     build_signal_trade_quality,
     main,
 )
-from scripts.phase8_model_selection.evaluate_predictions import PolicyConfig  # noqa: E402
+from scripts.phase8_model_selection.evaluate_predictions import (  # noqa: E402
+    PolicyConfig,
+    SIDE_AWARE_TREND_TARGETS,
+)
 
 
 def _write_costs(path: Path) -> Path:
@@ -69,6 +72,12 @@ def _base_row(
 
 
 def _add_prediction_group(rows: list[dict[str, object]], base: dict[str, object], item: dict[str, object]) -> None:
+    side_aware_score_keys = {
+        "target_trend_adverse_long_30m": "p_trend_adverse_long",
+        "target_trend_favorable_long_30m": "p_trend_favorable_long",
+        "target_trend_adverse_short_30m": "p_trend_adverse_short",
+        "target_trend_favorable_short_30m": "p_trend_favorable_short",
+    }
     rows.extend(
         [
             {
@@ -130,6 +139,25 @@ def _add_prediction_group(rows: list[dict[str, object]], base: dict[str, object]
             },
         ]
     )
+    for side_key, (target_name, probability_column) in SIDE_AWARE_TREND_TARGETS.items():
+        score = item[side_aware_score_keys[target_name]]
+        rows.append(
+            {
+                **base,
+                "model_id": f"logistic_{side_key}_v1",
+                "model_family": "logistic_regression",
+                "target_name": target_name,
+                "y_true": int(score >= 0.5),
+                "y_pred_raw": score,
+                "y_pred_calibrated": score,
+                "p_long": None,
+                "p_short": None,
+                "p_flat": None,
+                "p_fade_success": None,
+                probability_column: score,
+                "p_trend_danger": None,
+            }
+        )
 
 
 def _write_predictions(path: Path) -> Path:
@@ -146,6 +174,10 @@ def _write_predictions(path: Path) -> Path:
             "p_flat": 0.10,
             "p_fade": 0.80,
             "p_trend": 0.10,
+            "p_trend_adverse_long": 0.10,
+            "p_trend_favorable_long": 0.80,
+            "p_trend_adverse_short": 0.80,
+            "p_trend_favorable_short": 0.10,
             "direction_true": 1,
             "ret_true": 0.02,
             "ret_pred": 1000.0,
@@ -160,6 +192,10 @@ def _write_predictions(path: Path) -> Path:
             "p_flat": 0.15,
             "p_fade": 0.55,
             "p_trend": 0.10,
+            "p_trend_adverse_long": 0.10,
+            "p_trend_favorable_long": 0.20,
+            "p_trend_adverse_short": 0.80,
+            "p_trend_favorable_short": 0.10,
             "direction_true": -1,
             "ret_true": -0.02,
             "ret_pred": -1000.0,
@@ -174,6 +210,10 @@ def _write_predictions(path: Path) -> Path:
             "p_flat": 0.10,
             "p_fade": 0.80,
             "p_trend": 0.10,
+            "p_trend_adverse_long": 0.80,
+            "p_trend_favorable_long": 0.10,
+            "p_trend_adverse_short": 0.10,
+            "p_trend_favorable_short": 0.80,
             "direction_true": -1,
             "ret_true": -0.01,
             "ret_pred": -1000.0,
@@ -188,6 +228,10 @@ def _write_predictions(path: Path) -> Path:
             "p_flat": 0.10,
             "p_fade": 0.80,
             "p_trend": 0.90,
+            "p_trend_adverse_long": 0.90,
+            "p_trend_favorable_long": 0.10,
+            "p_trend_adverse_short": 0.10,
+            "p_trend_favorable_short": 0.90,
             "direction_true": 1,
             "ret_true": 0.01,
             "ret_pred": 1000.0,
@@ -202,6 +246,10 @@ def _write_predictions(path: Path) -> Path:
             "p_flat": 0.10,
             "p_fade": 0.80,
             "p_trend": 0.10,
+            "p_trend_adverse_long": 0.10,
+            "p_trend_favorable_long": 0.60,
+            "p_trend_adverse_short": 0.60,
+            "p_trend_favorable_short": 0.10,
             "direction_true": 0,
             "ret_true": 0.00,
             "ret_pred": 0.00,
@@ -216,6 +264,10 @@ def _write_predictions(path: Path) -> Path:
             "p_flat": 0.20,
             "p_fade": 0.30,
             "p_trend": 0.10,
+            "p_trend_adverse_long": 0.10,
+            "p_trend_favorable_long": 0.70,
+            "p_trend_adverse_short": 0.70,
+            "p_trend_favorable_short": 0.10,
             "direction_true": 1,
             "ret_true": 0.01,
             "ret_pred": 1000.0,
@@ -279,13 +331,14 @@ def test_signal_trade_quality_writes_outputs_and_threshold_sensitivity(tmp_path:
             long_short_margin=0.05,
             min_fade_success=0.50,
             max_trend_danger=0.50,
+            side_aware_trend_blocks_fade_trades=True,
         ),
     )
 
     for suffix in OUTPUT_SUFFIXES.values():
         assert (output_root / f"fixture_{suffix}").exists()
 
-    assert report["prediction_count"] == 24
+    assert report["prediction_count"] == 48
     assert report["policy_row_count"] == 6
     assert report["trade_count"] == 3
     assert report["overall"]["gross_return_dollars"] == -50.0

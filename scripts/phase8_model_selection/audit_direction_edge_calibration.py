@@ -581,6 +581,7 @@ def main() -> int:
             long_short_margin=args.long_short_margin,
             min_fade_success=args.min_fade_success,
             max_trend_danger=args.max_trend_danger,
+            side_aware_trend_blocks_fade_trades=True,
         ),
     )
     current = summary["current_edge"]

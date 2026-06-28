@@ -128,6 +128,7 @@ def _policy_base(predictions: pd.DataFrame, costs_config: Path) -> tuple[pd.Data
         long_short_margin=0.05,
         min_fade_success=0.50,
         max_trend_danger=0.50,
+        side_aware_trend_blocks_fade_trades=True,
     )
     policy_frame, failures, warnings = build_policy_frame(predictions, costs_config, policy)
     if failures:

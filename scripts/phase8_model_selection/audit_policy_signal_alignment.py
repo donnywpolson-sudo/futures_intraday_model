@@ -136,7 +136,7 @@ def _attach_alignment_fields(policy_frame: pd.DataFrame) -> pd.DataFrame:
         ["<0.50", "0.50-0.70", "0.70-0.85", "0.85-0.95", ">0.95"],
     )
     frame["p_trend_bucket"] = _bucket(
-        _numeric(frame, "p_trend_danger"),
+        _numeric(frame, "trend_adverse_probability"),
         [-np.inf, 0.10, 0.25, 0.50, 0.75, np.inf],
         ["<0.10", "0.10-0.25", "0.25-0.50", "0.50-0.75", ">0.75"],
     )
@@ -226,7 +226,10 @@ def _alignment_metrics(frame: pd.DataFrame, scope: str, keys: Mapping[str, Any])
         "avg_p_long_traded": _mean_or_none(traded["p_long"]),
         "avg_p_short_traded": _mean_or_none(traded["p_short"]),
         "avg_p_fade_success_traded": _mean_or_none(traded["p_fade_success"]),
-        "avg_p_trend_danger_traded": _mean_or_none(traded["p_trend_danger"]),
+        "avg_trend_adverse_probability_traded": _mean_or_none(
+            traded["trend_adverse_probability"]
+        ),
+        "avg_legacy_p_trend_danger_traded": _mean_or_none(traded["p_trend_danger"]),
         "position_base_signal_mismatch_count": int((~frame["position_matches_base_signal"]).sum()),
     }
 
@@ -521,6 +524,7 @@ def main() -> int:
             long_short_margin=args.long_short_margin,
             min_fade_success=args.min_fade_success,
             max_trend_danger=args.max_trend_danger,
+            side_aware_trend_blocks_fade_trades=True,
         ),
     )
     overall = summary["overall"]

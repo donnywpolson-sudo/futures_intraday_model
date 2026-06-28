@@ -16,6 +16,7 @@ from scripts.phase8_model_selection.audit_trade_failure_drilldown import (  # no
     main,
 )
 from scripts.phase8_model_selection.evaluate_predictions import PolicyConfig  # noqa: E402
+from tests.phase8_model_selection.side_aware_fixture import add_side_aware_trend_rows  # noqa: E402
 
 
 def _write_costs(path: Path) -> Path:
@@ -138,6 +139,7 @@ def _add_policy_rows(rows: list[dict[str, object]], base: dict[str, object], ite
             "p_trend_danger": item["p_trend"],
         }
     )
+    add_side_aware_trend_rows(rows, base, item)
 
 
 def _write_predictions(path: Path) -> Path:
@@ -271,13 +273,14 @@ def test_trade_failure_drilldown_writes_files_and_reconciles_metrics(tmp_path: P
             long_short_margin=0.05,
             min_fade_success=0.50,
             max_trend_danger=0.50,
+            side_aware_trend_blocks_fade_trades=True,
         ),
     )
 
     for suffix in OUTPUT_SUFFIXES.values():
         assert (output_root / f"fixture_{suffix}").exists()
 
-    assert report["prediction_count"] == 24
+    assert report["prediction_count"] == 48
     assert report["policy_row_count"] == 6
     assert report["trade_count"] == 3
     assert report["totals"]["gross_return_dollars"] == -50.0

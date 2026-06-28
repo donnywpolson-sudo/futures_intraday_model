@@ -16,6 +16,7 @@ from scripts.phase8_model_selection.audit_direction_edge_calibration import (  #
     main,
 )
 from scripts.phase8_model_selection.evaluate_predictions import PolicyConfig  # noqa: E402
+from tests.phase8_model_selection.side_aware_fixture import add_side_aware_trend_rows  # noqa: E402
 
 
 def _write_costs(path: Path) -> Path:
@@ -130,6 +131,7 @@ def _add_prediction_group(rows: list[dict[str, object]], base: dict[str, object]
             },
         ]
     )
+    add_side_aware_trend_rows(rows, base, item)
 
 
 def _write_predictions(path: Path) -> Path:
@@ -220,7 +222,7 @@ def test_direction_edge_calibration_writes_flat_aware_reports(tmp_path: Path) ->
 
     for suffix in OUTPUT_SUFFIXES.values():
         assert (output_root / f"fixture_{suffix}").exists()
-    assert report["prediction_count"] == 32
+    assert report["prediction_count"] == 64
     assert report["policy_row_count"] == 8
     assert report["current_edge"]["trade_count"] == 6
     assert report["current_edge"]["target_direction_accuracy"] < 1.0

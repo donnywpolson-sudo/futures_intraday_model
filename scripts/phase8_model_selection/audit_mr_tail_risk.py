@@ -325,13 +325,18 @@ def build_mr_tail_policy_frame(
             long_short_margin=config.long_short_margin,
             min_fade_success=config.fade_success_cutoff,
             max_trend_danger=config.trend_danger_cutoff,
+            side_aware_trend_blocks_fade_trades=True,
         ),
     )
     if failures:
         return policy_frame, failures, warnings
 
     frame = _merge_optional_values(predictions, policy_frame)
-    frame = _attach_probability_decile(frame, "p_trend_danger", "trend_danger_decile")
+    frame = _attach_probability_decile(
+        frame,
+        "trend_adverse_probability",
+        "trend_danger_decile",
+    )
     frame = _attach_probability_decile(frame, "p_fade_success", "fade_success_decile")
     frame, volatility_source = _attach_volatility_regime(frame)
     frame = _attach_time_fields(frame)
@@ -347,7 +352,7 @@ def build_mr_tail_policy_frame(
     frame["fade_success_gate"] = pd.to_numeric(
         frame["p_fade_success"], errors="coerce"
     ).ge(config.fade_success_cutoff)
-    trend_probability = pd.to_numeric(frame["p_trend_danger"], errors="coerce")
+    trend_probability = pd.to_numeric(frame["trend_adverse_probability"], errors="coerce")
     frame["trend_danger_block"] = trend_probability.isna() | trend_probability.ge(
         config.trend_danger_cutoff
     )

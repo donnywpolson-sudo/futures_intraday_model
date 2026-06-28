@@ -26,6 +26,10 @@ REQUIRED_LINEAR_MODELS = {
     "logistic_direction_v1",
     "logistic_fade_success_v1",
     "logistic_trend_danger_v1",
+    "logistic_trend_adverse_long_v1",
+    "logistic_trend_favorable_long_v1",
+    "logistic_trend_adverse_short_v1",
+    "logistic_trend_favorable_short_v1",
 }
 OPTIONAL_EXTERNAL_MODELS = {"lightgbm_direction_v1", "xgboost_direction_v1"}
 REQUIRED_STAGES = {
@@ -50,6 +54,10 @@ REQUIRED_PREDICTION_COLUMNS = {
     "p_short",
     "p_flat",
     "p_fade_success",
+    "p_trend_adverse_long_30m",
+    "p_trend_favorable_long_30m",
+    "p_trend_adverse_short_30m",
+    "p_trend_favorable_short_30m",
     "p_trend_danger",
     "calibration_id",
     "model_config_hash",
@@ -57,6 +65,12 @@ REQUIRED_PREDICTION_COLUMNS = {
     "execution_open",
     "execution_close",
     "target_valid",
+}
+SIDE_AWARE_TREND_PROBABILITY_COLUMNS = {
+    "p_trend_adverse_long_30m",
+    "p_trend_favorable_long_30m",
+    "p_trend_adverse_short_30m",
+    "p_trend_favorable_short_30m",
 }
 
 
@@ -79,9 +93,10 @@ def all_target_columns(config: dict[str, Any]) -> set[str]:
 def resolve_purge_bars(purge: dict[str, Any]) -> int:
     entry_lag = int(purge["entry_lag_bars"])
     target_horizon = int(purge["target_horizon_bars"])
+    trend_horizon = int(purge.get("trend_horizon_bars", target_horizon))
     configured = purge.get("purge_bars")
     if configured == "auto":
-        return entry_lag + target_horizon
+        return entry_lag + max(target_horizon, trend_horizon)
     return int(configured)
 
 
@@ -99,18 +114,22 @@ def validate_purge_policy(config: dict[str, Any]) -> list[str]:
     try:
         entry_lag = int(purge["entry_lag_bars"])
         target_horizon = int(purge["target_horizon_bars"])
+        trend_horizon = int(purge.get("trend_horizon_bars", target_horizon))
         resolved = resolve_purge_bars(purge)
     except (KeyError, TypeError, ValueError) as exc:
         return [f"invalid purge policy: {exc}"]
 
-    expected = entry_lag + target_horizon
+    expected_horizon = max(target_horizon, trend_horizon)
+    expected = entry_lag + expected_horizon
     if purge.get("purge_bars") != "auto":
         errors.append("purge_bars must be auto for target-aligned WFA")
     if resolved != expected:
         errors.append(f"resolved purge must be {expected}, got {resolved}")
     if int(purge.get("resolved_purge_bars", -1)) != expected:
         errors.append(f"resolved_purge_bars must be {expected}")
-    if resolved == target_horizon:
+    if trend_horizon > target_horizon and resolved < entry_lag + trend_horizon:
+        errors.append("resolved purge does not cover side-aware 30m trend horizon")
+    if resolved == expected_horizon:
         errors.append("hardcoded target_horizon purge does not cover entry lag")
     return errors
 
@@ -215,6 +234,19 @@ def validate_model_registry(config: dict[str, Any]) -> list[str]:
         errors.append("raw and calibrated predictions must be separate")
     if prediction_schema.get("regression_probability_columns_nullable") is not True:
         errors.append("regression probability columns must be nullable")
+
+    position_policy = config.get("position_policy", {})
+    if not isinstance(position_policy, dict):
+        position_policy = {}
+    policy_inputs = set(position_policy.get("inputs", []))
+    if position_policy.get("side_aware_trend_blocks_fade_trades") is True:
+        missing_side_inputs = sorted(SIDE_AWARE_TREND_PROBABILITY_COLUMNS - policy_inputs)
+        if missing_side_inputs:
+            errors.append(
+                "side-aware trend policy inputs missing columns: " + str(missing_side_inputs)
+            )
+    if position_policy.get("p_trend_danger_blocks_fade_trades") is not False:
+        errors.append("aggregate p_trend_danger must remain disabled for trend blocking")
 
     calibration = config.get("calibration", {})
     if not isinstance(calibration, dict):

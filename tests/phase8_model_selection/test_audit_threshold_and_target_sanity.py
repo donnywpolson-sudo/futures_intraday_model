@@ -14,6 +14,7 @@ from scripts.phase8_model_selection.audit_threshold_and_target_sanity import (  
     build_threshold_and_target_sanity,
     main,
 )
+from scripts.phase8_model_selection.evaluate_predictions import SIDE_AWARE_TREND_TARGETS  # noqa: E402
 
 
 def _write_costs(path: Path) -> Path:
@@ -67,6 +68,12 @@ def _base_row(
 
 
 def _add_prediction_group(rows: list[dict[str, object]], base: dict[str, object], item: dict[str, object]) -> None:
+    side_aware_score_keys = {
+        "target_trend_adverse_long_30m": "p_trend_adverse_long",
+        "target_trend_favorable_long_30m": "p_trend_favorable_long",
+        "target_trend_adverse_short_30m": "p_trend_adverse_short",
+        "target_trend_favorable_short_30m": "p_trend_favorable_short",
+    }
     rows.extend(
         [
             {
@@ -128,22 +135,153 @@ def _add_prediction_group(rows: list[dict[str, object]], base: dict[str, object]
             },
         ]
     )
+    for side_key, (target_name, probability_column) in SIDE_AWARE_TREND_TARGETS.items():
+        score = item[side_aware_score_keys[target_name]]
+        rows.append(
+            {
+                **base,
+                "model_id": f"logistic_{side_key}_v1",
+                "model_family": "logistic_regression",
+                "target_name": target_name,
+                "y_true": int(score >= 0.5),
+                "y_pred_raw": score,
+                "y_pred_calibrated": score,
+                "p_long": None,
+                "p_short": None,
+                "p_flat": None,
+                "p_fade_success": None,
+                probability_column: score,
+                "p_trend_danger": None,
+            }
+        )
 
 
 def _write_predictions(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     timestamps = pd.date_range("2024-01-02T14:00:00Z", periods=6, freq="30min")
     items = [
-        ("ES", "ES_research_0001", 100.0, 102.0, 0.80, 0.10, 0.80, 0.10, 1, 0.02, 1000.0),
-        ("CL", "CL_research_0001", 80.0, 78.0, 0.75, 0.10, 0.55, 0.10, -1, -0.02, -1000.0),
-        ("ES", "ES_research_0002", 101.0, 100.0, 0.10, 0.80, 0.80, 0.10, -1, -0.01, -1000.0),
-        ("ES", "ES_research_0002", 100.0, 101.0, 0.80, 0.10, 0.80, 0.90, 1, 0.01, 1000.0),
-        ("CL", "CL_research_0002", 80.0, 81.0, 0.52, 0.50, 0.80, 0.10, 0, 0.0, 0.0),
-        ("CL", "CL_research_0002", 81.0, 82.0, 0.70, 0.10, 0.30, 0.10, 1, 0.01, 1000.0),
+        (
+            "ES",
+            "ES_research_0001",
+            100.0,
+            102.0,
+            0.80,
+            0.10,
+            0.80,
+            0.10,
+            0.10,
+            0.80,
+            0.80,
+            0.10,
+            1,
+            0.02,
+            1000.0,
+        ),
+        (
+            "CL",
+            "CL_research_0001",
+            80.0,
+            78.0,
+            0.75,
+            0.10,
+            0.55,
+            0.10,
+            0.10,
+            0.20,
+            0.80,
+            0.10,
+            -1,
+            -0.02,
+            -1000.0,
+        ),
+        (
+            "ES",
+            "ES_research_0002",
+            101.0,
+            100.0,
+            0.10,
+            0.80,
+            0.80,
+            0.10,
+            0.80,
+            0.10,
+            0.10,
+            0.80,
+            -1,
+            -0.01,
+            -1000.0,
+        ),
+        (
+            "ES",
+            "ES_research_0002",
+            100.0,
+            101.0,
+            0.80,
+            0.10,
+            0.80,
+            0.90,
+            0.90,
+            0.10,
+            0.10,
+            0.90,
+            1,
+            0.01,
+            1000.0,
+        ),
+        (
+            "CL",
+            "CL_research_0002",
+            80.0,
+            81.0,
+            0.52,
+            0.50,
+            0.80,
+            0.10,
+            0.10,
+            0.60,
+            0.60,
+            0.10,
+            0,
+            0.0,
+            0.0,
+        ),
+        (
+            "CL",
+            "CL_research_0002",
+            81.0,
+            82.0,
+            0.70,
+            0.10,
+            0.30,
+            0.10,
+            0.10,
+            0.70,
+            0.70,
+            0.10,
+            1,
+            0.01,
+            1000.0,
+        ),
     ]
     rows: list[dict[str, object]] = []
     for timestamp, item in zip(timestamps, items):
-        market, fold, entry, exit_, p_long, p_short, p_fade, p_trend, direction, ret_true, ret_pred = item
+        (
+            market,
+            fold,
+            entry,
+            exit_,
+            p_long,
+            p_short,
+            p_fade,
+            p_trend,
+            p_trend_adverse_long,
+            p_trend_favorable_long,
+            p_trend_adverse_short,
+            p_trend_favorable_short,
+            direction,
+            ret_true,
+            ret_pred,
+        ) = item
         _add_prediction_group(
             rows,
             _base_row(timestamp, market=market, fold_id=fold, entry=entry, exit_=exit_),
@@ -153,6 +291,10 @@ def _write_predictions(path: Path) -> Path:
                 "p_flat": 0.10,
                 "p_fade": p_fade,
                 "p_trend": p_trend,
+                "p_trend_adverse_long": p_trend_adverse_long,
+                "p_trend_favorable_long": p_trend_favorable_long,
+                "p_trend_adverse_short": p_trend_adverse_short,
+                "p_trend_favorable_short": p_trend_favorable_short,
                 "direction_true": direction,
                 "ret_true": ret_true,
                 "ret_pred": ret_pred,

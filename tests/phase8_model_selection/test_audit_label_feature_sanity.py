@@ -14,6 +14,7 @@ from scripts.phase8_model_selection.audit_label_feature_sanity import (  # noqa:
     build_label_feature_sanity,
     main,
 )
+from tests.phase8_model_selection.side_aware_fixture import add_side_aware_trend_rows  # noqa: E402
 
 
 def _write_costs(path: Path) -> Path:
@@ -130,6 +131,7 @@ def _add_prediction_group(rows: list[dict[str, object]], base: dict[str, object]
             },
         ]
     )
+    add_side_aware_trend_rows(rows, base, item)
 
 
 def _write_predictions(path: Path) -> Path:

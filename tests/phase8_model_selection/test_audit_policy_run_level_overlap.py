@@ -15,6 +15,7 @@ from scripts.phase8_model_selection.audit_policy_run_level_overlap import (  # n
     main,
 )
 from scripts.phase8_model_selection.evaluate_predictions import PolicyConfig  # noqa: E402
+from tests.phase8_model_selection.side_aware_fixture import add_side_aware_trend_rows  # noqa: E402
 
 
 def _write_costs(path: Path) -> Path:
@@ -121,6 +122,7 @@ def _add_policy_rows(rows: list[dict[str, object]], base: dict[str, object], ite
             "p_trend_danger": item["p_trend"],
         }
     )
+    add_side_aware_trend_rows(rows, base, item)
 
 
 def _write_predictions(path: Path, *, include_target_times: bool = True) -> Path:

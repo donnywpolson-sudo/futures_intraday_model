@@ -54,6 +54,18 @@ def _numeric(frame: pd.DataFrame, column: str) -> pd.Series:
     return pd.to_numeric(frame[column], errors="coerce")
 
 
+def _side_aware_adverse_probability(frame: pd.DataFrame, position: pd.Series) -> pd.Series:
+    positions = pd.to_numeric(position, errors="coerce")
+    long_adverse = _numeric(frame, "p_trend_adverse_long_30m")
+    short_adverse = _numeric(frame, "p_trend_adverse_short_30m")
+    values = np.where(
+        positions.eq(1),
+        long_adverse,
+        np.where(positions.eq(-1), short_adverse, np.nan),
+    )
+    return pd.Series(values, index=frame.index)
+
+
 def _finite_accuracy(predicted: pd.Series, actual: pd.Series) -> float | None:
     aligned = pd.DataFrame({"predicted": predicted, "actual": actual}).dropna()
     if aligned.empty:
@@ -111,7 +123,12 @@ def _quality_metrics(frame: pd.DataFrame, scope: str, keys: Mapping[str, Any]) -
             "avg_p_long": float(traded["p_long"].mean()) if not traded.empty else None,
             "avg_p_short": float(traded["p_short"].mean()) if not traded.empty else None,
             "avg_p_fade_success": float(traded["p_fade_success"].mean()) if not traded.empty else None,
-            "avg_p_trend_danger": float(traded["p_trend_danger"].mean()) if not traded.empty else None,
+            "avg_trend_adverse_probability": float(traded["trend_adverse_probability"].mean())
+            if not traded.empty and "trend_adverse_probability" in traded
+            else None,
+            "avg_legacy_p_trend_danger": float(traded["p_trend_danger"].mean())
+            if not traded.empty and "p_trend_danger" in traded
+            else None,
         }
     )
     return record
@@ -204,7 +221,8 @@ def _scenario_metrics(
     base_position.loc[margin.ge(direction_margin)] = 1
     base_position.loc[margin.le(-direction_margin)] = -1
     fade_allowed = _numeric(frame, "p_fade_success").ge(min_fade_success).fillna(False)
-    trend_ok = _numeric(frame, "p_trend_danger").lt(max_trend_danger).fillna(False)
+    frame["trend_adverse_probability"] = _side_aware_adverse_probability(frame, base_position)
+    trend_ok = frame["trend_adverse_probability"].lt(max_trend_danger).fillna(False)
     frame["position"] = np.where(fade_allowed & trend_ok, base_position, 0).astype(int)
     frame["trade_count"] = frame["position"].ne(0).astype(int)
     frame["long_count"] = frame["position"].eq(1).astype(int)
@@ -244,7 +262,8 @@ def _threshold_sensitivity(policy_frame: pd.DataFrame, unavailable: list[str]) -
     required = {
         "direction_margin",
         "p_fade_success",
-        "p_trend_danger",
+        "p_trend_adverse_long_30m",
+        "p_trend_adverse_short_30m",
         "price_move",
         "point_value",
         "round_turn_cost_dollars",
@@ -489,6 +508,7 @@ def main() -> int:
             long_short_margin=args.long_short_margin,
             min_fade_success=args.min_fade_success,
             max_trend_danger=args.max_trend_danger,
+            side_aware_trend_blocks_fade_trades=True,
         ),
     )
     print(

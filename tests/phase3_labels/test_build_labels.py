@@ -985,11 +985,45 @@ def test_fade_and_30m_regime_labels() -> None:
     assert row["target_fade_success_15m"] == True
     assert row["trend_danger_up_30m"] == True
     assert row["trend_danger_down_30m"] == True
+    assert row["target_trend_adverse_long_30m"] == True
+    assert row["target_trend_favorable_long_30m"] == True
+    assert row["target_trend_adverse_short_30m"] == True
+    assert row["target_trend_favorable_short_30m"] == True
     assert row["target_trend_danger_long_30m"] == True
     assert row["target_trend_danger_short_30m"] == True
     assert row["target_trend_danger_30m"] == True
     assert row["revert_to_vwap_30m"] == True
     assert row["revert_to_session_mid_30m"] == True
+
+
+def test_side_aware_30m_trend_labels_require_valid_30m_path() -> None:
+    rows = _base_rows(count=45)
+    for row in rows:
+        row["open"] = 100.0
+        row["high"] = 100.25
+        row["low"] = 99.75
+        row["close"] = 100.0
+    rows[1]["open"] = 100.0
+    rows[25]["high"] = 110.0
+    rows[25]["low"] = 90.0
+    rows[25]["session_segment_id"] = "session_2024-01-02_seg1"
+
+    labeled = add_labels(
+        pd.DataFrame(rows),
+        load_market_config("ES", Path("missing.yaml")),
+    )
+
+    row = labeled.iloc[0]
+    assert row["target_valid"] == True
+    for column in (
+        "trend_danger_up_30m",
+        "trend_danger_down_30m",
+        "target_trend_adverse_long_30m",
+        "target_trend_favorable_long_30m",
+        "target_trend_adverse_short_30m",
+        "target_trend_favorable_short_30m",
+    ):
+        assert row[column] == False
 
 
 def test_output_schema_and_reports(tmp_path: Path) -> None:
@@ -1018,6 +1052,10 @@ def test_output_schema_and_reports(tmp_path: Path) -> None:
         "target_fade_long_success_15m",
         "target_fade_short_success_15m",
         "target_fade_success_15m",
+        "target_trend_adverse_long_30m",
+        "target_trend_favorable_long_30m",
+        "target_trend_adverse_short_30m",
+        "target_trend_favorable_short_30m",
         "target_trend_danger_long_30m",
         "target_trend_danger_short_30m",
         "target_trend_danger_30m",

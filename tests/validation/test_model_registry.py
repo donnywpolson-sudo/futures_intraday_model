@@ -58,18 +58,26 @@ def test_purge_auto_resolution() -> None:
 
     assert purge["entry_lag_bars"] == 1
     assert purge["target_horizon_bars"] == 15
+    assert purge["trend_horizon_bars"] == 30
     assert purge["purge_bars"] == "auto"
-    assert resolve_purge_bars(purge) == 16
-    assert purge["resolved_purge_bars"] == 16
+    assert resolve_purge_bars(purge) == 31
+    assert purge["resolved_purge_bars"] == 31
     alpha = load_yaml(ROOT / "configs" / "alpha_tiered.yaml")
-    assert alpha["defaults"]["resolved_purge_bars"] == 16
+    assert alpha["defaults"]["resolved_purge_bars"] == 31
 
     bad = dict(purge)
-    bad["purge_bars"] = 15
-    bad["resolved_purge_bars"] = 15
+    bad["purge_bars"] = 30
+    bad["resolved_purge_bars"] = 30
     errors = validate_purge_policy({"purge": bad})
     assert any("purge_bars must be auto" in error for error in errors)
     assert any("does not cover entry lag" in error for error in errors)
+
+    too_short = dict(purge)
+    too_short["resolved_purge_bars"] = 16
+    assert any(
+        "resolved_purge_bars must be 31" in error
+        for error in validate_purge_policy({"purge": too_short})
+    )
 
 
 def test_target_group_exclusion() -> None:
@@ -81,19 +89,25 @@ def test_target_group_exclusion() -> None:
         "direction_target",
         "fade_success_target",
         "trend_danger_target",
+        "side_aware_trend_target",
     }
 
     targets = all_target_columns(config)
     assert {
         "target_fade_success_15m",
         "target_trend_danger_30m",
+        "target_trend_adverse_long_30m",
+        "target_trend_favorable_long_30m",
+        "target_trend_adverse_short_30m",
+        "target_trend_favorable_short_30m",
     }.issubset(targets)
 
     forbidden_targets = set(config["feature_exclusion"]["forbidden_feature_targets"])
     assert set(groups["fade_success_target"]).issubset(forbidden_targets)
     assert set(groups["trend_danger_target"]).issubset(forbidden_targets)
+    assert set(groups["side_aware_trend_target"]).issubset(forbidden_targets)
 
-    injected = validate_registry(["target_fade_success_15m", "target_trend_danger_30m"])
+    injected = validate_registry(["target_fade_success_15m", "target_trend_adverse_long_30m"])
     assert any("forbidden columns" in failure for failure in injected)
 
 
@@ -105,7 +119,26 @@ def test_multi_model_prediction_schema() -> None:
     assert {"model_id", "target_name"}.issubset(schema["primary_key"])
     assert schema["raw_and_calibrated_scores_separate"] is True
     assert schema["regression_probability_columns_nullable"] is True
-    assert {"p_long", "p_short", "p_flat", "p_fade_success", "p_trend_danger"}.issubset(columns)
+    assert {
+        "p_long",
+        "p_short",
+        "p_flat",
+        "p_fade_success",
+        "p_trend_adverse_long_30m",
+        "p_trend_favorable_long_30m",
+        "p_trend_adverse_short_30m",
+        "p_trend_favorable_short_30m",
+        "p_trend_danger",
+    }.issubset(columns)
+
+
+def test_aggregate_trend_danger_blocking_is_disabled_for_side_aware_policy() -> None:
+    config = _config()
+    config["position_policy"]["p_trend_danger_blocks_fade_trades"] = True
+
+    errors = validate_model_registry(config)
+
+    assert any("aggregate p_trend_danger must remain disabled" in error for error in errors)
 
 
 def test_calibration_train_only_discipline() -> None:
