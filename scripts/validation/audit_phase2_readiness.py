@@ -31,7 +31,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile", default=DEFAULT_PROFILE)
     parser.add_argument("--raw-root", default="data/raw")
     parser.add_argument("--raw-alignment-report", default=str(DEFAULT_RAW_ALIGNMENT_REPORT))
-    parser.add_argument("--output-root", default="data/causally_gated_normalized")
+    parser.add_argument("--output-root", default=None)
     parser.add_argument("--profile-config", default=str(DEFAULT_PROFILE_CONFIG))
     parser.add_argument("--session-config", default=str(DEFAULT_SESSION_CONFIG))
     parser.add_argument("--allow-hardcoded-calendar", action="store_true")
@@ -454,7 +454,8 @@ def summarize_readiness_report(
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_arg_parser().parse_args(argv)
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
     try:
         resume_rows = (
             load_checkpoint_rows(Path(args.resume_from)) if args.resume_from else []
@@ -498,6 +499,9 @@ def main(argv: list[str] | None = None) -> int:
             json_out.write_text(json.dumps(output, indent=2) + "\n", encoding="utf-8")
         print(json.dumps(output, indent=2))
         return 0 if output.get("status") == "PASS" else 1
+
+    if not args.output_root:
+        parser.error("--output-root is required; pass an explicit causal output root")
 
     checkpoint_path = Path(args.checkpoint_jsonl) if args.checkpoint_jsonl else None
     new_rows: list[dict[str, Any]] = []

@@ -12,6 +12,12 @@ from scripts.validation.audit_phase2_readiness import (
     summarize_readiness_report,
 )
 
+EXPLICIT_OUTPUT_ROOT = "reports/phase2_readiness/causal_fixture"
+
+
+def _scan_args(*args: str) -> list[str]:
+    return ["--output-root", EXPLICIT_OUTPUT_ROOT, *args]
+
 
 def _sample_report() -> dict[str, object]:
     return {
@@ -124,13 +130,48 @@ def test_cli_default_full_json_behavior_is_unchanged(
         lambda **_: _sample_report(),
     )
 
-    result = audit_phase2_readiness.main([])
+    result = audit_phase2_readiness.main(_scan_args())
     payload = json.loads(capsys.readouterr().out)
 
     assert result == 1
     assert payload["stage"] == "phase2_readiness_preflight"
     assert "blockers" in payload
     assert len(payload["blockers"]) == 3
+
+
+def test_cli_requires_explicit_output_root(
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(
+        audit_phase2_readiness,
+        "build_phase2_readiness_report",
+        lambda **_: _sample_report(),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        audit_phase2_readiness.main([])
+
+    assert exc_info.value.code == 2
+    assert (
+        "--output-root is required; pass an explicit causal output root"
+        in capsys.readouterr().err
+    )
+
+
+def test_cli_accepts_explicit_output_roots(tmp_path: Path) -> None:
+    canonical_root = Path("data/causally_gated_normalized")
+    report_root = tmp_path / "reports" / "phase2" / "causal_base_fixture"
+
+    canonical_args = audit_phase2_readiness.build_arg_parser().parse_args(
+        ["--output-root", canonical_root.as_posix()]
+    )
+    report_args = audit_phase2_readiness.build_arg_parser().parse_args(
+        ["--output-root", report_root.as_posix()]
+    )
+
+    assert Path(canonical_args.output_root).as_posix() == canonical_root.as_posix()
+    assert Path(report_args.output_root).as_posix() == report_root.as_posix()
 
 
 def test_cli_summary_only_and_json_out(
@@ -146,13 +187,13 @@ def test_cli_summary_only_and_json_out(
     )
 
     result = audit_phase2_readiness.main(
-        [
+        _scan_args(
             "--summary-only",
             "--top-blockers",
             "1",
             "--json-out",
             str(out_path),
-        ]
+        )
     )
     stdout_payload = json.loads(capsys.readouterr().out)
     written_payload = json.loads(out_path.read_text(encoding="utf-8"))
@@ -230,7 +271,9 @@ def test_cli_checkpoint_preserves_completed_rows_when_builder_stops(
     )
 
     with pytest.raises(RuntimeError):
-        audit_phase2_readiness.main(["--checkpoint-jsonl", str(checkpoint_path)])
+        audit_phase2_readiness.main(
+            _scan_args("--checkpoint-jsonl", str(checkpoint_path))
+        )
 
     rows = load_checkpoint_rows(checkpoint_path)
     assert [(row["market"], row["year"], row["status"]) for row in rows] == [
@@ -288,7 +331,7 @@ def test_cli_resume_skips_completed_checkpoint_rows(
     )
 
     result = audit_phase2_readiness.main(
-        ["--resume-from", str(checkpoint_path), "--summary-only"]
+        _scan_args("--resume-from", str(checkpoint_path), "--summary-only")
     )
     payload = json.loads(capsys.readouterr().out)
 
@@ -324,7 +367,7 @@ def test_cli_passes_market_year_filters(monkeypatch, capsys) -> None:
     )
 
     result = audit_phase2_readiness.main(
-        ["--markets", "ES", "NQ", "--years", "2023", "2024"]
+        _scan_args("--markets", "ES", "NQ", "--years", "2023", "2024")
     )
     capsys.readouterr()
 
@@ -460,7 +503,7 @@ def test_cli_max_market_years_preserves_resume_rows_and_reports_pending(
     )
 
     result = audit_phase2_readiness.main(
-        [
+        _scan_args(
             "--resume-from",
             str(checkpoint_path),
             "--checkpoint-jsonl",
@@ -468,7 +511,7 @@ def test_cli_max_market_years_preserves_resume_rows_and_reports_pending(
             "--summary-only",
             "--max-market-years",
             "1",
-        ]
+        )
     )
     payload = json.loads(capsys.readouterr().out)
 
@@ -526,13 +569,13 @@ def test_cli_stop_after_blockers_returns_fail_with_partial_evidence(
     )
 
     result = audit_phase2_readiness.main(
-        [
+        _scan_args(
             "--checkpoint-jsonl",
             str(checkpoint_path),
             "--summary-only",
             "--stop-after-blockers",
             "1",
-        ]
+        )
     )
     payload = json.loads(capsys.readouterr().out)
 
