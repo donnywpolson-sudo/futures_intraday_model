@@ -1,0 +1,2 @@
+path,current_classification,reference_type,recommended_action,reason,cleanup_eligible_now,dry_run_cleanup_safe_next,actual_cleanup_allowed,reference_examples
+NONE,no_active_reference_blocker,none,dry_run_cleanup_approval_plan_only,active legacy causal manifest and Phase 5 approved-base references were retired; remaining candidate paths are specific and protected paths are excluded,true,true,false,configs/data_manifest.yaml:11; scripts/audit_databento_phase5.py:43; reports/data_audit/final/manual_review_classification_refresh.csv

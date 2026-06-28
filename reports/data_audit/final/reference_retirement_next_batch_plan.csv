@@ -1,0 +1,2 @@
+step,path,action,allowed_now,actual_cleanup_allowed,reason
+dry_run_cleanup_approval_plan,data/causally_gated_normalized;data/raw/_repair_candidates;data/feature_matrices/baseline;data/predictions;data/dbn_sr_parent_candidate,request_separate_user_approval_before_dry_run_cleanup,false_without_user_approval,false,cleanup eligibility gate is clear but dry-run cleanup remains a separate action requiring explicit approval

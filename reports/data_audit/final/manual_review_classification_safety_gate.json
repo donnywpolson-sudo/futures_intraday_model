@@ -1,0 +1,73 @@
+{
+  "active_reference_blockers": [],
+  "actual_cleanup_safe_now": false,
+  "approved_causal_base": "data/causal_base_candidates/tier1_rebuild_v1",
+  "candidate_future_quarantine_plan_only": [
+    "data/causally_gated_normalized",
+    "data/raw/_repair_candidates",
+    "data/feature_matrices/baseline",
+    "data/predictions",
+    "data/dbn_sr_parent_candidate"
+  ],
+  "cleanup_eligible_now": true,
+  "cleanup_or_dry_run_executed": false,
+  "data_causally_gated_normalized_classification": "legacy_candidate_future_quarantine_plan_only",
+  "data_modified": false,
+  "dry_run_cleanup_safe_next": true,
+  "dry_run_plan_specific": true,
+  "generated_at": "2026-06-28T12:50:26Z",
+  "legacy_causal_base": "data/causally_gated_normalized",
+  "manual_review_blockers": [],
+  "model_artifacts_written": false,
+  "predictions_generated": false,
+  "production_live_readiness_claimed": false,
+  "protected_keep": [
+    "data/dbn",
+    "data/raw",
+    "data/raw/ES",
+    "data/raw/RTY",
+    "data/raw/ZS",
+    "data/causal_base_candidates/tier1_rebuild_v1",
+    "data/labeled/tier1_rebuild_v1",
+    "data/feature_matrices/baseline_tier1_rebuild_v1",
+    "reports/data_audit/**"
+  ],
+  "protected_keep_paths_confirmed": true,
+  "reason": "all active legacy causal approved-base references were retired or reclassified; dry-run cleanup is safe as the next separately approved action, while actual cleanup remains unsafe until dry-run evidence is reviewed",
+  "references_reclassified_this_pass": [
+    "scripts/audit_databento_phase0.py legacy causal strings -> audit scanner/classification strings",
+    "scripts/audit_databento_phase4.py legacy causal strings -> audit scanner/modeling-root historical classifier strings",
+    "scripts/check_git_hygiene.py data/causally_gated_normalized -> protective hygiene guard",
+    "tests/* data/causally_gated_normalized references -> test fixtures",
+    "reports/data_audit/** data/causally_gated_normalized references -> report/history evidence"
+  ],
+  "references_retired_this_pass": [
+    "configs/data_manifest.yaml:11 canonical causal pattern -> data/causal_base_candidates/tier1_rebuild_v1/{market}/{year}.parquet",
+    "configs/data_manifest.yaml artifact_policy removed data/causally_gated_normalized/_ active audit prefix",
+    "scripts/audit_data_manifest.py causal coverage artifact label now follows manifest canonical pattern",
+    "scripts/audit_databento_phase5.py approved causal base -> data/causal_base_candidates/tier1_rebuild_v1",
+    "tests/validation/test_refresh_master_data_health_matrix.py fixture canonical causal pattern aligned to rebuilt root"
+  ],
+  "reports_written": [
+    "reports/data_audit/final/manual_review_classification_refresh.csv",
+    "reports/data_audit/final/manual_review_classification_refresh.md",
+    "reports/data_audit/final/manual_review_classification_safety_gate.json",
+    "reports/data_audit/final/cleanup_blocker_refresh.csv",
+    "reports/data_audit/final/cleanup_blocker_refresh.md",
+    "reports/data_audit/final/cleanup_blocker_safety_gate.json",
+    "reports/data_audit/final/reference_retirement_next_batch_plan.csv",
+    "reports/data_audit/final/reference_retirement_next_batch_plan.md",
+    "reports/data_audit/final/reference_retirement_next_batch_safety_gate.json"
+  ],
+  "requires_user_approval_before_actual_cleanup": true,
+  "requires_user_approval_before_dry_run_cleanup": true,
+  "unsafe_or_protected_paths": [
+    "data/dbn",
+    "data/raw",
+    "data/raw/ES",
+    "data/raw/RTY",
+    "data/raw/ZS",
+    "reports/data_audit/**"
+  ],
+  "wfa_modeling_metrics_run": false
+}

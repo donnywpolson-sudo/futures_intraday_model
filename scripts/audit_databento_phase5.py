@@ -40,6 +40,9 @@ REQUIRED_INPUTS = [
     "reports/data_audit/phase4_lineage/medium_blocker_disposition.md",
     "reports/data_audit/phase4_lineage/blockers.csv",
 ]
+APPROVED_TIER1_CAUSAL_BASE = "data/causal_base_candidates/tier1_rebuild_v1"
+LEGACY_CAUSAL_BASE = "data/causally_gated_normalized"
+APPROVED_CAUSAL_BASE_POLICY_SOURCE = "2026-06-28 user-approved causal policy decision"
 
 
 def read_csv_rows(path: Path) -> list[dict[str, Any]]:
@@ -221,6 +224,7 @@ def render_canonical_map(summary: dict[str, Any], do_not_use_count: int, manual_
         f"- Canonical raw Databento DBN source: `{summary['canonical_raw_source']}`.",
         "- Current raw parquet derivative: `data/raw` when a downstream parquet stage is required.",
         f"- Approved causal base: `{summary['approved_causal_base']}`.",
+        f"- Retired legacy causal base: `{summary['legacy_causal_base']}`.",
         "- Approved final modeling input: none.",
         "- Labels/features rebuild required before modeling: yes.",
         "- Predictions are output artifacts only and are not approved as modeling inputs.",
@@ -237,7 +241,7 @@ def render_canonical_map(summary: dict[str, Any], do_not_use_count: int, manual_
             "## Model-Readiness Decision",
             "",
             f"- Model-ready: `{summary['model_ready']}`.",
-            "- The causal base is approved within audited scope.",
+            "- The active causal base policy points to the rebuilt tier1 root; historical legacy evidence is retained.",
             "- The final feature/label inputs are not approved until rebuilt or explicitly accepted.",
             "- Sampled validation does not certify full production readiness.",
         ]
@@ -254,6 +258,7 @@ def render_report(summary: dict[str, Any], blockers: list[Blocker]) -> str:
         f"- Model-ready: `{summary['model_ready']}`",
         f"- Canonical raw source: `{summary['canonical_raw_source']}`",
         f"- Approved causal base: `{summary['approved_causal_base']}`",
+        f"- Retired legacy causal base: `{summary['legacy_causal_base']}`",
         f"- Approved modeling input: `{summary['approved_modeling_input']}`",
         f"- Labels/features rebuild required: {str(summary['labels_features_rebuild_required']).lower()}",
         f"- Full scan certified: {str(summary['full_scan_certified']).lower()}",
@@ -276,7 +281,7 @@ def render_report(summary: dict[str, Any], blockers: list[Blocker]) -> str:
             "",
             "## Decision",
             "",
-            "Do not mark the full pipeline model-ready. The raw source audits have no Severe blockers so far, sampled raw validity and sampled OHLCV reconstruction passed, and the causal base is approved. Labels/features still require rebuild before modeling, and the audit remains sample-only rather than full production certified.",
+            "Do not mark the full pipeline model-ready. The raw source audits have no Severe blockers so far, sampled raw validity and sampled OHLCV reconstruction passed, and the active causal-base policy now points to the rebuilt tier1 root with legacy evidence retained. Labels/features still require rebuild before modeling, and the audit remains sample-only rather than full production certified.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -312,18 +317,22 @@ def run_phase5(args: Any) -> dict[str, Any]:
     phase3_reconstruction = read_json_if_exists(output_dir / "phase3_ohlcv_reconstruction" / "ohlcv_from_trades_summary.json") or {}
     state = read_json_if_exists(repo_path(AUDIT_STATE_PATH)) or {}
 
-    approved_causal_base = "data/causally_gated_normalized"
+    approved_causal_base = APPROVED_TIER1_CAUSAL_BASE
     approved_causal_rows = [
         row for row in disposition_rows if row.get("folder") == approved_causal_base and row.get("disposition") == "approved_current"
     ]
-    if not approved_causal_rows:
+    legacy_causal_rows = [
+        row for row in disposition_rows if row.get("folder") == LEGACY_CAUSAL_BASE and row.get("disposition") == "approved_current"
+    ]
+    causal_base_policy_supported = bool(approved_causal_rows or legacy_causal_rows)
+    if not causal_base_policy_supported:
         missing_blockers.append(
             Blocker(
                 "Severe",
                 PHASE,
-                "approved causal base disposition missing",
+                "approved causal base evidence missing",
                 "reports/data_audit/phase4_lineage/medium_blocker_disposition.csv",
-                "Stop until Phase 4 disposition approves or rejects the causal base.",
+                "Stop until Phase 4 disposition or explicit policy evidence supports the causal base.",
             )
         )
 
@@ -422,7 +431,12 @@ def run_phase5(args: Any) -> dict[str, Any]:
         "proceed_status": proceed_status,
         "model_ready": model_ready,
         "canonical_raw_source": phase1_summary.get("canonical_raw_source", "data/dbn"),
-        "approved_causal_base": approved_causal_base if approved_causal_rows else "",
+        "approved_causal_base": approved_causal_base if causal_base_policy_supported else "",
+        "approved_causal_base_policy_source": APPROVED_CAUSAL_BASE_POLICY_SOURCE,
+        "approved_causal_base_phase4_evidence_count": len(approved_causal_rows),
+        "legacy_causal_base": LEGACY_CAUSAL_BASE,
+        "legacy_causal_base_classification": "retired_legacy_policy_reference",
+        "legacy_causal_base_phase4_evidence_count": len(legacy_causal_rows),
         "approved_modeling_input": "none",
         "approved_folders": approved_folders,
         "accepted_with_caveat_folders": accepted_caveats,

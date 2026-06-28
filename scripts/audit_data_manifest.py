@@ -224,6 +224,8 @@ def summarize(rows: list[dict[str, str]], manifest: dict[str, Any], coverage_row
         counts[(row["artifact"], row["policy_status"])] += 1
 
     cleanup = manifest.get("artifact_policy", {})
+    canonical = manifest.get("canonical_paths", {})
+    causal_artifact = str(canonical.get("causal_parquet_pattern", ""))
     exclusions = cleanup.get("exclusions", []) or []
     unknown_paths = [
         item for item in exclusions if str(item.get("classification")) in {"STALE_OR_UNKNOWN", "UNKNOWN"}
@@ -246,7 +248,7 @@ def summarize(rows: list[dict[str, str]], manifest: dict[str, Any], coverage_row
     ]
     for artifact in [
         "data/raw/{market}/{year}.parquet",
-        "data/causally_gated_normalized/{market}/{year}.parquet",
+        causal_artifact,
         "data/dbn/status",
     ]:
         expected_count = counts.get((artifact, "expected_missing"), 0)
@@ -351,7 +353,7 @@ def build_rows(manifest: dict[str, Any]) -> list[dict[str, str]]:
     causal_actual = parquet_pairs(str(canonical["causal_parquet_pattern"]))
     rows.extend(
         issue_rows_for_artifact(
-            artifact="data/causally_gated_normalized/{market}/{year}.parquet",
+            artifact=str(canonical["causal_parquet_pattern"]),
             schema="phase2_causal_base_parquet",
             expected=expected,
             actual=causal_actual,

@@ -11,7 +11,7 @@ from scripts.validation import refresh_master_data_health_matrix as refresh
 def _manifest() -> dict[str, object]:
     return {
         "canonical_paths": {
-            "causal_parquet_pattern": "data/causally_gated_normalized/{market}/{year}.parquet"
+            "causal_parquet_pattern": "data/causal_base_candidates/tier1_rebuild_v1/{market}/{year}.parquet"
         },
         "expected_markets": ["ES", "KE"],
         "expected_years": {
@@ -24,11 +24,11 @@ def _manifest() -> dict[str, object]:
 
 def test_expected_pairs_order_and_current_causal_detection(tmp_path: Path) -> None:
     pairs = refresh.expected_pairs(_manifest())
-    (tmp_path / "data" / "causally_gated_normalized" / "ES").mkdir(parents=True)
-    (tmp_path / "data" / "causally_gated_normalized" / "ES" / "2020.parquet").write_text("x", encoding="utf-8")
+    (tmp_path / "data" / "causal_base_candidates" / "tier1_rebuild_v1" / "ES").mkdir(parents=True)
+    (tmp_path / "data" / "causal_base_candidates" / "tier1_rebuild_v1" / "ES" / "2020.parquet").write_text("x", encoding="utf-8")
     present = refresh.current_causal_pairs(
         tmp_path,
-        "data/causally_gated_normalized/{market}/{year}.parquet",
+        "data/causal_base_candidates/tier1_rebuild_v1/{market}/{year}.parquet",
         pairs,
     )
 
@@ -68,7 +68,7 @@ def test_refresh_updates_stale_causal_count(tmp_path: Path) -> None:
     raw_audit_path = tmp_path / "reports" / "raw_readiness" / "raw_enriched_optional_schema_audit.json"
     phase2_plan_path = tmp_path / "reports" / "phase_restart" / "batch_phase2_build_exclusion_plan.json"
     handoff_path = tmp_path / "CODEX_HANDOFF.md"
-    causal_dir = tmp_path / "data" / "causally_gated_normalized" / "ES"
+    causal_dir = tmp_path / "data" / "causal_base_candidates" / "tier1_rebuild_v1" / "ES"
     causal_dir.mkdir(parents=True)
     (causal_dir / "2020.parquet").write_text("x", encoding="utf-8")
     matrix_path.parent.mkdir(parents=True)
