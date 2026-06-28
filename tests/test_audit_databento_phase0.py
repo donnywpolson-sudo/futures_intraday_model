@@ -9,6 +9,7 @@ def test_folder_classification_identifies_canonical_and_derived() -> None:
     assert classify_folder(Path("data/dbn"))[0] == "canonical_raw_source"
     assert classify_folder(Path("data/raw"))[0] == "current_derived"
     assert classify_folder(Path("data/causally_gated_normalized_pre_replace_TEST_FIXTURE"))[0] == "quarantine_candidate"
+    assert classify_folder(Path("data/example_sr_parent_candidate/nested"))[0] == "quarantine_candidate"
     assert classify_folder(Path("data/mystery"))[0] == "unsafe_unknown"
 
 

@@ -55,7 +55,8 @@ def classify_folder(path: Path) -> tuple[str, str]:
         if "candidate" in rel_lower or "repair" in rel_lower:
             return "quarantine_candidate", "source-like DBN candidate/repair subtree"
         return "canonical_raw_source", "DBN archive source subtree"
-    if rel_path == "data/dbn_sr_parent_candidate" or rel_path.startswith("data/dbn_sr_parent_candidate/"):
+    rel_parts = rel_path.split("/")
+    if len(rel_parts) >= 2 and rel_parts[0] == "data" and rel_parts[1].endswith("_sr_parent_candidate"):
         return "quarantine_candidate", "source-like parent candidate subtree pending audit"
     if rel_path.startswith("data/causally_gated_normalized_pre_replace"):
         return "quarantine_candidate", "derived backup subtree pending audit"
