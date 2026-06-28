@@ -224,7 +224,7 @@ position_policy:
     - p_flat
     - p_fade_success
     - p_trend_danger
-  p_trend_danger_blocks_fade_trades: true
+  p_trend_danger_blocks_fade_trades: false
   p_fade_success_allows_fade_trades: true
   raw_return_prediction_direct_trading_allowed: false
   deterministic_policy_required: true

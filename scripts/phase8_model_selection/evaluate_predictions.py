@@ -83,7 +83,7 @@ class PolicyConfig:
     min_fade_success: float
     max_trend_danger: float
     raw_return_prediction_direct_trading_allowed: bool = False
-    p_trend_danger_blocks_fade_trades: bool = True
+    p_trend_danger_blocks_fade_trades: bool = False
     p_fade_success_allows_fade_trades: bool = True
 
 
@@ -111,6 +111,48 @@ def _read_yaml(path: Path) -> dict[str, Any]:
         return {}
     payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _read_bool_config(value: object, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "1"}:
+            return True
+        if normalized in {"false", "no", "0"}:
+            return False
+    return default
+
+
+def load_policy_config(
+    models_config: Path,
+    *,
+    long_short_margin: float,
+    min_fade_success: float,
+    max_trend_danger: float,
+) -> PolicyConfig:
+    models = _read_yaml(models_config)
+    position_policy = models.get("position_policy", {})
+    if not isinstance(position_policy, Mapping):
+        position_policy = {}
+    return PolicyConfig(
+        long_short_margin=long_short_margin,
+        min_fade_success=min_fade_success,
+        max_trend_danger=max_trend_danger,
+        raw_return_prediction_direct_trading_allowed=_read_bool_config(
+            position_policy.get("raw_return_prediction_direct_trading_allowed"),
+            False,
+        ),
+        p_trend_danger_blocks_fade_trades=_read_bool_config(
+            position_policy.get("p_trend_danger_blocks_fade_trades"),
+            False,
+        ),
+        p_fade_success_allows_fade_trades=_read_bool_config(
+            position_policy.get("p_fade_success_allows_fade_trades"),
+            True,
+        ),
+    )
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -586,8 +628,11 @@ def build_policy_frame(
     )
     base["direction_beats_flat"] = base["direction_probability"] > base["p_flat"]
     base["fade_allowed"] = base["p_fade_success"].ge(policy.min_fade_success).fillna(False)
-    base["trend_danger_block"] = base["p_trend_danger"].isna() | base["p_trend_danger"].ge(
+    trend_danger_condition = base["p_trend_danger"].isna() | base["p_trend_danger"].ge(
         policy.max_trend_danger
+    )
+    base["trend_danger_block"] = (
+        trend_danger_condition if policy.p_trend_danger_blocks_fade_trades else False
     )
     base["no_direction_signal"] = base["base_position"].eq(0)
     base["blocked_by_flat_probability"] = (
@@ -1377,7 +1422,8 @@ def main() -> int:
         model_selection_root=Path(args.model_selection_root),
         phase8_root=Path(args.phase8_root),
         run=args.run,
-        policy=PolicyConfig(
+        policy=load_policy_config(
+            Path(args.models_config),
             long_short_margin=args.long_short_margin,
             min_fade_success=args.min_fade_success,
             max_trend_danger=args.max_trend_danger,

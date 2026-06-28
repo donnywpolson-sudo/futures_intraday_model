@@ -14,6 +14,7 @@ from scripts.phase8_model_selection.evaluate_predictions import (  # noqa: E402
     PromotionGateConfig,
     build_arg_parser,
     evaluate_predictions,
+    load_policy_config,
     main,
 )
 
@@ -45,15 +46,20 @@ markets:
     return path
 
 
-def _write_models(path: Path) -> Path:
+def _write_models(path: Path, *, p_trend_danger_blocks_fade_trades: bool = False) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
+    trend_block = str(p_trend_danger_blocks_fade_trades).lower()
     path.write_text(
-        """
+        f"""
 calibration:
   test_fold_fit_allowed: false
   final_holdout_fit_allowed: false
   no_calibration_marker: no_calibration
   preserve_raw_and_calibrated_scores: true
+position_policy:
+  p_trend_danger_blocks_fade_trades: {trend_block}
+  p_fade_success_allows_fade_trades: true
+  raw_return_prediction_direct_trading_allowed: false
 """.strip(),
         encoding="utf-8",
     )
@@ -65,6 +71,7 @@ def _policy() -> PolicyConfig:
         long_short_margin=0.05,
         min_fade_success=0.50,
         max_trend_danger=0.50,
+        p_trend_danger_blocks_fade_trades=False,
     )
 
 
@@ -274,7 +281,34 @@ def test_cli_accepts_explicit_report_scoped_predictions(tmp_path: Path) -> None:
     assert Path(args.predictions).as_posix() == prediction_path.as_posix()
 
 
-def test_policy_metrics_block_trend_danger_and_fade_filter(tmp_path: Path) -> None:
+def test_policy_config_reads_trend_danger_blocker_flag(tmp_path: Path) -> None:
+    disabled_models = _write_models(
+        tmp_path / "configs" / "models_disabled.yaml",
+        p_trend_danger_blocks_fade_trades=False,
+    )
+    enabled_models = _write_models(
+        tmp_path / "configs" / "models_enabled.yaml",
+        p_trend_danger_blocks_fade_trades=True,
+    )
+
+    disabled_policy = load_policy_config(
+        disabled_models,
+        long_short_margin=0.05,
+        min_fade_success=0.50,
+        max_trend_danger=0.50,
+    )
+    enabled_policy = load_policy_config(
+        enabled_models,
+        long_short_margin=0.05,
+        min_fade_success=0.50,
+        max_trend_danger=0.50,
+    )
+
+    assert disabled_policy.p_trend_danger_blocks_fade_trades is False
+    assert enabled_policy.p_trend_danger_blocks_fade_trades is True
+
+
+def test_policy_metrics_do_not_hard_block_aggregate_trend_danger(tmp_path: Path) -> None:
     prediction_path = _write_predictions(tmp_path / "data" / "predictions" / "baseline" / "oos_predictions.parquet")
     manifest_path = _write_manifest(tmp_path / "reports" / "wfa" / "baseline_predictions_manifest.json", prediction_path)
     costs_path = _write_costs(tmp_path / "configs" / "costs.yaml")
@@ -295,15 +329,15 @@ def test_policy_metrics_block_trend_danger_and_fade_filter(tmp_path: Path) -> No
     assert result["failure_count"] == 0
     overall = result["policy_metrics"]["overall"]
     assert overall["row_count"] == 5
-    assert overall["trade_count"] == 2
-    assert overall["blocked_by_trend_danger"] == 1
+    assert overall["trade_count"] == 3
+    assert overall["blocked_by_trend_danger"] == 0
     assert overall["blocked_by_fade_filter"] == 1
     assert overall["blocked_by_flat_probability"] == 1
-    assert overall["gross_return_dollars"] == 100.0
-    assert overall["cost_dollars"] == 20.0
-    assert overall["net_return_dollars"] == 80.0
+    assert overall["gross_return_dollars"] == 150.0
+    assert overall["cost_dollars"] == 30.0
+    assert overall["net_return_dollars"] == 120.0
     assert overall["max_drawdown_dollars"] <= 0.0
-    assert overall["position_change_abs_sum"] >= 2.0
+    assert overall["position_change_abs_sum"] >= 3.0
 
     metrics = json.loads(result["metrics_path"].read_text(encoding="utf-8"))
     phase8_metrics = json.loads(result["phase8_metrics_path"].read_text(encoding="utf-8"))
@@ -318,10 +352,11 @@ def test_policy_metrics_block_trend_danger_and_fade_filter(tmp_path: Path) -> No
     assert metrics["execution_policy"] == "max_one_contract_non_overlapping_target_window"
     assert metrics["research_alpha_ready"] is False
     assert metrics["model_promotion_allowed"] is False
-    assert phase8_metrics["metrics"]["overall"]["net_return_dollars"] == 80.0
+    assert metrics["policy_config"]["p_trend_danger_blocks_fade_trades"] is False
+    assert phase8_metrics["metrics"]["overall"]["net_return_dollars"] == 120.0
     assert decision["promoted"] is False
     assert decision["model_promotion_allowed"] is False
-    assert "trade_count 2 below minimum 100" in decision["blockers"]
+    assert "trade_count 3 below minimum 100" in decision["blockers"]
     assert "market_count 1 below minimum 2" in decision["blockers"]
     assert decision["final_holdout_touched"] is False
     assert decision["trading_semantics_changed"] is False
@@ -337,7 +372,8 @@ def test_policy_metrics_block_trend_danger_and_fade_filter(tmp_path: Path) -> No
         "logistic_fade_success_v1",
         "logistic_trend_danger_v1",
     }
-    assert turnover.loc[0, "trade_count"] == 2
+    assert calibration["calibration_curve_count"] > 0
+    assert turnover.loc[0, "trade_count"] == 3
 
 
 def test_policy_metrics_net_overlapping_target_windows_before_costs(tmp_path: Path) -> None:
