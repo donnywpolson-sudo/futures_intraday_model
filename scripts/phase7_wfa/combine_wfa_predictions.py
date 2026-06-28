@@ -254,7 +254,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest-pattern", action="append", required=True)
     parser.add_argument("--run", required=True)
-    parser.add_argument("--predictions-root", default="data/predictions")
+    parser.add_argument("--predictions-root", default=None)
     parser.add_argument("--reports-root", default="reports/wfa")
     parser.add_argument("--split-plan", default=None)
     parser.add_argument("--require-all-folds", action="store_true")
@@ -262,7 +262,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    args = build_arg_parser().parse_args()
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    if args.predictions_root is None:
+        parser.error("--predictions-root is required; pass an explicit prediction root")
     manifest = combine_wfa_prediction_shards(
         manifest_patterns=args.manifest_pattern,
         run=args.run,

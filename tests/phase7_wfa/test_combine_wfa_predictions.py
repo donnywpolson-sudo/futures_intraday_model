@@ -5,10 +5,15 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.phase7_wfa.combine_wfa_predictions import combine_wfa_prediction_shards
+from scripts.phase7_wfa import combine_wfa_predictions
+from scripts.phase7_wfa.combine_wfa_predictions import (
+    build_arg_parser,
+    combine_wfa_prediction_shards,
+)
 
 
 def _sha256(path: Path) -> str:
@@ -117,6 +122,56 @@ def test_combine_wfa_prediction_shards_requires_all_folds(tmp_path: Path) -> Non
     assert manifest["prediction_count"] == 2
     assert manifest["fold_count"] == 2
     assert (tmp_path / "data" / "predictions" / "full" / "oos_predictions.parquet").exists()
+
+
+def test_build_arg_parser_does_not_default_predictions_root() -> None:
+    parser = build_arg_parser()
+
+    args = parser.parse_args(["--manifest-pattern", "reports/*_manifest.json", "--run", "full"])
+
+    assert args.predictions_root is None
+
+
+def test_main_requires_explicit_predictions_root(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "combine_wfa_predictions.py",
+            "--manifest-pattern",
+            "reports/*_manifest.json",
+            "--run",
+            "full",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        combine_wfa_predictions.main()
+
+    assert excinfo.value.code == 2
+    assert (
+        "--predictions-root is required; pass an explicit prediction root"
+        in capsys.readouterr().err
+    )
+
+
+def test_build_arg_parser_accepts_report_scoped_predictions_root() -> None:
+    parser = build_arg_parser()
+
+    args = parser.parse_args(
+        [
+            "--manifest-pattern",
+            "reports/*_manifest.json",
+            "--run",
+            "full",
+            "--predictions-root",
+            "reports/wfa_research/tier1_rebuild_v1/predictions",
+        ]
+    )
+
+    assert args.predictions_root == "reports/wfa_research/tier1_rebuild_v1/predictions"
 
 
 def test_combine_wfa_prediction_shards_fails_missing_expected_fold(tmp_path: Path) -> None:
