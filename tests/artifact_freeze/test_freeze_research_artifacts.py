@@ -8,7 +8,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.artifact_freeze.freeze_research_artifacts import freeze_research_artifacts
+from scripts.artifact_freeze.freeze_research_artifacts import (
+    build_arg_parser,
+    freeze_research_artifacts,
+    main,
+)
 
 
 def _write_json(path: Path, payload: object) -> Path:
@@ -106,6 +110,53 @@ def _write_freeze_inputs(
         "models": models,
         "costs": costs,
     }
+
+
+def test_cli_feature_root_has_no_implicit_default() -> None:
+    args = build_arg_parser().parse_args(["--freeze-id", "fixture-freeze"])
+
+    assert args.feature_root is None
+
+
+def test_cli_missing_feature_root_fails_clearly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    freeze_root = tmp_path / "artifacts" / "frozen"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "freeze_research_artifacts.py",
+            "--freeze-id",
+            "fixture-freeze",
+            "--freeze-root",
+            freeze_root.as_posix(),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+
+    assert excinfo.value.code == 2
+    assert "--feature-root is required; pass an explicit feature root" in capsys.readouterr().err
+    assert not freeze_root.exists()
+
+
+def test_cli_accepts_explicit_feature_roots() -> None:
+    rebuilt_root = Path("data") / "feature_matrices" / "baseline_tier1_rebuild_v1"
+    report_root = Path("reports") / "artifact_freeze" / "features"
+
+    rebuilt_args = build_arg_parser().parse_args(
+        ["--freeze-id", "fixture-freeze", "--feature-root", rebuilt_root.as_posix()]
+    )
+    report_args = build_arg_parser().parse_args(
+        ["--freeze-id", "fixture-freeze", "--feature-root", report_root.as_posix()]
+    )
+
+    assert Path(rebuilt_args.feature_root).as_posix() == rebuilt_root.as_posix()
+    assert Path(report_args.feature_root).as_posix() == report_root.as_posix()
 
 
 def test_freeze_research_artifacts_writes_manifest_after_guards_pass(tmp_path: Path) -> None:

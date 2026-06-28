@@ -14,7 +14,6 @@ from typing import Any, Iterable, Mapping
 
 
 DEFAULT_FREEZE_ROOT = Path("artifacts/frozen")
-DEFAULT_FEATURE_ROOT = Path("data/feature_matrices/baseline")
 DEFAULT_WFA_ROOT = Path("reports/wfa")
 DEFAULT_PHASE4_AUDIT = Path("reports/phase4/feature_coverage_audit.json")
 DEFAULT_PHASE8_DECISION = Path("reports/phase8/alpha_promotion_decision.json")
@@ -193,7 +192,7 @@ def _validate_schema(feature_root: Path, feature_manifest: Mapping[str, Any]) ->
 
 def validate_freeze_inputs(
     *,
-    feature_root: Path = DEFAULT_FEATURE_ROOT,
+    feature_root: Path,
     phase4_audit_path: Path = DEFAULT_PHASE4_AUDIT,
     split_plan_path: Path = DEFAULT_WFA_ROOT / "split_plan.json",
     predictions_manifest_path: Path = DEFAULT_WFA_ROOT / "baseline_predictions_manifest.json",
@@ -247,7 +246,7 @@ def freeze_research_artifacts(
     *,
     freeze_id: str,
     freeze_root: Path = DEFAULT_FREEZE_ROOT,
-    feature_root: Path = DEFAULT_FEATURE_ROOT,
+    feature_root: Path,
     phase4_audit_path: Path = DEFAULT_PHASE4_AUDIT,
     split_plan_path: Path = DEFAULT_WFA_ROOT / "split_plan.json",
     predictions_manifest_path: Path = DEFAULT_WFA_ROOT / "baseline_predictions_manifest.json",
@@ -338,7 +337,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--freeze-id", required=True)
     parser.add_argument("--freeze-root", default=DEFAULT_FREEZE_ROOT.as_posix())
-    parser.add_argument("--feature-root", default=DEFAULT_FEATURE_ROOT.as_posix())
+    parser.add_argument("--feature-root", default=None)
     parser.add_argument("--phase4-audit", default=DEFAULT_PHASE4_AUDIT.as_posix())
     parser.add_argument("--split-plan", default=(DEFAULT_WFA_ROOT / "split_plan.json").as_posix())
     parser.add_argument(
@@ -354,7 +353,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    args = build_arg_parser().parse_args()
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    if not args.feature_root:
+        parser.error("--feature-root is required; pass an explicit feature root")
     manifest = freeze_research_artifacts(
         freeze_id=args.freeze_id,
         freeze_root=Path(args.freeze_root),
