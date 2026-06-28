@@ -124,7 +124,7 @@ def _write_split_plan(path: Path, *, models_config: Path) -> Path:
 
 
 def _write_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
-    input_root = _write_feature_matrix(tmp_path / "data" / "feature_matrices" / "baseline")
+    input_root = _write_feature_matrix(tmp_path / "reports" / "wfa" / "feature_matrix_fixture")
     predictions_root = tmp_path / "data" / "predictions"
     reports_root = tmp_path / "reports" / "wfa"
     models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
@@ -138,6 +138,7 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
         predictions_root=predictions_root,
         reports_root=reports_root,
         models_config=models_config,
+        write_predictions=True,
     )
     return (
         predictions_root / "fixture" / "oos_predictions.parquet",
@@ -152,6 +153,7 @@ def test_return_model_scale_cli_predictions_has_no_implicit_default() -> None:
     args = build_arg_parser().parse_args([])
 
     assert args.predictions is None
+    assert args.feature_root is None
 
 
 def test_return_model_scale_cli_missing_predictions_fails_clearly(
@@ -173,6 +175,36 @@ def test_return_model_scale_cli_accepts_explicit_report_scoped_predictions(tmp_p
     args = build_arg_parser().parse_args(["--predictions", prediction_path.as_posix()])
 
     assert Path(args.predictions).as_posix() == prediction_path.as_posix()
+
+
+def test_return_model_scale_cli_missing_feature_root_fails_clearly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    prediction_path = tmp_path / "reports" / "wfa" / "fixture_predictions.parquet"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["audit_return_model_scale", "--predictions", prediction_path.as_posix()],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 2
+    assert "--feature-root is required; pass an explicit feature root" in capsys.readouterr().err
+
+
+def test_return_model_scale_cli_accepts_explicit_feature_roots(tmp_path: Path) -> None:
+    rebuilt_root = Path("data/feature_matrices/baseline_tier1_rebuild_v1")
+    report_root = tmp_path / "reports" / "wfa" / "feature_matrix_fixture"
+
+    rebuilt_args = build_arg_parser().parse_args(["--feature-root", rebuilt_root.as_posix()])
+    report_args = build_arg_parser().parse_args(["--feature-root", report_root.as_posix()])
+
+    assert Path(rebuilt_args.feature_root).as_posix() == rebuilt_root.as_posix()
+    assert Path(report_args.feature_root).as_posix() == report_root.as_posix()
 
 
 def test_return_model_scale_audit_writes_outlier_and_contribution_reports(tmp_path: Path) -> None:

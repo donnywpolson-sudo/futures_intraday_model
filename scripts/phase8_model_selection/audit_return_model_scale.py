@@ -23,7 +23,6 @@ from scripts.phase8_model_selection.audit_policy_failure import (
 
 
 DEFAULT_REPORTS_ROOT = Path("reports/wfa")
-DEFAULT_FEATURE_ROOT = Path("data/feature_matrices/baseline")
 DEFAULT_SPLIT_PLAN = Path("reports/wfa/split_plan.json")
 DEFAULT_MODELS_CONFIG = Path("configs/models.yaml")
 RETURN_MODEL = "ridge_return_v1"
@@ -638,7 +637,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Explicit prediction parquet path. Required; no data/predictions default is used.",
     )
     parser.add_argument("--reports-root", default=DEFAULT_REPORTS_ROOT.as_posix())
-    parser.add_argument("--feature-root", default=DEFAULT_FEATURE_ROOT.as_posix())
+    parser.add_argument("--feature-root", default=None)
     parser.add_argument("--split-plan", default=DEFAULT_SPLIT_PLAN.as_posix())
     parser.add_argument("--models-config", default=DEFAULT_MODELS_CONFIG.as_posix())
     parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT.as_posix())
@@ -657,6 +656,8 @@ def main() -> int:
     args = parser.parse_args()
     if not args.predictions:
         parser.error("--predictions is required; pass an explicit prediction parquet path")
+    if not args.feature_root:
+        parser.error("--feature-root is required; pass an explicit feature root")
     summary = build_return_model_scale_audit(
         predictions_path=Path(args.predictions),
         reports_root=Path(args.reports_root),
