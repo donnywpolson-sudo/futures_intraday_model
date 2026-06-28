@@ -1,0 +1,55 @@
+version: 1
+name: databento_read_only_audit_plan
+data_root: data/dbn
+output_dir: reports/data_audit
+expected:
+  schemas: [ohlcv-1m, definition, statistics, status]
+  trades_schema: trades
+  years: [2010, 2026]
+  markets:
+    - ES
+    - NQ
+    - RTY
+    - YM
+    - CL
+    - NG
+    - RB
+    - HO
+    - GC
+    - SI
+    - HG
+    - SR3
+    - SR1
+    - TN
+    - ZT
+    - ZF
+    - ZN
+    - ZB
+    - UB
+    - 6A
+    - 6B
+    - 6C
+    - 6E
+    - 6J
+    - 6M
+    - ZC
+    - ZS
+    - ZL
+    - ZM
+    - ZW
+    - KE
+    - LE
+    - HE
+phases:
+  0: folder triage
+  1: raw DBN inventory
+  2: sampled/raw source validity audit
+  3: OHLCV-from-trades reconstruction
+  4: derived lineage and raw-vs-derived audit
+  5: final model-readiness gate
+  6: quarantine plan only, no execution
+safety:
+  source_mutation_guard: true
+  phase6_executes_quarantine: false
+  full_scan_requires_allow_full_scan: true
+

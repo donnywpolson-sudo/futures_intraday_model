@@ -1,0 +1,37 @@
+version: 1
+severe:
+  - unclear canonical raw source
+  - source data mutation
+  - unreadable/corrupt source files
+  - active scripts reading stale/legacy data
+  - missing expected entire schema-market-years
+  - invalid timestamps
+  - impossible OHLCV invariants
+  - impossible trade prices/sizes
+  - systematic OHLCV-from-trades mismatch
+  - broken instrument/root mapping affecting OHLCV or trades
+  - duplicate bars/trades that would contaminate training
+  - derived modeling data not traceable to raw .dbn.zst
+  - severe raw-vs-derived mismatch
+medium:
+  - partial days
+  - suspicious gaps
+  - isolated OHLCV-from-trades mismatch
+  - high duplicate rate
+  - stale close runs
+  - extreme price jumps
+  - tick-size violations
+  - missing definition/statistics/status coverage for some instruments
+  - suspicious file-size or row-count outliers
+  - ambiguous derived folders
+  - unused stale folders still present but not actively referenced
+  - derived data usable only with caveats
+low:
+  - expected holiday/session gaps
+  - expected no-trade OHLCV intervals
+  - harmless old reports
+  - empty folders
+  - minor naming inconsistency
+  - cache/log folders clearly not model inputs
+  - isolated non-critical anomalies
+
