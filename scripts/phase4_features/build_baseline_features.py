@@ -33,7 +33,6 @@ warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
 DEFAULT_PROFILE = "tier_1"
 DEFAULT_PROFILE_CONFIG = Path("configs/alpha_tiered.yaml")
 DEFAULT_INPUT_ROOT = Path("data/labeled")
-DEFAULT_OUTPUT_ROOT = Path("data/feature_matrices/baseline")
 DEFAULT_REPORTS_ROOT = Path("reports/features_baseline")
 DEFAULT_COSTS_CONFIG = Path("configs/costs.yaml")
 DEFAULT_LABEL_MANIFEST = Path("reports/labels/label_manifest.json")
@@ -1560,7 +1559,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", default=DEFAULT_PROFILE)
     parser.add_argument("--input-root", default=DEFAULT_INPUT_ROOT.as_posix())
-    parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT.as_posix())
+    parser.add_argument("--output-root", default=None)
     parser.add_argument("--reports-root", default=DEFAULT_REPORTS_ROOT.as_posix())
     parser.add_argument("--profile-config", default=DEFAULT_PROFILE_CONFIG.as_posix())
     parser.add_argument("--costs-config", default=DEFAULT_COSTS_CONFIG.as_posix())
@@ -1595,7 +1594,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    args = build_arg_parser().parse_args()
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    if not args.output_root:
+        parser.error("--output-root is required; pass an explicit feature output root")
     input_root = Path(args.input_root)
     output_root = Path(args.output_root)
     reports_root = Path(args.reports_root)

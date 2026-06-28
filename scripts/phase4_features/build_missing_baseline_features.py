@@ -19,7 +19,6 @@ from scripts.phase4_features.audit_feature_coverage import (
 from scripts.phase4_features.build_baseline_features import (
     DEFAULT_COSTS_CONFIG,
     DEFAULT_INPUT_ROOT,
-    DEFAULT_OUTPUT_ROOT,
     DEFAULT_PROFILE_CONFIG,
     FeatureResult,
     process_file,
@@ -51,7 +50,7 @@ def build_missing_features(
     *,
     profile: str = DEFAULT_PROFILE,
     input_root: Path = DEFAULT_INPUT_ROOT,
-    output_root: Path = DEFAULT_OUTPUT_ROOT,
+    output_root: Path | None = None,
     reports_root: Path = DEFAULT_REPORTS_ROOT,
     profile_config: Path = DEFAULT_PROFILE_CONFIG,
     costs_config: Path = DEFAULT_COSTS_CONFIG,
@@ -59,6 +58,9 @@ def build_missing_features(
     workers: int = 1,
     dry_run: bool = False,
 ) -> dict[str, Any]:
+    if output_root is None:
+        raise ValueError("output_root is required; pass an explicit feature output root")
+
     pre_audit = build_coverage_audit(
         profile=profile,
         input_root=input_root,
@@ -177,7 +179,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", default=DEFAULT_PROFILE)
     parser.add_argument("--input-root", default=DEFAULT_INPUT_ROOT.as_posix())
-    parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT.as_posix())
+    parser.add_argument("--output-root", default=None)
     parser.add_argument("--reports-root", default=DEFAULT_REPORTS_ROOT.as_posix())
     parser.add_argument("--profile-config", default=DEFAULT_PROFILE_CONFIG.as_posix())
     parser.add_argument("--costs-config", default=DEFAULT_COSTS_CONFIG.as_posix())
@@ -188,7 +190,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    args = build_arg_parser().parse_args()
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    if not args.output_root:
+        parser.error("--output-root is required; pass an explicit feature output root")
     manifest = build_missing_features(
         profile=args.profile,
         input_root=Path(args.input_root),

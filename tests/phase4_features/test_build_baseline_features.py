@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.pipeline_gates import file_sha256
 from scripts.phase4_features import build_baseline_features as features_mod
+from scripts.phase4_features import build_missing_baseline_features as missing_features_mod
 from scripts.phase4_features.build_baseline_features import (
     FEATURE_COLS,
     FeatureResult,
@@ -114,6 +115,81 @@ def _accepted_6e_caveats() -> list[dict[str, object]]:
             "warning": "synthetic threshold breached: rows_pct=2.539287 max_gap_minutes=54",
         },
     ]
+
+
+def test_phase4_cli_output_root_has_no_implicit_default() -> None:
+    args = features_mod.build_arg_parser().parse_args([])
+    missing_args = missing_features_mod.build_arg_parser().parse_args([])
+
+    assert args.output_root is None
+    assert missing_args.output_root is None
+
+
+def test_phase4_main_missing_output_root_fails_clearly(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["build_baseline_features.py"])
+
+    with pytest.raises(SystemExit) as exc:
+        features_mod.main()
+
+    assert exc.value.code == 2
+    assert (
+        "--output-root is required; pass an explicit feature output root"
+        in capsys.readouterr().err
+    )
+
+
+def test_missing_phase4_main_missing_output_root_fails_clearly(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["build_missing_baseline_features.py"])
+
+    with pytest.raises(SystemExit) as exc:
+        missing_features_mod.main()
+
+    assert exc.value.code == 2
+    assert (
+        "--output-root is required; pass an explicit feature output root"
+        in capsys.readouterr().err
+    )
+
+
+def test_missing_phase4_build_requires_explicit_output_root() -> None:
+    with pytest.raises(
+        ValueError,
+        match="output_root is required; pass an explicit feature output root",
+    ):
+        missing_features_mod.build_missing_features()
+
+
+def test_phase4_coverage_audit_requires_output_root_or_config_value(tmp_path: Path) -> None:
+    profile_config = _write_phase4_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+
+    with pytest.raises(ValueError, match="feature_matrix_root is required"):
+        build_coverage_audit(
+            profile="research",
+            input_root=tmp_path / "data" / "labeled",
+            profile_config=profile_config,
+        )
+
+
+def test_phase4_coverage_audit_accepts_explicit_output_root_without_config_value(
+    tmp_path: Path,
+) -> None:
+    profile_config = _write_phase4_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    output_root = tmp_path / "explicit" / "features"
+
+    audit = build_coverage_audit(
+        profile="research",
+        input_root=tmp_path / "data" / "labeled",
+        output_root=output_root,
+        profile_config=profile_config,
+    )
+
+    assert Path(str(audit["output_root"])).as_posix() == output_root.as_posix()
 
 
 def test_phase4_main_rejects_warn_label_manifest(

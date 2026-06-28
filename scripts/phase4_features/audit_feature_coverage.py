@@ -15,7 +15,6 @@ import yaml
 
 from scripts.phase4_features.build_baseline_features import (
     DEFAULT_INPUT_ROOT,
-    DEFAULT_OUTPUT_ROOT,
     DEFAULT_PROFILE_CONFIG,
     relative_path,
     resolve_profile_inputs,
@@ -66,12 +65,16 @@ def _read_yaml(path: Path) -> Mapping[str, Any]:
 def _configured_root(
     profile_config: Path,
     key: str,
-    default: Path,
+    default: Path | None,
 ) -> Path:
     config = _read_yaml(profile_config)
     paths = config.get("paths", {})
     if isinstance(paths, Mapping) and paths.get(key):
         return Path(str(paths[key]))
+    if default is None:
+        raise ValueError(
+            f"{key} is required; pass an explicit root or set paths.{key} in {profile_config.as_posix()}"
+        )
     return default
 
 
@@ -158,7 +161,7 @@ def build_coverage_audit(
     resolved_output_root = output_root or _configured_root(
         profile_config,
         "feature_matrix_root",
-        DEFAULT_OUTPUT_ROOT,
+        None,
     )
     profile_inputs = resolve_profile_inputs(profile, resolved_input_root, profile_config)
     rows = [
@@ -280,14 +283,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    args = build_arg_parser().parse_args()
-    audit = build_coverage_audit(
-        profile=args.profile,
-        input_root=Path(args.input_root) if args.input_root else None,
-        output_root=Path(args.output_root) if args.output_root else None,
-        profile_config=Path(args.profile_config),
-        collect_row_counts=args.row_counts,
-    )
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    try:
+        audit = build_coverage_audit(
+            profile=args.profile,
+            input_root=Path(args.input_root) if args.input_root else None,
+            output_root=Path(args.output_root) if args.output_root else None,
+            profile_config=Path(args.profile_config),
+            collect_row_counts=args.row_counts,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     json_path, csv_path = write_coverage_audit(audit, Path(args.reports_root))
     print(
         "PASS Phase 4 coverage audit:"
