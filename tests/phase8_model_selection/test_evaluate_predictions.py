@@ -12,7 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.phase8_model_selection.evaluate_predictions import (  # noqa: E402
     PolicyConfig,
     PromotionGateConfig,
+    build_arg_parser,
     evaluate_predictions,
+    main,
 )
 
 
@@ -246,6 +248,30 @@ def _write_manifest(
         encoding="utf-8",
     )
     return path
+
+
+def test_cli_predictions_has_no_implicit_data_predictions_default() -> None:
+    args = build_arg_parser().parse_args([])
+
+    assert args.predictions is None
+
+
+def test_cli_missing_predictions_fails_clearly(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(sys, "argv", ["evaluate_predictions.py"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 2
+    assert "--predictions is required" in capsys.readouterr().err
+
+
+def test_cli_accepts_explicit_report_scoped_predictions(tmp_path: Path) -> None:
+    prediction_path = tmp_path / "reports" / "wfa" / "fixture_predictions.parquet"
+
+    args = build_arg_parser().parse_args(["--predictions", prediction_path.as_posix()])
+
+    assert Path(args.predictions).as_posix() == prediction_path.as_posix()
 
 
 def test_policy_metrics_block_trend_danger_and_fade_filter(tmp_path: Path) -> None:

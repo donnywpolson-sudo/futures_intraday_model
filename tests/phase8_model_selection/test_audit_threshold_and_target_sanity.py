@@ -5,10 +5,12 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.phase8_model_selection.audit_threshold_and_target_sanity import (  # noqa: E402
+    build_arg_parser,
     build_threshold_and_target_sanity,
     main,
 )
@@ -200,6 +202,31 @@ def test_threshold_and_target_sanity_writes_decision_outputs(tmp_path: Path) -> 
     summary = json.loads((output_root / "fixture_next_action_summary.json").read_text(encoding="utf-8"))
     assert len(summary["top_findings"]) == 5
     assert summary["return_target_action"] == "fix_or_explain_ridge_return_scale_before_return_magnitude_logic"
+
+
+def test_threshold_and_target_sanity_cli_predictions_has_no_implicit_default() -> None:
+    args = build_arg_parser().parse_args([])
+    assert args.predictions is None
+
+
+def test_threshold_and_target_sanity_cli_missing_predictions_fails_clearly(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["audit_threshold_and_target_sanity"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 2
+    assert "--predictions is required" in capsys.readouterr().err
+
+
+def test_threshold_and_target_sanity_cli_accepts_explicit_report_scoped_predictions(tmp_path: Path) -> None:
+    prediction_path = tmp_path / "reports" / "wfa" / "fixture_predictions.parquet"
+    args = build_arg_parser().parse_args(["--predictions", prediction_path.as_posix()])
+
+    assert Path(args.predictions).as_posix() == prediction_path.as_posix()
 
 
 def test_threshold_and_target_sanity_main_runs_cleanly(tmp_path: Path, monkeypatch) -> None:

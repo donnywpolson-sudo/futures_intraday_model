@@ -5,11 +5,13 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.phase8_model_selection.audit_policy_signal_alignment import (  # noqa: E402
     OUTPUT_SUFFIXES,
+    build_arg_parser,
     build_policy_signal_alignment,
     main,
 )
@@ -234,6 +236,33 @@ def _write_predictions(path: Path) -> Path:
         )
     pd.DataFrame(rows).to_parquet(path, index=False)
     return path
+
+
+def test_policy_signal_alignment_cli_predictions_has_no_implicit_default() -> None:
+    args = build_arg_parser().parse_args([])
+
+    assert args.predictions is None
+
+
+def test_policy_signal_alignment_cli_missing_predictions_fails_clearly(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["audit_policy_signal_alignment"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 2
+    assert "--predictions is required" in capsys.readouterr().err
+
+
+def test_policy_signal_alignment_cli_accepts_explicit_report_scoped_predictions(tmp_path: Path) -> None:
+    prediction_path = tmp_path / "reports" / "wfa" / "fixture_predictions.parquet"
+
+    args = build_arg_parser().parse_args(["--predictions", prediction_path.as_posix()])
+
+    assert Path(args.predictions).as_posix() == prediction_path.as_posix()
 
 
 def test_policy_signal_alignment_detects_bad_traded_subset(tmp_path: Path) -> None:

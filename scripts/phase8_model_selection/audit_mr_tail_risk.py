@@ -22,7 +22,6 @@ from scripts.phase8_model_selection.evaluate_predictions import (
 
 
 DEFAULT_RUN = "tier1_locked_baseline"
-DEFAULT_PREDICTIONS = Path("data/predictions/tier1_locked_baseline/oos_predictions.parquet")
 DEFAULT_OUTPUT_ROOT = Path("reports/phase8_mr_tail_audit")
 
 OUTPUT_SUFFIXES = {
@@ -615,7 +614,11 @@ def build_mr_tail_audit(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--predictions", default=DEFAULT_PREDICTIONS.as_posix())
+    parser.add_argument(
+        "--predictions",
+        default=None,
+        help="Explicit prediction parquet path. Required; no data/predictions default is used.",
+    )
     parser.add_argument("--costs-config", default=DEFAULT_COSTS_CONFIG.as_posix())
     parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT.as_posix())
     parser.add_argument("--run", default=DEFAULT_RUN)
@@ -629,7 +632,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    args = build_arg_parser().parse_args()
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    if not args.predictions:
+        parser.error("--predictions is required; pass an explicit prediction parquet path")
     summary = build_mr_tail_audit(
         predictions_path=Path(args.predictions),
         costs_config=Path(args.costs_config),

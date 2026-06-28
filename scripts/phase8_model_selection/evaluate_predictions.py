@@ -18,7 +18,7 @@ import pandas as pd
 import yaml
 
 
-DEFAULT_PREDICTIONS = Path("data/predictions/baseline/oos_predictions.parquet")
+DEFAULT_PREDICTIONS = Path("data") / "predictions" / "baseline" / "oos_predictions.parquet"
 DEFAULT_PREDICTIONS_MANIFEST = Path("reports/wfa/baseline_predictions_manifest.json")
 DEFAULT_COSTS_CONFIG = Path("configs/costs.yaml")
 DEFAULT_MODELS_CONFIG = Path("configs/models.yaml")
@@ -1315,7 +1315,11 @@ def evaluate_predictions(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--predictions", default=DEFAULT_PREDICTIONS.as_posix())
+    parser.add_argument(
+        "--predictions",
+        default=None,
+        help="Explicit prediction parquet path. Required; no data/predictions default is used.",
+    )
     parser.add_argument("--predictions-manifest", default=DEFAULT_PREDICTIONS_MANIFEST.as_posix())
     parser.add_argument("--costs-config", default=DEFAULT_COSTS_CONFIG.as_posix())
     parser.add_argument("--models-config", default=DEFAULT_MODELS_CONFIG.as_posix())
@@ -1358,7 +1362,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    args = build_arg_parser().parse_args()
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    if not args.predictions:
+        parser.error("--predictions is required; pass an explicit prediction parquet path")
     result = evaluate_predictions(
         predictions_path=Path(args.predictions),
         predictions_manifest=Path(args.predictions_manifest)

@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.phase8_model_selection.audit_policy_run_level_overlap import (  # noqa: E402
+    build_arg_parser,
     build_policy_run_level_overlap_audit,
     main,
 )
@@ -180,6 +181,38 @@ def _policy() -> PolicyConfig:
         min_fade_success=0.50,
         max_trend_danger=0.50,
     )
+
+
+def test_run_level_audit_cli_predictions_has_no_implicit_default() -> None:
+    args = build_arg_parser().parse_args(["--json-out", "reports/phase8/run_level.json"])
+
+    assert args.predictions is None
+
+
+def test_run_level_audit_cli_missing_predictions_fails_clearly(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--json-out", (tmp_path / "reports" / "phase8" / "run_level.json").as_posix()])
+
+    assert exc_info.value.code == 2
+    assert "--predictions is required" in capsys.readouterr().err
+
+
+def test_run_level_audit_cli_accepts_explicit_report_scoped_predictions(tmp_path: Path) -> None:
+    prediction_path = tmp_path / "reports" / "wfa" / "fixture_predictions.parquet"
+
+    args = build_arg_parser().parse_args(
+        [
+            "--predictions",
+            prediction_path.as_posix(),
+            "--json-out",
+            (tmp_path / "reports" / "phase8" / "run_level.json").as_posix(),
+        ]
+    )
+
+    assert Path(args.predictions).as_posix() == prediction_path.as_posix()
 
 
 def test_run_level_audit_reports_row_vs_run_cost_and_overlap(tmp_path: Path) -> None:

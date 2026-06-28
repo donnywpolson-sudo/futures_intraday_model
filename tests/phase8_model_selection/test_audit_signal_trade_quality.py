@@ -5,11 +5,13 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.phase8_model_selection.audit_signal_trade_quality import (  # noqa: E402
     OUTPUT_SUFFIXES,
+    build_arg_parser,
     build_signal_trade_quality,
     main,
 )
@@ -234,6 +236,33 @@ def _write_predictions(path: Path) -> Path:
         )
     pd.DataFrame(rows).to_parquet(path, index=False)
     return path
+
+
+def test_signal_trade_quality_cli_predictions_has_no_implicit_default() -> None:
+    args = build_arg_parser().parse_args([])
+
+    assert args.predictions is None
+
+
+def test_signal_trade_quality_cli_missing_predictions_fails_clearly(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["audit_signal_trade_quality"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 2
+    assert "--predictions is required" in capsys.readouterr().err
+
+
+def test_signal_trade_quality_cli_accepts_explicit_report_scoped_predictions(tmp_path: Path) -> None:
+    prediction_path = tmp_path / "reports" / "wfa" / "fixture_predictions.parquet"
+
+    args = build_arg_parser().parse_args(["--predictions", prediction_path.as_posix()])
+
+    assert Path(args.predictions).as_posix() == prediction_path.as_posix()
 
 
 def test_signal_trade_quality_writes_outputs_and_threshold_sensitivity(tmp_path: Path) -> None:

@@ -5,10 +5,15 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.phase8_model_selection.audit_policy_failure import build_failure_breakdown  # noqa: E402
+from scripts.phase8_model_selection.audit_policy_failure import (  # noqa: E402
+    build_arg_parser,
+    build_failure_breakdown,
+    main,
+)
 from scripts.phase8_model_selection.evaluate_predictions import PolicyConfig  # noqa: E402
 
 
@@ -154,3 +159,28 @@ def test_build_failure_breakdown_writes_expected_slices(tmp_path: Path) -> None:
     }
     assert cost_components.loc[0, "slippage_cost_dollars"] == 6.25
     assert cost_components.loc[0, "commission_cost_dollars"] == 3.75
+
+
+def test_policy_failure_cli_predictions_has_no_implicit_default() -> None:
+    args = build_arg_parser().parse_args([])
+    assert args.predictions is None
+
+
+def test_policy_failure_cli_missing_predictions_fails_clearly(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["audit_policy_failure"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 2
+    assert "--predictions is required; pass an explicit prediction parquet path" in capsys.readouterr().err
+
+
+def test_policy_failure_cli_accepts_explicit_report_scoped_predictions(tmp_path: Path) -> None:
+    prediction_path = tmp_path / "reports" / "wfa" / "fixture_predictions.parquet"
+    args = build_arg_parser().parse_args(["--predictions", prediction_path.as_posix()])
+
+    assert Path(args.predictions).as_posix() == prediction_path.as_posix()

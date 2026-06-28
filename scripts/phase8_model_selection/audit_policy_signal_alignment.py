@@ -13,7 +13,6 @@ import pandas as pd
 
 from scripts.phase8_model_selection.audit_policy_failure import (
     DEFAULT_OUTPUT_ROOT,
-    DEFAULT_PREDICTIONS,
     DEFAULT_RUN,
     _relative_path,
     _write_csv,
@@ -494,7 +493,11 @@ def build_policy_signal_alignment(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--predictions", default=DEFAULT_PREDICTIONS.as_posix())
+    parser.add_argument(
+        "--predictions",
+        default=None,
+        help="Explicit prediction parquet path. Required; no data/predictions default is used.",
+    )
     parser.add_argument("--costs-config", default=DEFAULT_COSTS_CONFIG.as_posix())
     parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT.as_posix())
     parser.add_argument("--run", default=DEFAULT_RUN)
@@ -505,7 +508,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    args = build_arg_parser().parse_args()
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    if not args.predictions:
+        parser.error("--predictions is required; pass an explicit prediction parquet path")
     summary = build_policy_signal_alignment(
         predictions_path=Path(args.predictions),
         costs_config=Path(args.costs_config),

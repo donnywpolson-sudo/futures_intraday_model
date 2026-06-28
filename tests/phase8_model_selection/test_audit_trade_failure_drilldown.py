@@ -5,11 +5,13 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.phase8_model_selection.audit_trade_failure_drilldown import (  # noqa: E402
     OUTPUT_SUFFIXES,
+    build_arg_parser,
     build_trade_failure_drilldown,
     main,
 )
@@ -308,6 +310,31 @@ def test_trade_failure_drilldown_writes_files_and_reconciles_metrics(tmp_path: P
     summary = json.loads((output_root / "fixture_trade_drilldown_summary.json").read_text(encoding="utf-8"))
     assert summary["gross_positive_before_costs"] is False
     assert len(summary["top_findings"]) == 5
+
+
+def test_trade_failure_drilldown_cli_predictions_has_no_implicit_default() -> None:
+    args = build_arg_parser().parse_args([])
+    assert args.predictions is None
+
+
+def test_trade_failure_drilldown_cli_missing_predictions_fails_clearly(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["audit_trade_failure_drilldown"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 2
+    assert "--predictions is required" in capsys.readouterr().err
+
+
+def test_trade_failure_drilldown_cli_accepts_explicit_report_scoped_predictions(tmp_path: Path) -> None:
+    prediction_path = tmp_path / "reports" / "wfa" / "fixture_predictions.parquet"
+    args = build_arg_parser().parse_args(["--predictions", prediction_path.as_posix()])
+
+    assert Path(args.predictions).as_posix() == prediction_path.as_posix()
 
 
 def test_trade_failure_drilldown_main_runs_cleanly(tmp_path: Path, monkeypatch) -> None:

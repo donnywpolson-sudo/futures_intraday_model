@@ -5,11 +5,13 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.phase7_wfa.run_wfa import run_wfa  # noqa: E402
 from scripts.phase8_model_selection.audit_return_model_scale import (  # noqa: E402
+    build_arg_parser,
     build_return_model_scale_audit,
     main,
 )
@@ -144,6 +146,33 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
         split_plan,
         models_config,
     )
+
+
+def test_return_model_scale_cli_predictions_has_no_implicit_default() -> None:
+    args = build_arg_parser().parse_args([])
+
+    assert args.predictions is None
+
+
+def test_return_model_scale_cli_missing_predictions_fails_clearly(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["audit_return_model_scale"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 2
+    assert "--predictions is required" in capsys.readouterr().err
+
+
+def test_return_model_scale_cli_accepts_explicit_report_scoped_predictions(tmp_path: Path) -> None:
+    prediction_path = tmp_path / "reports" / "wfa" / "fixture_predictions.parquet"
+
+    args = build_arg_parser().parse_args(["--predictions", prediction_path.as_posix()])
+
+    assert Path(args.predictions).as_posix() == prediction_path.as_posix()
 
 
 def test_return_model_scale_audit_writes_outlier_and_contribution_reports(tmp_path: Path) -> None:

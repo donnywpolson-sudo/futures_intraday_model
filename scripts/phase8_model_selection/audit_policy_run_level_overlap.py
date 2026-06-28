@@ -14,7 +14,6 @@ import pandas as pd
 
 from scripts.phase8_model_selection.evaluate_predictions import (
     DEFAULT_COSTS_CONFIG,
-    DEFAULT_PREDICTIONS,
     PolicyConfig,
     build_policy_frame,
 )
@@ -487,7 +486,11 @@ def build_policy_run_level_overlap_audit(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--predictions", default=DEFAULT_PREDICTIONS.as_posix())
+    parser.add_argument(
+        "--predictions",
+        default=None,
+        help="Explicit prediction parquet path. Required; no data/predictions default is used.",
+    )
     parser.add_argument("--costs-config", default=DEFAULT_COSTS_CONFIG.as_posix())
     parser.add_argument("--json-out", required=True)
     parser.add_argument("--md-out")
@@ -499,7 +502,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Iterable[str] | None = None) -> int:
-    args = build_arg_parser().parse_args(list(argv) if argv is not None else None)
+    parser = build_arg_parser()
+    args = parser.parse_args(list(argv) if argv is not None else None)
+    if not args.predictions:
+        parser.error("--predictions is required; pass an explicit prediction parquet path")
     report = build_policy_run_level_overlap_audit(
         predictions_path=Path(args.predictions),
         costs_config=Path(args.costs_config),
