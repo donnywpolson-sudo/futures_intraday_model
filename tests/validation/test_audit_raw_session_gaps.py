@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from scripts.validation.audit_raw_session_gaps import build_report, main
 
@@ -207,3 +208,30 @@ def test_missing_input_fails_closed_after_writing_reports(tmp_path: Path) -> Non
     assert report["status"] == "FAIL"
     assert "missing raw input" in report["failures"][0]
     assert md_out.exists()
+
+
+def test_main_requires_explicit_causal_root(tmp_path: Path) -> None:
+    json_out = tmp_path / "reports" / "gap_audit.json"
+    md_out = tmp_path / "reports" / "gap_audit.md"
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "--markets",
+                "ZN",
+                "--years",
+                "2024",
+                "--raw-root",
+                str(tmp_path / "data" / "raw"),
+                "--session-config",
+                str(tmp_path / "configs" / "market_sessions.yaml"),
+                "--json-out",
+                str(json_out),
+                "--md-out",
+                str(md_out),
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert not json_out.exists()
+    assert not md_out.exists()
