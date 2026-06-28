@@ -835,3 +835,66 @@ Task:
 Stop when:
 - data/causally_gated_normalized is either fully retired from active manifest/audit-policy references, or the remaining protected references are documented as final blockers with cleanup_eligible_now=false and dry_run_cleanup_safe_next=false.
 ```
+# Final Cleanup Blocker State - 2026-06-28
+
+Authoritative current state for the next run. Older historical sections below are retained as evidence, but this section supersedes them.
+
+## Current status
+
+- Latest reviewed commit: `ebc283e Retire stale causal audit references`.
+- Worktree before final documentation: clean (`git status --short` returned no rows).
+- Documentation scope only: no code, config, script, test, or `data/**` changes.
+- Cleanup remains blocked.
+- Dry-run cleanup remains unsafe.
+- Actual cleanup remains unsafe.
+- Do not run cleanup.
+- Do not run dry-run cleanup.
+- Do not delete, move, rename, archive, quarantine, or mutate `data/**`.
+- Do not touch raw paths without a separate human-approved raw-specific decision.
+
+## Active blockers remaining
+
+- `data/causally_gated_normalized`: active protected blocker. Current evidence still includes protected manifest/audit-policy references in `configs/data_manifest.yaml` and `scripts/audit_databento_phase5.py`. This remains protected/active until a separate human decision or broader policy change.
+- `data/raw`: active blocker. Current evidence still includes runtime/config raw source references.
+- `data/raw/_repair_candidates`: active blocker. Current evidence still includes raw repair-candidate config/report references.
+
+## Candidate future quarantine plan only
+
+- `data/feature_matrices/baseline`: no active blocker; candidate future quarantine plan only.
+- `data/dbn_sr_parent_candidate`: candidate future quarantine plan only.
+- `data/predictions`: candidate future quarantine plan only.
+
+## Unsafe to touch
+
+- `data/raw/ES`
+- `data/raw/RTY`
+- `data/raw/ZS`
+
+## Protected keep paths
+
+- `data/dbn`
+- `data/causal_base_candidates/tier1_rebuild_v1`
+- `data/labeled/tier1_rebuild_v1`
+- `data/feature_matrices/baseline_tier1_rebuild_v1`
+- `reports/data_audit/**`
+
+## Cleanup gate
+
+- cleanup_eligible_now: `false`
+- dry_run_cleanup_safe_next: `false`
+- actual_cleanup_safe_now: `false`
+- dry-run approval plan available: `no`
+- actual cleanup safe now: `no`
+
+## Final documentation written
+
+- `reports/data_audit/final/final_cleanup_blockers.md`
+- `reports/data_audit/final/final_cleanup_blockers.json`
+
+## Next safe options
+
+1. Pause cleanup work.
+2. Run Phase 8 gross/net research metrics using a report-scoped prediction artifact only.
+3. Separately review policy decision for `data/causally_gated_normalized` and raw blockers.
+
+Forbidden next actions without explicit later approval: cleanup, dry-run cleanup, deletion, archive/quarantine execution, raw path retirement, WFA/modeling/metrics, prediction generation, and model artifact writes.
