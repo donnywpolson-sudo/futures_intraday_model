@@ -427,10 +427,21 @@ def test_prediction_cli_defaults_are_report_only_and_explicit_write_opt_in(
     parser = wfa.build_arg_parser()
 
     default_args = parser.parse_args([])
+    assert default_args.input_root is None
     assert default_args.write_predictions is False
     assert default_args.predictions_root is None
     assert parser.parse_args(["--no-predictions"]).write_predictions is False
     assert parser.parse_args(["--report-only"]).write_predictions is False
+    rebuilt_root = Path("data") / "feature_matrices" / "baseline_tier1_rebuild_v1"
+    report_root = Path("reports") / "wfa_research" / "tier1_rebuild_v1" / "features"
+    assert (
+        parser.parse_args(["--input-root", rebuilt_root.as_posix()]).input_root
+        == rebuilt_root.as_posix()
+    )
+    assert (
+        parser.parse_args(["--input-root", report_root.as_posix()]).input_root
+        == report_root.as_posix()
+    )
     write_args = parser.parse_args(
         [
             "--write-predictions",
@@ -442,6 +453,22 @@ def test_prediction_cli_defaults_are_report_only_and_explicit_write_opt_in(
     assert write_args.predictions_root == (
         tmp_path / "reports" / "wfa_predictions"
     ).as_posix()
+
+
+def test_main_missing_input_root_fails_clearly(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_wfa.py"])
+
+    with pytest.raises(SystemExit) as excinfo:
+        wfa.main()
+
+    assert excinfo.value.code == 2
+    assert (
+        "--input-root is required; pass an explicit feature root"
+        in capsys.readouterr().err
+    )
 
 
 def test_main_write_predictions_requires_explicit_predictions_root(

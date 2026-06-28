@@ -39,7 +39,7 @@ from scripts.profile_scope import (
 DEFAULT_PROFILE = "tier_1"
 DEFAULT_MATRIX = "baseline"
 DEFAULT_RUN = "baseline"
-DEFAULT_INPUT_ROOT = Path("data/feature_matrices/baseline")
+DEFAULT_INPUT_ROOT = Path("data") / "feature_matrices" / "baseline_tier1_rebuild_v1"
 DEFAULT_SPLIT_PLAN = Path("reports/wfa/split_plan.json")
 DEFAULT_REPORTS_ROOT = Path("reports/wfa")
 DEFAULT_MODELS_CONFIG = Path("configs/models.yaml")
@@ -1291,7 +1291,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile", default=DEFAULT_PROFILE)
     parser.add_argument("--matrix", default=DEFAULT_MATRIX)
     parser.add_argument("--run", default=DEFAULT_RUN)
-    parser.add_argument("--input-root", default=DEFAULT_INPUT_ROOT.as_posix())
+    parser.add_argument("--input-root", default=None)
     parser.add_argument("--split-plan", default=DEFAULT_SPLIT_PLAN.as_posix())
     parser.add_argument("--predictions-root", default=None)
     parser.add_argument("--reports-root", default=DEFAULT_REPORTS_ROOT.as_posix())
@@ -1331,6 +1331,8 @@ def main() -> int:
     args = parser.parse_args()
     if args.write_predictions and not args.predictions_root:
         parser.error("--predictions-root is required when --write-predictions is set")
+    if not args.input_root:
+        parser.error("--input-root is required; pass an explicit feature root")
     manifest = run_wfa(
         profile=args.profile,
         matrix=args.matrix,
