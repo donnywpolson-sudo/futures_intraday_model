@@ -63,8 +63,17 @@ UNDEF_PRICE = 9_223_372_036_854_775_807
 TARGET_RETURN = "target_ret_15m"
 TARGET_DIRECTION = "target_sign_with_deadzone"
 TARGET_FADE = "target_fade_success_15m"
-TARGET_TREND = "target_trend_danger_30m"
-REQUIRED_TARGETS = (TARGET_RETURN, TARGET_DIRECTION, TARGET_FADE, TARGET_TREND)
+TARGET_TREND_ADVERSE_LONG = "target_trend_adverse_long_30m"
+TARGET_TREND_ADVERSE_SHORT = "target_trend_adverse_short_30m"
+PROB_TREND_ADVERSE_LONG = "p_trend_adverse_long_30m"
+PROB_TREND_ADVERSE_SHORT = "p_trend_adverse_short_30m"
+REQUIRED_TARGETS = (
+    TARGET_RETURN,
+    TARGET_DIRECTION,
+    TARGET_FADE,
+    TARGET_TREND_ADVERSE_LONG,
+    TARGET_TREND_ADVERSE_SHORT,
+)
 
 
 @dataclass(frozen=True)
@@ -473,7 +482,16 @@ def model_predictions(model_bundle: ModelBundle, row: pd.Series) -> dict[str, fl
         "p_short": _class_probability(model_bundle.estimators[TARGET_DIRECTION], x, -1),
         "p_flat": _class_probability(model_bundle.estimators[TARGET_DIRECTION], x, 0),
         "p_fade_success": _class_probability(model_bundle.estimators[TARGET_FADE], x, 1),
-        "p_trend_danger": _class_probability(model_bundle.estimators[TARGET_TREND], x, 1),
+        PROB_TREND_ADVERSE_LONG: _class_probability(
+            model_bundle.estimators[TARGET_TREND_ADVERSE_LONG],
+            x,
+            1,
+        ),
+        PROB_TREND_ADVERSE_SHORT: _class_probability(
+            model_bundle.estimators[TARGET_TREND_ADVERSE_SHORT],
+            x,
+            1,
+        ),
     }
 
 
@@ -554,7 +572,8 @@ def build_signal_payload(
     p_short = _finite_or_none(preds.get("p_short"))
     p_flat = _finite_or_none(preds.get("p_flat"))
     p_fade_success = _finite_or_none(preds.get("p_fade_success"))
-    p_trend_danger = _finite_or_none(preds.get("p_trend_danger"))
+    p_trend_adverse_long = _finite_or_none(preds.get(PROB_TREND_ADVERSE_LONG))
+    p_trend_adverse_short = _finite_or_none(preds.get(PROB_TREND_ADVERSE_SHORT))
     reasons: list[str] = []
 
     if p_long is None or p_short is None:
@@ -580,7 +599,20 @@ def build_signal_payload(
     fade_ok = p_fade_success is not None and p_fade_success >= policy.min_fade_success
     if not fade_ok:
         reasons.append("fade_filter_block")
-    trend_ok = p_trend_danger is not None and p_trend_danger < policy.max_trend_danger
+
+    if direction_signal == 1:
+        p_trend_adverse = p_trend_adverse_long
+    elif direction_signal == -1:
+        p_trend_adverse = p_trend_adverse_short
+    else:
+        p_trend_adverse = None
+
+    trend_ok = False
+    if direction_signal != 0:
+        if p_trend_adverse is None:
+            reasons.append("missing_side_aware_trend_adverse_probability")
+        else:
+            trend_ok = p_trend_adverse < policy.max_trend_danger
     if not trend_ok:
         reasons.append("trend_danger_block")
 
@@ -596,7 +628,7 @@ def build_signal_payload(
     confidence_parts = [
         direction_probability,
         p_fade_success,
-        None if p_trend_danger is None else 1.0 - p_trend_danger,
+        None if p_trend_adverse is None else 1.0 - p_trend_adverse,
     ]
     confidence_values = [value for value in confidence_parts if value is not None]
     confidence = float(min(confidence_values)) if len(confidence_values) == 3 else 0.0
@@ -615,7 +647,9 @@ def build_signal_payload(
             "p_short": p_short,
             "p_flat": p_flat,
             "p_fade_success": p_fade_success,
-            "p_trend_danger": p_trend_danger,
+            PROB_TREND_ADVERSE_LONG: p_trend_adverse_long,
+            PROB_TREND_ADVERSE_SHORT: p_trend_adverse_short,
+            "p_trend_adverse_selected_30m": p_trend_adverse,
         }
     )
     return payload

@@ -9,6 +9,7 @@ from pathlib import Path
 from types import ModuleType
 
 import numpy as np
+import pandas as pd
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -105,7 +106,8 @@ def _bundle() -> live_shadow.ModelBundle:
             live_shadow.TARGET_RETURN: FakeRegressor(),
             live_shadow.TARGET_DIRECTION: FakeClassifier([-1, 0, 1], [0.10, 0.10, 0.80]),
             live_shadow.TARGET_FADE: FakeClassifier([0, 1], [0.30, 0.70]),
-            live_shadow.TARGET_TREND: FakeClassifier([0, 1], [0.80, 0.20]),
+            live_shadow.TARGET_TREND_ADVERSE_LONG: FakeClassifier([0, 1], [0.80, 0.20]),
+            live_shadow.TARGET_TREND_ADVERSE_SHORT: FakeClassifier([0, 1], [0.80, 0.20]),
         },
     )
 
@@ -130,6 +132,70 @@ def _args(tmp_path: Path, *values: str):
 
 def _loader(_: Path) -> live_shadow.ModelBundle:
     return _bundle()
+
+
+def _valid_feature_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "valid_ohlcv": True,
+                "inside_session": True,
+                "causal_valid": True,
+                "causal_invalid_reason": "",
+                "feature_input_valid": True,
+                "feature_ret_1": 0.0,
+            }
+        ]
+    )
+
+
+def _long_predictions(**overrides: object) -> dict[str, object]:
+    preds: dict[str, object] = {
+        "expected_return": 0.25,
+        "p_long": 0.80,
+        "p_short": 0.10,
+        "p_flat": 0.10,
+        "p_fade_success": 0.70,
+    }
+    preds.update(overrides)
+    return preds
+
+
+def _short_predictions(**overrides: object) -> dict[str, object]:
+    preds = _long_predictions(p_long=0.10, p_short=0.80)
+    preds.update(overrides)
+    return preds
+
+
+def _payload_with_predictions(
+    monkeypatch: pytest.MonkeyPatch,
+    preds: dict[str, object],
+) -> dict[str, object]:
+    monkeypatch.setattr(
+        live_shadow,
+        "build_live_feature_frame",
+        lambda *args, **kwargs: _valid_feature_frame(),
+    )
+    monkeypatch.setattr(
+        live_shadow,
+        "model_predictions",
+        lambda *args, **kwargs: preds,
+    )
+    return live_shadow.build_signal_payload(
+        [live_shadow.ohlcv_record_to_bar(FakeOHLCVRecord(), market="ES", symbol="ES.v.0")],
+        market="ES",
+        model_bundle=_bundle(),
+        tick_size=0.25,
+        session_config=Path("configs/market_sessions.yaml"),
+        policy=live_shadow.PolicyConfig(),
+        min_feature_bars=1,
+    )
+
+
+def _assert_trend_fail_closed(payload: dict[str, object]) -> None:
+    assert payload["signal"] == "NO_FADE"
+    assert payload["do_not_fade"] is True
+    assert "trend_danger_block" in payload["reason_flags"]
 
 
 def test_missing_key_exits_before_model_or_databento_import(tmp_path: Path) -> None:
@@ -256,6 +322,118 @@ def test_valid_fake_signal_prints_and_writes_jsonl(tmp_path: Path) -> None:
     assert signal["confidence"] == pytest.approx(0.7)
     assert signal["reason_flags"] == []
     assert bar["close"] == 5500.25
+
+
+def test_legacy_trend_danger_probability_alone_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _payload_with_predictions(
+        monkeypatch,
+        _long_predictions(p_trend_danger=0.01),
+    )
+
+    _assert_trend_fail_closed(payload)
+    assert "missing_side_aware_trend_adverse_probability" in payload["reason_flags"]
+    assert "p_trend_danger" not in payload
+
+
+def test_legacy_trend_danger_target_alone_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _payload_with_predictions(
+        monkeypatch,
+        _long_predictions(target_trend_danger_30m=0.0),
+    )
+
+    _assert_trend_fail_closed(payload)
+    assert "missing_side_aware_trend_adverse_probability" in payload["reason_flags"]
+
+
+def test_legacy_trend_danger_target_alone_fails_model_bundle_validation() -> None:
+    estimators = {
+        live_shadow.TARGET_RETURN: FakeRegressor(),
+        live_shadow.TARGET_DIRECTION: FakeClassifier([-1, 0, 1], [0.10, 0.10, 0.80]),
+        live_shadow.TARGET_FADE: FakeClassifier([0, 1], [0.30, 0.70]),
+        "target_trend_danger_30m": FakeClassifier([0, 1], [0.80, 0.20]),
+    }
+
+    with pytest.raises(ValueError, match="target_trend_adverse_long_30m"):
+        live_shadow.normalize_model_bundle(
+            {"feature_cols": ["feature_ret_1"], "estimators": estimators}
+        )
+
+
+def test_missing_side_aware_adverse_probability_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _payload_with_predictions(monkeypatch, _long_predictions())
+
+    _assert_trend_fail_closed(payload)
+    assert "missing_side_aware_trend_adverse_probability" in payload["reason_flags"]
+
+
+def test_long_gate_uses_long_side_adverse_probability_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    missing_long = _payload_with_predictions(
+        monkeypatch,
+        _long_predictions(**{live_shadow.PROB_TREND_ADVERSE_SHORT: 0.20}),
+    )
+    passed = _payload_with_predictions(
+        monkeypatch,
+        _long_predictions(**{live_shadow.PROB_TREND_ADVERSE_LONG: 0.20}),
+    )
+
+    _assert_trend_fail_closed(missing_long)
+    assert "missing_side_aware_trend_adverse_probability" in missing_long["reason_flags"]
+    assert passed["signal"] == "LONG_FADE"
+    assert passed["do_not_fade"] is False
+    assert passed["reason_flags"] == []
+    assert passed["p_trend_adverse_selected_30m"] == pytest.approx(0.20)
+
+
+def test_short_gate_uses_short_side_adverse_probability_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    missing_short = _payload_with_predictions(
+        monkeypatch,
+        _short_predictions(**{live_shadow.PROB_TREND_ADVERSE_LONG: 0.20}),
+    )
+    passed = _payload_with_predictions(
+        monkeypatch,
+        _short_predictions(**{live_shadow.PROB_TREND_ADVERSE_SHORT: 0.20}),
+    )
+
+    _assert_trend_fail_closed(missing_short)
+    assert "missing_side_aware_trend_adverse_probability" in missing_short["reason_flags"]
+    assert passed["signal"] == "SHORT_FADE"
+    assert passed["do_not_fade"] is False
+    assert passed["reason_flags"] == []
+    assert passed["p_trend_adverse_selected_30m"] == pytest.approx(0.20)
+
+
+def test_aggregate_trend_danger_does_not_override_side_aware_adverse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _payload_with_predictions(
+        monkeypatch,
+        _long_predictions(
+            p_trend_danger=0.01,
+            **{live_shadow.PROB_TREND_ADVERSE_LONG: 0.90},
+        ),
+    )
+
+    _assert_trend_fail_closed(payload)
+    assert "missing_side_aware_trend_adverse_probability" not in payload["reason_flags"]
+    assert payload["p_trend_adverse_selected_30m"] == pytest.approx(0.90)
+    assert "p_trend_danger" not in payload
+
+
+def test_live_shadow_module_remains_observation_only() -> None:
+    module_doc = live_shadow.__doc__ or ""
+
+    assert "Research/paper observation only" in module_doc
+    assert "does not place orders" in module_doc
 
 
 def test_sdk_error_returns_failure_and_stops_client(tmp_path: Path) -> None:

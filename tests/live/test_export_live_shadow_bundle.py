@@ -61,11 +61,18 @@ models:
     target: target_fade_success_15m
     enabled: true
     requires_optional_dependency: false
-  logistic_trend_danger_v1:
+  logistic_trend_adverse_long_v1:
     stage: phase_7a_linear_controls
     family: logistic_regression
     task: classification
-    target: target_trend_danger_30m
+    target: target_trend_adverse_long_30m
+    enabled: true
+    requires_optional_dependency: false
+  logistic_trend_adverse_short_v1:
+    stage: phase_7a_linear_controls
+    family: logistic_regression
+    task: classification
+    target: target_trend_adverse_short_30m
     enabled: true
     requires_optional_dependency: false
 """.strip(),
@@ -118,7 +125,8 @@ def _write_feature_matrix(root: Path, *, market: str = "ES", year: int = 2024) -
             "target_ret_15m": [value * 0.001 for value in signal],
             "target_sign_with_deadzone": [-1, 0, 1] * 30,
             "target_fade_success_15m": [idx % 2 == 0 for idx in range(len(ts))],
-            "target_trend_danger_30m": [idx % 3 == 0 for idx in range(len(ts))],
+            "target_trend_adverse_long_30m": [idx % 3 == 0 for idx in range(len(ts))],
+            "target_trend_adverse_short_30m": [idx % 3 == 1 for idx in range(len(ts))],
         }
     ).to_parquet(path, index=False)
     return path
