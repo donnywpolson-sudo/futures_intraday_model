@@ -255,6 +255,34 @@ def _run_tier1_candidate_main(
     return captured
 
 
+def test_phase3_main_requires_explicit_input_root(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["build_labels.py"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        labels_mod.main()
+
+    assert exc_info.value.code == 2
+    assert "--input-root is required; pass an explicit causal root" in capsys.readouterr().err
+
+
+def test_phase3_cli_accepts_explicit_causal_roots(tmp_path: Path) -> None:
+    approved_root = Path("data/causal_base_candidates/tier1_rebuild_v1")
+    report_root = tmp_path / "reports" / "phase3" / "causal_base_fixture"
+
+    approved_args = labels_mod.build_arg_parser().parse_args(
+        ["--input-root", approved_root.as_posix()]
+    )
+    report_args = labels_mod.build_arg_parser().parse_args(
+        ["--input-root", report_root.as_posix()]
+    )
+
+    assert Path(approved_args.input_root).as_posix() == approved_root.as_posix()
+    assert Path(report_args.input_root).as_posix() == report_root.as_posix()
+
+
 def _base_rows(count: int = 40, market: str = "ES") -> list[dict[str, object]]:
     start = pd.Timestamp("2024-01-02T15:00:00Z")
     rows: list[dict[str, object]] = []

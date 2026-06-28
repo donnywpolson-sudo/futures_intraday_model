@@ -1269,7 +1269,7 @@ def write_reports(
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", default=DEFAULT_PROFILE)
-    parser.add_argument("--input-root", default="data/causally_gated_normalized")
+    parser.add_argument("--input-root", default=None)
     parser.add_argument("--output-root", default="data/labeled")
     parser.add_argument("--reports-root", default="reports/labels")
     parser.add_argument("--costs-config", default="configs/costs.yaml")
@@ -1288,7 +1288,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    args = build_arg_parser().parse_args()
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    if not args.input_root:
+        parser.error("--input-root is required; pass an explicit causal root")
     input_root = Path(args.input_root)
     output_root = Path(args.output_root)
     reports_root = Path(args.reports_root)
