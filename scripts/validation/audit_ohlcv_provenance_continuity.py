@@ -532,7 +532,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--markets", nargs="+", required=True)
     parser.add_argument("--years", nargs="+", type=int, required=True)
     parser.add_argument("--raw-root", default="data/raw")
-    parser.add_argument("--causal-root", default="data/causally_gated_normalized")
+    parser.add_argument("--causal-root", default=None)
     parser.add_argument("--dbn-root", default="data/dbn")
     parser.add_argument("--session-config", default="configs/market_sessions.yaml")
     parser.add_argument(
@@ -550,7 +550,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_arg_parser().parse_args(argv)
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
+    if args.causal_root is None:
+        parser.error("--causal-root is required; pass an explicit causal root")
     report = build_report(args)
     write_json_report(report, Path(args.json_out))
     write_markdown_report(report, Path(args.md_out))

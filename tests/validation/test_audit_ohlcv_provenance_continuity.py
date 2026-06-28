@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from scripts.validation.audit_ohlcv_provenance_continuity import build_report, main
 
@@ -237,6 +238,35 @@ def test_missing_definition_dbn_fails_closed_after_writing_reports(tmp_path: Pat
     assert report["status"] == "FAIL"
     assert "missing definition DBN file" in " ".join(report["failures"])
     assert md_out.exists()
+
+
+def test_main_requires_explicit_causal_root(tmp_path: Path) -> None:
+    json_out = tmp_path / "reports" / "ohlcv_audit.json"
+    md_out = tmp_path / "reports" / "ohlcv_audit.md"
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "--markets",
+                "ZN",
+                "--years",
+                "2024",
+                "--raw-root",
+                str(tmp_path / "data" / "raw"),
+                "--dbn-root",
+                str(tmp_path / "data" / "dbn"),
+                "--session-config",
+                str(tmp_path / "configs" / "market_sessions.yaml"),
+                "--json-out",
+                str(json_out),
+                "--md-out",
+                str(md_out),
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert not json_out.exists()
+    assert not md_out.exists()
 
 
 def test_ohlcv_hash_mismatch_fails_closed(tmp_path: Path) -> None:
