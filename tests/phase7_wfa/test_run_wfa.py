@@ -11,9 +11,14 @@ from sklearn.exceptions import ConvergenceWarning
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import scripts.phase7_wfa.run_wfa as wfa
-from scripts.phase7_wfa.run_wfa import PREDICTION_COLUMNS, run_wfa
+from scripts.phase7_wfa.run_wfa import PREDICTION_COLUMNS, run_wfa as _run_wfa
 from scripts.profile_scope import load_profile_scope, profile_config_hash
 from scripts.validation.data_audit_universe_guard import load_data_audit_universe
+
+
+def run_wfa(**kwargs: object) -> dict[str, object]:
+    kwargs.setdefault("write_predictions", True)
+    return _run_wfa(**kwargs)  # type: ignore[arg-type]
 
 
 def _write_models_config(path: Path) -> Path:
@@ -396,6 +401,9 @@ def test_run_wfa_writes_oos_predictions_and_manifest(tmp_path: Path) -> None:
     assert manifest["input_root"] == input_root.as_posix()
     assert manifest["output_root"] == predictions_root.as_posix()
     assert manifest["prediction_count"] == 72
+    assert manifest["prediction_writes_enabled"] is True
+    assert manifest["prediction_artifact_written"] is True
+    assert manifest["prediction_artifact_write_skipped"] is False
     assert manifest["artifact_evidence_ready"] is True
     assert manifest["artifact_evidence_failures"] == []
     assert manifest["data_audit_universe"] is None
@@ -411,6 +419,111 @@ def test_run_wfa_writes_oos_predictions_and_manifest(tmp_path: Path) -> None:
     assert report_path.exists()
     assert manifest_path.exists()
     assert manifest["output_file_hashes"][prediction_path.as_posix()] != "MISSING"
+
+
+def test_prediction_cli_defaults_are_report_only_and_explicit_write_opt_in(
+    tmp_path: Path,
+) -> None:
+    parser = wfa.build_arg_parser()
+
+    default_args = parser.parse_args([])
+    assert default_args.write_predictions is False
+    assert default_args.predictions_root is None
+    assert parser.parse_args(["--no-predictions"]).write_predictions is False
+    assert parser.parse_args(["--report-only"]).write_predictions is False
+    write_args = parser.parse_args(
+        [
+            "--write-predictions",
+            "--predictions-root",
+            (tmp_path / "reports" / "wfa_predictions").as_posix(),
+        ]
+    )
+    assert write_args.write_predictions is True
+    assert write_args.predictions_root == (
+        tmp_path / "reports" / "wfa_predictions"
+    ).as_posix()
+
+
+def test_main_write_predictions_requires_explicit_predictions_root(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["run_wfa.py", "--write-predictions"])
+
+    with pytest.raises(SystemExit) as excinfo:
+        wfa.main()
+
+    assert excinfo.value.code == 2
+    assert (
+        "--predictions-root is required when --write-predictions is set"
+        in capsys.readouterr().err
+    )
+
+
+def test_run_wfa_report_only_writes_reports_without_prediction_file(tmp_path: Path) -> None:
+    input_root = tmp_path / "data" / "feature_matrices" / "baseline_tier1_rebuild_v1"
+    predictions_root = tmp_path / "data" / "predictions"
+    reports_root = tmp_path / "reports" / "wfa"
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    split_plan = _write_split_plan(reports_root / "split_plan.json")
+    _write_feature_matrix(input_root)
+
+    manifest = run_wfa(
+        profile="fixture",
+        matrix="baseline",
+        run="baseline",
+        input_root=input_root,
+        split_plan=split_plan,
+        predictions_root=predictions_root,
+        reports_root=reports_root,
+        models_config=models_config,
+        write_predictions=False,
+    )
+
+    prediction_path = predictions_root / "baseline" / "oos_predictions.parquet"
+    report_path = reports_root / "baseline_wfa_report.json"
+    manifest_path = reports_root / "baseline_predictions_manifest.json"
+
+    assert manifest["failure_count"] == 0
+    assert manifest["prediction_count"] == 72
+    assert manifest["prediction_writes_enabled"] is False
+    assert manifest["prediction_artifact_written"] is False
+    assert manifest["prediction_artifact_write_skipped"] is True
+    assert manifest["output_root"] is None
+    assert manifest["predictions_root"] is None
+    assert manifest["prediction_path"] is None
+    assert manifest["output_file_hashes"] == {}
+    assert manifest["stale_output_path_exists"] is False
+    assert manifest["artifact_evidence_ready"] is True
+    assert manifest["artifact_evidence_failures"] == []
+    assert report_path.exists()
+    assert manifest_path.exists()
+    assert not prediction_path.exists()
+    assert not predictions_root.exists()
+
+
+def test_report_only_rejects_stale_default_feature_root(tmp_path: Path) -> None:
+    input_root = _feature_root(tmp_path)
+    predictions_root = tmp_path / "data" / "predictions"
+    reports_root = tmp_path / "reports" / "wfa"
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    split_plan = _write_split_plan(reports_root / "split_plan.json")
+    _write_feature_matrix(input_root)
+
+    with pytest.raises(SystemExit, match="refused data/feature_matrices/baseline"):
+        run_wfa(
+            profile="fixture",
+            matrix="baseline",
+            run="baseline",
+            input_root=input_root,
+            split_plan=split_plan,
+            predictions_root=predictions_root,
+            reports_root=reports_root,
+            models_config=models_config,
+            write_predictions=False,
+        )
+
+    assert not predictions_root.exists()
 
 
 def test_run_wfa_accepts_frozen_feature_set_manifest(tmp_path: Path) -> None:

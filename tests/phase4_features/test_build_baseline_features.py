@@ -21,6 +21,7 @@ from scripts.phase4_features.build_baseline_features import (
     REGIME_LABEL_COLUMNS,
     add_base_market_features,
     add_intermarket_features,
+    enrich_label_manifest_gate_evidence,
     process_file,
     resolve_profile_inputs,
     select_profile_inputs,
@@ -61,6 +62,7 @@ def _write_label_manifest(
     output_path: Path,
     status: str = "PASS",
     warning_count: int = 0,
+    causal_base_gate: dict[str, object] | None = None,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -85,8 +87,33 @@ def _write_label_manifest(
             }
         ],
     }
+    if causal_base_gate is not None:
+        payload["causal_base_manifest_gate"] = causal_base_gate
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
+
+
+def _accepted_6e_caveats() -> list[dict[str, object]]:
+    return [
+        {
+            "market": "6E",
+            "year": 2023,
+            "category": "vendor_trusted_ohlcv_no_trade",
+            "metric": "synthetic_rows_pct",
+            "observed": 2.057954,
+            "approved_limit": 2.1,
+            "warning": "synthetic threshold breached: rows_pct=2.057954 max_gap_minutes=48",
+        },
+        {
+            "market": "6E",
+            "year": 2024,
+            "category": "vendor_trusted_ohlcv_no_trade",
+            "metric": "synthetic_rows_pct",
+            "observed": 2.539287,
+            "approved_limit": 2.6,
+            "warning": "synthetic threshold breached: rows_pct=2.539287 max_gap_minutes=54",
+        },
+    ]
 
 
 def test_phase4_main_rejects_warn_label_manifest(
@@ -196,6 +223,95 @@ def test_phase4_main_accepts_passed_label_manifest(
 
     assert features_mod.main() == 0
     assert captured["gate"]["status"] == "PASS"  # type: ignore[index]
+
+
+def test_phase4_main_carries_label_causal_gate_and_accepted_caveats(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_root = tmp_path / "data" / "labeled"
+    input_path = input_root / "ES" / "2024.parquet"
+    input_path.parent.mkdir(parents=True, exist_ok=True)
+    input_path.write_bytes(b"labels")
+    profile_config = _write_phase4_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    causal_gate = {
+        "gate": "causal_base_manifest_gate",
+        "status": "PASS",
+        "manifest_path": "reports/data_audit/causal_base_repair_plan/tier1_candidate_v1/causal_base_manifest.json",
+        "manifest_hash": "candidate-hash",
+        "accepted_readiness_exception_count": 2,
+        "accepted_readiness_exceptions": _accepted_6e_caveats(),
+    }
+    manifest = _write_label_manifest(
+        tmp_path / "reports" / "labels" / "label_manifest.json",
+        profile="research",
+        output_root=input_root,
+        output_path=input_path,
+        causal_base_gate=causal_gate,
+    )
+    captured: dict[str, object] = {}
+
+    def fake_process_file(
+        input_path: Path,
+        output_path: Path,
+        *,
+        profile: str,
+        costs_config: Path,
+        input_root: Path,
+    ) -> features_mod.FeatureResult:
+        return features_mod.FeatureResult(
+            profile=profile,
+            market=input_path.parent.name,
+            year=int(input_path.stem),
+            input_path=input_path.as_posix(),
+            output_path=output_path.as_posix(),
+        )
+
+    def fake_write_reports(*args: object, **kwargs: object) -> None:
+        captured["gate"] = kwargs["label_gate"]
+
+    monkeypatch.setattr(features_mod, "process_file", fake_process_file)
+    monkeypatch.setattr(features_mod, "write_reports", fake_write_reports)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_baseline_features.py",
+            "--profile",
+            "research",
+            "--input-root",
+            input_root.as_posix(),
+            "--output-root",
+            (tmp_path / "data" / "feature_matrices" / "baseline").as_posix(),
+            "--reports-root",
+            (tmp_path / "reports" / "features").as_posix(),
+            "--profile-config",
+            profile_config.as_posix(),
+            "--costs-config",
+            (tmp_path / "configs" / "costs.yaml").as_posix(),
+            "--label-manifest",
+            manifest.as_posix(),
+        ],
+    )
+
+    assert features_mod.main() == 0
+    gate = captured["gate"]  # type: ignore[assignment]
+    assert gate["status"] == "PASS"  # type: ignore[index]
+    assert gate["manifest_path"] == manifest.as_posix()  # type: ignore[index]
+    assert gate["label_manifest_causal_base_manifest_gate"] == causal_gate  # type: ignore[index]
+    assert gate["accepted_readiness_exception_count"] == 2  # type: ignore[index]
+    assert gate["accepted_readiness_exceptions"] == _accepted_6e_caveats()  # type: ignore[index]
+    assert validate_registry(FEATURE_COLS) == []
+
+
+def test_enrich_label_manifest_gate_evidence_is_noop_without_nested_causal_gate() -> None:
+    gate = {"gate": "label_manifest_gate", "status": "PASS"}
+    enriched = enrich_label_manifest_gate_evidence(
+        gate,
+        {"stage": "labels", "status": "PASS"},
+    )
+
+    assert enriched == gate
 
 
 def _frame(

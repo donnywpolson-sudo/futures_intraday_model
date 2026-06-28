@@ -41,7 +41,6 @@ DEFAULT_MATRIX = "baseline"
 DEFAULT_RUN = "baseline"
 DEFAULT_INPUT_ROOT = Path("data/feature_matrices/baseline")
 DEFAULT_SPLIT_PLAN = Path("reports/wfa/split_plan.json")
-DEFAULT_PREDICTIONS_ROOT = Path("data/predictions")
 DEFAULT_REPORTS_ROOT = Path("reports/wfa")
 DEFAULT_MODELS_CONFIG = Path("configs/models.yaml")
 NO_CALIBRATION_ID = "no_calibration"
@@ -135,6 +134,12 @@ def _file_hash_or_missing(path: Path) -> str:
 
 def _file_hash_map(paths: Iterable[Path]) -> dict[str, str]:
     return {_relative_path(path): _file_hash_or_missing(path) for path in paths}
+
+
+def _is_stale_default_feature_root(path: Path) -> bool:
+    normalized = path.as_posix().replace("\\", "/").rstrip("/")
+    stale_root = "data/feature_matrices/baseline"
+    return normalized == stale_root or normalized.endswith(f"/{stale_root}")
 
 
 def _stale_prediction_output_info(path: Path) -> dict[str, Any]:
@@ -821,7 +826,7 @@ def run_wfa(
     run: str,
     input_root: Path,
     split_plan: Path,
-    predictions_root: Path,
+    predictions_root: Path | None,
     reports_root: Path,
     models_config: Path,
     profile_config: Path | None = None,
@@ -832,9 +837,17 @@ def run_wfa(
     fold_shard_count: int | None = None,
     fold_shard_index: int | None = None,
     data_audit_universe_json: Path | None = None,
+    write_predictions: bool = False,
 ) -> dict[str, Any]:
     if matrix != "baseline":
         raise SystemExit("only baseline matrix is supported in the initial WFA runner")
+    if write_predictions and predictions_root is None:
+        raise SystemExit("prediction writes require an explicit predictions_root")
+    if not write_predictions and _is_stale_default_feature_root(input_root):
+        raise SystemExit(
+            "report-only/no-predictions WFA requires an explicit non-stale feature input root; "
+            "refused data/feature_matrices/baseline"
+        )
     if (fold_shard_count is None) != (fold_shard_index is None):
         raise SystemExit("--fold-shard-count and --fold-shard-index must be provided together")
     if fold_shard_count is not None and fold_shard_index is not None:
@@ -1115,11 +1128,16 @@ def run_wfa(
             detail["prediction_rows"] = int(len(test))
             diagnostics.append(detail)
 
-    output_path = predictions_root / run / "oos_predictions.parquet"
+    output_path = (
+        predictions_root / run / "oos_predictions.parquet"
+        if predictions_root is not None
+        else None
+    )
     prediction_count = 0
     duplicate_count = 0
     prediction_markets: list[str] = []
     prediction_years: list[int] = []
+    prediction_artifact_written = False
     if predictions:
         output = pd.concat(predictions, ignore_index=True)
         duplicate_count = int(
@@ -1131,26 +1149,38 @@ def run_wfa(
             failures.append(f"duplicate prediction rows: {duplicate_count}")
         prediction_markets = sorted(output["market"].dropna().astype(str).unique().tolist())
         prediction_years = sorted(int(year) for year in output["year"].dropna().unique())
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = output_path.with_name(f"{output_path.name}.tmp")
-        output.to_parquet(tmp_path, index=False)
-        tmp_path.replace(output_path)
         prediction_count = int(len(output))
+        if write_predictions:
+            if output_path is None:
+                raise SystemExit("prediction writes require an explicit predictions_root")
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = output_path.with_name(f"{output_path.name}.tmp")
+            output.to_parquet(tmp_path, index=False)
+            tmp_path.replace(output_path)
+            prediction_artifact_written = True
     else:
         failures.append("no prediction rows generated")
-    output_hashes = (
-        _file_hash_map([output_path])
-        if prediction_count > 0
-        else {_relative_path(output_path): "NOT_WRITTEN"}
-    )
-    stale_output = _stale_prediction_output_info(output_path) if prediction_count == 0 else {
+    output_hashes = {}
+    if write_predictions:
+        if output_path is None:
+            raise SystemExit("prediction writes require an explicit predictions_root")
+        output_hashes = (
+            _file_hash_map([output_path])
+            if prediction_artifact_written
+            else {_relative_path(output_path): "NOT_WRITTEN"}
+        )
+    stale_output = (
+        _stale_prediction_output_info(output_path)
+        if write_predictions and not prediction_artifact_written and output_path is not None
+        else {
         "stale_output_path_exists": False,
         "stale_output_path": None,
         "stale_output_file_hash": None,
         "stale_output_mtime_utc": None,
         "stale_output_row_count": None,
         "stale_output_split_groups": [],
-    }
+        }
+    )
     if stale_output["stale_output_path_exists"]:
         failures.append(
             f"stale prediction output exists from a previous run: {stale_output['stale_output_path']}"
@@ -1185,6 +1215,9 @@ def run_wfa(
         "prediction_markets": prediction_markets,
         "prediction_years": prediction_years,
         "duplicate_prediction_count": duplicate_count,
+        "prediction_writes_enabled": write_predictions,
+        "prediction_artifact_written": prediction_artifact_written,
+        "prediction_artifact_write_skipped": not write_predictions,
         "warning_count": sum(len(item["warnings"]) for item in diagnostics),
         "failure_count": len(failures),
         "failures": failures,
@@ -1210,10 +1243,10 @@ def run_wfa(
         "split_plan_resolved_profile": split_manifest.get("resolved_profile"),
         "split_plan_config_hash": split_manifest.get("config_hash"),
         "input_root": _relative_path(input_root),
-        "output_root": _relative_path(predictions_root),
-        "predictions_root": _relative_path(predictions_root),
+        "output_root": _relative_path(predictions_root) if write_predictions else None,
+        "predictions_root": _relative_path(predictions_root) if write_predictions else None,
         "reports_root": _relative_path(reports_root),
-        "prediction_path": _relative_path(output_path),
+        "prediction_path": _relative_path(output_path) if write_predictions else None,
         "input_file_hashes": _file_hash_map(input_paths),
         "output_file_hashes": output_hashes,
         "required_columns": PREDICTION_COLUMNS,
@@ -1235,6 +1268,9 @@ def run_wfa(
         "prediction_markets": prediction_markets,
         "prediction_years": prediction_years,
         "duplicate_prediction_count": duplicate_count,
+        "prediction_writes_enabled": write_predictions,
+        "prediction_artifact_written": prediction_artifact_written,
+        "prediction_artifact_write_skipped": not write_predictions,
         "warning_count": report["warning_count"],
         "failure_count": len(failures),
         "failures": failures,
@@ -1257,7 +1293,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run", default=DEFAULT_RUN)
     parser.add_argument("--input-root", default=DEFAULT_INPUT_ROOT.as_posix())
     parser.add_argument("--split-plan", default=DEFAULT_SPLIT_PLAN.as_posix())
-    parser.add_argument("--predictions-root", default=DEFAULT_PREDICTIONS_ROOT.as_posix())
+    parser.add_argument("--predictions-root", default=None)
     parser.add_argument("--reports-root", default=DEFAULT_REPORTS_ROOT.as_posix())
     parser.add_argument("--models-config", default=DEFAULT_MODELS_CONFIG.as_posix())
     parser.add_argument("--profile-config", default=DEFAULT_PROFILE_CONFIG.as_posix())
@@ -1268,18 +1304,40 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fold-shard-count", type=int, default=None)
     parser.add_argument("--fold-shard-index", type=int, default=None)
     parser.add_argument("--data-audit-universe-json", default=None)
+    parser.add_argument(
+        "--write-predictions",
+        action="store_true",
+        dest="write_predictions",
+        help="Write OOS prediction parquet artifacts. Requires --predictions-root.",
+    )
+    parser.add_argument(
+        "--no-predictions",
+        action="store_false",
+        dest="write_predictions",
+        help="Run WFA diagnostics without writing OOS prediction parquet artifacts.",
+    )
+    parser.add_argument(
+        "--report-only",
+        action="store_false",
+        dest="write_predictions",
+        help="Alias for --no-predictions.",
+    )
+    parser.set_defaults(write_predictions=False)
     return parser
 
 
 def main() -> int:
-    args = build_arg_parser().parse_args()
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    if args.write_predictions and not args.predictions_root:
+        parser.error("--predictions-root is required when --write-predictions is set")
     manifest = run_wfa(
         profile=args.profile,
         matrix=args.matrix,
         run=args.run,
         input_root=Path(args.input_root),
         split_plan=Path(args.split_plan),
-        predictions_root=Path(args.predictions_root),
+        predictions_root=Path(args.predictions_root) if args.predictions_root else None,
         reports_root=Path(args.reports_root),
         models_config=Path(args.models_config),
         profile_config=Path(args.profile_config),
@@ -1292,6 +1350,7 @@ def main() -> int:
         data_audit_universe_json=(
             Path(args.data_audit_universe_json) if args.data_audit_universe_json else None
         ),
+        write_predictions=args.write_predictions,
     )
     status = "FAIL" if manifest["failure_count"] else "PASS"
     print(

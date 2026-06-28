@@ -369,6 +369,30 @@ def file_hash_map(paths: Iterable[Path]) -> dict[str, str]:
     return {relative_path(path): file_hash_or_missing(path) for path in paths}
 
 
+def enrich_label_manifest_gate_evidence(
+    gate_evidence: Mapping[str, object],
+    label_manifest: Mapping[str, Any] | None,
+) -> dict[str, object]:
+    enriched = dict(gate_evidence)
+    if not isinstance(label_manifest, Mapping):
+        return enriched
+
+    causal_gate = label_manifest.get("causal_base_manifest_gate")
+    if not isinstance(causal_gate, Mapping):
+        return enriched
+
+    enriched["label_manifest_input_root"] = label_manifest.get("input_root")
+    enriched["label_manifest_output_root"] = label_manifest.get("output_root")
+    enriched["label_manifest_reports_root"] = label_manifest.get("reports_root")
+    enriched["label_manifest_causal_base_manifest_gate"] = dict(causal_gate)
+
+    accepted = causal_gate.get("accepted_readiness_exceptions")
+    if isinstance(accepted, list):
+        enriched["accepted_readiness_exception_count"] = len(accepted)
+        enriched["accepted_readiness_exceptions"] = accepted
+    return enriched
+
+
 def config_hash(paths: Iterable[Path]) -> str:
     digest = hashlib.sha256()
     for path in sorted(paths, key=lambda item: item.as_posix()):
@@ -1597,6 +1621,10 @@ def main() -> int:
         expected_market_years=((market, year) for market, year, _ in inputs),
         gate_name="label_manifest_gate",
     )
+    label_gate_evidence = enrich_label_manifest_gate_evidence(
+        label_gate.evidence,
+        label_gate.manifest,
+    )
     results: list[FeatureResult] = []
     for market, year, input_path in inputs:
         output_path = output_root / market / f"{year}.parquet"
@@ -1623,7 +1651,7 @@ def main() -> int:
         profile_config=profile_config,
         costs_config=Path(args.costs_config),
         input_selection=input_selection,
-        label_gate=label_gate.evidence,
+        label_gate=label_gate_evidence,
     )
     return 1 if any(result.status == "FAIL" for result in results) else 0
 
