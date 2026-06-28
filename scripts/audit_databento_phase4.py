@@ -136,7 +136,8 @@ def parse_paths_config(path: Path) -> dict[str, str]:
         if in_paths:
             match = re.match(r"\s{2}([A-Za-z0-9_]+):\s*(.+?)\s*$", line)
             if match:
-                values[match.group(1)] = match.group(2).strip().strip('"').strip("'")
+                raw_value = match.group(2).strip().strip('"').strip("'")
+                values[match.group(1)] = "" if raw_value.lower() in {"null", "none", "~"} else raw_value
     return values
 
 
@@ -274,6 +275,7 @@ def active_pipeline_rows(data_refs: list[dict[str, Any]], config_paths: dict[str
         "predictions_root": "expected_predictions_folder",
     }
     for name, path in sorted(config_paths.items()):
+        is_missing_required = name == "predictions_root" and not path
         rows.append(
             {
                 "item_type": "active_config_path",
@@ -284,8 +286,8 @@ def active_pipeline_rows(data_refs: list[dict[str, Any]], config_paths: dict[str
                 "line": "",
                 "operation": "config",
                 "context": "",
-                "status": "ok",
-                "issue": "",
+                "status": "not_configured" if is_missing_required else "ok",
+                "issue": "predictions_root not configured; explicit root required" if is_missing_required else "",
                 "evidence": "configs/alpha_tiered.yaml paths block",
             }
         )
@@ -654,6 +656,7 @@ def run_phase4(args: Any) -> dict[str, Any]:
     data_refs = read_csv_rows(output_dir / "phase0_folder_triage" / "data_path_references.csv")
     inventory = read_csv_rows(output_dir / "phase1_raw_inventory" / "inventory.csv")
     config_paths = parse_paths_config(repo_path("configs/alpha_tiered.yaml"))
+    config_paths.setdefault("predictions_root", "")
     quarantine_paths = {str(row.get("path", "")) for row in folder_rows if row.get("classification") == "quarantine_candidate"}
 
     active_rows = active_pipeline_rows(data_refs, config_paths, quarantine_paths)
@@ -664,16 +667,14 @@ def run_phase4(args: Any) -> dict[str, Any]:
     feature_root = repo_path(config_paths.get("feature_matrix_root", "data/feature_matrices/baseline"))
     raw_pairs = parquet_pairs(raw_root)
     canonical_pairs = inventory_pairs(inventory, "ohlcv-1m")
-    raw_vs_rows = raw_vs_derived_rows(
-        raw_pairs,
-        canonical_pairs,
-        {
-            "causally_gated_normalized": causal_root,
-            "labeled": labeled_root,
-            "feature_matrices": feature_root,
-            "predictions": repo_path(config_paths.get("predictions_root", "data/predictions")),
-        },
-    )
+    raw_vs_roots = {
+        "causally_gated_normalized": causal_root,
+        "labeled": labeled_root,
+        "feature_matrices": feature_root,
+    }
+    if config_paths.get("predictions_root"):
+        raw_vs_roots["predictions"] = repo_path(config_paths["predictions_root"])
+    raw_vs_rows = raw_vs_derived_rows(raw_pairs, canonical_pairs, raw_vs_roots)
     ohlcv_rows = ohlcv_examples(causal_root, raw_root)
     session_rows = session_audit_rows(causal_root if not repo_path("data/session_normalized").exists() else repo_path("data/session_normalized"))
     causal_rows = causal_audit_rows(causal_root)
