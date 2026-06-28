@@ -26,7 +26,6 @@ from scripts.validation.data_audit_universe_guard import load_data_audit_univers
 
 
 DEFAULT_PROFILE = "tier_1"
-DEFAULT_INPUT_ROOT = Path("data/feature_matrices/baseline")
 DEFAULT_REPORTS_ROOT = Path("reports/wfa")
 DEFAULT_PROFILE_CONFIG = Path("configs/alpha_tiered.yaml")
 DEFAULT_MODELS_CONFIG = Path("configs/models.yaml")
@@ -533,7 +532,7 @@ def build_split_plan(
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", default=DEFAULT_PROFILE)
-    parser.add_argument("--input-root", default=DEFAULT_INPUT_ROOT.as_posix())
+    parser.add_argument("--input-root", default=None)
     parser.add_argument("--reports-root", default=DEFAULT_REPORTS_ROOT.as_posix())
     parser.add_argument("--profile-config", default=DEFAULT_PROFILE_CONFIG.as_posix())
     parser.add_argument("--models-config", default=DEFAULT_MODELS_CONFIG.as_posix())
@@ -548,7 +547,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    args = build_arg_parser().parse_args()
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    if not args.input_root:
+        parser.error("--input-root is required; pass an explicit feature root")
     manifest = build_split_plan(
         profile=args.profile,
         input_root=Path(args.input_root),

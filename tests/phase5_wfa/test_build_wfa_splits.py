@@ -10,7 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.pipeline_gates import file_sha256
-from scripts.phase5_wfa.build_wfa_splits import build_split_plan
+from scripts.phase5_wfa.build_wfa_splits import build_arg_parser, build_split_plan, main
 
 
 def _write_profile_config(path: Path, *, profile: str = "research") -> Path:
@@ -201,6 +201,36 @@ def _write_mixed_data_audit_universe(path: Path) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def test_cli_input_root_has_no_implicit_default() -> None:
+    args = build_arg_parser().parse_args([])
+
+    assert args.input_root is None
+
+
+def test_cli_missing_input_root_fails_clearly(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["build_wfa_splits"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 2
+    assert "--input-root is required; pass an explicit feature root" in capsys.readouterr().err
+
+
+def test_cli_accepts_explicit_feature_roots(tmp_path: Path) -> None:
+    rebuilt_root = Path("data/feature_matrices/baseline_tier1_rebuild_v1")
+    report_root = tmp_path / "reports" / "wfa" / "feature_matrix_fixture"
+
+    rebuilt_args = build_arg_parser().parse_args(["--input-root", rebuilt_root.as_posix()])
+    report_args = build_arg_parser().parse_args(["--input-root", report_root.as_posix()])
+
+    assert Path(rebuilt_args.input_root).as_posix() == rebuilt_root.as_posix()
+    assert Path(report_args.input_root).as_posix() == report_root.as_posix()
 
 
 def test_build_split_plan_rejects_warn_feature_manifest(tmp_path: Path) -> None:
