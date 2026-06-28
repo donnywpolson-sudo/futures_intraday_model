@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from argparse import Namespace
 from pathlib import Path
 
+import pytest
 import yaml
 
 from scripts.validation.check_tier_2_coverage import (
     EXCLUDED,
     REQUIRED_COST_KEYS,
     TIER_2_UNIVERSE,
+    build_arg_parser,
     build_report,
     load_yaml,
+    main,
     resolve_profile_name,
 )
 
@@ -46,7 +50,10 @@ def _namespace(
     config: Path,
     stage: str = "all",
     profile: str = FULL_UNIVERSE_PROFILE,
+    canonical_feature_root: Path | None = None,
 ) -> Namespace:
+    if canonical_feature_root is None:
+        canonical_feature_root = tmp_path / "data" / "feature_matrices" / "baseline"
     return Namespace(
         profile=profile,
         stage=stage,
@@ -57,7 +64,7 @@ def _namespace(
         causal_root=str(tmp_path / "data" / "causally_gated_normalized"),
         labeled_root=str(tmp_path / "data" / "labeled"),
         feature_root=str(tmp_path / "data" / "feature_matrices"),
-        canonical_feature_root=str(tmp_path / "data" / "feature_matrices" / "baseline"),
+        canonical_feature_root=str(canonical_feature_root),
         wfa_reports_root=str(tmp_path / "reports" / "wfa"),
         metrics_root=str(tmp_path / "reports" / "metrics"),
         model_selection_root=str(tmp_path / "reports" / "model_selection"),
@@ -70,6 +77,8 @@ def _touch_complete_tree(
     tmp_path: Path,
     years: list[int],
     markets: tuple[str, ...] | list[str] = TIER_2_UNIVERSE,
+    *,
+    feature_root_name: str = "baseline",
 ) -> None:
     for root_name in ("raw", "causally_gated_normalized", "labeled"):
         root = tmp_path / "data" / root_name
@@ -79,12 +88,60 @@ def _touch_complete_tree(
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("placeholder", encoding="utf-8")
 
-    feature_root = tmp_path / "data" / "feature_matrices" / "baseline"
+    feature_root = tmp_path / "data" / "feature_matrices" / feature_root_name
     for market in markets:
         for year in years:
             path = feature_root / market / f"{year}.parquet"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("placeholder", encoding="utf-8")
+
+
+def test_cli_canonical_feature_root_has_no_implicit_default() -> None:
+    parser = build_arg_parser()
+
+    args = parser.parse_args([])
+
+    assert args.canonical_feature_root is None
+    rebuilt_root = Path("data") / "feature_matrices" / "baseline_tier1_rebuild_v1"
+    rebuilt_args = parser.parse_args(["--canonical-feature-root", rebuilt_root.as_posix()])
+    assert Path(rebuilt_args.canonical_feature_root).as_posix() == rebuilt_root.as_posix()
+
+
+def test_main_missing_canonical_feature_root_fails_clearly(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["check_tier_2_coverage.py"])
+
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+
+    assert excinfo.value.code == 2
+    assert (
+        "--canonical-feature-root is required; pass an explicit canonical feature root"
+        in capsys.readouterr().err
+    )
+
+
+def test_coverage_gate_accepts_explicit_approved_rebuilt_feature_root(
+    tmp_path: Path,
+) -> None:
+    config = ROOT / "configs" / "alpha_tiered.yaml"
+    canonical_root = (
+        tmp_path / "data" / "feature_matrices" / "baseline_tier1_rebuild_v1"
+    )
+    _touch_complete_tree(
+        tmp_path,
+        list(range(2010, 2025)),
+        feature_root_name="baseline_tier1_rebuild_v1",
+    )
+
+    report = build_report(
+        _namespace(tmp_path, config=config, stage="all", canonical_feature_root=canonical_root)
+    )
+
+    assert report["status"] == "PASS"
+    assert report["canonical_feature_root"] == canonical_root.as_posix()
 
 
 def test_default_profile_exists_aliases_resolve_and_retired_profiles_absent() -> None:

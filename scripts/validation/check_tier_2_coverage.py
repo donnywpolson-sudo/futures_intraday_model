@@ -501,6 +501,10 @@ def check_research_alpha_promotion(
 
 
 def build_report(args: argparse.Namespace) -> dict[str, Any]:
+    if not getattr(args, "canonical_feature_root", None):
+        raise ValueError(
+            "--canonical-feature-root is required; pass an explicit canonical feature root"
+        )
     config = load_yaml(Path(args.config))
     session_config = load_yaml(Path(args.session_config))
     cost_config = load_yaml(Path(args.costs_config))
@@ -530,7 +534,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         )
     feature_artifact_warnings = check_non_canonical_feature_artifacts(
         Path(getattr(args, "feature_root", "data/feature_matrices")),
-        Path(getattr(args, "canonical_feature_root", "data/feature_matrices/baseline")),
+        Path(args.canonical_feature_root),
     )
     quarantined_features, unquarantined_features = quarantined_feature_artifacts(
         feature_artifact_warnings["non_canonical_feature_artifacts"],
@@ -646,7 +650,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--causal-root", default="data/causally_gated_normalized")
     parser.add_argument("--labeled-root", default="data/labeled")
     parser.add_argument("--feature-root", default="data/feature_matrices")
-    parser.add_argument("--canonical-feature-root", default="data/feature_matrices/baseline")
+    parser.add_argument("--canonical-feature-root", default=None)
     parser.add_argument("--wfa-reports-root", default="reports/wfa")
     parser.add_argument("--metrics-root", default="reports/metrics")
     parser.add_argument("--model-selection-root", default="reports/model_selection")
@@ -656,7 +660,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    args = build_arg_parser().parse_args()
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    if not args.canonical_feature_root:
+        parser.error(
+            "--canonical-feature-root is required; pass an explicit canonical feature root"
+        )
     report = build_report(args)
     write_report(Path(args.report_out), report)
 
