@@ -27,7 +27,6 @@ from scripts.phase8_model_selection.evaluate_predictions import (
 )
 
 
-DEFAULT_FEATURE_ROOT = Path("data/feature_matrices/baseline")
 RETURN_TARGET = "target_ret_15m"
 RETURN_MODEL = "ridge_return_v1"
 FEATURE_MATCH_TOLERANCE = 1e-12
@@ -609,7 +608,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Explicit prediction parquet path. Required; no data/predictions default is used.",
     )
     parser.add_argument("--costs-config", default=DEFAULT_COSTS_CONFIG.as_posix())
-    parser.add_argument("--feature-root", default=DEFAULT_FEATURE_ROOT.as_posix())
+    parser.add_argument("--feature-root", default=None)
     parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT.as_posix())
     parser.add_argument("--run", default=DEFAULT_RUN)
     parser.add_argument("--max-shift-features", type=int, default=40)
@@ -621,6 +620,8 @@ def main() -> int:
     args = parser.parse_args()
     if not args.predictions:
         parser.error("--predictions is required; pass an explicit prediction parquet path")
+    if not args.feature_root:
+        parser.error("--feature-root is required; pass an explicit feature root")
     summary = build_label_feature_sanity(
         predictions_path=Path(args.predictions),
         costs_config=Path(args.costs_config),

@@ -289,6 +289,12 @@ def test_label_feature_sanity_cli_predictions_has_no_implicit_default() -> None:
     assert args.predictions is None
 
 
+def test_label_feature_sanity_cli_feature_root_has_no_implicit_default() -> None:
+    args = build_arg_parser().parse_args([])
+
+    assert args.feature_root is None
+
+
 def test_label_feature_sanity_cli_missing_predictions_fails_clearly(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -317,12 +323,56 @@ def test_label_feature_sanity_cli_missing_predictions_fails_clearly(
     assert "--predictions is required" in capsys.readouterr().err
 
 
+def test_label_feature_sanity_cli_missing_feature_root_fails_clearly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    predictions = _write_predictions(tmp_path / "reports" / "wfa" / "fixture_predictions.parquet")
+    costs = _write_costs(tmp_path / "configs" / "costs.yaml")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "audit_label_feature_sanity",
+            "--predictions",
+            predictions.as_posix(),
+            "--costs-config",
+            costs.as_posix(),
+            "--output-root",
+            (tmp_path / "reports" / "phase8_failure_breakdown").as_posix(),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 2
+    assert "--feature-root is required; pass an explicit feature root" in capsys.readouterr().err
+
+
 def test_label_feature_sanity_cli_accepts_explicit_report_scoped_predictions(tmp_path: Path) -> None:
     prediction_path = tmp_path / "reports" / "wfa" / "fixture_predictions.parquet"
 
     args = build_arg_parser().parse_args(["--predictions", prediction_path.as_posix()])
 
     assert Path(args.predictions).as_posix() == prediction_path.as_posix()
+
+
+def test_label_feature_sanity_cli_accepts_explicit_approved_rebuilt_feature_root() -> None:
+    feature_root = Path("data/feature_matrices/baseline_tier1_rebuild_v1")
+
+    args = build_arg_parser().parse_args(["--feature-root", feature_root.as_posix()])
+
+    assert Path(args.feature_root).as_posix() == feature_root.as_posix()
+
+
+def test_label_feature_sanity_cli_accepts_explicit_report_scoped_feature_root() -> None:
+    feature_root = Path("reports/wfa_research/tier1_rebuild_v1/features")
+
+    args = build_arg_parser().parse_args(["--feature-root", feature_root.as_posix()])
+
+    assert Path(args.feature_root).as_posix() == feature_root.as_posix()
 
 
 def test_label_feature_sanity_writes_alignment_and_shift_reports(tmp_path: Path) -> None:
