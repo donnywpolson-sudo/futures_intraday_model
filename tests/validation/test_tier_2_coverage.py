@@ -293,15 +293,17 @@ def test_coverage_gate_skips_unavailable_years_across_artifact_stages(tmp_path: 
 def test_coverage_gate_fails_when_feature_file_is_missing(tmp_path: Path) -> None:
     config = ROOT / "configs" / "alpha_tiered.yaml"
     _touch_complete_tree(tmp_path, list(range(2010, 2025)))
-    (tmp_path / "data" / "feature_matrices" / "baseline" / "ES" / "2010.parquet").unlink()
+    missing_feature_path = (
+        tmp_path / "data" / "feature_matrices" / "baseline" / "ES" / "2010.parquet"
+    )
+    missing_feature_path.unlink()
 
     report = build_report(_namespace(tmp_path, config=config, stage="all"))
 
     assert report["status"] == "FAIL"
     assert "missing features files: 1" in report["coverage_errors"]
-    assert "data/feature_matrices/baseline/ES/2010.parquet" in report[
-        "artifact_checks"
-    ]["features"]["missing"][0]
+    expected_missing_path = missing_feature_path.relative_to(tmp_path).as_posix()
+    assert expected_missing_path in report["artifact_checks"]["features"]["missing"][0]
 
 
 def test_tier_1_profile_checks_only_profile_scope(tmp_path: Path) -> None:
@@ -454,14 +456,15 @@ def test_invalid_prediction_manifest_fails_artifact_evidence_only(tmp_path: Path
     reports_root = tmp_path / "reports" / "wfa"
     reports_root.mkdir(parents=True, exist_ok=True)
     manifest_path = reports_root / "baseline_predictions_manifest.json"
+    prediction_fixture_path = (
+        reports_root / "baseline" / "oos_predictions.parquet"
+    ).as_posix()
     manifest_path.write_text(
         json.dumps(
             {
                 "failure_count": 1,
                 "prediction_count": 0,
-                "output_file_hashes": {
-                    "data/predictions/baseline/oos_predictions.parquet": "NOT_WRITTEN"
-                },
+                "output_file_hashes": {prediction_fixture_path: "NOT_WRITTEN"},
                 "stale_output_path_exists": True,
                 "artifact_evidence_ready": False,
             },
