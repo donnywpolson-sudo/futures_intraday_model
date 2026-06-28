@@ -102,9 +102,13 @@ def test_cli_canonical_feature_root_has_no_implicit_default() -> None:
     args = parser.parse_args([])
 
     assert args.canonical_feature_root is None
+    assert args.causal_root is None
     rebuilt_root = Path("data") / "feature_matrices" / "baseline_tier1_rebuild_v1"
     rebuilt_args = parser.parse_args(["--canonical-feature-root", rebuilt_root.as_posix()])
     assert Path(rebuilt_args.canonical_feature_root).as_posix() == rebuilt_root.as_posix()
+    causal_root = Path("data") / "causally_gated_normalized"
+    causal_args = parser.parse_args(["--causal-root", causal_root.as_posix()])
+    assert Path(causal_args.causal_root).as_posix() == causal_root.as_posix()
 
 
 def test_main_missing_canonical_feature_root_fails_clearly(
@@ -119,6 +123,32 @@ def test_main_missing_canonical_feature_root_fails_clearly(
     assert excinfo.value.code == 2
     assert (
         "--canonical-feature-root is required; pass an explicit canonical feature root"
+        in capsys.readouterr().err
+    )
+
+
+def test_main_missing_causal_root_fails_for_causal_stages(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "check_tier_2_coverage.py",
+            "--stage",
+            "all",
+            "--canonical-feature-root",
+            "data/feature_matrices/baseline_tier1_rebuild_v1",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+
+    assert excinfo.value.code == 2
+    assert (
+        "--causal-root is required for --stage causal/all; pass an explicit causal root"
         in capsys.readouterr().err
     )
 

@@ -647,7 +647,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--session-config", default="configs/market_sessions.yaml")
     parser.add_argument("--costs-config", default="configs/costs.yaml")
     parser.add_argument("--raw-root", default="data/raw")
-    parser.add_argument("--causal-root", default="data/causally_gated_normalized")
+    parser.add_argument("--causal-root", default=None)
     parser.add_argument("--labeled-root", default="data/labeled")
     parser.add_argument("--feature-root", default="data/feature_matrices")
     parser.add_argument("--canonical-feature-root", default=None)
@@ -666,6 +666,8 @@ def main() -> int:
         parser.error(
             "--canonical-feature-root is required; pass an explicit canonical feature root"
         )
+    if args.stage in {"causal", "all"} and args.causal_root is None:
+        parser.error("--causal-root is required for --stage causal/all; pass an explicit causal root")
     report = build_report(args)
     write_report(Path(args.report_out), report)
 
