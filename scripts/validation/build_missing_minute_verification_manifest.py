@@ -785,7 +785,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--markets", nargs="+")
     parser.add_argument("--years", nargs="+", type=int)
     parser.add_argument("--raw-root", default="data/raw")
-    parser.add_argument("--causal-root", default="data/causally_gated_normalized")
+    parser.add_argument("--causal-root", default=None)
     parser.add_argument("--session-config", default="configs/market_sessions.yaml")
     parser.add_argument("--json-out", required=True)
     parser.add_argument("--md-out")
@@ -800,7 +800,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_arg_parser().parse_args(argv)
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
+    if args.causal_root is None:
+        parser.error("--causal-root is required; pass an explicit causal root")
     if args.buffer_minutes < 0:
         raise SystemExit("--buffer-minutes must be >= 0")
     if args.max_market_years is not None and args.max_market_years <= 0:

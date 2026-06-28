@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from scripts.validation.build_missing_minute_verification_manifest import (
     REQUIRED_THIRD_PARTY_SOURCE_TYPE,
@@ -189,6 +190,35 @@ def test_missing_inputs_fail_closed_after_writing_manifest(tmp_path: Path) -> No
     assert manifest["status"] == "FAIL"
     assert "no common raw+causal parquet years" in " ".join(manifest["failures"])
     assert md_out.exists()
+
+
+def test_main_requires_explicit_causal_root(tmp_path: Path) -> None:
+    _write_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    _write_session_config(tmp_path / "configs" / "market_sessions.yaml")
+    json_out = tmp_path / "reports" / "manifest.json"
+    md_out = tmp_path / "reports" / "manifest.md"
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "--profile",
+                "tier_3",
+                "--config",
+                str(tmp_path / "configs" / "alpha_tiered.yaml"),
+                "--raw-root",
+                str(tmp_path / "data" / "raw"),
+                "--session-config",
+                str(tmp_path / "configs" / "market_sessions.yaml"),
+                "--json-out",
+                str(json_out),
+                "--md-out",
+                str(md_out),
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert not json_out.exists()
+    assert not md_out.exists()
 
 
 def test_unresolved_contract_fails_unless_allowed(tmp_path: Path) -> None:
