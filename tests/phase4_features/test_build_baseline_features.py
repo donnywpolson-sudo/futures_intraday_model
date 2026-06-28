@@ -192,6 +192,34 @@ def test_phase4_coverage_audit_accepts_explicit_output_root_without_config_value
     assert Path(str(audit["output_root"])).as_posix() == output_root.as_posix()
 
 
+def test_phase4_coverage_audit_accepts_approved_rebuilt_config_root(tmp_path: Path) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    approved_root = Path("data/feature_matrices/baseline_tier1_rebuild_v1")
+    profile_config.parent.mkdir(parents=True, exist_ok=True)
+    profile_config.write_text(
+        "\n".join(
+            [
+                "paths:",
+                f"  feature_matrix_root: {approved_root.as_posix()}",
+                "profiles:",
+                "  research:",
+                "    markets: [\"ES\"]",
+                "    years: [2024]",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    audit = build_coverage_audit(
+        profile="research",
+        input_root=tmp_path / "data" / "labeled",
+        profile_config=profile_config,
+    )
+
+    assert Path(str(audit["output_root"])).as_posix() == approved_root.as_posix()
+
+
 def test_phase4_main_rejects_warn_label_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1080,7 +1108,7 @@ def test_phase4_coverage_audit_compares_labeled_to_canonical_features(tmp_path: 
         """
 paths:
   labeled_root: data/labeled
-  feature_matrix_root: data/feature_matrices/baseline
+  feature_matrix_root: null
 profiles:
   tier_3_research:
     markets: ["ES", "RTY"]
