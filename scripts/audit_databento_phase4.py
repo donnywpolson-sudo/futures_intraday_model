@@ -141,6 +141,13 @@ def parse_paths_config(path: Path) -> dict[str, str]:
     return values
 
 
+def required_config_path(config_paths: dict[str, str], name: str) -> str:
+    value = config_paths.get(name, "")
+    if not value:
+        raise ValueError(f"configs/alpha_tiered.yaml paths.{name} is required; explicit root required")
+    return value
+
+
 def infer_reference_operation(context: str) -> str:
     lower = context.lower()
     if any(hint in lower for hint in WRITE_HINTS) and not any(hint in lower for hint in ("read", "input")):
@@ -664,7 +671,7 @@ def run_phase4(args: Any) -> dict[str, Any]:
     raw_root = repo_path(config_paths.get("raw_root", "data/raw"))
     causal_root = repo_path(config_paths.get("causal_base_root", "data/causally_gated_normalized"))
     labeled_root = repo_path(config_paths.get("labeled_root", "data/labeled"))
-    feature_root = repo_path(config_paths.get("feature_matrix_root", "data/feature_matrices/baseline"))
+    feature_root = repo_path(required_config_path(config_paths, "feature_matrix_root"))
     raw_pairs = parquet_pairs(raw_root)
     canonical_pairs = inventory_pairs(inventory, "ohlcv-1m")
     raw_vs_roots = {
