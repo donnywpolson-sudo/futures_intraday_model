@@ -1,5 +1,56 @@
 # Codex Handoff
 
+## Latest Phase 8 Research Metrics Run
+
+- Updated at UTC: 2026-06-28.
+- Purpose: run Phase 8 gross/net research metrics from the existing report-scoped WFA prediction artifact only.
+- Prediction artifact used: `reports\data_audit\wfa_research\tier1_rebuild_v1\metrics_artifacts\tier1_rebuild_v1_research_metrics_artifacts\oos_predictions.parquet`.
+- Prediction manifest used: `reports\data_audit\wfa_research\tier1_rebuild_v1\metrics_artifacts\wfa_prediction_rerun\tier1_rebuild_v1_research_metrics_artifacts_predictions_manifest.json`.
+- Output roots:
+  - `reports\data_audit\wfa_research\tier1_rebuild_v1\metrics_artifacts\phase8_metrics`
+  - `reports\data_audit\wfa_research\tier1_rebuild_v1\metrics_artifacts\model_selection`
+  - `reports\data_audit\wfa_research\tier1_rebuild_v1\metrics_artifacts\phase8`
+- Command exited 0 with `PASS model diagnostics: rows=1146552 trades=261 net_dollars=-9955.740000000023 alpha_ready=False failures=0`.
+- Report files written:
+  - `phase8_metrics\tier1_rebuild_v1_research_metrics_artifacts_metrics.csv`
+  - `phase8_metrics\tier1_rebuild_v1_research_metrics_artifacts_metrics.json`
+  - `phase8_metrics\turnover_diagnostics.csv`
+  - `model_selection\calibration_report.json`
+  - `model_selection\model_comparison.csv`
+  - `model_selection\model_selection_report.json`
+  - `phase8\alpha_promotion_decision.json`
+  - `phase8\metrics.json`
+- Metrics summary from `model_selection_report.json`:
+  - rows: `1146552`
+  - trades: `261`
+  - candidate trades: `938`
+  - gross_return_dollars: `-2380.0000000000236`
+  - cost_dollars: `7575.74`
+  - net_return_dollars: `-9955.740000000023`
+  - gross_sharpe_like: `-0.33961880966612407`
+  - net_sharpe_like: `-1.4156866011544051`
+  - cost_drag_to_abs_gross: `3.183084033613414`
+  - turnover_per_bar: `0.00045353372546556983`
+  - slippage_cost_dollars: `6395.0`
+  - commission_cost_dollars: `1180.74`
+  - win_rate_net_positive: `0.4444444444444444`
+- Selection/promotion result:
+  - `selection_status=NOT_SELECTED_BASELINE_DIAGNOSTICS_ONLY`
+  - `research_alpha_ready=false`
+  - `model_promotion_allowed=false`
+  - `live_execution_ready=false`
+  - `failure_count=0`
+  - `warning_count=1`
+  - warning: policy economics use max-one-contract non-overlapping target-window execution; partial fills, order rejection, latency, and capacity remain outside Phase 8.
+- Safety:
+  - No cleanup or dry-run cleanup.
+  - No `data/**` mutation.
+  - No `data\predictions\**` output.
+  - No new predictions generated.
+  - No model artifacts written.
+  - No WFA/modeling rerun.
+  - Research-only; no production/live readiness.
+
 ## Latest Cleanup Reference Readiness Run
 
 - Updated at UTC: 2026-06-28T06:56:47Z
