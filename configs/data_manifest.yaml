@@ -217,9 +217,6 @@ artifact_policy:
     - path: data/raw/_repair_candidates
       classification: STALE_OR_UNKNOWN
       reason: "Repair candidate parquet folder needs explicit review."
-    - path: data/causally_gated_normalized/_repair_candidates
-      classification: STALE_OR_UNKNOWN
-      reason: "Repair candidate parquet folder needs explicit review."
   audit_artifact_prefixes:
     - data/raw/_
     - data/causally_gated_normalized/_
