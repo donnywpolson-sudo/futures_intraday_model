@@ -1713,8 +1713,13 @@ def build_dashboard_v2(ctx: BuildContext) -> dict[str, Any]:
     for key, value in lift.items():
         add(f"policy.{key}", key, key.replace("_", " ").title(), "Policy/blocker diagnostics", value, "Blocker lift diagnostic from base-position counterfactual.", "base_position counterfactual", "derived", f"policy_frame.{key}", "row", diagnostic=True, interpretation="Shows whether blockers saved losses or missed profits.")
 
+    prediction_metadata_source = str(
+        metrics.get("prediction_path")
+        or wfa_manifest.get("prediction_path")
+        or "reports/wfa/tier1_locked_baseline_20260616_predictions_manifest.json"
+    )
     for key, value in label_stats.items():
-        add(f"data.{key}", key, key.replace("_", " ").title(), "Label/data integrity", value, "Locked prediction data integrity diagnostic.", "derived from predictions", "data/predictions/tier1_locked_baseline_20260616/oos_predictions.parquet", key, "row", diagnostic=True, required=key in {"target_valid_rows", "causal_valid_rows"}, interpretation="Data/label validity context for interpreting OOS metrics.")
+        add(f"data.{key}", key, key.replace("_", " ").title(), "Label/data integrity", value, "Locked prediction data integrity diagnostic.", "derived from predictions", prediction_metadata_source, key, "row", diagnostic=True, required=key in {"target_valid_rows", "causal_valid_rows"}, interpretation="Data/label validity context for interpreting OOS metrics.")
 
     readiness = {
         "artifact_evidence_ready": bool(wfa_manifest.get("artifact_evidence_ready")),
