@@ -1,5 +1,80 @@
 # Codex Handoff
 
+## Local Trade/OHLCV Proof Scan Guard Fix - 2026-06-30
+
+- Updated at UTC date: 2026-06-30.
+- User request: the last proof-scan process appeared stuck; fix the problem and prevent another open-ended scan.
+- Current status: runaway scan process was stopped and the local trade/OHLCV gap auditor now has fail-closed scan limits.
+- Incident evidence:
+  - Found Python process `8284` still running the candidate-root local trade/OHLCV gap scan after interruption.
+  - Stopped it with `Stop-Process -Id 8284 -Force`.
+  - Later process checks showed no remaining `python.exe` processes.
+- Files changed in this step:
+  - `scripts\validation\audit_local_trade_ohlcv_gaps.py`
+  - `tests\validation\test_audit_local_trade_ohlcv_gaps.py`
+  - `CODEX_HANDOFF.md`
+- Guard behavior added:
+  - New CLI flags: `--max-trade-rows-scanned`, `--max-archives-read`, `--max-runtime-seconds`.
+  - CLI default runtime ceiling is `900` seconds, so rerunning the prior command without extra flags is no longer open-ended.
+  - Limit hits fail closed: pending synthetic OHLCV gaps become `unverified_missing_trade_coverage`, report status becomes `FAIL`, and the report records `scan_limits`.
+- Commands run:
+  - `python -m pytest tests\validation\test_audit_local_trade_ohlcv_gaps.py -q` -> `15 passed`.
+  - `python scripts\validation\audit_local_trade_ohlcv_gaps.py --help` -> confirmed new budget flags are present.
+  - `python -m pytest tests\validation\test_check_phase2_local_trade_ohlcv_gap_proof.py -q` -> `7 passed`.
+  - `python -m pytest tests\validation\test_inventory_phase2_local_trade_archive_coverage.py -q` -> `6 passed`.
+  - `git status --short -- data reports configs models predictions` -> no output.
+- Safety:
+  - Did not rerun the full proof scan.
+  - Did not stage generated artifacts, refresh promoted Phase 2 reports, run broad build/loop files, promote canonical data, or touch modeling, WFA, metrics, predictions, cleanup, labels, feature matrices, or live/paper execution.
+  - The seven untracked broad build/loop files remain excluded and uncommitted.
+- Remaining blockers:
+  - Severe: local trade/OHLCV proof remains no-go until a separately approved capped proof scan completes with acceptable evidence.
+  - Medium: this guard fix and `CODEX_HANDOFF.md` are local and uncommitted.
+  - Medium: generated candidate causal proof data/reports remain ignored local artifacts and must not be staged.
+  - Medium: optional metadata is classified and blocked, but field-level PIT availability has not been proven.
+  - Medium: full 527-row promoted/canonical Phase 2 remains no-go.
+
+### Exact Next Recommended Step
+
+Review and, if approved, commit only the guard-fix scope: `scripts\validation\audit_local_trade_ohlcv_gaps.py`, `tests\validation\test_audit_local_trade_ohlcv_gaps.py`, and this `CODEX_HANDOFF.md`; do not stage the seven broad build/loop files, generated `data/**`, generated reports, configs, models, predictions, cleanup, labels, feature matrices, modeling, WFA, metrics, or live/paper execution. After that, separately approve a capped local trade/OHLCV proof scan with explicit `--max-gap-windows`, `--max-trade-rows-scanned`, `--max-archives-read`, `--max-runtime-seconds`, and shell timeout.
+
+## Bounded Causal Proof Candidate Creation Run - 2026-06-30
+
+- Updated at UTC date: 2026-06-30.
+- User approval: run the bounded generated-artifact causal-input creation under `data\causal_proof_candidates\local_trade_2025_2026_v1`, using only the planner's 58-row scope.
+- Current status: generated candidate causal inputs were created successfully; candidate root is now ready for a separately approved bounded local trade/OHLCV proof scan.
+- Generated artifact roots:
+  - `data\causal_proof_candidates\local_trade_2025_2026_v1`
+  - `reports\pipeline_audit\causal_proof_candidates\local_trade_2025_2026_v1`
+- Generated files:
+  - `58` parquet files under the candidate output root.
+  - `reports\pipeline_audit\causal_proof_candidates\local_trade_2025_2026_v1\market_year_include_list.json`
+  - `reports\pipeline_audit\causal_proof_candidates\local_trade_2025_2026_v1\build_progress_checkpoint.jsonl`
+  - `reports\pipeline_audit\causal_proof_candidates\local_trade_2025_2026_v1\causal_base_manifest.json`
+  - `reports\pipeline_audit\causal_proof_candidates\local_trade_2025_2026_v1\causal_base_validation.json`
+  - `reports\pipeline_audit\causal_proof_candidates\local_trade_2025_2026_v1\causal_base_validation.csv`
+- Commands run:
+  - Wrote the generated 58-row include list from `python scripts\validation\plan_phase2_causal_proof_input_creation.py --json` to `reports\pipeline_audit\causal_proof_candidates\local_trade_2025_2026_v1\market_year_include_list.json`; rewrote as UTF-8 without BOM after the builder rejected the initial PowerShell UTF-8 BOM.
+  - `python scripts\phase2_causal_base\build_causal_base_data.py ...` -> failed before build logic with `ModuleNotFoundError: No module named 'scripts'`.
+  - `python -m scripts.phase2_causal_base.build_causal_base_data ... --raw-alignment-report reports\raw_ingest\raw_dbn_alignment.json ...` -> failed guard: `raw alignment report profile does not match Phase 2 profile: tier_3/tier_3_research != all_raw/all_raw`.
+  - `python -m scripts.phase2_causal_base.build_causal_base_data --profile all_raw --raw-root data\raw --output-root data\causal_proof_candidates\local_trade_2025_2026_v1 --reports-root reports\pipeline_audit\causal_proof_candidates\local_trade_2025_2026_v1 --profile-config configs\alpha_tiered.yaml --session-config configs\market_sessions.yaml --raw-alignment-report reports\data_audit\source_of_truth_lineage\broader_lineage_review_20260628\broad_manifest_527_rebuild_all_raw_alignment.json --market-year-include-list reports\pipeline_audit\causal_proof_candidates\local_trade_2025_2026_v1\market_year_include_list.json --build-max-market-years 58 --build-progress-checkpoint-jsonl reports\pipeline_audit\causal_proof_candidates\local_trade_2025_2026_v1\build_progress_checkpoint.jsonl` -> `58/58` market-years printed `PASS`; `local_trade_ohlcv_gap_gate status=SKIPPED`.
+  - `python scripts\validation\reconcile_phase2_local_trade_causal_inputs.py --candidate-root data\causal_proof_candidates\local_trade_2025_2026_v1` -> `status=READY_FOR_BOUNDED_PROOF_SCAN_WITH_CAUSAL_ROOT`, `existing=58/58`, `usable_roots=1`, `failure_count=0`.
+  - `python scripts\validation\plan_phase2_causal_proof_input_path.py --candidate-root data\causal_proof_candidates\local_trade_2025_2026_v1` -> `status=READY_USE_EXISTING_AUTHORIZED_ROOT`, `usable_roots=1`, `READY_ROOT data/causal_proof_candidates/local_trade_2025_2026_v1`.
+  - `git status --short -- data reports configs models predictions` -> no output because generated artifacts are ignored/untracked.
+- Safety:
+  - No provider/network call, broad build/loop runner, canonical promotion, promoted Phase 2 report refresh, cleanup, labels, feature matrices, modeling, WFA, metrics, predictions, staging, commit, or live/paper action was performed.
+  - The seven untracked broad build/loop files remain excluded and uncommitted.
+- Remaining blockers:
+  - Severe: local trade/OHLCV proof remains no-go until a separately approved bounded proof scan uses `data\causal_proof_candidates\local_trade_2025_2026_v1` and produces passing evidence.
+  - Medium: generated candidate data/reports are ignored local artifacts and must not be staged.
+  - Medium: `CODEX_HANDOFF.md` is local and uncommitted after this run.
+  - Medium: optional metadata is classified and blocked, but field-level PIT availability has not been proven.
+  - Medium: full 527-row promoted/canonical Phase 2 remains no-go.
+
+### Exact Next Recommended Step
+
+Approve a bounded local trade/OHLCV proof scan using existing local archives and `--causal-root data\causal_proof_candidates\local_trade_2025_2026_v1` for the same 29 uncovered markets and 2025/2026 only; do not stage generated artifacts, refresh promoted Phase 2 reports, run broad build/loop files, promote canonical data, or touch modeling, WFA, metrics, predictions, cleanup, labels, feature matrices, or live/paper execution.
+
 ## Phase 2 Causal Proof Input Creation Planner Implemented - 2026-06-30
 
 - Updated at UTC date: 2026-06-30.

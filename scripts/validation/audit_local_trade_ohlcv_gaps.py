@@ -6,8 +6,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -29,6 +31,7 @@ from scripts.phase1_raw_contract import REQUIRED_DATASET, SCHEMA_PATHS  # noqa: 
 SCHEMAS_TO_VERIFY = ("ohlcv-1m", "definition", "trades")
 LOCAL_TRADES_SCHEMA_ACCESS_START = "2025-06-18"
 LOCAL_TRADES_SCHEMA_ACCESS_END = "2026-06-13"
+DEFAULT_MAX_RUNTIME_SECONDS = 900.0
 VERIFIED_NO_TRADE = "verified_no_trade_rows_inside_ohlcv_gap"
 TRADE_ACTIVITY = "trade_activity_inside_ohlcv_gap"
 TIMESTAMP_BASIS_MISMATCH = "timestamp_basis_mismatch_with_ohlcv_source_bar"
@@ -46,6 +49,36 @@ CAVEAT = (
 )
 
 TradeFrameReader = Callable[[Path, int], Iterable[pd.DataFrame]]
+
+
+class ScanLimitExceeded(RuntimeError):
+    """Raised when a bounded proof scan reaches an approved safety limit."""
+
+
+@dataclass
+class ScanBudget:
+    max_trade_rows_scanned: int | None = None
+    max_archives_read: int | None = None
+    deadline_monotonic: float | None = None
+    trade_rows_scanned: int = 0
+    archives_read: int = 0
+
+    def check_runtime(self) -> None:
+        if self.deadline_monotonic is not None and time.monotonic() >= self.deadline_monotonic:
+            raise ScanLimitExceeded("--max-runtime-seconds limit exceeded")
+
+    def begin_archive(self) -> None:
+        self.check_runtime()
+        if self.max_archives_read is not None and self.archives_read >= self.max_archives_read:
+            raise ScanLimitExceeded("--max-archives-read limit exceeded")
+        self.archives_read += 1
+
+    def begin_frame(self, row_count: int) -> None:
+        self.check_runtime()
+        next_rows = self.trade_rows_scanned + int(row_count)
+        if self.max_trade_rows_scanned is not None and next_rows > self.max_trade_rows_scanned:
+            raise ScanLimitExceeded("--max-trade-rows-scanned limit exceeded")
+        self.trade_rows_scanned = next_rows
 
 
 def _relative_path(path: Path) -> str:
@@ -634,6 +667,7 @@ def _scan_trade_archives(
     gaps: list[dict[str, Any]],
     chunk_size: int,
     trade_frame_reader: TradeFrameReader,
+    scan_budget: ScanBudget | None,
 ) -> dict[str, Any]:
     pending_indexes = [idx for idx, gap in enumerate(gaps) if gap["classification"] == PENDING]
     minute_to_gap_indexes: dict[int, list[int]] = defaultdict(list)
@@ -658,8 +692,14 @@ def _scan_trade_archives(
     source_match_recv_minutes_by_gap: dict[int, set[str]] = defaultdict(set)
     for path in archive_paths:
         try:
+            if scan_budget is not None:
+                scan_budget.begin_archive()
+            archives_read.append(_relative_path(path))
             for frame in trade_frame_reader(path, chunk_size):
-                scanned_rows += int(len(frame))
+                frame_rows = int(len(frame))
+                if scan_budget is not None:
+                    scan_budget.begin_frame(frame_rows)
+                scanned_rows += frame_rows
                 if frame.empty:
                     continue
                 if required_ids and "instrument_id" not in frame.columns:
@@ -745,7 +785,9 @@ def _scan_trade_archives(
                                     "ts_recv_matches_adjacent_ohlcv_source_bar": source_match,
                                 }
                             )
-            archives_read.append(_relative_path(path))
+        except ScanLimitExceeded as exc:
+            failures.append(str(exc))
+            break
         except Exception as exc:
             failures.append(f"unreadable trades archive {_relative_path(path)}: {exc}")
 
@@ -835,6 +877,7 @@ def audit_market_year(
     chunk_size: int,
     max_gap_windows: int | None,
     trade_frame_reader: TradeFrameReader,
+    scan_budget: ScanBudget | None,
 ) -> dict[str, Any]:
     raw_path = _raw_path_for_market_year(raw_root, raw_overlay_root, market, year)
     causal_path = causal_root / market / f"{year}.parquet"
@@ -916,6 +959,7 @@ def audit_market_year(
             gaps=gap_windows,
             chunk_size=chunk_size,
             trade_frame_reader=trade_frame_reader,
+            scan_budget=scan_budget,
         )
         failures.extend(trade_scan["failures"])
 
@@ -977,8 +1021,24 @@ def build_report(
     _validate_local_trades_access_window(start, end)
     if int(args.chunk_size) <= 0:
         raise ValueError("--chunk-size must be > 0")
-    if args.max_gap_windows is not None and int(args.max_gap_windows) <= 0:
+    if getattr(args, "max_gap_windows", None) is not None and int(args.max_gap_windows) <= 0:
         raise ValueError("--max-gap-windows must be > 0")
+    max_trade_rows_scanned = getattr(args, "max_trade_rows_scanned", None)
+    max_archives_read = getattr(args, "max_archives_read", None)
+    max_runtime_seconds = getattr(args, "max_runtime_seconds", None)
+    if max_trade_rows_scanned is not None and int(max_trade_rows_scanned) < 0:
+        raise ValueError("--max-trade-rows-scanned must be >= 0")
+    if max_archives_read is not None and int(max_archives_read) < 0:
+        raise ValueError("--max-archives-read must be >= 0")
+    if max_runtime_seconds is not None and float(max_runtime_seconds) < 0:
+        raise ValueError("--max-runtime-seconds must be >= 0")
+    scan_budget = ScanBudget(
+        max_trade_rows_scanned=int(max_trade_rows_scanned) if max_trade_rows_scanned is not None else None,
+        max_archives_read=int(max_archives_read) if max_archives_read is not None else None,
+        deadline_monotonic=(time.monotonic() + float(max_runtime_seconds))
+        if max_runtime_seconds is not None
+        else None,
+    )
 
     scope, scope_failures = _load_scope(
         Path(args.profile_config),
@@ -1026,8 +1086,9 @@ def build_report(
                         causal_root=Path(args.causal_root),
                         preflight=preflight,
                         chunk_size=int(args.chunk_size),
-                        max_gap_windows=args.max_gap_windows,
+                        max_gap_windows=getattr(args, "max_gap_windows", None),
                         trade_frame_reader=reader,
+                        scan_budget=scan_budget,
                     )
                 )
 
@@ -1068,7 +1129,13 @@ def build_report(
         else None,
         "causal_root": _relative_path(Path(args.causal_root)),
         "chunk_size": int(args.chunk_size),
-        "max_gap_windows": args.max_gap_windows,
+        "scan_limits": {
+            "max_gap_windows": getattr(args, "max_gap_windows", None),
+            "max_trade_rows_scanned": scan_budget.max_trade_rows_scanned,
+            "max_archives_read": scan_budget.max_archives_read,
+            "max_runtime_seconds": float(max_runtime_seconds) if max_runtime_seconds is not None else None,
+        },
+        "max_gap_windows": getattr(args, "max_gap_windows", None),
         "preflight": preflight,
         "summary": summary,
         "market_years": entries,
@@ -1145,6 +1212,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--md-out", default="reports/pipeline_audit/local_trade_ohlcv_gap_crosscheck_2025_2026.md")
     parser.add_argument("--chunk-size", type=int, default=250_000)
     parser.add_argument("--max-gap-windows", type=int)
+    parser.add_argument("--max-trade-rows-scanned", type=int)
+    parser.add_argument("--max-archives-read", type=int)
+    parser.add_argument("--max-runtime-seconds", type=float, default=DEFAULT_MAX_RUNTIME_SECONDS)
     parser.add_argument("--inventory-only", action="store_true")
     return parser
 

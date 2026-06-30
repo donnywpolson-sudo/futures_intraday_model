@@ -20,6 +20,7 @@ from scripts.validation.audit_local_trade_ohlcv_gaps import (
     TIMESTAMP_BASIS_MISMATCH,
     TRADE_ACTIVITY,
     UNVERIFIED_CONTRACT,
+    UNVERIFIED_MISSING_COVERAGE,
     VERIFIED_NO_TRADE,
     build_arg_parser,
     build_report,
@@ -150,6 +151,9 @@ def _args(root: Path, *, inventory_only: bool = False) -> argparse.Namespace:
         md_out=str(root / "reports" / "audit.md"),
         chunk_size=2,
         max_gap_windows=None,
+        max_trade_rows_scanned=None,
+        max_archives_read=None,
+        max_runtime_seconds=None,
         inventory_only=inventory_only,
     )
 
@@ -180,6 +184,7 @@ def test_default_window_is_end_exclusive_through_2026_06_12() -> None:
 
     assert args.start == "2025-06-18"
     assert args.end == "2026-06-13"
+    assert args.max_runtime_seconds == 900.0
 
 
 def test_requested_window_outside_local_trades_access_fails_closed(tmp_path: Path) -> None:
@@ -282,6 +287,62 @@ def test_synthetic_gap_with_trade_row_fails_gap(tmp_path: Path) -> None:
     assert report["status"] == "FAIL"
     assert gap["classification"] == TRADE_ACTIVITY
     assert gap["trade_rows_inside_ohlcv_gap"] == 1
+
+
+def test_max_archives_read_limit_fails_closed_before_reader_call(tmp_path: Path) -> None:
+    _write_config(tmp_path / "configs" / "alpha_tiered.yaml", ["ES"])
+    _write_all_archives(tmp_path / "data" / "dbn")
+    _write_raw_causal(tmp_path)
+    args = _args(tmp_path)
+    args.max_archives_read = 0
+    reader = FakeTradeReader([_trade_frame(["2025-06-18T00:01:30Z"])])
+
+    report = build_report(args, trade_frame_reader=reader)
+    gap = report["market_years"][0]["gap_windows"][0]
+
+    assert report["status"] == "FAIL"
+    assert report["summary"]["unverified_minutes"] == 1
+    assert report["summary"]["archives_read"] == 0
+    assert reader.calls == []
+    assert gap["classification"] == UNVERIFIED_MISSING_COVERAGE
+    assert "--max-archives-read limit exceeded" in gap["failures"]
+
+
+def test_max_trade_rows_scanned_limit_fails_closed(tmp_path: Path) -> None:
+    _write_config(tmp_path / "configs" / "alpha_tiered.yaml", ["ES"])
+    _write_all_archives(tmp_path / "data" / "dbn")
+    _write_raw_causal(tmp_path)
+    args = _args(tmp_path)
+    args.max_trade_rows_scanned = 1
+    reader = FakeTradeReader([_trade_frame(["2025-06-18T00:00:30Z", "2025-06-18T00:01:30Z"])])
+
+    report = build_report(args, trade_frame_reader=reader)
+    gap = report["market_years"][0]["gap_windows"][0]
+
+    assert report["status"] == "FAIL"
+    assert report["summary"]["unverified_minutes"] == 1
+    assert report["summary"]["trade_rows_scanned"] == 0
+    assert report["summary"]["archives_read"] == 1
+    assert gap["classification"] == UNVERIFIED_MISSING_COVERAGE
+    assert "--max-trade-rows-scanned limit exceeded" in gap["failures"]
+
+
+def test_max_runtime_seconds_limit_fails_closed(tmp_path: Path) -> None:
+    _write_config(tmp_path / "configs" / "alpha_tiered.yaml", ["ES"])
+    _write_all_archives(tmp_path / "data" / "dbn")
+    _write_raw_causal(tmp_path)
+    args = _args(tmp_path)
+    args.max_runtime_seconds = 0
+    reader = FakeTradeReader([_trade_frame(["2025-06-18T00:01:30Z"])])
+
+    report = build_report(args, trade_frame_reader=reader)
+    gap = report["market_years"][0]["gap_windows"][0]
+
+    assert report["status"] == "FAIL"
+    assert report["summary"]["unverified_minutes"] == 1
+    assert reader.calls == []
+    assert gap["classification"] == UNVERIFIED_MISSING_COVERAGE
+    assert "--max-runtime-seconds limit exceeded" in gap["failures"]
 
 
 def test_boundary_trade_reclassified_when_recv_minute_matches_ohlcv_source(tmp_path: Path) -> None:
