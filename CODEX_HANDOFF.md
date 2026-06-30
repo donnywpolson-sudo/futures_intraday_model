@@ -1,5 +1,38 @@
 # Codex Handoff
 
+## Bounded Local Trade/OHLCV Proof Scan Result - 2026-06-30
+
+- Updated at UTC date: 2026-06-30.
+- User request: run a bounded local trade/OHLCV proof scan for the 29 uncovered markets using existing local archives only.
+- Current status: bounded scan completed and generated ignored report artifacts, but proof remains `NO_GO_LOCAL_TRADE_OHLCV_GAP_PROOF`.
+- Generated ignored report artifacts:
+  - `reports\pipeline_audit\local_trade_ohlcv_gap_crosscheck_phase2_uncovered_29_20250618_20260613.json`
+  - `reports\pipeline_audit\local_trade_ohlcv_gap_crosscheck_phase2_uncovered_29_20250618_20260613.md`
+- Commands run:
+  - `python scripts\validation\inventory_phase2_local_trade_archive_coverage.py` -> `status=READY_FOR_BOUNDED_PROOF_RUN`, `uncovered_markets=29`, `schema_failure_count=0`, `failure_count=0`.
+  - `python scripts\validation\audit_local_trade_ohlcv_gaps.py --profile-config configs\alpha_tiered.yaml --profiles tier_3_holdout tier_3_forward --markets 6A 6B 6C 6J 6M GC HE HG HO KE LE NG NQ RB RTY SI SR1 SR3 TN UB YM ZB ZC ZF ZL ZM ZS ZT ZW --start 2025-06-18 --end 2026-06-13 --dbn-root data\dbn --raw-root data\raw --causal-root data\causally_gated_normalized --json-out reports\pipeline_audit\local_trade_ohlcv_gap_crosscheck_phase2_uncovered_29_20250618_20260613.json --md-out reports\pipeline_audit\local_trade_ohlcv_gap_crosscheck_phase2_uncovered_29_20250618_20260613.md --chunk-size 250000` -> `status=FAIL`, `markets=29`, `market_years=58`, `gaps=0`, `missing_minutes=0`, `failed_minutes=0`, `unverified_minutes=0`.
+  - `python scripts\validation\check_phase2_local_trade_ohlcv_gap_proof.py --local-trade-report reports\pipeline_audit\local_trade_ohlcv_gap_crosscheck_tier1_access_window_repaired_20250618_20260613.json --local-trade-report reports\pipeline_audit\local_trade_ohlcv_gap_crosscheck_phase2_uncovered_29_20250618_20260613.json` -> `status=NO_GO_LOCAL_TRADE_OHLCV_GAP_PROOF`, `covered_markets=4`, `missing_markets=29`, `failure_count=3`, `warning_count=1`.
+  - `git status --short -- data configs models predictions` -> no output.
+  - `git status --short -- reports\pipeline_audit` -> no output.
+  - `git status --short -- reports` -> no output.
+- Failure mechanism:
+  - The generated 29-market report has `status=FAIL` because all `58` market-year rows are missing causal inputs under `data\causally_gated_normalized\{market}\2025.parquet` and `data\causally_gated_normalized\{market}\2026.parquet`.
+  - Local archive metadata coverage exists, but local proof scan inputs do not exist at the requested causal root for those holdout/forward years.
+  - No trade rows were scanned because there were no causal synthetic-gap inputs to evaluate.
+- Safety:
+  - No provider/network call, data rebuild, Phase 2 report refresh, broad build/loop runner, cleanup, labels, feature matrices, modeling, WFA, metrics, predictions, staging, commit, or live/paper action was performed.
+  - Generated report artifacts remain ignored and unstaged.
+  - The seven untracked broad build/loop files remain excluded and uncommitted.
+- Remaining blockers:
+  - Severe: local trade/OHLCV proof remains no-go because the 29-market proof scan lacks causal 2025/2026 input files under the configured causal root.
+  - Medium: generated scan reports are local ignored artifacts and should not be staged unless separately approved.
+  - Medium: optional metadata is classified and blocked, but field-level PIT availability has not been proven.
+  - Medium: full 527-row promoted/canonical Phase 2 remains no-go.
+
+### Exact Next Recommended Step
+
+Plan a read-only reconciliation of available 2025/2026 causal proof inputs and allowed causal-root choices for the 29 uncovered markets; do not rebuild data, refresh Phase 2 reports, run broad build/loop files, stage generated reports, or touch modeling, WFA, metrics, predictions, cleanup, labels, feature matrices, or live/paper execution.
+
 ## Local Trade Archive Coverage Inventory Implemented - 2026-06-30
 
 - Updated at UTC date: 2026-06-30.
