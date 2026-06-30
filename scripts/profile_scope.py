@@ -63,10 +63,13 @@ def resolve_profile_name(profile: str, aliases: Mapping[str, Any]) -> str:
     resolved = profile
     seen: set[str] = set()
     while resolved in aliases:
+        next_profile = str(aliases[resolved])
+        if next_profile == resolved:
+            break
         if resolved in seen:
             raise SystemExit(f"Profile alias cycle detected at {resolved!r}")
         seen.add(resolved)
-        resolved = str(aliases[resolved])
+        resolved = next_profile
     return resolved
 
 
