@@ -1,5 +1,42 @@
 # Codex Handoff
 
+## Phase 2 Causal Proof Input Creation Planner Implemented - 2026-06-30
+
+- Updated at UTC date: 2026-06-30.
+- User decision: authorize planning a separate bounded generated-artifact causal-input creation path under `data\causal_proof_candidates\local_trade_2025_2026_v1` for the 29 uncovered markets and 2025/2026 only.
+- Current status: read-only creation planner implemented and verified; current planner status is `READY_FOR_SEPARATE_BOUNDED_CAUSAL_INPUT_CREATION_APPROVAL`.
+- Files changed in this step:
+  - `scripts\validation\plan_phase2_causal_proof_input_creation.py`
+  - `tests\validation\test_plan_phase2_causal_proof_input_creation.py`
+  - `CODEX_HANDOFF.md`
+- Gate behavior:
+  - Reuses the committed causal proof input path planner.
+  - Emits an exact 58-row include-list plan and command template only; it does not write the include list, create candidate data, refresh reports, or run the command.
+  - Fails closed if the proposed quarantine output root or reports root already contains files.
+  - Excludes the seven broad build/loop files and uses the committed causal builder command template directly.
+- Commands run:
+  - `python -m pytest tests/validation/test_plan_phase2_causal_proof_input_creation.py -q` -> `6 passed`.
+  - `python -m pytest tests/validation/test_plan_phase2_causal_proof_input_path.py -q` -> `5 passed`.
+  - `python scripts\validation\plan_phase2_causal_proof_input_creation.py` -> `status=READY_FOR_SEPARATE_BOUNDED_CAUSAL_INPUT_CREATION_APPROVAL`, `include_rows=58`, `output_root=data/causal_proof_candidates/local_trade_2025_2026_v1`, `reports_root=reports/pipeline_audit/causal_proof_candidates/local_trade_2025_2026_v1`, `failure_count=0`.
+  - `git status --short -- data reports configs models predictions` -> no output.
+  - `Test-Path reports\pipeline_audit\causal_proof_candidates\local_trade_2025_2026_v1\market_year_include_list.json` -> `False`.
+  - `Test-Path data\causal_proof_candidates\local_trade_2025_2026_v1` -> `False`.
+- Planned future command template:
+  - `python scripts\phase2_causal_base\build_causal_base_data.py --profile all_raw --raw-root data\raw --output-root data\causal_proof_candidates\local_trade_2025_2026_v1 --reports-root reports\pipeline_audit\causal_proof_candidates\local_trade_2025_2026_v1 --profile-config configs\alpha_tiered.yaml --session-config configs\market_sessions.yaml --raw-alignment-report reports\raw_ingest\raw_dbn_alignment.json --market-year-include-list reports\pipeline_audit\causal_proof_candidates\local_trade_2025_2026_v1\market_year_include_list.json --build-max-market-years 58 --build-progress-checkpoint-jsonl reports\pipeline_audit\causal_proof_candidates\local_trade_2025_2026_v1\build_progress_checkpoint.jsonl`
+- Safety:
+  - No provider/network call, data rebuild, Phase 2 report refresh, broad build/loop runner, cleanup, labels, feature matrices, modeling, WFA, metrics, predictions, staging, commit, or live/paper action was performed.
+  - No generated `data/**`, generated reports, configs, models, or predictions status lines were present after validation.
+  - The seven untracked broad build/loop files remain excluded and uncommitted.
+- Remaining blockers:
+  - Severe: local trade/OHLCV proof remains no-go until a separately approved mutation run actually creates the 58 causal proof candidate inputs and a later bounded proof scan validates them.
+  - Medium: this creation planner scope is local and uncommitted.
+  - Medium: optional metadata is classified and blocked, but field-level PIT availability has not been proven.
+  - Medium: full 527-row promoted/canonical Phase 2 remains no-go.
+
+### Exact Next Recommended Step
+
+Review and, if approved, commit only the causal proof input creation planner scope: `scripts\validation\plan_phase2_causal_proof_input_creation.py`, `tests\validation\test_plan_phase2_causal_proof_input_creation.py`, and this `CODEX_HANDOFF.md`; do not stage the seven broad build/loop files, generated `data/**`, generated reports, configs, models, predictions, cleanup, labels, feature matrices, modeling, WFA, metrics, or live/paper execution. After that, separately approve or reject the mutation-capable generated-artifact creation run.
+
 ## Phase 2 Causal Proof Input Path Planner Implemented - 2026-06-30
 
 - Updated at UTC date: 2026-06-30.
