@@ -12,6 +12,10 @@ continuous-contract 1-minute OHLCV data. The pipeline is for research, not live
 trading. A strategy is not promotion-ready unless it passes structural,
 economic, cost, holdout, and provenance gates.
 
+Current audit-readiness scope is defined in
+`docs/audit_readiness_packet.md`. That packet authorizes only raw/source
+formal-audit readiness; raw plus causal Phase 2 remains a separate later gate.
+
 Core principles:
 
 - Correctness and reproducibility outrank model complexity.

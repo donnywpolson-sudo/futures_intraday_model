@@ -118,6 +118,10 @@ and stop conditions.
 Use `PIPELINE.md` for the authoritative pipeline rebuild order, validation
 coverage command, phase commands, acceptance checks, and current stop rules.
 
+Use `docs/audit_readiness_packet.md` for the current formal-audit readiness
+scope. The current packet is raw/source only; raw plus causal Phase 2 is not
+authorized for formal audit from this baseline.
+
 ## Smoke Tests
 
 ```powershell
