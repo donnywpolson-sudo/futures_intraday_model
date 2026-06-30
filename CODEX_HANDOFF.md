@@ -1,5 +1,46 @@
 # Codex Handoff
 
+## Phase 2 460 Audit Readiness Gate Implemented - 2026-06-30
+
+- Updated at UTC date: 2026-06-30.
+- User request: implement the narrow remediation pass for the approved 460-row canonical scope only.
+- Current status: read-only audit-readiness gate implemented and verified for promoted canonical `broad_manifest_527_rebuild_v1` 460-row Phase 2.
+- Files changed in this step:
+  - `scripts\validation\check_phase2_460_audit_readiness.py`
+  - `tests\validation\test_check_phase2_460_audit_readiness.py`
+  - `scripts\validation\feature_leakage_guard.py`
+  - `CODEX_HANDOFF.md`
+- Gate behavior:
+  - Requires `configs\data_manifest.yaml` canonical causal pattern to equal `data/causal_base_candidates/broad_manifest_527_rebuild_v1/{market}/{year}.parquet`.
+  - Requires exactly `460` canonical parquet files under `data\causal_base_candidates\broad_manifest_527_rebuild_v1`.
+  - Fails if `6M:2012`, 2025, 2026, malformed canonical paths, staged changes, or `data/reports/configs/models/predictions` status lines are present.
+  - Compares manifest scope, validation summary counts, output/report roots, current git head, builder script hash, and profile config hash.
+  - Treats stale manifest commit, local trade/OHLCV gap gate `NOT_RUN`, and optional metadata PIT approval gaps as warnings, not hard failures.
+  - Does not write reports, rebuild data, refresh generated artifacts, download provider data, stage files, commit files, or mutate `data/**`.
+- Feature leakage guard:
+  - Added explicit blocked feature columns for roll-distance/roll-window, causal invalid reason, raw/source/hash references, and settlement/open-interest/cleared-volume style metadata.
+- Commands run:
+  - `python -m pytest tests/validation/test_check_phase2_460_audit_readiness.py -q` -> `9 passed`.
+  - `python -m pytest tests/phase4_features/test_build_baseline_features.py -q -k registry_excludes_targets_audit_source_and_forbidden_columns` -> `1 passed, 41 deselected`.
+  - `python scripts\validation\check_phase2_460_audit_readiness.py` -> `status=CONDITIONAL_GO_CANONICAL_PHASE2_460_ONLY`, `canonical_parquet_count=460/460`, `failure_count=0`, `warning_count=3`.
+  - `git status --short -- data reports configs models predictions` -> no output.
+- Current checker warnings:
+  - `WARN_NOT_CURRENT_BASELINE`: Phase 2 manifest git commit is `209f48ffebd0c7e6705f808a029c0e612fec022b`, current head is `21c1adf651d02039846bea5552fd3b6164654d27`.
+  - `WARN_NOT_RUN`: `local_trade_ohlcv_gap_gate_status=NOT_RUN`.
+  - `WARN_NOT_PIT_APPROVED`: optional status/statistics/settlement-style metadata remains audit-only until field-level `available_at <= decision_time` proof exists.
+- Safety:
+  - No provider/network call, data mutation, generated report refresh, Phase 2 build, cleanup, modeling, WFA, metrics, predictions, feature matrix generation, staging, commit, or live/paper action was performed.
+  - The seven untracked broad build/loop files remain excluded and uncommitted.
+- Remaining blockers:
+  - Medium: remediation changes are local and uncommitted.
+  - Medium: full 527-row promoted/canonical Phase 2 remains no-go.
+  - Medium: local trade/OHLCV gap proof and optional metadata PIT proof remain unresolved warnings.
+  - Medium: the Phase 2 manifest remains stale relative to current commit and should not be treated as current-baseline proof.
+
+### Exact Next Recommended Step
+
+Review and, if approved, commit only the narrow remediation scope: `scripts\validation\check_phase2_460_audit_readiness.py`, `tests\validation\test_check_phase2_460_audit_readiness.py`, `scripts\validation\feature_leakage_guard.py`, and this `CODEX_HANDOFF.md`; do not stage the seven broad build/loop files, generated `data/**`, generated reports, modeling, WFA, metrics, predictions, cleanup, or live/paper execution.
+
 ## Docs Policy Handoff Cleanup - 2026-06-30
 
 - Updated at UTC date: 2026-06-30.
