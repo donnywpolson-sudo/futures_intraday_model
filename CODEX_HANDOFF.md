@@ -1,5 +1,43 @@
 # Codex Handoff
 
+## Local Trade/OHLCV Gap Proof Gate Implemented - 2026-06-30
+
+- Updated at UTC date: 2026-06-30.
+- User request: add a bounded read-only local trade/OHLCV gap proof gate for approved promoted canonical Phase 2 460 only.
+- Current status: read-only proof gate implemented and verified; current repo evidence remains `NO_GO_LOCAL_TRADE_OHLCV_GAP_PROOF` because local trade convention evidence does not cover every canonical market.
+- Files changed in this step:
+  - `scripts\validation\check_phase2_local_trade_ohlcv_gap_proof.py`
+  - `tests\validation\test_check_phase2_local_trade_ohlcv_gap_proof.py`
+  - `CODEX_HANDOFF.md`
+- Gate behavior:
+  - Reuses the committed Phase 2 460 readiness gate and manifest material-hash trust gate.
+  - Reads selected existing local trade/OHLCV report evidence only; no report refresh, DBN scan, provider call, Phase 2 build, or `data/**` write.
+  - Requires passing report status, no failures, expected local trades access window `[2025-06-18T00:00:00Z, 2026-06-13T00:00:00Z)`, expected roots, no failed/unverified minutes, passing market-year entries, and explicit caveat that evidence is not direct historical trade proof outside the access window.
+  - Requires every promoted canonical 460-scope market to be covered by eligible convention evidence.
+  - Does not modify `causal_base_validation.json`; this is separate current-baseline proof.
+- Commands run:
+  - `python -m pytest tests/validation/test_check_phase2_local_trade_ohlcv_gap_proof.py -q` -> `7 passed`.
+  - `python -m pytest tests/validation/test_check_phase2_manifest_trust.py -q` -> `8 passed`.
+  - `python -m pytest tests/validation/test_check_phase2_460_audit_readiness.py -q` -> `9 passed`.
+  - `python scripts\validation\check_phase2_local_trade_ohlcv_gap_proof.py` -> `status=NO_GO_LOCAL_TRADE_OHLCV_GAP_PROOF`, `canonical_markets=33`, `covered_markets=4`, `missing_markets=29`, `failure_count=1`, `warning_count=1`.
+  - `git status --short -- data reports configs models predictions` -> no output.
+- Current local trade/OHLCV proof result:
+  - Covered markets from selected passing convention report: `4`.
+  - Missing canonical markets: `6A`, `6B`, `6C`, `6J`, `6M`, `GC`, `HE`, `HG`, `HO`, `KE`, `LE`, `NG`, `NQ`, `RB`, `RTY`, `SI`, `SR1`, `SR3`, `TN`, `UB`, `YM`, `ZB`, `ZC`, `ZF`, `ZL`, `ZM`, `ZS`, `ZT`, `ZW`.
+  - Warning: `WARN_CONVENTION_BACKED_NOT_DIRECT_HISTORICAL_PROOF`; the local trades access-window report must not be represented as direct historical trades proof for 2010-2024.
+- Safety:
+  - No provider/network call, DBN scan, data mutation, generated report refresh, Phase 2 build, cleanup, labels, feature matrices, modeling, WFA, metrics, predictions, staging, commit, or live/paper action was performed.
+  - The seven untracked broad build/loop files remain excluded and uncommitted.
+- Remaining blockers:
+  - Medium: local trade/OHLCV gap proof gate changes are local and uncommitted.
+  - Severe: current local trade/OHLCV convention evidence covers only `4/33` canonical markets, so the blocker remains no-go for full 460 canonical Phase 2.
+  - Medium: optional metadata is classified and blocked, but field-level PIT availability has not been proven.
+  - Medium: full 527-row promoted/canonical Phase 2 remains no-go.
+
+### Exact Next Recommended Step
+
+Review and, if approved, commit only the local trade/OHLCV proof gate scope: `scripts\validation\check_phase2_local_trade_ohlcv_gap_proof.py`, `tests\validation\test_check_phase2_local_trade_ohlcv_gap_proof.py`, and this `CODEX_HANDOFF.md`; do not stage the seven broad build/loop files, generated `data/**`, generated reports, configs, models, predictions, cleanup, labels, feature matrices, modeling, WFA, metrics, or live/paper execution.
+
 ## Phase 2 Manifest Trust Reconciliation Gate Implemented - 2026-06-30
 
 - Updated at UTC date: 2026-06-30.
