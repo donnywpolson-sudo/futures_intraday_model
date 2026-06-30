@@ -1,5 +1,40 @@
 # Codex Handoff
 
+## Local Trade Archive Coverage Inventory Implemented - 2026-06-30
+
+- Updated at UTC date: 2026-06-30.
+- User request: add a read-only inventory pass for existing local trades/OHLCV archive coverage for the 29 uncovered canonical markets only.
+- Current status: metadata-only archive coverage inventory implemented and verified; current repo evidence is `READY_FOR_BOUNDED_PROOF_RUN`.
+- Files changed in this step:
+  - `scripts\validation\inventory_phase2_local_trade_archive_coverage.py`
+  - `tests\validation\test_inventory_phase2_local_trade_archive_coverage.py`
+  - `CODEX_HANDOFF.md`
+- Gate behavior:
+  - Reuses the committed local trade/OHLCV proof gate to derive canonical markets, covered markets, and uncovered markets.
+  - Inventories only the uncovered markets for `ohlcv-1m`, `definition`, and `trades` archive metadata.
+  - Reads archive paths and sidecar manifest JSON only; does not decode DBN payloads, recompute DBN file hashes, refresh reports, rebuild data, or write generated artifacts.
+  - Verifies archive directory/file presence, sidecar manifest readability, manifest schema/market/dataset/path/size fields, and coverage of `[2025-06-18T00:00:00Z, 2026-06-13T00:00:00Z)`.
+- Commands run:
+  - `python -m pytest tests/validation/test_inventory_phase2_local_trade_archive_coverage.py -q` -> `6 passed`.
+  - `python -m pytest tests/validation/test_check_phase2_local_trade_ohlcv_gap_proof.py -q` -> `7 passed`.
+  - `python scripts\validation\inventory_phase2_local_trade_archive_coverage.py` -> `status=READY_FOR_BOUNDED_PROOF_RUN`, `uncovered_markets=29`, `schema_failure_count=0`, `failure_count=0`.
+  - `git status --short -- data reports configs models predictions` -> no output.
+- Current inventory result:
+  - The 29 canonical markets missing local trade/OHLCV proof coverage have complete local archive metadata coverage for the configured access window.
+  - This does not close the local trade/OHLCV blocker; it only shows a future bounded proof scan can be planned from existing local archives.
+- Safety:
+  - No provider/network call, DBN payload scan, data mutation, generated report refresh, Phase 2 build, cleanup, labels, feature matrices, modeling, WFA, metrics, predictions, staging, commit, or live/paper action was performed.
+  - The seven untracked broad build/loop files remain excluded and uncommitted.
+- Remaining blockers:
+  - Medium: archive inventory changes are local and uncommitted.
+  - Severe: local trade/OHLCV proof remains no-go until a bounded proof scan covers the 29 markets and produces acceptable evidence.
+  - Medium: optional metadata is classified and blocked, but field-level PIT availability has not been proven.
+  - Medium: full 527-row promoted/canonical Phase 2 remains no-go.
+
+### Exact Next Recommended Step
+
+Review and, if approved, commit only the archive coverage inventory scope: `scripts\validation\inventory_phase2_local_trade_archive_coverage.py`, `tests\validation\test_inventory_phase2_local_trade_archive_coverage.py`, and this `CODEX_HANDOFF.md`; do not stage the seven broad build/loop files, generated `data/**`, generated reports, configs, models, predictions, cleanup, labels, feature matrices, modeling, WFA, metrics, or live/paper execution.
+
 ## Local Trade/OHLCV Gap Proof Gate Implemented - 2026-06-30
 
 - Updated at UTC date: 2026-06-30.
