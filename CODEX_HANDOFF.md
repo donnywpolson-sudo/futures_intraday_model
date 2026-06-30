@@ -1,5 +1,39 @@
 # Codex Handoff
 
+## Phase 2 Causal Proof Input Path Planner Implemented - 2026-06-30
+
+- Updated at UTC date: 2026-06-30.
+- User request: implement a separate bounded path to obtain or authorize the missing 2025/2026 causal proof inputs without rebuilding data, refreshing Phase 2 reports, running broad build/loop files, staging generated reports, or touching modeling/WFA/metrics/predictions/cleanup/labels/features/live execution.
+- Current status: read-only planner implemented and verified; current repo decision remains `NO_GO_NEEDS_CAUSAL_INPUT_AUTHORIZATION`.
+- Files changed in this step:
+  - `scripts\validation\plan_phase2_causal_proof_input_path.py`
+  - `tests\validation\test_plan_phase2_causal_proof_input_path.py`
+  - `CODEX_HANDOFF.md`
+- Gate behavior:
+  - Reuses the committed causal input reconciliation gate.
+  - Emits stdout only; does not write reports, create data, refresh Phase 2 reports, run broad build/loop files, or touch model/backtest/execution artifacts.
+  - Converts current reconciliation evidence into explicit allowed paths: keep blocker no-go, use exactly one existing usable local root, or separately authorize future bounded causal-input creation under `data\causal_proof_candidates\local_trade_2025_2026_v1`.
+- Commands run:
+  - `python -m pytest tests/validation/test_plan_phase2_causal_proof_input_path.py -q` -> `5 passed`.
+  - `python -m pytest tests/validation/test_reconcile_phase2_local_trade_causal_inputs.py -q` -> `6 passed`.
+  - `python scripts\validation\plan_phase2_causal_proof_input_path.py` -> `status=NO_GO_NEEDS_CAUSAL_INPUT_AUTHORIZATION`, `reconciliation_status=NO_GO_LOCAL_TRADE_CAUSAL_INPUTS_MISSING`, `uncovered_markets=29`, `expected_causal_files=58`, `candidate_roots=2`, `usable_roots=0`.
+- Current decision result:
+  - `keep_blocker_no_go` is available.
+  - `use_existing_local_candidate_root` is blocked because there are `0` usable roots.
+  - `authorize_future_bounded_causal_input_creation` requires separate approval, with proposed generated-artifact root `data\causal_proof_candidates\local_trade_2025_2026_v1` and expected output count `58`.
+- Safety:
+  - No provider/network call, data rebuild, Phase 2 report refresh, broad build/loop runner, cleanup, labels, feature matrices, modeling, WFA, metrics, predictions, staging, commit, or live/paper action was performed.
+  - The seven untracked broad build/loop files remain excluded and uncommitted.
+- Remaining blockers:
+  - Severe: local trade/OHLCV proof remains no-go because no allowed existing causal root contains the 58 required 2025/2026 causal input files.
+  - Medium: this planner scope is local and uncommitted.
+  - Medium: optional metadata is classified and blocked, but field-level PIT availability has not been proven.
+  - Medium: full 527-row promoted/canonical Phase 2 remains no-go.
+
+### Exact Next Recommended Step
+
+Review and, if approved, commit only the causal proof input path planner scope: `scripts\validation\plan_phase2_causal_proof_input_path.py`, `tests\validation\test_plan_phase2_causal_proof_input_path.py`, and this `CODEX_HANDOFF.md`; do not stage the seven broad build/loop files, generated `data/**`, generated reports, configs, models, predictions, cleanup, labels, feature matrices, modeling, WFA, metrics, or live/paper execution. After that, separately decide whether to keep blocker no-go or authorize a bounded generated-artifact causal-input creation plan.
+
 ## Phase 2 Local Trade Causal Input Reconciliation Implemented - 2026-06-30
 
 - Updated at UTC date: 2026-06-30.
