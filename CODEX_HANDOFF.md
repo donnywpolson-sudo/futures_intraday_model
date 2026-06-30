@@ -1,5 +1,133 @@
 # Codex Handoff
 
+## Docs Policy Handoff Cleanup - 2026-06-30
+
+- Updated at UTC date: 2026-06-30.
+- User-approved scope: classify and resolve only docs/policy/handoff files after commit `d2f1189 Add report-only broad validation tooling`.
+- Current status: docs/policy/handoff cleanup is ready for a scoped docs-only commit.
+- Files in this cleanup scope:
+  - `AGENTS.md`
+  - `CODEX_HANDOFF.md`
+  - `scripts\dev\audit_prompts\02_main_adversarial_audit_prompt.md`
+  - `scripts\dev\audit_prompts\README.md`
+  - `quant_research_playbook.md`
+  - `scripts\dev\audit_prompts\04_data_layout_audit_prompt.md`
+- Disposition:
+  - `AGENTS.md`: commit as repo-local policy guardrails for generated artifacts, bounded command gates, handoff usage, and final output format.
+  - `CODEX_HANDOFF.md`: commit as current handoff state with this cleanup section and preserved Phase 2 promotion history.
+  - `scripts\dev\audit_prompts\02_main_adversarial_audit_prompt.md`: commit as prompt reference cleanup; current playbook path is `quant_research_playbook.md`.
+  - `scripts\dev\audit_prompts\README.md`: commit as audit prompt index update for the reusable data-layout prompt.
+  - `quant_research_playbook.md`: commit as durable research guidance only; not current pipeline evidence, build approval, model approval, or live-readiness evidence.
+  - `scripts\dev\audit_prompts\04_data_layout_audit_prompt.md`: commit as reusable read-only data-layout audit prompt template only.
+- Safety:
+  - No generated `data/**` artifacts, generated reports, broad build/loop runners, modeling, WFA, metrics, predictions, cleanup, or live/paper execution are included in this scope.
+  - No source data, DBN files, parquet files, configs, manifests, models, predictions, or report artifacts were intentionally modified for this cleanup.
+- Remaining blockers:
+  - Medium: mutation-capable broad build/loop runner files remain untracked and out of scope until separately classified with a bounded command gate.
+
+### Exact Next Recommended Step
+
+Classify and resolve the mutation-capable broad build/loop runner files separately; do not run them, stage them, commit them, or use them to mutate `data/**`, `reports/**`, configs, manifests, models, predictions, or live/paper state without a separate explicit approval and bounded command gate.
+
+## Phase 2 Canonical Config Promotion Applied - 2026-06-30
+
+- Updated at UTC date: 2026-06-30.
+- User request: approve configuration promotion only.
+- Current status: narrow config promotion is applied; canonical Phase 2 now points to `broad_manifest_527_rebuild_v1`, with refreshed master health coverage `460/527`.
+- Files changed in this step:
+  - `configs\data_manifest.yaml`
+  - `reports\data_manifest\master_data_health_matrix.json`
+  - `reports\data_manifest\master_data_health_summary.md`
+  - `docs\audit_readiness_packet.md`
+  - `scripts\validation\evaluate_phase2_canonical_promotion_gate.py`
+  - `tests\validation\test_evaluate_phase2_canonical_promotion_gate.py`
+  - `CODEX_HANDOFF.md`
+- Config promotion:
+  - `configs\data_manifest.yaml` `canonical_paths.causal_parquet_pattern` changed from `data/causal_base_candidates/tier1_rebuild_v1/{market}/{year}.parquet` to `data/causal_base_candidates/broad_manifest_527_rebuild_v1/{market}/{year}.parquet`.
+  - No data files were copied, moved, deleted, rebuilt, or redownloaded.
+- Refreshed master health evidence:
+  - `python scripts\validation\refresh_master_data_health_matrix.py` -> `master_data_health_refresh expected_rows=527 causal_parquet_present=460 approved_pass=11 fail_closed=28 unresolved=0`.
+  - `reports\data_manifest\master_data_health_summary.md` now reports `causal_parquet_present=460/527`.
+  - Missing canonical causal parquet rows: `67`.
+  - Approved PASS rows with current canonical causal parquet: `11/11`.
+- Candidate integrity after promotion:
+  - Candidate parquet count: `460`.
+  - Candidate manifest status: `PASS`.
+  - Candidate validation status: `PASS`.
+  - Manifest output count: `460`.
+  - Validation file count: `460`.
+  - Forbidden `6M:2012` present: `false`.
+  - Forbidden `2025` count: `0`.
+  - Forbidden `2026` count: `0`.
+- Audit packet update:
+  - `docs\audit_readiness_packet.md` now records `CONDITIONAL_GO_RAW_SOURCE_AND_CANONICAL_PHASE2_460_ONLY`.
+  - Promoted/canonical Phase 2 formal audit is conditional go for exactly the 460 promoted canonical rows.
+  - Full 527-row promoted/canonical Phase 2 formal audit remains no-go.
+- Promotion gate report update:
+  - `python scripts\validation\evaluate_phase2_canonical_promotion_gate.py` -> `status=CONDITIONAL_GO_CANONICAL_PHASE2_460_ONLY`, `failure_count=0`.
+  - The gate now treats a promoted canonical config path as a valid post-promotion state while still requiring candidate/raw/DBN artifact paths to be clean.
+- Commands run:
+  - `python scripts\validation\refresh_master_data_health_matrix.py` -> refresh result above.
+  - `python -m pytest tests/validation/test_refresh_master_data_health_matrix.py tests/validation/test_evaluate_phase2_canonical_promotion_gate.py -q` -> `10 passed`.
+  - `python scripts\validation\evaluate_phase2_canonical_promotion_gate.py` -> promotion gate result above.
+  - Candidate evidence PowerShell parse returned the count/status/exclusion checks above.
+  - Scoped `git status --short -- configs\data_manifest.yaml reports\data_manifest\master_data_health_matrix.json reports\data_manifest\master_data_health_summary.md data\causal_base_candidates\broad_manifest_527_rebuild_v1 reports\data_audit\causal_base_rebuild\broad_manifest_527_rebuild_v1 data\raw data\dbn` showed only the approved config/report changes.
+- Safety:
+  - No provider/network call, raw/DBN mutation, Phase 2 build, data copy/move/delete, cleanup, modeling, WFA, metrics, predictions, or live/paper action was performed.
+  - 2025/2026 remain holdout/forward only; `6M:2012` remains fail-closed/excluded.
+- Remaining blockers:
+  - Medium: full 527-row promoted/canonical Phase 2 remains no-go because current canonical coverage is `460/527`.
+  - Medium: modeling, WFA, metrics, predictions, cleanup, further promotion, and live/paper execution remain not approved.
+  - Medium: unrelated dirty worktree changes still exist outside this approved promotion scope.
+
+### Exact Next Recommended Step
+
+Start the formal data phase audit only for `raw/source plus promoted canonical broad_manifest_527_rebuild_v1 460-row Phase 2`; do not include full 527-row Phase 2, `6M:2012`, 2025/2026 holdout/forward rows, modeling, WFA, metrics, predictions, cleanup, further promotion, or live/paper execution.
+
+## Phase 2 Canonical Promotion Report Gate Implemented - 2026-06-30
+
+- Updated at UTC date: 2026-06-30.
+- User request: implement the proposed report-only gate for promoted/canonical Phase 2 reconciliation.
+- Current status: report-only promotion gate implemented and run; candidate is ready for separate config-promotion review, but canonical Phase 2 remains unpromoted.
+- Files changed:
+  - `scripts\validation\evaluate_phase2_canonical_promotion_gate.py`
+  - `tests\validation\test_evaluate_phase2_canonical_promotion_gate.py`
+  - `CODEX_HANDOFF.md`
+- Generated ignored report outputs:
+  - `reports\data_audit\phase2_canonical_promotion_gate\broad_manifest_527_rebuild_v1_promotion_gate.json`
+  - `reports\data_audit\phase2_canonical_promotion_gate\broad_manifest_527_rebuild_v1_promotion_gate.md`
+- Gate result:
+  - Status: `CONDITIONAL_GO_CONFIG_PROMOTION_CANDIDATE_460_ONLY`.
+  - Decision: `candidate_ready_for_separate_config_promotion_review`.
+  - Candidate parquet count: `460/460`.
+  - Candidate manifest status: `PASS`.
+  - Candidate validation status: `PASS`.
+  - Manifest output count: `460`.
+  - Validation file count: `460`.
+  - Forbidden `6M:2012` present: `false`.
+  - Forbidden `2025` count: `0`.
+  - Forbidden `2026` count: `0`.
+  - Current canonical config pattern remains `data/causal_base_candidates/tier1_rebuild_v1/{market}/{year}.parquet`.
+  - Candidate target pattern is `data/causal_base_candidates/broad_manifest_527_rebuild_v1/{market}/{year}.parquet`.
+  - Current canonical causal coverage remains `8/527`.
+  - `config_mutation_performed=false`; `promotion_performed=false`; `modeling_approved=false`; `wfa_approved=false`; `research_use_allowed=false`.
+- Commands run:
+  - `python -m pytest tests/validation/test_evaluate_phase2_canonical_promotion_gate.py -q` -> `6 passed`.
+  - `python scripts\validation\evaluate_phase2_canonical_promotion_gate.py` -> `status=CONDITIONAL_GO_CONFIG_PROMOTION_CANDIDATE_460_ONLY`, `failure_count=0`.
+  - Scoped `git status --short -- data\causal_base_candidates\broad_manifest_527_rebuild_v1 reports\data_audit\causal_base_rebuild\broad_manifest_527_rebuild_v1 data\raw data\dbn configs\data_manifest.yaml` returned no tracked changes.
+  - `git diff --check` produced line-ending warnings only; no whitespace-error output.
+- Safety:
+  - No provider/network call, raw/DBN mutation, Phase 2 build, data copy/move/delete, cleanup, config mutation, config promotion, modeling, WFA, metrics, predictions, or live/paper action was performed.
+  - Generated gate reports remain under ignored `reports/**`.
+- Remaining blockers:
+  - Medium: promoted/canonical Phase 2 formal audit remains no-go until a separate human decision authorizes config promotion and the config-promotion implementation is completed.
+  - Medium: unrelated dirty worktree changes still exist outside this gate implementation.
+  - Medium: `6M:2012` remains fail-closed/excluded, and 2025/2026 remain holdout/forward only.
+
+### Exact Next Recommended Step
+
+Decide whether to authorize a separate config-promotion implementation that changes `configs\data_manifest.yaml` causal pattern to `data/causal_base_candidates/broad_manifest_527_rebuild_v1/{market}/{year}.parquet`, refreshes master data health reports, and reruns narrow post-promotion checks; do not include modeling, WFA, metrics, predictions, cleanup, or live/paper execution.
+
 ## Phase 2 Candidate Audit Readiness Verified - 2026-06-30
 
 - Updated at UTC date: 2026-06-30.
