@@ -13,6 +13,11 @@
     - `README_RUNBOOK.md`
     - `docs\audit_readiness_packet.md`
   - Pre-commit staged check showed no data, reports, configs, scripts, or tests staged.
+- Phase 2 candidate readiness commit:
+  - `85c670e Document Phase 2 candidate audit readiness`
+  - Staged/committed only:
+    - `CODEX_HANDOFF.md`
+    - `docs\audit_readiness_packet.md`
 - Phase 2 candidate verification:
   - Candidate output root exists: `data\causal_base_candidates\broad_manifest_527_rebuild_v1`.
   - Paired reports root exists: `reports\data_audit\causal_base_rebuild\broad_manifest_527_rebuild_v1`.
@@ -34,6 +39,8 @@
   - `git diff --cached --check` before baseline commit passed.
   - Candidate evidence PowerShell parse returned count/status/exclusion checks above.
   - `python -m pytest tests/validation/test_build_broad_manifest_527_rebuild.py tests/validation/test_alpha_tier_ladder_policy.py -q` -> `12 passed`.
+  - Post-commit scoped generated/raw status check returned no tracked changes.
+  - Post-commit candidate evidence parse returned parquet count `460`, manifest status `PASS`, validation status `PASS`, manifest output count `460`, validation file count `460`, forbidden `6M\2012` false, forbidden `2025` count `0`, and forbidden `2026` count `0`.
 - Safety:
   - No provider/network call, data mutation, raw/DBN rebuild, Phase 2 build, cleanup, staging outside docs/handoff, modeling, WFA, metrics, predictions, promotion, config promotion, or live/paper action was performed.
   - Existing generated candidate data and reports were read only.
