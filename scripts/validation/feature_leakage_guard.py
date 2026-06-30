@@ -54,8 +54,11 @@ FORBIDDEN_FEATURE_COLUMNS = {
     "target_tradeable_after_cost",
     "bars_since_roll",
     "bars_until_roll",
+    "roll_boundary_flag",
     "roll_window_flag",
     "causal_invalid_reason",
+    "symbol_change_flag",
+    "instrument_id_change_flag",
     "rtype",
     "publisher_id",
     "instrument_id",
@@ -66,6 +69,7 @@ FORBIDDEN_FEATURE_COLUMNS = {
     "definition_source_sha256",
     "status_source_file",
     "status_source_sha256",
+    "status_stale",
     "source_path",
     "source_file_hash",
     "source_row_number",
@@ -86,6 +90,7 @@ FORBIDDEN_FEATURE_COLUMNS = {
     "settlement_price",
     "open_interest",
     "cleared_volume",
+    "statistics_stale",
 }
 
 FORBIDDEN_FEATURE_PREFIXES = (

@@ -1,5 +1,47 @@
 # Codex Handoff
 
+## Optional Metadata PIT Inventory Gate Implemented - 2026-06-30
+
+- Updated at UTC date: 2026-06-30.
+- User request: address optional metadata PIT inventory next for the approved 460-row canonical Phase 2 scope.
+- Current status: read-only PIT inventory gate implemented and verified; optional metadata remains blocked from features by default.
+- Files changed in this step:
+  - `scripts\validation\check_optional_metadata_pit_inventory.py`
+  - `tests\validation\test_check_optional_metadata_pit_inventory.py`
+  - `scripts\validation\feature_leakage_guard.py`
+  - `CODEX_HANDOFF.md`
+- Gate behavior:
+  - Reads canonical config, the promoted canonical `broad_manifest_527_rebuild_v1` root, paired Phase 2 manifest/validation files, and parquet schemas only.
+  - Scans all canonical parquet schemas via parquet metadata; no row reads, rebuilds, report refreshes, provider calls, or `data/**` writes.
+  - Classifies discovered columns as `feature_allowed_candidate`, `audit_only`, `pit_not_verified`, `forbidden_feature`, or `source_lineage`.
+  - Fails if the 460-row canonical scope fails, schemas are unreadable, discovered columns are unclassified, or current baseline feature columns include PIT-not-verified/source-lineage/forbidden columns.
+  - Treats present PIT-not-verified optional metadata as an expected warning, not approval for feature use.
+- Feature leakage guard update:
+  - Added explicit blocked columns for `roll_boundary_flag`, `symbol_change_flag`, `instrument_id_change_flag`, `status_stale`, and `statistics_stale`.
+- Commands run:
+  - `python -m pytest tests/validation/test_check_optional_metadata_pit_inventory.py -q` -> `5 passed`.
+  - `python -m pytest tests/validation/test_check_phase2_460_audit_readiness.py -q` -> `9 passed`.
+  - `python -m pytest tests/phase4_features/test_build_baseline_features.py -q -k registry_excludes_targets_audit_source_and_forbidden_columns` -> `1 passed, 41 deselected`.
+  - `python scripts\validation\check_optional_metadata_pit_inventory.py` -> `status=CONDITIONAL_GO_OPTIONAL_METADATA_PIT_INVENTORY_460_ONLY`, `canonical_parquet_count=460/460`, `column_count=117`, `pit_not_verified=41`, `failure_count=0`, `warning_count=1`.
+  - `python scripts\validation\check_phase2_460_audit_readiness.py` -> `status=CONDITIONAL_GO_CANONICAL_PHASE2_460_ONLY`, `canonical_parquet_count=460/460`, `failure_count=0`, `warning_count=3`.
+  - `git status --short -- data reports configs models predictions` -> no output.
+- Current checker warnings:
+  - Optional metadata PIT inventory: `WARN_OPTIONAL_METADATA_BLOCKED`, `pit_not_verified=41`; blocked until field-level `available_at <= decision_time` proof exists.
+  - 460 audit readiness: stale Phase 2 manifest commit, local trade/OHLCV gap gate `NOT_RUN`, optional metadata PIT approval gap.
+- Safety:
+  - No provider/network call, data mutation, generated report refresh, Phase 2 build, cleanup, labels, feature matrices, modeling, WFA, metrics, predictions, staging, commit, or live/paper action was performed.
+  - The seven untracked broad build/loop files remain excluded and uncommitted.
+- Remaining blockers:
+  - Medium: PIT inventory changes are local and uncommitted.
+  - Medium: optional metadata is classified and blocked, but field-level PIT availability has not been proven.
+  - Medium: local trade/OHLCV gap proof remains `NOT_RUN`.
+  - Medium: Phase 2 manifest remains stale relative to current commit.
+  - Medium: full 527-row promoted/canonical Phase 2 remains no-go.
+
+### Exact Next Recommended Step
+
+Review and, if approved, commit only the PIT inventory scope: `scripts\validation\check_optional_metadata_pit_inventory.py`, `tests\validation\test_check_optional_metadata_pit_inventory.py`, `scripts\validation\feature_leakage_guard.py`, and this `CODEX_HANDOFF.md`; do not stage the seven broad build/loop files, generated `data/**`, generated reports, configs, models, predictions, cleanup, labels, feature matrices, modeling, WFA, metrics, or live/paper execution.
+
 ## Phase 2 460 Audit Readiness Gate Implemented - 2026-06-30
 
 - Updated at UTC date: 2026-06-30.
