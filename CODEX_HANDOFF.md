@@ -1,5 +1,42 @@
 # Codex Handoff
 
+## Phase 2 Manifest Trust Reconciliation Gate Implemented - 2026-06-30
+
+- Updated at UTC date: 2026-06-30.
+- User request: address stale manifest/current-baseline trust reconciliation next.
+- Current status: read-only material-hash trust gate implemented and verified for promoted canonical `broad_manifest_527_rebuild_v1` 460-row Phase 2.
+- Files changed in this step:
+  - `scripts\validation\check_phase2_manifest_trust.py`
+  - `tests\validation\test_check_phase2_manifest_trust.py`
+  - `CODEX_HANDOFF.md`
+- Gate behavior:
+  - Reuses the existing Phase 2 460 audit-readiness gate before making a trust decision.
+  - Reads current builder script, profile config, Phase 2 manifest, Phase 2 validation, manifest-listed raw inputs, and manifest-listed canonical outputs only.
+  - Hashes all manifest-listed raw inputs and canonical outputs; no row reads, rebuilds, report refreshes, provider calls, or `data/**` writes.
+  - Hard-fails material script/config/input/output hash mismatch, scope mismatch, path/hash reconciliation mismatch, or validation count mismatch.
+  - Treats stale manifest `git_commit` as a warning only when material hashes, scope, and validation counts match.
+- Commands run:
+  - `python -m pytest tests/validation/test_check_phase2_manifest_trust.py -q` -> `8 passed`.
+  - `python -m pytest tests/validation/test_check_phase2_460_audit_readiness.py -q` -> `9 passed`.
+  - `python scripts\validation\check_phase2_manifest_trust.py` -> `status=TRUSTED_CURRENT_BASELINE_BY_MATERIAL_HASHES`, `input_hashes=460/460`, `output_hashes=460/460`, `input_mismatches=0`, `output_mismatches=0`, `validation_pass_count=460`, `failure_count=0`, `warning_count=1`.
+  - `python scripts\validation\check_phase2_460_audit_readiness.py` -> `status=CONDITIONAL_GO_CANONICAL_PHASE2_460_ONLY`, `canonical_parquet_count=460/460`, `failure_count=0`, `warning_count=3`.
+  - `git status --short -- data reports configs models predictions` -> no output.
+- Current checker warnings:
+  - Trust gate: `WARN_GIT_COMMIT_STALE_BUT_MATERIAL_HASHES_MATCH`, manifest commit `209f48ffebd0c7e6705f808a029c0e612fec022b`, current head `1ecbf7414c01edf0976859bcdb5af5989bcdc505`.
+  - 460 audit readiness: stale Phase 2 manifest commit, local trade/OHLCV gap gate `NOT_RUN`, optional metadata PIT approval gap.
+- Safety:
+  - No provider/network call, data mutation, generated report refresh, Phase 2 build, cleanup, labels, feature matrices, modeling, WFA, metrics, predictions, staging, commit, or live/paper action was performed.
+  - The seven untracked broad build/loop files remain excluded and uncommitted.
+- Remaining blockers:
+  - Medium: manifest trust changes are local and uncommitted.
+  - Medium: local trade/OHLCV gap proof remains `NOT_RUN`.
+  - Medium: optional metadata is classified and blocked, but field-level PIT availability has not been proven.
+  - Medium: full 527-row promoted/canonical Phase 2 remains no-go.
+
+### Exact Next Recommended Step
+
+Review and, if approved, commit only the manifest trust reconciliation scope: `scripts\validation\check_phase2_manifest_trust.py`, `tests\validation\test_check_phase2_manifest_trust.py`, and this `CODEX_HANDOFF.md`; do not stage the seven broad build/loop files, generated `data/**`, generated reports, configs, models, predictions, cleanup, labels, feature matrices, modeling, WFA, metrics, or live/paper execution.
+
 ## Optional Metadata PIT Inventory Gate Implemented - 2026-06-30
 
 - Updated at UTC date: 2026-06-30.
