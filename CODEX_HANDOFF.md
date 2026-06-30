@@ -1,5 +1,42 @@
 # Codex Handoff
 
+## Phase 2 Local Trade Causal Input Reconciliation Implemented - 2026-06-30
+
+- Updated at UTC date: 2026-06-30.
+- User request: implement a read-only reconciliation of available 2025/2026 causal proof inputs and allowed causal-root choices for the 29 uncovered markets.
+- Current status: read-only reconciliation gate implemented and verified; current repo evidence remains `NO_GO_LOCAL_TRADE_CAUSAL_INPUTS_MISSING`.
+- Files changed in this step:
+  - `scripts\validation\reconcile_phase2_local_trade_causal_inputs.py`
+  - `tests\validation\test_reconcile_phase2_local_trade_causal_inputs.py`
+  - `CODEX_HANDOFF.md`
+- Gate behavior:
+  - Reuses the committed local trade/OHLCV proof gate to derive the uncovered canonical markets.
+  - Checks only expected 2025/2026 causal parquet paths for those uncovered markets.
+  - Reads parquet metadata/schema only; does not read rows, refresh reports, rebuild data, run broad build/loop files, or write generated artifacts.
+  - Evaluates the default allowed roots `data\causally_gated_normalized` and `data\causal_base_candidates\broad_manifest_527_rebuild_v1`, with optional explicit `--candidate-root` support for later human-approved root choices.
+- Commands run:
+  - `python -m pytest tests/validation/test_reconcile_phase2_local_trade_causal_inputs.py -q` -> `6 passed`.
+  - `python -m pytest tests/validation/test_check_phase2_local_trade_ohlcv_gap_proof.py -q` -> `7 passed`.
+  - `python scripts\validation\reconcile_phase2_local_trade_causal_inputs.py` -> `status=NO_GO_LOCAL_TRADE_CAUSAL_INPUTS_MISSING`, `uncovered_markets=29`, `expected_causal_files=58`, `candidate_roots=2`, `usable_roots=0`, `missing_files=116`, `schema_failures=0`, `failure_count=1`.
+  - `git status --short -- data reports configs models predictions` -> no output.
+- Current reconciliation result:
+  - `data\causally_gated_normalized` has `0/58` required 2025/2026 causal files for the 29 uncovered markets.
+  - `data\causal_base_candidates\broad_manifest_527_rebuild_v1` has `0/58` required 2025/2026 causal files for the 29 uncovered markets.
+  - No usable causal root exists for a future bounded local trade/OHLCV proof scan under the current allowed defaults.
+- Safety:
+  - No provider/network call, data rebuild, Phase 2 report refresh, broad build/loop runner, cleanup, labels, feature matrices, modeling, WFA, metrics, predictions, staging, commit, or live/paper action was performed.
+  - No generated `data/**`, generated reports, configs, models, or predictions status lines were present after validation.
+  - The seven untracked broad build/loop files remain excluded and uncommitted.
+- Remaining blockers:
+  - Severe: local trade/OHLCV proof remains no-go because no allowed default causal root contains the 58 required 2025/2026 causal input files for the 29 uncovered markets.
+  - Medium: this reconciliation gate is local and uncommitted.
+  - Medium: optional metadata is classified and blocked, but field-level PIT availability has not been proven.
+  - Medium: full 527-row promoted/canonical Phase 2 remains no-go.
+
+### Exact Next Recommended Step
+
+Review and, if approved, commit only the causal input reconciliation scope: `scripts\validation\reconcile_phase2_local_trade_causal_inputs.py`, `tests\validation\test_reconcile_phase2_local_trade_causal_inputs.py`, and this `CODEX_HANDOFF.md`; do not stage the seven broad build/loop files, generated `data/**`, generated reports, configs, models, predictions, cleanup, labels, feature matrices, modeling, WFA, metrics, or live/paper execution. After that, plan a separate bounded path to obtain or authorize the missing 2025/2026 causal proof inputs.
+
 ## Bounded Local Trade/OHLCV Proof Scan Result - 2026-06-30
 
 - Updated at UTC date: 2026-06-30.
