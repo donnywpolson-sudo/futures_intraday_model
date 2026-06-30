@@ -1,5 +1,51 @@
 # Codex Handoff
 
+## Phase 2 Candidate Audit Readiness Verified - 2026-06-30
+
+- Updated at UTC date: 2026-06-30.
+- User request: implement the plan to resolve dirty worktree and Phase 2 causal coverage blockers.
+- Current status: blocker resolution complete for audit-baseline purposes.
+- Docs-only baseline commit:
+  - `d5d9583 Document audit readiness baseline`
+  - Staged/committed only:
+    - `CODEX_HANDOFF.md`
+    - `PIPELINE.md`
+    - `README_RUNBOOK.md`
+    - `docs\audit_readiness_packet.md`
+  - Pre-commit staged check showed no data, reports, configs, scripts, or tests staged.
+- Phase 2 candidate verification:
+  - Candidate output root exists: `data\causal_base_candidates\broad_manifest_527_rebuild_v1`.
+  - Paired reports root exists: `reports\data_audit\causal_base_rebuild\broad_manifest_527_rebuild_v1`.
+  - Parquet count: `460`.
+  - `causal_base_manifest.json` status: `PASS`.
+  - `causal_base_validation.json` status: `PASS`.
+  - Manifest output count: `460`.
+  - Forbidden `6M\2012.parquet`: absent.
+  - Forbidden `2025.parquet` count: `0`.
+  - Forbidden `2026.parquet` count: `0`.
+  - Scoped status check for `data\causal_base_candidates\broad_manifest_527_rebuild_v1`, paired reports, `data\raw`, `data\dbn`, and `configs\data_manifest.yaml` returned no tracked changes.
+- Audit readiness packet update:
+  - `docs\audit_readiness_packet.md` now records `CONDITIONAL_GO_RAW_SOURCE_AND_PHASE2_CANDIDATE_460_ONLY`.
+  - Raw/source formal audit is go from committed documentation baseline.
+  - Phase 2 candidate formal audit is conditional go for exactly the 460 built-not-promoted research rows.
+  - Promoted/canonical Phase 2 formal audit remains no-go.
+- Validation:
+  - `git diff --cached --name-only` before baseline commit showed only the four docs/handoff files.
+  - `git diff --cached --check` before baseline commit passed.
+  - Candidate evidence PowerShell parse returned count/status/exclusion checks above.
+  - `python -m pytest tests/validation/test_build_broad_manifest_527_rebuild.py tests/validation/test_alpha_tier_ladder_policy.py -q` -> `12 passed`.
+- Safety:
+  - No provider/network call, data mutation, raw/DBN rebuild, Phase 2 build, cleanup, staging outside docs/handoff, modeling, WFA, metrics, predictions, promotion, config promotion, or live/paper action was performed.
+  - Existing generated candidate data and reports were read only.
+- Remaining blockers:
+  - Medium: worktree still contains unrelated pre-existing/user changes outside the committed/docs audit baseline.
+  - Medium: promoted/canonical Phase 2 remains no-go until a separate config/canonical promotion gate reconciles `configs\data_manifest.yaml` and current canonical coverage.
+  - Medium: 2025/2026 remain holdout/forward evidence only, and `6M:2012` remains fail-closed/excluded.
+
+### Exact Next Recommended Step
+
+Start the formal audit only with scope `raw/source plus broad_manifest_527_rebuild_v1 candidate 460`; do not include promoted/canonical Phase 2, modeling, WFA, metrics, predictions, promotion, cleanup, or live/paper execution.
+
 ## Audit Readiness Baseline Stabilized - 2026-06-30
 
 - Updated at UTC date: 2026-06-30.

@@ -5,30 +5,36 @@ Status date: 2026-06-30
 This packet stabilizes the project baseline for deciding whether a formal data
 audit may begin. It is not a data audit and does not approve data mutation,
 cleanup, provider downloads, Phase 2 rebuilds, modeling, WFA, metrics,
-predictions, promotion, or live-trading readiness.
+predictions, promotion, config promotion, or live-trading readiness.
 
 ## Scope Decision
 
-Formal audit readiness is approved only for the raw/source layer:
+Formal audit readiness is approved for the raw/source layer and conditionally
+approved for one built-not-promoted Phase 2 candidate scope:
 
 - In scope: `data/dbn`, `data/raw`, DBN sidecar manifests, source hashes, raw
   schema/value checks, optional status/statistics raw enrichment posture, and
   raw/source lineage reports.
-- Out of scope: `data/causally_gated_normalized`, labels, feature matrices,
-  predictions, models, WFA, Phase 8 metrics, promotion gates, cleanup, and
-  live/paper execution.
-- Raw plus causal Phase 2 is not ready for formal audit authorization because
-  current canonical Phase 2 coverage is incomplete and conflicts with older
-  generated evidence.
+- Conditionally in scope: the generated candidate root
+  `data/causal_base_candidates/broad_manifest_527_rebuild_v1` and paired
+  reports under
+  `reports/data_audit/causal_base_rebuild/broad_manifest_527_rebuild_v1`.
+- Out of scope: promoted canonical Phase 2, `data/causally_gated_normalized`,
+  labels, feature matrices, predictions, models, WFA, Phase 8 metrics,
+  promotion gates, cleanup, and live/paper execution.
+- Promoted/canonical Phase 2 is not ready for formal audit authorization because
+  current configured canonical Phase 2 coverage is incomplete and conflicts with
+  older generated evidence.
 
-Decision: `CONDITIONAL_GO_RAW_SOURCE_ONLY`.
+Decision: `CONDITIONAL_GO_RAW_SOURCE_AND_PHASE2_CANDIDATE_460_ONLY`.
 
 ## Verified Facts
 
 - Source control is active; `git rev-parse --is-inside-work-tree` returned
   `true` during the readiness review.
+- Documentation baseline commit: `d5d9583 Document audit readiness baseline`.
 - The worktree remains dirty with pre-existing code, config, report, and test
-  changes outside this documentation stabilization scope.
+  changes outside the documentation/audit-readiness scope.
 - Deleted tracked docs were restored before this packet was written:
   `PIPELINE.md`, `README_RUNBOOK.md`, `DATA REBUILD.md`, `RESOURCES.md`, and
   the tracked `docs/*` files.
@@ -53,14 +59,35 @@ Decision: `CONDITIONAL_GO_RAW_SOURCE_ONLY`.
 - `reports/data_lineage/pipeline_phase_io_map.md` maps the implemented raw
   pipeline as Phase 1A DBN download, Phase 1B raw parquet conversion, Phase 1C
   raw readiness reports, and Phase 2 causal base.
+- Phase 2 candidate verification on 2026-06-30 reported:
+  - candidate root exists:
+    `data/causal_base_candidates/broad_manifest_527_rebuild_v1`
+  - paired reports root exists:
+    `reports/data_audit/causal_base_rebuild/broad_manifest_527_rebuild_v1`
+  - parquet count: `460`
+  - `causal_base_manifest.json` status: `PASS`
+  - `causal_base_validation.json` status: `PASS`
+  - manifest output count: `460`
+  - forbidden `6M/2012.parquet`: absent
+  - forbidden `2025.parquet` count: `0`
+  - forbidden `2026.parquet` count: `0`
+- Focused candidate checks passed:
+  `python -m pytest tests/validation/test_build_broad_manifest_527_rebuild.py tests/validation/test_alpha_tier_ladder_policy.py -q`
+  -> `12 passed`.
+- Scoped generated/raw status check for the candidate root, paired report root,
+  `data/raw`, `data/dbn`, and `configs/data_manifest.yaml` returned no tracked
+  changes.
 
 ## Inferences
 
 - The raw/source layer has enough local evidence to begin a formal raw/source
   audit after the current documentation baseline is accepted.
-- The broader raw+causal Phase 2 dataset is not audit-ready because the current
-  master health summary reports only `8/527` canonical causal parquet rows and
-  explicitly records stale prior causal coverage evidence.
+- The built-not-promoted Phase 2 candidate root has enough local evidence to
+  begin a formal candidate-scope audit for exactly the 460 approved research
+  rows.
+- Promoted/canonical Phase 2 remains not audit-ready because the current master
+  health summary reports only `8/527` configured canonical causal parquet rows
+  and explicitly records stale prior causal coverage evidence.
 - Optional status/statistics fields may support audit context, but direct
   alpha-feature use still requires a separate leakage-safe feature design.
 
@@ -71,8 +98,9 @@ Decision: `CONDITIONAL_GO_RAW_SOURCE_ONLY`.
   timestamp handling, and raw/source lineage.
 - Generated reports under `reports/**` are evidence inputs, not artifacts to
   refresh or stage in this stabilization phase.
-- Any future raw+causal Phase 2 audit will be planned as a separate gate after
-  canonical causal coverage and stale evidence conflicts are reconciled.
+- Any future promoted/canonical Phase 2 audit will be planned as a separate gate
+  after canonical causal coverage, config promotion, and stale evidence conflicts
+  are reconciled.
 
 ## Stale Or Conflicting Evidence Policy
 
@@ -85,12 +113,13 @@ Decision: `CONDITIONAL_GO_RAW_SOURCE_ONLY`.
   row-level matrix `status_dbn_present` and optional-schema audit
   `status_archive_market_year_count` are not interchangeable.
 
-## Required Before Starting Formal Raw/Source Audit
+## Required Before Starting Formal Audit
 
 1. Accept or commit the documentation baseline that restores tracked docs and
    adds this packet.
 2. Record the exact `git status --short` output as the audit baseline.
-3. Confirm that the audit scope remains raw/source only.
+3. Confirm that the audit scope is raw/source plus
+   `broad_manifest_527_rebuild_v1` candidate only.
 4. Run only narrow readiness checks; do not refresh generated data or reports
    unless separately approved.
 
@@ -113,6 +142,9 @@ state.
 
 ## Current Authorization
 
-- Raw/source formal audit: conditional go after baseline acceptance.
-- Raw+causal Phase 2 formal audit: no-go.
+- Raw/source formal audit: go from committed documentation baseline.
+- Phase 2 candidate formal audit for
+  `data/causal_base_candidates/broad_manifest_527_rebuild_v1`: conditional go
+  for exactly 460 built-not-promoted research rows.
+- Promoted/canonical Phase 2 formal audit: no-go.
 - Modeling, WFA, metrics, promotion, predictions, live/paper execution: no-go.
