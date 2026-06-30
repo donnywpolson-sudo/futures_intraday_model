@@ -8,7 +8,7 @@ source_profile: configs/alpha_tiered.yaml::profiles.tier_3_research
 canonical_paths:
   dbn_root: data/dbn
   raw_parquet_pattern: data/raw/{market}/{year}.parquet
-  causal_parquet_pattern: data/causal_base_candidates/tier1_rebuild_v1/{market}/{year}.parquet
+  causal_parquet_pattern: data/causal_base_candidates/broad_manifest_527_rebuild_v1/{market}/{year}.parquet
 
 expected_markets:
   - ES
