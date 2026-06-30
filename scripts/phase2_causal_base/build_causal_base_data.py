@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import hashlib
 import json
 import os
@@ -37,6 +38,10 @@ DEFAULT_RAW_ALIGNMENT_REPORT = Path("reports/raw_ingest/raw_dbn_alignment.json")
 LOCAL_TRADE_GAP_AUDIT_START = "2025-06-18"
 LOCAL_TRADE_GAP_AUDIT_END = "2026-06-13"
 LOCAL_TRADE_GAP_AUDIT_PROFILES = ("tier_3_holdout", "tier_3_forward")
+# The local trades audit remains available as an explicit diagnostic. Phase 2
+# no longer requires local L1 self-proof for OHLCV no-bar minutes; that gate is
+# replaced by vendor-backed OHLCV provenance policy.
+MANDATORY_LOCAL_TRADE_GAP_AUDIT_PROFILES: tuple[str, ...] = tuple()
 LOCAL_TRADE_GAP_AUDIT_DBN_ROOT = Path("data/dbn")
 LOCAL_TRADE_GAP_AUDIT_JSON = "local_trade_ohlcv_gap_crosscheck_2025_2026.json"
 LOCAL_TRADE_GAP_AUDIT_MD = "local_trade_ohlcv_gap_crosscheck_2025_2026.md"
@@ -207,6 +212,16 @@ DEFAULT_MAX_SYNTHETIC_GAP_MINUTES = 120
 DEFAULT_MAX_SYNTHETIC_ROWS_PCT = 2.0
 DEFAULT_MAX_DEGRADED_ROWS_PCT = 1.0
 DEFAULT_MAX_ROLL_WINDOW_ROWS_PCT = 1.0
+BROAD_MANIFEST_527_REBUILD_OUTPUT_ROOT = Path(
+    "data/causal_base_candidates/broad_manifest_527_rebuild_v1"
+)
+BROAD_MANIFEST_527_REBUILD_REPORTS_ROOT = Path(
+    "reports/data_audit/causal_base_rebuild/broad_manifest_527_rebuild_v1"
+)
+BROAD_MANIFEST_527_REBUILD_APPROVAL_TOKEN = (
+    "APPROVE_BROAD_MANIFEST_527_REBUILD_V1_BUILD_460_ROWS_EXCLUDING_6M_2012_ROLL_MATURITY_ONLY_UNDER_VENDOR_OHLCV_POLICY"
+)
+BROAD_MANIFEST_527_REBUILD_MAX_BUILD_MARKET_YEARS = 25
 DEFAULT_SYNTHETIC_GAP_THRESHOLD_ACTION = "warn"
 SYNTHETIC_GAP_THRESHOLD_ACTIONS = {"warn", "diagnostic"}
 ROLL_MATURITY_EXCEPTION_CATEGORY = "roll_maturity"
@@ -214,6 +229,14 @@ STATUS_SPARSE_EXCEPTION_CATEGORY = "status_sparse"
 DEGRADED_RAW_QUALITY_EXCEPTION_CATEGORY = "degraded_raw_quality"
 VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY = "vendor_trusted_ohlcv_no_trade"
 PARENT_SPARSE_OHLCV_NO_TRADE_EXCEPTION_CATEGORY = "parent_sparse_ohlcv_no_trade"
+VENDOR_CONTINUOUS_ROLL_BACKSTEP_POLICY = "databento_continuous_roll_identity_proven"
+VENDOR_CONTINUOUS_ROLL_BACKSTEP_STATUS = (
+    "roll_backsteps_diagnostic_vendor_continuous_identity_proven"
+)
+SPARSE_ROLL_WINDOW_THRESHOLD_POLICY = "sparse_elapsed_roll_window_vendor_continuous"
+SPARSE_ROLL_WINDOW_THRESHOLD_STATUS = (
+    "roll_window_threshold_diagnostic_sparse_vendor_continuous"
+)
 ACCEPTED_READINESS_EXCEPTION_CATEGORIES = {
     ROLL_MATURITY_EXCEPTION_CATEGORY,
     STATUS_SPARSE_EXCEPTION_CATEGORY,
@@ -224,15 +247,6 @@ ACCEPTED_READINESS_EXCEPTION_CATEGORIES = {
 ROLL_MATURITY_EXCEPTION_WARNING_PREFIXES = (
     "roll maturity sequence not monotonic",
     "roll exclusion threshold breached",
-)
-VENDOR_TRUSTED_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS = frozenset(
-    {
-        ("HE", 2016),
-        ("HE", 2019),
-        ("HE", 2020),
-        ("LE", 2016),
-        ("LE", 2020),
-    }
 )
 TIER1_CANDIDATE_ACCEPTED_EXCEPTION_SOURCE = (
     "tier1_candidate_accepted_readiness_exceptions_file"
@@ -255,7 +269,6 @@ VENDOR_TRUSTED_OHLCV_NO_TRADE_DEGRADED_ALLOWED_MARKET_YEARS = frozenset(
         ("HE", 2020),
     }
 )
-VENDOR_TRUSTED_OHLCV_NO_TRADE_BROAD_MARKETS = frozenset({"HE", "LE"})
 VENDOR_TRUSTED_OHLCV_NO_TRADE_REQUIRED_EVIDENCE_SUFFIXES = (
     "reports/raw_ingest/raw_dbn_alignment.json",
     "reports/raw_readiness/raw_enriched_optional_schema_audit.json",
@@ -451,6 +464,13 @@ class ValidationResult:
     sparse_ohlcv_suppressed_max_gap_minutes: int = 0
     vendor_trusted_ohlcv_no_trade_policy: str = "not_applicable"
     vendor_trusted_ohlcv_no_trade_status: str = "not_applicable"
+    vendor_continuous_roll_backstep_policy: str = "not_applicable"
+    vendor_continuous_roll_backstep_status: str = "not_applicable"
+    vendor_continuous_roll_backstep_evidence: dict[str, object] = field(default_factory=dict)
+    sparse_roll_window_threshold_policy: str = "not_applicable"
+    sparse_roll_window_threshold_status: str = "not_applicable"
+    sparse_roll_window_threshold_evidence: dict[str, object] = field(default_factory=dict)
+    diagnostic_warnings: list[str] = field(default_factory=list)
     max_synthetic_rows_pct_threshold: float = DEFAULT_MAX_SYNTHETIC_ROWS_PCT
     max_synthetic_gap_minutes_threshold: int = DEFAULT_MAX_SYNTHETIC_GAP_MINUTES
     max_degraded_rows_pct_threshold: float = DEFAULT_MAX_DEGRADED_ROWS_PCT
@@ -992,19 +1012,11 @@ def _matching_vendor_trusted_ohlcv_no_trade_exception(
     ):
         return None
     for exception in config.accepted_readiness_exceptions:
-        scoped_tier1_candidate_exception = (
-            exception.source == TIER1_CANDIDATE_ACCEPTED_EXCEPTION_SOURCE
-        )
         if (
             exception.market == result.market
             and exception.year == result.year
             and exception.category == VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY
             and tuple(result.warnings) == exception.warning_prefixes
-            and (
-                scoped_tier1_candidate_exception
-                or (result.market, result.year)
-                in VENDOR_TRUSTED_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS
-            )
             and not _accepted_readiness_exception_evidence_failures(
                 result, exception
             )
@@ -1068,28 +1080,10 @@ def _accepted_readiness_exception_for_result(
                 ):
                     continue
         elif exception.category == VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY:
-            scoped_tier1_candidate_exception = (
-                exception.source == TIER1_CANDIDATE_ACCEPTED_EXCEPTION_SOURCE
-            )
-            if (
-                not scoped_tier1_candidate_exception
-                and (result.market, result.year)
-                not in VENDOR_TRUSTED_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS
-            ):
-                continue
             if (
                 not result.synthetic_gap_threshold_breached
                 or result.synthetic_rows <= 0
                 or result.degraded_threshold_breached
-                or (
-                    not scoped_tier1_candidate_exception
-                    and (
-                        result.status_enrichment_missing_rows
-                        or result.status_enrichment_stale_rows
-                        or result.statistics_enrichment_missing_rows
-                        or result.statistics_enrichment_stale_rows
-                    )
-                )
             ):
                 continue
             if tuple(result.warnings) != exception.warning_prefixes:
@@ -1452,7 +1446,7 @@ def profile_requires_local_trade_gap_gate(
 ) -> bool:
     _, _, aliases, _ = load_profile_map(profile_config_path)
     resolved_profile = resolve_profile_name(profile, aliases)
-    return resolved_profile in LOCAL_TRADE_GAP_AUDIT_PROFILES
+    return resolved_profile in MANDATORY_LOCAL_TRADE_GAP_AUDIT_PROFILES
 
 
 def current_git_commit() -> str:
@@ -1539,16 +1533,6 @@ def _parse_accepted_readiness_exceptions(
             raise ValueError(
                 f"accepted_readiness_exceptions[{index}].year must be an integer"
             ) from exc
-        if (
-            category == VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY
-            and (market, year)
-            not in VENDOR_TRUSTED_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS
-        ):
-            allowed = sorted(VENDOR_TRUSTED_OHLCV_NO_TRADE_ALLOWED_MARKET_YEARS)
-            raise ValueError(
-                f"accepted_readiness_exceptions[{index}] category "
-                f"{category!r} is limited to exact market-years {allowed!r}"
-            )
         if (
             category == PARENT_SPARSE_OHLCV_NO_TRADE_EXCEPTION_CATEGORY
             and (market, year)
@@ -1788,17 +1772,6 @@ def load_causal_base_config(
             }
         )
     )
-    broad_vendor_trusted_overlap = sorted(
-        set(vendor_trusted_ohlcv_no_trade_markets)
-        & VENDOR_TRUSTED_OHLCV_NO_TRADE_BROAD_MARKETS
-    )
-    if broad_vendor_trusted_overlap:
-        raise ValueError(
-            "vendor_trusted_ohlcv_no_trade_markets cannot include HE/LE; "
-            "use exact accepted_readiness_exceptions rows for "
-            f"{broad_vendor_trusted_overlap!r}"
-        )
-
     config = CausalBaseConfig(
         max_synthetic_rows_pct=get_float(
             "max_synthetic_rows_pct", DEFAULT_MAX_SYNTHETIC_ROWS_PCT
@@ -2799,6 +2772,187 @@ def _roll_maturity_backsteps(raw: pd.DataFrame) -> tuple[bool, int, list[dict[st
     return True, int(backstep.sum()), examples
 
 
+def _split_path_values(values: Iterable[object]) -> list[Path]:
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for value in values:
+        if pd.isna(value):
+            continue
+        for part in str(value).split(";"):
+            text = part.strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            paths.append(Path(text))
+    return paths
+
+
+def _manifest_for_path(path: Path) -> dict[str, object]:
+    manifest_path = Path(path.as_posix() + ".manifest.json")
+    return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+
+def _normalized_identity_frame(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    normalized = frame[columns].copy()
+    normalized["ts_event"] = (
+        pd.to_datetime(normalized["ts_event"], utc=True, errors="coerce")
+        .astype("int64")
+    )
+    for column in ["instrument_id", "volume", "maturity_year", "maturity_month"]:
+        normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
+    for column in ["open", "high", "low", "close"]:
+        normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
+    normalized["raw_symbol"] = normalized["raw_symbol"].astype("string").fillna("")
+    return normalized.sort_values(columns, kind="mergesort").reset_index(drop=True)
+
+
+def _identity_mismatch_counts(
+    raw_frame: pd.DataFrame,
+    enriched_frame: pd.DataFrame,
+) -> dict[str, int]:
+    columns = [
+        "ts_event",
+        "instrument_id",
+        "raw_symbol",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "maturity_year",
+        "maturity_month",
+    ]
+    missing = sorted(set(columns) - set(raw_frame.columns))
+    if missing:
+        return {f"missing_raw_{column}": 1 for column in missing}
+    missing = sorted(set(columns) - set(enriched_frame.columns))
+    if missing:
+        return {f"missing_enriched_{column}": 1 for column in missing}
+    left = _normalized_identity_frame(raw_frame, columns)
+    right = _normalized_identity_frame(enriched_frame, columns)
+    if len(left) != len(right):
+        return {"row_count": abs(len(left) - len(right)) or 1}
+    mismatches: dict[str, int] = {}
+    for column in columns:
+        mismatch = ~(left[column].eq(right[column]) | (left[column].isna() & right[column].isna()))
+        count = int(mismatch.sum())
+        if count:
+            mismatches[column] = count
+    return mismatches
+
+
+def _vendor_continuous_roll_backstep_identity_evidence(
+    raw: pd.DataFrame,
+    input_path: Path,
+    *,
+    market: str,
+    year: int,
+    backstep_count: int,
+) -> dict[str, object]:
+    failures: list[str] = []
+    source_paths = _split_path_values(raw.get("source_file", pd.Series(dtype=object)).dropna().unique())
+    if not source_paths:
+        failures.append("missing raw source_file DBN paths")
+
+    manifest_payloads: list[dict[str, object]] = []
+    for path in source_paths:
+        if not path.exists():
+            failures.append(f"missing OHLCV DBN source: {relative_source_path(path)}")
+            continue
+        try:
+            from scripts.phase1A_download.download_databento_raw import (
+                validate_raw_file_manifest,
+            )
+
+            manifest_failures = validate_raw_file_manifest(
+                path,
+                expected_schema="ohlcv-1m",
+                expected_market=market,
+                expected_year=year,
+            )
+            if manifest_failures:
+                failures.extend(
+                    f"OHLCV manifest {relative_source_path(path)}: {failure}"
+                    for failure in manifest_failures
+                )
+            manifest = _manifest_for_path(path)
+            manifest_payloads.append(manifest)
+            if manifest.get("stype_in") != "continuous":
+                failures.append(f"OHLCV manifest stype_in is {manifest.get('stype_in')!r}")
+            if manifest.get("stype_out") != "instrument_id":
+                failures.append(f"OHLCV manifest stype_out is {manifest.get('stype_out')!r}")
+        except Exception as exc:
+            failures.append(f"unreadable OHLCV manifest/source: {type(exc).__name__}: {exc}")
+
+    identity_mismatches: dict[str, int] = {}
+    dbn_row_count = 0
+    enriched_row_count = 0
+    definition_row_count = 0
+    definition_paths: list[Path] = []
+    if not failures:
+        try:
+            import databento as db
+            from scripts.phase1A_download.download_databento_raw import (
+                definition_frame_for_group,
+                drop_exact_duplicate_ohlcv_rows,
+                enrich_with_definition_metadata,
+                store_to_required_dataframe,
+            )
+
+            dbn_frames = []
+            for path in source_paths:
+                store = db.DBNStore.from_file(path)
+                dbn_frames.append(store_to_required_dataframe(store))
+            dbn_frame = drop_exact_duplicate_ohlcv_rows(
+                pd.concat(dbn_frames, ignore_index=True).sort_values(
+                    "ts_event",
+                    kind="mergesort",
+                )
+            )
+            dbn_row_count = int(len(dbn_frame))
+            dbn_root = source_paths[0].parents[2]
+            raw_root = input_path.parents[1]
+            definitions, definition_paths = definition_frame_for_group(
+                dbn_root,
+                market,
+                year,
+                raw_root=raw_root,
+            )
+            definition_row_count = int(len(definitions))
+            enriched = enrich_with_definition_metadata(dbn_frame, definitions)
+            enriched_row_count = int(len(enriched))
+            identity_mismatches = _identity_mismatch_counts(raw, enriched)
+            if identity_mismatches:
+                failures.append("DBN/raw/definition identity mismatch")
+            del dbn_frames, dbn_frame, definitions, enriched
+        except Exception as exc:
+            failures.append(f"DBN/raw/definition identity check failed: {type(exc).__name__}: {exc}")
+        finally:
+            gc.collect()
+
+    status = "PASS" if not failures and backstep_count > 0 else "FAIL"
+    return {
+        "status": status,
+        "policy": VENDOR_CONTINUOUS_ROLL_BACKSTEP_POLICY if status == "PASS" else "fail_closed",
+        "market": market,
+        "year": year,
+        "backstep_count": int(backstep_count),
+        "source_files": [relative_source_path(path) for path in source_paths],
+        "definition_files": [relative_source_path(path) for path in definition_paths],
+        "manifest_stype_in_values": sorted(
+            {str(item.get("stype_in")) for item in manifest_payloads}
+        ),
+        "manifest_stype_out_values": sorted(
+            {str(item.get("stype_out")) for item in manifest_payloads}
+        ),
+        "ohlcv_dbn_row_count": dbn_row_count,
+        "enriched_row_count": enriched_row_count,
+        "definition_row_count": definition_row_count,
+        "identity_mismatch_counts": identity_mismatches,
+        "failures": failures,
+    }
+
+
 def _add_roll_fields(
     df: pd.DataFrame,
     roll_window_bars: int,
@@ -3128,8 +3282,22 @@ def process_file(
     session_config_path: Path = DEFAULT_SESSION_CONFIG,
     allow_hardcoded_calendar: bool = False,
     write_output: bool = True,
+    allow_broad_build_after_readiness_pass: bool = False,
+    broad_build_approval_token: str | None = None,
 ) -> ValidationResult:
     market, year = infer_market_year(input_path)
+    if (
+        write_output
+        and _path_is_under_broad_manifest_527_rebuild_output_root(output_path)
+        and not (
+            allow_broad_build_after_readiness_pass
+            and broad_build_approval_token == BROAD_MANIFEST_527_REBUILD_APPROVAL_TOKEN
+        )
+    ):
+        raise ValueError(
+            "exact broad-build approval token is required before writing "
+            f"{relative_source_path(output_path)}"
+        )
     config = load_causal_base_config(profile_config_path, profile)
     _, _, aliases, _ = load_profile_map(profile_config_path)
     resolved_profile = resolve_profile_name(profile, aliases)
@@ -3176,7 +3344,7 @@ def process_file(
             else "not_applicable"
         ),
         vendor_trusted_ohlcv_no_trade_status=(
-            "synthetic_thresholds_diagnostic_l0_gate_still_fail_closed"
+            "synthetic_thresholds_diagnostic_vendor_backed_provenance"
             if vendor_trusted_ohlcv_no_trade_policy_enabled
             else "not_applicable"
         ),
@@ -3224,10 +3392,41 @@ def process_file(
         result.roll_maturity_backstep_examples,
     ) = _roll_maturity_backsteps(current_raw)
     if result.roll_maturity_backstep_count > 0:
-        result.warnings.append(
-            "roll maturity sequence not monotonic: "
-            f"backsteps={result.roll_maturity_backstep_count}"
-        )
+        if vendor_trusted_ohlcv_no_trade_policy_enabled:
+            evidence = _vendor_continuous_roll_backstep_identity_evidence(
+                current_raw,
+                input_path,
+                market=market,
+                year=year,
+                backstep_count=result.roll_maturity_backstep_count,
+            )
+            result.vendor_continuous_roll_backstep_evidence = evidence
+            if evidence.get("status") == "PASS":
+                result.vendor_continuous_roll_backstep_policy = (
+                    VENDOR_CONTINUOUS_ROLL_BACKSTEP_POLICY
+                )
+                result.vendor_continuous_roll_backstep_status = (
+                    VENDOR_CONTINUOUS_ROLL_BACKSTEP_STATUS
+                )
+                result.diagnostic_warnings.append(
+                    "roll maturity sequence not monotonic treated as diagnostic "
+                    "under vendor continuous DBN/raw/definition identity proof: "
+                    f"backsteps={result.roll_maturity_backstep_count}"
+                )
+            else:
+                result.vendor_continuous_roll_backstep_policy = "fail_closed"
+                result.vendor_continuous_roll_backstep_status = (
+                    "vendor_continuous_roll_identity_proof_failed"
+                )
+                result.warnings.append(
+                    "roll maturity sequence not monotonic: "
+                    f"backsteps={result.roll_maturity_backstep_count}"
+                )
+        else:
+            result.warnings.append(
+                "roll maturity sequence not monotonic: "
+                f"backsteps={result.roll_maturity_backstep_count}"
+            )
 
     result.metadata_available = result.instrument_id_nonnull_count > 0
     result.roll_detection_available = result.metadata_available
@@ -3479,7 +3678,54 @@ def process_file(
             f"rows_pct={result.synthetic_rows_pct} "
             f"max_gap_minutes={result.max_synthetic_gap_minutes}"
         )
-    if result.roll_window_threshold_breached:
+    sparse_roll_window_threshold_diagnostic = (
+        result.roll_window_threshold_breached
+        and sparse_ohlcv_policy_enabled
+        and result.roll_window_policy == "elapsed_minutes_sparse_ohlcv"
+        and result.vendor_continuous_roll_backstep_evidence.get("status") == "PASS"
+    )
+    if sparse_roll_window_threshold_diagnostic:
+        result.sparse_roll_window_threshold_policy = SPARSE_ROLL_WINDOW_THRESHOLD_POLICY
+        result.sparse_roll_window_threshold_status = SPARSE_ROLL_WINDOW_THRESHOLD_STATUS
+        result.sparse_roll_window_threshold_evidence = {
+            "status": "PASS",
+            "market": market,
+            "year": year,
+            "roll_window_policy": result.roll_window_policy,
+            "roll_window_minutes": result.roll_window_minutes,
+            "roll_window_rows": result.roll_window_rows,
+            "roll_window_rows_pct": result.roll_window_rows_pct,
+            "max_roll_window_rows_pct_threshold": result.max_roll_window_rows_pct_threshold,
+            "vendor_continuous_roll_backstep_status": (
+                result.vendor_continuous_roll_backstep_status
+            ),
+            "vendor_continuous_identity_evidence_status": (
+                result.vendor_continuous_roll_backstep_evidence.get("status")
+            ),
+        }
+        result.diagnostic_warnings.append(
+            "roll exclusion threshold treated as diagnostic under sparse elapsed-minute "
+            "vendor continuous identity proof: "
+            f"rows_pct={result.roll_window_rows_pct} rows={result.roll_window_rows}"
+        )
+    elif result.roll_window_threshold_breached:
+        if sparse_ohlcv_policy_enabled and result.roll_window_policy == "elapsed_minutes_sparse_ohlcv":
+            result.sparse_roll_window_threshold_policy = "fail_closed"
+            result.sparse_roll_window_threshold_status = (
+                "sparse_roll_window_vendor_continuous_identity_proof_missing"
+            )
+            result.sparse_roll_window_threshold_evidence = {
+                "status": "FAIL",
+                "market": market,
+                "year": year,
+                "roll_window_policy": result.roll_window_policy,
+                "roll_window_minutes": result.roll_window_minutes,
+                "roll_window_rows": result.roll_window_rows,
+                "roll_window_rows_pct": result.roll_window_rows_pct,
+                "vendor_continuous_identity_evidence_status": (
+                    result.vendor_continuous_roll_backstep_evidence.get("status")
+                ),
+            }
         result.warnings.append(
             "roll exclusion threshold breached: "
             f"rows_pct={result.roll_window_rows_pct} rows={result.roll_window_rows}"
@@ -3512,9 +3758,33 @@ def write_reports(
     accepted_readiness_exceptions_path: Path | None = None,
     local_trade_gap_gate: dict[str, Any] | None = None,
     selection_metadata: dict[str, Any] | None = None,
+    allow_broad_build_after_readiness_pass: bool = False,
+    broad_build_approval_token: str | None = None,
 ) -> None:
-    reports_root.mkdir(parents=True, exist_ok=True)
     result_list = list(results)
+    protected_broad_report_write = _is_broad_manifest_527_rebuild_reports_root(
+        reports_root
+    ) or (
+        output_root is not None
+        and _is_broad_manifest_527_rebuild_output_root(output_root)
+    )
+    if not protected_broad_report_write:
+        protected_broad_report_write = any(
+            _path_is_under_broad_manifest_527_rebuild_output_root(
+                Path(result.output_path)
+            )
+            for result in result_list
+        )
+    if protected_broad_report_write and not (
+        allow_broad_build_after_readiness_pass
+        and broad_build_approval_token == BROAD_MANIFEST_527_REBUILD_APPROVAL_TOKEN
+    ):
+        raise ValueError(
+            "exact broad-build approval token is required before writing "
+            "protected broad build reports"
+        )
+
+    reports_root.mkdir(parents=True, exist_ok=True)
     config = load_causal_base_config(
         profile_config_path,
         profile,
@@ -3803,6 +4073,25 @@ def write_reports(
                 "vendor_trusted_ohlcv_no_trade_status": row[
                     "vendor_trusted_ohlcv_no_trade_status"
                 ],
+                "vendor_continuous_roll_backstep_policy": row[
+                    "vendor_continuous_roll_backstep_policy"
+                ],
+                "vendor_continuous_roll_backstep_status": row[
+                    "vendor_continuous_roll_backstep_status"
+                ],
+                "vendor_continuous_roll_backstep_evidence": row[
+                    "vendor_continuous_roll_backstep_evidence"
+                ],
+                "sparse_roll_window_threshold_policy": row[
+                    "sparse_roll_window_threshold_policy"
+                ],
+                "sparse_roll_window_threshold_status": row[
+                    "sparse_roll_window_threshold_status"
+                ],
+                "sparse_roll_window_threshold_evidence": row[
+                    "sparse_roll_window_threshold_evidence"
+                ],
+                "diagnostic_warnings": row["diagnostic_warnings"],
                 "max_synthetic_rows_pct_threshold": row["max_synthetic_rows_pct_threshold"],
                 "max_synthetic_gap_minutes_threshold": row[
                     "max_synthetic_gap_minutes_threshold"
@@ -3900,6 +4189,132 @@ def write_readiness_report(report: dict[str, Any], json_path: Path, markdown_pat
     markdown_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _path_is_under_data(path: Path) -> bool:
+    data_root = Path("data").resolve()
+    try:
+        resolved = path.resolve()
+        return os.path.commonpath([str(data_root), str(resolved)]) == str(data_root)
+    except (OSError, ValueError):
+        normalized = path.as_posix().lower().lstrip("./")
+        return normalized == "data" or normalized.startswith("data/")
+
+
+def _open_jsonl_checkpoint_writer(
+    checkpoint_path: Path,
+    *,
+    label: str,
+) -> tuple[Any, Callable[[dict[str, Any]], None]]:
+    if _path_is_under_data(checkpoint_path):
+        raise ValueError(
+            f"{label} checkpoint path must not be under data/**: "
+            f"{relative_source_path(checkpoint_path)}"
+        )
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = checkpoint_path.open("w", encoding="utf-8")
+
+    def write_checkpoint(record: dict[str, Any]) -> None:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+        handle.flush()
+
+    return handle, write_checkpoint
+
+
+def _open_readiness_checkpoint_writer(
+    checkpoint_path: Path,
+) -> tuple[Any, Callable[[dict[str, Any]], None]]:
+    return _open_jsonl_checkpoint_writer(checkpoint_path, label="readiness")
+
+
+def _open_build_progress_checkpoint_writer(
+    checkpoint_path: Path,
+) -> tuple[Any, Callable[[dict[str, Any]], None]]:
+    return _open_jsonl_checkpoint_writer(checkpoint_path, label="build progress")
+
+
+def _is_broad_manifest_527_rebuild_output_root(output_root: Path) -> bool:
+    try:
+        return (
+            output_root.resolve()
+            == BROAD_MANIFEST_527_REBUILD_OUTPUT_ROOT.resolve()
+        )
+    except OSError:
+        return (
+            output_root.as_posix().rstrip("/").lower()
+            == BROAD_MANIFEST_527_REBUILD_OUTPUT_ROOT.as_posix().lower()
+        )
+
+
+def _is_broad_manifest_527_rebuild_reports_root(reports_root: Path) -> bool:
+    try:
+        return (
+            reports_root.resolve()
+            == BROAD_MANIFEST_527_REBUILD_REPORTS_ROOT.resolve()
+        )
+    except OSError:
+        return (
+            reports_root.as_posix().rstrip("/").lower()
+            == BROAD_MANIFEST_527_REBUILD_REPORTS_ROOT.as_posix().lower()
+        )
+
+
+def _path_is_under_broad_manifest_527_rebuild_output_root(path: Path) -> bool:
+    root = BROAD_MANIFEST_527_REBUILD_OUTPUT_ROOT.resolve()
+    try:
+        resolved = path.resolve()
+        return os.path.commonpath([str(root), str(resolved)]) == str(root)
+    except (OSError, ValueError):
+        normalized = path.as_posix().lower().lstrip("./")
+        root_text = BROAD_MANIFEST_527_REBUILD_OUTPUT_ROOT.as_posix().lower()
+        return normalized == root_text or normalized.startswith(root_text + "/")
+
+
+def _broad_manifest_527_rebuild_approval_failures(
+    *,
+    output_root: Path,
+    reports_root: Path,
+    allow_broad_build_after_readiness_pass: bool,
+    broad_build_approval_token: str | None,
+    build_max_market_years: int | None,
+    build_progress_checkpoint_jsonl: str | None,
+) -> list[str]:
+    failures: list[str] = []
+    if not _is_broad_manifest_527_rebuild_output_root(output_root):
+        return failures
+    if not allow_broad_build_after_readiness_pass:
+        failures.append("missing --allow-broad-build-after-readiness-pass")
+    if broad_build_approval_token != BROAD_MANIFEST_527_REBUILD_APPROVAL_TOKEN:
+        failures.append("missing or incorrect --broad-build-approval-token")
+    if build_progress_checkpoint_jsonl is None:
+        failures.append("protected broad build requires --build-progress-checkpoint-jsonl")
+    if build_max_market_years is None:
+        failures.append("protected broad build requires --build-max-market-years")
+    elif build_max_market_years > BROAD_MANIFEST_527_REBUILD_MAX_BUILD_MARKET_YEARS:
+        failures.append(
+            "protected broad build chunk is too large: "
+            f"--build-max-market-years must be <= "
+            f"{BROAD_MANIFEST_527_REBUILD_MAX_BUILD_MARKET_YEARS}"
+        )
+
+    manifest_path = reports_root / "causal_base_manifest.json"
+    if output_root.exists() and not manifest_path.exists():
+        try:
+            has_parquet = next(output_root.rglob("*.parquet"), None) is not None
+        except OSError as exc:
+            failures.append(
+                "protected broad output root unreadable: "
+                f"{relative_source_path(output_root)} ({exc})"
+            )
+        else:
+            if has_parquet:
+                failures.append(
+                    "protected broad output root already contains parquet files "
+                    "without paired Phase 2 manifest: "
+                    f"output_root={relative_source_path(output_root)} "
+                    f"manifest={relative_source_path(manifest_path)}"
+                )
+    return failures
+
+
 def phase2_readiness_result_row(
     result: ValidationResult,
     *,
@@ -3965,6 +4380,25 @@ def phase2_readiness_result_row(
         "vendor_trusted_ohlcv_no_trade_status": (
             result.vendor_trusted_ohlcv_no_trade_status
         ),
+        "vendor_continuous_roll_backstep_policy": (
+            result.vendor_continuous_roll_backstep_policy
+        ),
+        "vendor_continuous_roll_backstep_status": (
+            result.vendor_continuous_roll_backstep_status
+        ),
+        "vendor_continuous_roll_backstep_evidence": (
+            result.vendor_continuous_roll_backstep_evidence
+        ),
+        "sparse_roll_window_threshold_policy": (
+            result.sparse_roll_window_threshold_policy
+        ),
+        "sparse_roll_window_threshold_status": (
+            result.sparse_roll_window_threshold_status
+        ),
+        "sparse_roll_window_threshold_evidence": (
+            result.sparse_roll_window_threshold_evidence
+        ),
+        "diagnostic_warnings": result.diagnostic_warnings,
         "warnings": result.warnings,
         "failures": result.failures,
     }
@@ -4348,6 +4782,56 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--readiness-json-out", help="Override readiness-only JSON report path.")
     parser.add_argument("--readiness-md-out", help="Override readiness-only markdown report path.")
+    parser.add_argument(
+        "--readiness-checkpoint-jsonl",
+        help=(
+            "Write append-only readiness checkpoint records outside data/**: "
+            "start, one row per checked market-year, and final summary."
+        ),
+    )
+    parser.add_argument(
+        "--readiness-max-market-years",
+        type=int,
+        help="Limit readiness-only processing to the first N scheduled market-years.",
+    )
+    parser.add_argument(
+        "--readiness-stop-after-blockers",
+        type=int,
+        help=(
+            "Stop readiness-only after N unaccepted blockers. Defaults to 1 for "
+            "--readiness-only."
+        ),
+    )
+    parser.add_argument(
+        "--readiness-progress",
+        action="store_true",
+        help="Emit per-market-year readiness progress to stderr.",
+    )
+    parser.add_argument(
+        "--allow-broad-build-after-readiness-pass",
+        action="store_true",
+        help=(
+            "Allow non-readiness build writes to the protected "
+            "broad_manifest_527_rebuild_v1 output root after exact human "
+            "approval. Readiness PASS alone is not sufficient."
+        ),
+    )
+    parser.add_argument(
+        "--broad-build-approval-token",
+        help="Exact human approval token required for protected broad build writes.",
+    )
+    parser.add_argument(
+        "--build-max-market-years",
+        type=int,
+        help="Limit non-readiness build processing to the first N scheduled market-years.",
+    )
+    parser.add_argument(
+        "--build-progress-checkpoint-jsonl",
+        help=(
+            "Write append-only non-readiness build progress records outside "
+            "data/**: start, one row per processed market-year, and final summary."
+        ),
+    )
     return parser
 
 
@@ -4367,6 +4851,57 @@ def main() -> int:
         if args.accepted_readiness_exceptions
         else None
     )
+    readiness_only_options = (
+        args.readiness_checkpoint_jsonl
+        or args.readiness_max_market_years is not None
+        or args.readiness_stop_after_blockers is not None
+        or args.readiness_progress
+    )
+    build_only_options = (
+        args.allow_broad_build_after_readiness_pass
+        or args.broad_build_approval_token
+        or args.build_max_market_years is not None
+        or args.build_progress_checkpoint_jsonl
+    )
+    if readiness_only_options and not args.readiness_only:
+        parser.error(
+            "--readiness-checkpoint-jsonl, --readiness-max-market-years, "
+            "--readiness-stop-after-blockers, and --readiness-progress require "
+            "--readiness-only"
+        )
+    if build_only_options and args.readiness_only:
+        parser.error(
+            "--allow-broad-build-after-readiness-pass, "
+            "--broad-build-approval-token, --build-max-market-years, "
+            "and --build-progress-checkpoint-jsonl require non-readiness build mode"
+        )
+    if args.readiness_max_market_years is not None and args.readiness_max_market_years < 1:
+        print("FAIL readiness_max_market_years: value must be >= 1")
+        return 1
+    if args.build_max_market_years is not None and args.build_max_market_years < 1:
+        print("FAIL build_max_market_years: value must be >= 1")
+        return 1
+    if not args.readiness_only:
+        broad_build_approval_failures = _broad_manifest_527_rebuild_approval_failures(
+            output_root=output_root,
+            reports_root=reports_root,
+            allow_broad_build_after_readiness_pass=(
+                args.allow_broad_build_after_readiness_pass
+            ),
+            broad_build_approval_token=args.broad_build_approval_token,
+            build_max_market_years=args.build_max_market_years,
+            build_progress_checkpoint_jsonl=args.build_progress_checkpoint_jsonl,
+        )
+        if broad_build_approval_failures:
+            for failure in broad_build_approval_failures:
+                print(f"FAIL broad_build_approval: {failure}")
+            return 1
+    readiness_stop_after_blockers = args.readiness_stop_after_blockers
+    if args.readiness_only and readiness_stop_after_blockers is None:
+        readiness_stop_after_blockers = 1
+    if readiness_stop_after_blockers is not None and readiness_stop_after_blockers < 1:
+        print("FAIL readiness_stop_after_blockers: value must be >= 1")
+        return 1
     include_list_path = (
         Path(args.market_year_include_list) if args.market_year_include_list else None
     )
@@ -4421,6 +4956,32 @@ def main() -> int:
             for failure in output_root_failures:
                 print(f"FAIL output_root_guard: {failure}")
             return 1
+    checkpoint_handle = None
+    write_checkpoint: Callable[[dict[str, Any]], None] | None = None
+    if args.readiness_checkpoint_jsonl:
+        checkpoint_path = Path(args.readiness_checkpoint_jsonl)
+        try:
+            checkpoint_handle, write_checkpoint = _open_readiness_checkpoint_writer(
+                checkpoint_path
+            )
+        except ValueError as exc:
+            print(f"FAIL readiness_checkpoint_jsonl: {exc}")
+            return 1
+        write_checkpoint(
+            {
+                "stage": "phase2_readiness_checkpoint_start",
+                "profile": args.profile,
+                "raw_root": relative_source_path(raw_root),
+                "raw_alignment_report": relative_source_path(raw_alignment_report),
+                "market_year_include_list": (
+                    relative_source_path(include_list_path)
+                    if include_list_path is not None
+                    else None
+                ),
+                "max_market_years": args.readiness_max_market_years,
+                "stop_after_blockers": readiness_stop_after_blockers,
+            }
+        )
     readiness = build_phase2_readiness_report(
         profile=args.profile,
         raw_root=raw_root,
@@ -4433,12 +4994,38 @@ def main() -> int:
         max_synthetic_gap_minutes=config.max_synthetic_gap_minutes,
         allow_hardcoded_calendar=args.allow_hardcoded_calendar,
         fail_fast=True,
+        progress=args.readiness_progress,
         include_market_years=include_market_years,
         include_list_path=include_list_path,
+        checkpoint_row_callback=write_checkpoint,
+        max_market_years=args.readiness_max_market_years,
+        stop_after_blockers=readiness_stop_after_blockers,
     )
     if args.readiness_only:
         json_path = Path(args.readiness_json_out) if args.readiness_json_out else reports_root / "phase2_readiness_summary.json"
         markdown_path = Path(args.readiness_md_out) if args.readiness_md_out else reports_root / "phase2_readiness_summary.md"
+        if write_checkpoint is not None:
+            write_checkpoint(
+                {
+                    "stage": "phase2_readiness_checkpoint_summary",
+                    "status": readiness.get("status"),
+                    "selected_market_year_count": readiness.get(
+                        "selected_market_year_count"
+                    ),
+                    "checked_market_year_count": readiness.get(
+                        "checked_market_year_count"
+                    ),
+                    "pending_market_year_count": readiness.get(
+                        "pending_market_year_count"
+                    ),
+                    "blocker_count": readiness.get("blocker_count"),
+                    "failure_count": readiness.get("failure_count"),
+                    "readiness_json_out": relative_source_path(json_path),
+                    "readiness_md_out": relative_source_path(markdown_path),
+                }
+            )
+            if checkpoint_handle is not None:
+                checkpoint_handle.close()
         write_readiness_report(readiness, json_path, markdown_path)
         print(
             "phase2_readiness_only "
@@ -4452,24 +5039,103 @@ def main() -> int:
         return 1
 
     results: list[ValidationResult] = []
-    for market, year, input_path in inputs:
-        output_path = output_root / market / f"{year}.parquet"
-        result = process_file(
-            input_path,
-            output_path,
-            profile=args.profile,
-            roll_window_bars=args.roll_window_bars,
-            max_synthetic_gap_minutes=config.max_synthetic_gap_minutes,
-            profile_config_path=profile_config_path,
-            session_config_path=session_config_path,
-            allow_hardcoded_calendar=args.allow_hardcoded_calendar,
+    build_inputs = inputs
+    if args.build_max_market_years is not None:
+        build_inputs = inputs[: int(args.build_max_market_years)]
+    build_checkpoint_handle = None
+    write_build_checkpoint: Callable[[dict[str, Any]], None] | None = None
+    if args.build_progress_checkpoint_jsonl:
+        build_checkpoint_path = Path(args.build_progress_checkpoint_jsonl)
+        try:
+            (
+                build_checkpoint_handle,
+                write_build_checkpoint,
+            ) = _open_build_progress_checkpoint_writer(build_checkpoint_path)
+        except ValueError as exc:
+            print(f"FAIL build_progress_checkpoint_jsonl: {exc}")
+            return 1
+        write_build_checkpoint(
+            {
+                "stage": "phase2_build_checkpoint_start",
+                "profile": args.profile,
+                "raw_root": relative_source_path(raw_root),
+                "output_root": relative_source_path(output_root),
+                "reports_root": relative_source_path(reports_root),
+                "raw_alignment_report": relative_source_path(raw_alignment_report),
+                "market_year_include_list": (
+                    relative_source_path(include_list_path)
+                    if include_list_path is not None
+                    else None
+                ),
+                "allow_broad_build_after_readiness_pass": (
+                    args.allow_broad_build_after_readiness_pass
+                ),
+                "broad_build_approval_token": args.broad_build_approval_token,
+                "max_market_years": args.build_max_market_years,
+                "selected_market_year_count": len(inputs),
+                "scheduled_market_year_count": len(build_inputs),
+            }
         )
-        results.append(result)
-        print(
-            f"{result.status} {market} {year}: raw={result.raw_rows} "
-            f"out={result.output_rows} synthetic={result.synthetic_rows} "
-            f"warnings={len(result.warnings)} failures={len(result.failures)}"
-        )
+    try:
+        for market, year, input_path in build_inputs:
+            output_path = output_root / market / f"{year}.parquet"
+            result = process_file(
+                input_path,
+                output_path,
+                profile=args.profile,
+                roll_window_bars=args.roll_window_bars,
+                max_synthetic_gap_minutes=config.max_synthetic_gap_minutes,
+                profile_config_path=profile_config_path,
+                session_config_path=session_config_path,
+                allow_hardcoded_calendar=args.allow_hardcoded_calendar,
+                allow_broad_build_after_readiness_pass=(
+                    args.allow_broad_build_after_readiness_pass
+                ),
+                broad_build_approval_token=args.broad_build_approval_token,
+            )
+            results.append(result)
+            if write_build_checkpoint is not None:
+                write_build_checkpoint(
+                    {
+                        "stage": "phase2_build_market_year",
+                        "market": result.market,
+                        "year": result.year,
+                        "status": result.status,
+                        "raw_rows": result.raw_rows,
+                        "output_rows": result.output_rows,
+                        "synthetic_rows": result.synthetic_rows,
+                        "warning_count": len(result.warnings),
+                        "failure_count": len(result.failures),
+                        "input_path": result.input_path,
+                        "output_path": result.output_path,
+                    }
+                )
+            print(
+                f"{result.status} {market} {year}: raw={result.raw_rows} "
+                f"out={result.output_rows} synthetic={result.synthetic_rows} "
+                f"warnings={len(result.warnings)} failures={len(result.failures)}"
+            )
+    finally:
+        if write_build_checkpoint is not None:
+            write_build_checkpoint(
+                {
+                    "stage": "phase2_build_checkpoint_summary",
+                    "selected_market_year_count": len(inputs),
+                    "scheduled_market_year_count": len(build_inputs),
+                    "processed_market_year_count": len(results),
+                    "pending_market_year_count": max(
+                        0, len(inputs) - len(results)
+                    ),
+                    "failure_count": sum(
+                        1 for result in results if result.status == "FAIL"
+                    ),
+                    "warning_count": sum(
+                        1 for result in results if result.status == "WARN"
+                    ),
+                }
+            )
+        if build_checkpoint_handle is not None:
+            build_checkpoint_handle.close()
 
     local_trade_gap_gate = None
     if profile_requires_local_trade_gap_gate(args.profile, profile_config_path):
@@ -4498,6 +5164,10 @@ def main() -> int:
         accepted_readiness_exceptions_path=accepted_readiness_exceptions_path,
         local_trade_gap_gate=local_trade_gap_gate,
         selection_metadata=selection.metadata,
+        allow_broad_build_after_readiness_pass=(
+            args.allow_broad_build_after_readiness_pass
+        ),
+        broad_build_approval_token=args.broad_build_approval_token,
     )
     return phase2_exit_code(results, local_trade_gap_gate)
 

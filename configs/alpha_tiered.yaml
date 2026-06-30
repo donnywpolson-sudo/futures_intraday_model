@@ -1,11 +1,12 @@
 default_profile: tier_1
 
-# Public research ladder:
-# - tier_0: smoke only; never alpha evidence.
-# - tier_1: core recent alpha research.
-# - tier_2: balanced robustness expansion.
-# - tier_3: full-universe long-horizon stress.
-# Keep *_holdout and *_forward profiles locked out of research selection.
+# Alpha testing ladder:
+# - tier_0: Smoke, never alpha evidence.
+# - tier_1: Core Research, fastest real alpha iteration.
+# - tier_2: Robustness Research, broader market/regime check.
+# - tier_3: Stress Research, full-universe long-history stress.
+# - *_holdout: Locked Holdout, 2025 only, no tuning or model selection.
+# - *_forward: Forward, 2026 current/partial year, no tuning or model selection.
 
 paths:
   raw_root: data/raw
@@ -124,13 +125,12 @@ causal_base:
   # much longer than one minute between adjacent rows.
   sparse_trade_derived_ohlcv_markets: ["SR1", "SR3"]
   sparse_trade_derived_roll_window_minutes: 15
-  # For configured markets, synthetic rows created from missing in-session
-  # Databento OHLCV-1m minutes are treated as vendor-trusted no-trade intervals
-  # after DBN coverage, raw/DBN alignment, timestamp ordering, OHLC, volume,
-  # tick-grid, and session/calendar checks pass. Synthetic row pct and max gap
-  # are diagnostic in causal readiness; the local L0/OHLCV gate still fails
-  # closed for overlapping local-trades windows with contradictory trade rows.
-  vendor_trusted_ohlcv_no_trade_markets: ["ZN"]
+  # For configured markets, missing in-session Databento OHLCV-1m minutes are
+  # handled as vendor-backed no-trade intervals after DBN coverage, raw/DBN
+  # alignment, timestamp ordering, OHLC, volume, tick-grid, and session/calendar
+  # checks pass. Synthetic row pct and max gap remain diagnostic evidence, but
+  # Phase 2 does not require local L1 self-proof for every no-bar minute.
+  vendor_trusted_ohlcv_no_trade_markets: *full_markets
 
 profile_defaults:
   smoke:
@@ -222,7 +222,7 @@ profiles:
     forbid_research_use: true
 
   tier_1_research:
-    description: "Tier 1 research: core family-diverse markets, 2023-2024."
+    description: "Core Research: core family-diverse markets, 2023-2024."
     intent: core_recent_research
     requirement_set: production_like
     settings_profile: recent_research
@@ -231,7 +231,7 @@ profiles:
     market_families: *core_market_families
 
   tier_1_holdout:
-    description: "Tier 1 locked holdout: core markets, 2025."
+    description: "Locked Holdout: core markets, 2025."
     intent: core_final_holdout
     requirement_set: production_like
     settings_profile: recent_research
@@ -241,7 +241,7 @@ profiles:
     market_families: *core_market_families
 
   tier_1_forward:
-    description: "Tier 1 forward validation: core markets, 2026."
+    description: "Forward: core markets, 2026 current/partial year."
     intent: core_forward_validation
     requirement_set: production_like
     settings_profile: recent_research
@@ -251,7 +251,7 @@ profiles:
     market_families: *core_market_families
 
   tier_2_research:
-    description: "Tier 2 robustness: 15 balanced markets, 2018-2024."
+    description: "Robustness Research: 15 balanced markets, 2018-2024."
     intent: balanced_medium_research
     requirement_set: production_like
     settings_profile: long_research
@@ -260,7 +260,7 @@ profiles:
     market_families: *balanced_market_families
 
   tier_2_holdout:
-    description: "Tier 2 locked holdout: 15 balanced markets, 2025."
+    description: "Locked Holdout: 15 balanced markets, 2025."
     intent: balanced_final_holdout
     requirement_set: production_like
     settings_profile: long_research
@@ -270,7 +270,7 @@ profiles:
     market_families: *balanced_market_families
 
   tier_2_forward:
-    description: "Tier 2 forward validation: 15 balanced markets, 2026."
+    description: "Forward: 15 balanced markets, 2026 current/partial year."
     intent: balanced_forward_validation
     requirement_set: production_like
     settings_profile: long_research
@@ -280,7 +280,7 @@ profiles:
     market_families: *balanced_market_families
 
   tier_3_research:
-    description: "Tier 3 full stress: 33 markets, 2010-2024."
+    description: "Stress Research: 33 markets, 2010-2024."
     intent: full_universe_long_research
     requirement_set: production_like
     settings_profile: long_research
@@ -610,7 +610,7 @@ profiles:
           - 'synthetic threshold breached: rows_pct=50.469719 max_gap_minutes=118'
 
   tier_3_holdout:
-    description: "Tier 3 locked holdout: 33 markets, 2025."
+    description: "Locked Holdout: 33 markets, 2025."
     intent: full_universe_final_holdout
     requirement_set: production_like
     settings_profile: long_research
@@ -622,7 +622,7 @@ profiles:
     market_families: *full_market_families
 
   tier_3_forward:
-    description: "Tier 3 forward validation: 33 markets, 2026."
+    description: "Forward: 33 markets, 2026 current/partial year."
     intent: full_universe_forward_validation
     requirement_set: production_like
     settings_profile: long_research

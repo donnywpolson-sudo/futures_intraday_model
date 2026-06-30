@@ -43,6 +43,14 @@ def build_phase2_readiness_report(**kwargs):
     return _build_phase2_readiness_report(**kwargs)
 
 
+def _read_jsonl(path: Path) -> list[dict[str, object]]:
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
 def _write_raw(path: Path, rows: list[dict[str, object]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_parquet(path, index=False)
@@ -991,7 +999,7 @@ def _degraded_raw_quality_rows() -> list[dict[str, object]]:
     return rows
 
 
-def _write_non_monotonic_roll_raw(path: Path, market: str) -> None:
+def _non_monotonic_roll_rows(market: str) -> list[dict[str, object]]:
     rows = []
     for ts_event, close, instrument_id, month_code, maturity_month in [
         ("2024-01-02T15:00:00Z", 100.5, 100, "H4", 3),
@@ -1011,6 +1019,11 @@ def _write_non_monotonic_roll_raw(path: Path, market: str) -> None:
                 "maturity_month": maturity_month,
             }
         )
+    return rows
+
+
+def _write_non_monotonic_roll_raw(path: Path, market: str) -> None:
+    rows = _non_monotonic_roll_rows(market)
     _write_raw(path, rows)
 
 
@@ -1457,6 +1470,9 @@ def test_phase2_readiness_allows_vendor_trusted_ohlcv_no_trade_gap(
     assert result.vendor_trusted_ohlcv_no_trade_policy == (
         "databento_ohlcv_1m_trade_derived_no_bar_no_trade"
     )
+    assert result.vendor_trusted_ohlcv_no_trade_status == (
+        "synthetic_thresholds_diagnostic_vendor_backed_provenance"
+    )
     output = pd.read_parquet(output_root / "ZN" / "2024.parquet")
     synthetic = output[output["is_synthetic"]]
     assert not synthetic.empty
@@ -1465,7 +1481,7 @@ def test_phase2_readiness_allows_vendor_trusted_ohlcv_no_trade_gap(
     assert synthetic["volume"].eq(0).all()
 
 
-def test_vendor_trusted_ohlcv_policy_does_not_override_l0_gate_failure(
+def test_vendor_trusted_ohlcv_policy_does_not_override_explicit_local_trade_failure(
     tmp_path: Path,
 ) -> None:
     profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
@@ -1600,6 +1616,127 @@ def test_sparse_trade_derived_roll_window_uses_elapsed_minutes_not_trade_bars(
     assert output.loc[boundary_idx + 1, "roll_window_flag"] == False
 
 
+def test_sparse_vendor_continuous_roll_window_threshold_is_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def proof(*args: object, **kwargs: object) -> dict[str, object]:
+        return {"status": "PASS", "identity_mismatch_counts": {}, "failures": []}
+
+    monkeypatch.setattr(
+        causal_base,
+        "_vendor_continuous_roll_backstep_identity_evidence",
+        proof,
+    )
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(
+        profile_config,
+        roll_pct=0.0,
+        tier0_markets=["SR1"],
+        sparse_markets=["SR1"],
+        sparse_roll_window_minutes=15,
+        vendor_trusted_markets=["SR1"],
+    )
+    raw_path = tmp_path / "data" / "raw" / "SR1" / "2024.parquet"
+    out_path = tmp_path / "data" / "causally_gated_normalized" / "SR1" / "2024.parquet"
+    _write_raw(raw_path, _non_monotonic_roll_rows("SR1"))
+
+    result = process_file(
+        raw_path,
+        out_path,
+        profile="tier_0",
+        profile_config_path=profile_config,
+        roll_window_bars=15,
+    )
+
+    output = pd.read_parquet(out_path)
+    assert result.status == "PASS"
+    assert result.roll_window_threshold_breached is True
+    assert result.sparse_roll_window_threshold_status == (
+        "roll_window_threshold_diagnostic_sparse_vendor_continuous"
+    )
+    assert not any("roll exclusion threshold breached" in item for item in result.warnings)
+    assert output["roll_window_flag"].any()
+    invalid_reasons = output["causal_invalid_reason"].fillna("").astype(str)
+    assert invalid_reasons.str.contains("roll_window").any()
+
+
+def test_sparse_roll_window_threshold_missing_identity_proof_stays_blocked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def proof(*args: object, **kwargs: object) -> dict[str, object]:
+        return {"status": "FAIL", "identity_mismatch_counts": {"raw_symbol": 1}, "failures": ["mismatch"]}
+
+    monkeypatch.setattr(
+        causal_base,
+        "_vendor_continuous_roll_backstep_identity_evidence",
+        proof,
+    )
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(
+        profile_config,
+        roll_pct=0.0,
+        tier0_markets=["SR1"],
+        sparse_markets=["SR1"],
+        sparse_roll_window_minutes=15,
+        vendor_trusted_markets=["SR1"],
+    )
+    raw_path = tmp_path / "data" / "raw" / "SR1" / "2024.parquet"
+    out_path = tmp_path / "data" / "causally_gated_normalized" / "SR1" / "2024.parquet"
+    _write_raw(raw_path, _non_monotonic_roll_rows("SR1"))
+
+    result = process_file(
+        raw_path,
+        out_path,
+        profile="tier_0",
+        profile_config_path=profile_config,
+        roll_window_bars=15,
+    )
+
+    assert result.status == "WARN"
+    assert result.sparse_roll_window_threshold_status == (
+        "sparse_roll_window_vendor_continuous_identity_proof_missing"
+    )
+    assert any("roll exclusion threshold breached" in item for item in result.warnings)
+
+
+def test_non_sparse_roll_window_threshold_stays_blocked_with_identity_proof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def proof(*args: object, **kwargs: object) -> dict[str, object]:
+        return {"status": "PASS", "identity_mismatch_counts": {}, "failures": []}
+
+    monkeypatch.setattr(
+        causal_base,
+        "_vendor_continuous_roll_backstep_identity_evidence",
+        proof,
+    )
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(
+        profile_config,
+        roll_pct=0.0,
+        tier0_markets=["ES"],
+        vendor_trusted_markets=["ES"],
+    )
+    raw_path = tmp_path / "data" / "raw" / "ES" / "2024.parquet"
+    out_path = tmp_path / "data" / "causally_gated_normalized" / "ES" / "2024.parquet"
+    _write_raw(raw_path, _non_monotonic_roll_rows("ES"))
+
+    result = process_file(
+        raw_path,
+        out_path,
+        profile="tier_0",
+        profile_config_path=profile_config,
+        roll_window_bars=15,
+    )
+
+    assert result.status == "WARN"
+    assert result.sparse_roll_window_threshold_status == "not_applicable"
+    assert any("roll exclusion threshold breached" in item for item in result.warnings)
+
+
 def test_non_monotonic_roll_maturity_sequence_warns(tmp_path: Path) -> None:
     raw_path = tmp_path / "data" / "raw" / "ES" / "2024.parquet"
     out_path = tmp_path / "data" / "causally_gated_normalized" / "ES" / "2024.parquet"
@@ -1655,6 +1792,111 @@ def test_non_monotonic_roll_maturity_sequence_warns(tmp_path: Path) -> None:
     assert result.roll_maturity_backstep_count == 1
     assert len(result.roll_maturity_backstep_examples) == 1
     assert any("roll maturity sequence not monotonic" in item for item in result.warnings)
+
+
+def test_vendor_continuous_roll_backstep_identity_proof_is_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def proof(*args: object, **kwargs: object) -> dict[str, object]:
+        return {
+            "status": "PASS",
+            "policy": "databento_continuous_roll_identity_proven",
+            "identity_mismatch_counts": {},
+            "failures": [],
+        }
+
+    monkeypatch.setattr(
+        causal_base,
+        "_vendor_continuous_roll_backstep_identity_evidence",
+        proof,
+    )
+    raw_path = tmp_path / "data" / "raw" / "HE" / "2024.parquet"
+    out_path = tmp_path / "data" / "causally_gated_normalized" / "HE" / "2024.parquet"
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(
+        profile_config,
+        roll_pct=100.0,
+        tier0_markets=["HE"],
+        vendor_trusted_markets=["HE"],
+    )
+    _write_raw(raw_path, _non_monotonic_roll_rows("HE"))
+
+    result = process_file(
+        raw_path,
+        out_path,
+        profile="tier_0",
+        profile_config_path=profile_config,
+        roll_window_bars=1,
+    )
+
+    assert result.status == "PASS"
+    assert result.roll_maturity_backstep_count == 1
+    assert result.vendor_continuous_roll_backstep_status == (
+        "roll_backsteps_diagnostic_vendor_continuous_identity_proven"
+    )
+    assert any("roll maturity sequence not monotonic" in item for item in result.diagnostic_warnings)
+    assert not any("roll maturity sequence not monotonic" in item for item in result.warnings)
+
+
+def test_vendor_continuous_roll_backstep_missing_identity_proof_stays_blocked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def proof(*args: object, **kwargs: object) -> dict[str, object]:
+        return {
+            "status": "FAIL",
+            "policy": "fail_closed",
+            "identity_mismatch_counts": {"raw_symbol": 1},
+            "failures": ["DBN/raw/definition identity mismatch"],
+        }
+
+    monkeypatch.setattr(
+        causal_base,
+        "_vendor_continuous_roll_backstep_identity_evidence",
+        proof,
+    )
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(
+        profile_config,
+        roll_pct=100.0,
+        tier0_markets=["HE"],
+        vendor_trusted_markets=["HE"],
+    )
+    raw_root = tmp_path / "data" / "raw"
+    raw_path = raw_root / "HE" / "2024.parquet"
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_raw_alignment_report(
+        report_path,
+        raw_root=raw_root,
+        profile="tier_0",
+        resolved_profile="tier_0",
+        overrides={
+            "markets": ["HE"],
+            "years": [2024],
+            "pre_availability_exemptions": [],
+            "expected_market_year_count": 1,
+        },
+    )
+    _write_raw(raw_path, _non_monotonic_roll_rows("HE"))
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        output_root=output_root,
+        profile_config_path=profile_config,
+        roll_window_bars=1,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["blocker_count"] == 1
+    blocker = report["blockers"][0]
+    assert blocker["vendor_continuous_roll_backstep_status"] == (
+        "vendor_continuous_roll_identity_proof_failed"
+    )
+    assert "roll maturity sequence not monotonic" in blocker["top_blocker_reason"]
 
 
 def test_phase2_readiness_accepts_configured_exact_roll_maturity_exception(
@@ -2169,6 +2411,49 @@ def test_phase2_readiness_accepts_exact_vendor_trusted_ohlcv_no_trade_exception(
     assert not (output_root / "HE" / "2016.parquet").exists()
 
 
+def test_phase2_readiness_vendor_trusted_exception_records_optional_enrichment_gaps(
+    tmp_path: Path,
+) -> None:
+    raw_alignment_path, raw_readiness_path = _write_vendor_trusted_ohlcv_evidence_reports(
+        tmp_path,
+        market="6M",
+        year=2015,
+    )
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_vendor_trusted_ohlcv_no_trade_exception_config(
+        profile_config,
+        profile_market="6M",
+        profile_year=2015,
+        exception_market="6M",
+        exception_year=2015,
+        raw_alignment_path=raw_alignment_path,
+        raw_readiness_path=raw_readiness_path,
+    )
+    rows = _vendor_trusted_ohlcv_no_trade_rows(year=2015)
+    for row in rows:
+        row["status_missing"] = True
+        row["status_stale"] = True
+        row["statistics_missing"] = True
+        row["statistics_stale"] = True
+    raw_root = tmp_path / "data" / "raw"
+    _write_raw(raw_root / "6M" / "2015.parquet", rows)
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=raw_alignment_path,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "PASS"
+    accepted = report["accepted_readiness_exceptions"][0]
+    assert accepted["market"] == "6M"
+    assert accepted["year"] == 2015
+    assert accepted["category"] == "vendor_trusted_ohlcv_no_trade"
+    assert accepted["status_enrichment_missing_rows"] == 2
+    assert accepted["statistics_enrichment_missing_rows"] == 2
+
+
 def _tier1_candidate_readiness_fixture(
     tmp_path: Path,
 ) -> tuple[Path, Path, Path, Path, dict[int, str]]:
@@ -2417,7 +2702,7 @@ def test_phase2_readiness_rejects_vendor_trusted_ohlcv_invalid_evidence_report(
     )
 
 
-def test_phase2_readiness_rejects_he_le_broad_vendor_trusted_market_waiver(
+def test_phase2_readiness_allows_he_le_broad_vendor_trusted_market_policy(
     tmp_path: Path,
 ) -> None:
     profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
@@ -2427,11 +2712,12 @@ def test_phase2_readiness_rejects_he_le_broad_vendor_trusted_market_waiver(
         vendor_trusted_markets=["HE"],
     )
 
-    with pytest.raises(ValueError, match="cannot include HE/LE"):
-        load_causal_base_config(profile_config, "tier_0")
+    config = load_causal_base_config(profile_config, "tier_0")
+
+    assert "HE" in config.vendor_trusted_ohlcv_no_trade_markets
 
 
-def test_phase2_readiness_rejects_session_scope_unresolved_vendor_trusted_row(
+def test_phase2_readiness_accepts_exact_vendor_trusted_row_outside_legacy_allowlist(
     tmp_path: Path,
 ) -> None:
     raw_alignment_path, raw_readiness_path = _write_vendor_trusted_ohlcv_evidence_reports(
@@ -2452,16 +2738,23 @@ def test_phase2_readiness_rejects_session_scope_unresolved_vendor_trusted_row(
     raw_root = tmp_path / "data" / "raw"
     _write_raw(
         raw_root / "KE" / "2019.parquet",
-        _vendor_trusted_ohlcv_no_trade_rows(),
+        _vendor_trusted_ohlcv_no_trade_rows(year=2019),
     )
 
-    with pytest.raises(ValueError, match="limited to exact market-years"):
-        build_phase2_readiness_report(
-            profile="tier_0",
-            raw_root=raw_root,
-            raw_alignment_report=raw_alignment_path,
-            profile_config_path=profile_config,
-        )
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=raw_alignment_path,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "PASS"
+    assert report["blocker_count"] == 0
+    assert report["accepted_exception_count"] == 1
+    accepted = report["accepted_readiness_exceptions"][0]
+    assert accepted["market"] == "KE"
+    assert accepted["year"] == 2019
+    assert accepted["category"] == "vendor_trusted_ohlcv_no_trade"
 
 
 def _parent_sparse_report(
@@ -2857,6 +3150,385 @@ def test_phase2_cli_accepts_explicit_output_roots(tmp_path: Path) -> None:
     assert Path(report_args.output_root).as_posix() == report_root.as_posix()
 
 
+def test_phase2_main_requires_explicit_broad_build_approval(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_causal_base_data.py",
+            "--output-root",
+            "data/causal_base_candidates/broad_manifest_527_rebuild_v1",
+        ],
+    )
+
+    assert phase2_main() == 1
+
+    assert "FAIL broad_build_approval" in capsys.readouterr().out
+
+
+def test_phase2_main_requires_broad_build_approval_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    protected_root = tmp_path / "data" / "causal_base_candidates" / "broad"
+    monkeypatch.setattr(
+        causal_base,
+        "BROAD_MANIFEST_527_REBUILD_OUTPUT_ROOT",
+        protected_root,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_causal_base_data.py",
+            "--output-root",
+            str(protected_root),
+            "--allow-broad-build-after-readiness-pass",
+            "--build-max-market-years",
+            "1",
+            "--build-progress-checkpoint-jsonl",
+            str(tmp_path / "reports" / "build_progress.jsonl"),
+        ],
+    )
+
+    assert phase2_main() == 1
+
+    assert "missing or incorrect --broad-build-approval-token" in capsys.readouterr().out
+
+
+def test_phase2_main_rejects_wrong_broad_build_approval_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    protected_root = tmp_path / "data" / "causal_base_candidates" / "broad"
+    monkeypatch.setattr(
+        causal_base,
+        "BROAD_MANIFEST_527_REBUILD_OUTPUT_ROOT",
+        protected_root,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_causal_base_data.py",
+            "--output-root",
+            str(protected_root),
+            "--allow-broad-build-after-readiness-pass",
+            "--broad-build-approval-token",
+            "WRONG_TOKEN",
+            "--build-max-market-years",
+            "1",
+            "--build-progress-checkpoint-jsonl",
+            str(tmp_path / "reports" / "build_progress.jsonl"),
+        ],
+    )
+
+    assert phase2_main() == 1
+
+    assert "missing or incorrect --broad-build-approval-token" in capsys.readouterr().out
+
+
+def test_phase2_main_rejects_unbounded_protected_broad_build(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    protected_root = tmp_path / "data" / "causal_base_candidates" / "broad"
+    monkeypatch.setattr(
+        causal_base,
+        "BROAD_MANIFEST_527_REBUILD_OUTPUT_ROOT",
+        protected_root,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_causal_base_data.py",
+            "--output-root",
+            str(protected_root),
+            "--allow-broad-build-after-readiness-pass",
+            "--broad-build-approval-token",
+            causal_base.BROAD_MANIFEST_527_REBUILD_APPROVAL_TOKEN,
+            "--build-progress-checkpoint-jsonl",
+            str(tmp_path / "reports" / "build_progress.jsonl"),
+        ],
+    )
+
+    assert phase2_main() == 1
+
+    assert "protected broad build requires --build-max-market-years" in capsys.readouterr().out
+
+
+def test_phase2_main_rejects_uncheckpointed_protected_broad_build(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    protected_root = tmp_path / "data" / "causal_base_candidates" / "broad"
+    monkeypatch.setattr(
+        causal_base,
+        "BROAD_MANIFEST_527_REBUILD_OUTPUT_ROOT",
+        protected_root,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_causal_base_data.py",
+            "--output-root",
+            str(protected_root),
+            "--allow-broad-build-after-readiness-pass",
+            "--broad-build-approval-token",
+            causal_base.BROAD_MANIFEST_527_REBUILD_APPROVAL_TOKEN,
+            "--build-max-market-years",
+            "1",
+        ],
+    )
+
+    assert phase2_main() == 1
+
+    assert (
+        "protected broad build requires --build-progress-checkpoint-jsonl"
+        in capsys.readouterr().out
+    )
+
+
+def test_phase2_main_rejects_large_protected_broad_build_chunk(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    protected_root = tmp_path / "data" / "causal_base_candidates" / "broad"
+    monkeypatch.setattr(
+        causal_base,
+        "BROAD_MANIFEST_527_REBUILD_OUTPUT_ROOT",
+        protected_root,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_causal_base_data.py",
+            "--output-root",
+            str(protected_root),
+            "--allow-broad-build-after-readiness-pass",
+            "--broad-build-approval-token",
+            causal_base.BROAD_MANIFEST_527_REBUILD_APPROVAL_TOKEN,
+            "--build-max-market-years",
+            str(causal_base.BROAD_MANIFEST_527_REBUILD_MAX_BUILD_MARKET_YEARS + 1),
+            "--build-progress-checkpoint-jsonl",
+            str(tmp_path / "reports" / "build_progress.jsonl"),
+        ],
+    )
+
+    assert phase2_main() == 1
+
+    assert "protected broad build chunk is too large" in capsys.readouterr().out
+
+
+def test_phase2_main_rejects_orphaned_protected_broad_outputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    protected_root = tmp_path / "data" / "causal_base_candidates" / "broad"
+    orphan = protected_root / "ES" / "2024.parquet"
+    orphan.parent.mkdir(parents=True)
+    orphan.write_text("not a valid parquet; only path presence matters", encoding="utf-8")
+    monkeypatch.setattr(
+        causal_base,
+        "BROAD_MANIFEST_527_REBUILD_OUTPUT_ROOT",
+        protected_root,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_causal_base_data.py",
+            "--output-root",
+            str(protected_root),
+            "--reports-root",
+            str(tmp_path / "reports" / "causal_base"),
+            "--allow-broad-build-after-readiness-pass",
+            "--broad-build-approval-token",
+            causal_base.BROAD_MANIFEST_527_REBUILD_APPROVAL_TOKEN,
+            "--build-max-market-years",
+            "1",
+            "--build-progress-checkpoint-jsonl",
+            str(tmp_path / "reports" / "build_progress.jsonl"),
+        ],
+    )
+
+    assert phase2_main() == 1
+
+    assert (
+        "protected broad output root already contains parquet files without paired "
+        "Phase 2 manifest"
+    ) in capsys.readouterr().out
+
+
+def test_process_file_requires_explicit_broad_build_approval(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="exact broad-build approval"):
+        process_file(
+            tmp_path / "data" / "raw" / "ES" / "2024.parquet",
+            Path(
+                "data/causal_base_candidates/"
+                "broad_manifest_527_rebuild_v1/ES/2024.parquet"
+            ),
+            profile="tier_0",
+        )
+
+
+def test_process_file_rejects_broad_build_boolean_without_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    protected_root = tmp_path / "data" / "causal_base_candidates" / "broad"
+    monkeypatch.setattr(
+        causal_base,
+        "BROAD_MANIFEST_527_REBUILD_OUTPUT_ROOT",
+        protected_root,
+    )
+
+    with pytest.raises(ValueError, match="exact broad-build approval token"):
+        process_file(
+            tmp_path / "data" / "raw" / "ES" / "2024.parquet",
+            protected_root / "ES" / "2024.parquet",
+            profile="tier_0",
+            allow_broad_build_after_readiness_pass=True,
+        )
+
+
+def test_write_reports_rejects_protected_broad_reports_without_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    protected_root = tmp_path / "data" / "causal_base_candidates" / "broad"
+    protected_reports = tmp_path / "reports" / "causal_base_rebuild" / "broad"
+    monkeypatch.setattr(
+        causal_base,
+        "BROAD_MANIFEST_527_REBUILD_OUTPUT_ROOT",
+        protected_root,
+    )
+    monkeypatch.setattr(
+        causal_base,
+        "BROAD_MANIFEST_527_REBUILD_REPORTS_ROOT",
+        protected_reports,
+    )
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(profile_config)
+    raw_path = tmp_path / "data" / "raw" / "ES" / "2024.parquet"
+    _write_raw(
+        raw_path,
+        [
+            _readiness_raw_row("2024-01-02T15:00:00Z", close=100.5),
+            _readiness_raw_row("2024-01-02T15:01:00Z", close=100.75),
+            _readiness_raw_row("2024-01-02T15:02:00Z", close=101.0),
+        ],
+    )
+    result = process_file(
+        raw_path,
+        protected_root / "ES" / "2024.parquet",
+        profile="tier_0",
+        profile_config_path=profile_config,
+        write_output=False,
+        allow_broad_build_after_readiness_pass=True,
+    )
+
+    with pytest.raises(ValueError, match="protected broad build reports"):
+        write_reports(
+            [result],
+            protected_reports,
+            "tier_0",
+            profile_config_path=profile_config,
+            output_root=protected_root,
+        )
+
+    assert not protected_reports.exists()
+
+
+def test_phase2_main_rejects_build_only_options_with_readiness_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_causal_base_data.py",
+            "--output-root",
+            str(tmp_path / "data" / "causally_gated_normalized"),
+            "--readiness-only",
+            "--allow-broad-build-after-readiness-pass",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        phase2_main()
+
+    assert exc_info.value.code == 2
+    assert "require non-readiness build mode" in capsys.readouterr().err
+
+
+def test_phase2_main_readiness_only_allows_protected_broad_output_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(profile_config)
+    raw_root = tmp_path / "data" / "raw"
+    reports_root = tmp_path / "reports" / "causal_base"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    json_out = reports_root / "phase2_readiness_summary.json"
+    md_out = reports_root / "phase2_readiness_summary.md"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(
+        raw_root / "ES" / "2024.parquet",
+        [
+            _readiness_raw_row("2024-01-02T15:00:00Z", close=100.5),
+            _readiness_raw_row("2024-01-02T15:01:00Z", close=100.75),
+            _readiness_raw_row("2024-01-02T15:02:00Z", close=101.0),
+        ],
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_causal_base_data.py",
+            "--profile",
+            "tier_0",
+            "--raw-root",
+            str(raw_root),
+            "--output-root",
+            "data/causal_base_candidates/broad_manifest_527_rebuild_v1",
+            "--reports-root",
+            str(reports_root),
+            "--profile-config",
+            str(profile_config),
+            "--raw-alignment-report",
+            str(report_path),
+            "--readiness-only",
+            "--readiness-json-out",
+            str(json_out),
+            "--readiness-md-out",
+            str(md_out),
+        ],
+    )
+
+    assert phase2_main() == 0
+
+    report = json.loads(json_out.read_text(encoding="utf-8"))
+    assert report["status"] == "PASS"
+    assert report["checked_market_year_count"] == 1
+    assert md_out.exists()
+
+
 def test_phase2_main_skips_local_trade_gate_for_smoke_profile(
     tmp_path: Path,
     monkeypatch,
@@ -2909,6 +3581,139 @@ def test_phase2_main_skips_local_trade_gate_for_smoke_profile(
     assert manifest["local_trade_ohlcv_gap_gate"] is None
     assert manifest["summary"]["local_trade_ohlcv_gap_gate_status"] == "NOT_RUN"
     assert manifest["outputs"][0]["local_trade_gap_gate_status"] == "NOT_RUN"
+
+
+def test_phase2_main_build_max_market_years_writes_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(profile_config, tier0_markets=["CL", "ES"])
+    raw_root = tmp_path / "data" / "raw"
+    output_root = tmp_path / "reports" / "candidate" / "raw"
+    reports_root = tmp_path / "reports" / "candidate" / "causal_base"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    checkpoint_out = reports_root / "build_progress.jsonl"
+    _write_tier0_multi_alignment(
+        report_path,
+        raw_root,
+        market_years=[("CL", 2024), ("ES", 2024)],
+    )
+    for market, close in [("CL", 90.5), ("ES", 100.5)]:
+        _write_raw(
+            raw_root / market / "2024.parquet",
+            [
+                _readiness_raw_row("2024-01-02T15:00:00Z", close=close),
+                _readiness_raw_row("2024-01-02T15:01:00Z", close=close + 0.25),
+                _readiness_raw_row("2024-01-02T15:02:00Z", close=close + 0.5),
+            ],
+        )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_causal_base_data.py",
+            "--profile",
+            "tier_0",
+            "--raw-root",
+            str(raw_root),
+            "--output-root",
+            str(output_root),
+            "--reports-root",
+            str(reports_root),
+            "--profile-config",
+            str(profile_config),
+            "--raw-alignment-report",
+            str(report_path),
+            "--build-max-market-years",
+            "1",
+            "--build-progress-checkpoint-jsonl",
+            str(checkpoint_out),
+        ],
+    )
+
+    assert phase2_main() == 0
+
+    records = _read_jsonl(checkpoint_out)
+    assert [record["stage"] for record in records] == [
+        "phase2_build_checkpoint_start",
+        "phase2_build_market_year",
+        "phase2_build_checkpoint_summary",
+    ]
+    assert records[0]["selected_market_year_count"] == 2
+    assert records[0]["scheduled_market_year_count"] == 1
+    assert records[1]["status"] == "PASS"
+    assert records[2]["processed_market_year_count"] == 1
+    assert records[2]["pending_market_year_count"] == 1
+    assert len(list(output_root.rglob("*.parquet"))) == 1
+
+
+def test_phase2_main_rejects_build_checkpoint_under_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(profile_config)
+    raw_root = tmp_path / "data" / "raw"
+    output_root = tmp_path / "reports" / "candidate" / "raw"
+    reports_root = tmp_path / "reports" / "candidate" / "causal_base"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(
+        raw_root / "ES" / "2024.parquet",
+        [
+            _readiness_raw_row("2024-01-02T15:00:00Z", close=100.5),
+            _readiness_raw_row("2024-01-02T15:01:00Z", close=100.75),
+            _readiness_raw_row("2024-01-02T15:02:00Z", close=101.0),
+        ],
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_causal_base_data.py",
+            "--profile",
+            "tier_0",
+            "--raw-root",
+            str(raw_root),
+            "--output-root",
+            str(output_root),
+            "--reports-root",
+            str(reports_root),
+            "--profile-config",
+            str(profile_config),
+            "--raw-alignment-report",
+            str(report_path),
+            "--build-progress-checkpoint-jsonl",
+            "data/build_progress.jsonl",
+        ],
+    )
+
+    assert phase2_main() == 1
+
+    assert "FAIL build_progress_checkpoint_jsonl" in capsys.readouterr().out
+    assert not any(output_root.rglob("*.parquet"))
+
+
+def test_phase2_no_longer_requires_local_trade_gate_for_holdout_profile(
+    tmp_path: Path,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    profile_config.parent.mkdir(parents=True, exist_ok=True)
+    profile_config.write_text(
+        "\n".join(
+            [
+                "profiles:",
+                "  tier_3_holdout:",
+                "    markets: [ES]",
+                "    years: [2025]",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert profile_requires_local_trade_gap_gate("tier_3_holdout", profile_config) is False
 
 
 def test_phase2_main_market_year_include_list_writes_exact_manifest(
@@ -3037,6 +3842,213 @@ def test_phase2_main_readiness_only_writes_reports_without_outputs(
     assert md_out.exists()
     assert not (output_root / "ES" / "2024.parquet").exists()
     assert not (reports_root / "causal_base_manifest.json").exists()
+
+
+def test_phase2_main_readiness_only_writes_checkpoint_jsonl_without_outputs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(profile_config)
+    raw_root = tmp_path / "data" / "raw"
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    reports_root = tmp_path / "reports" / "causal_base"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    json_out = reports_root / "phase2_readiness_summary.json"
+    md_out = reports_root / "phase2_readiness_summary.md"
+    checkpoint_out = reports_root / "phase2_readiness_rows.jsonl"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(
+        raw_root / "ES" / "2024.parquet",
+        [
+            _readiness_raw_row("2024-01-02T15:00:00Z", close=100.5),
+            _readiness_raw_row("2024-01-02T15:01:00Z", close=100.75),
+            _readiness_raw_row("2024-01-02T15:02:00Z", close=101.0),
+        ],
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_causal_base_data.py",
+            "--profile",
+            "tier_0",
+            "--raw-root",
+            str(raw_root),
+            "--output-root",
+            str(output_root),
+            "--reports-root",
+            str(reports_root),
+            "--profile-config",
+            str(profile_config),
+            "--raw-alignment-report",
+            str(report_path),
+            "--readiness-only",
+            "--readiness-json-out",
+            str(json_out),
+            "--readiness-md-out",
+            str(md_out),
+            "--readiness-checkpoint-jsonl",
+            str(checkpoint_out),
+            "--readiness-progress",
+        ],
+    )
+
+    assert phase2_main() == 0
+
+    records = _read_jsonl(checkpoint_out)
+    assert [record["stage"] for record in records] == [
+        "phase2_readiness_checkpoint_start",
+        "phase2_readiness_market_year",
+        "phase2_readiness_checkpoint_summary",
+    ]
+    assert records[1]["market"] == "ES"
+    assert records[1]["year"] == 2024
+    assert records[1]["status"] == "PASS"
+    assert records[2]["status"] == "PASS"
+    assert records[2]["checked_market_year_count"] == 1
+    assert json_out.exists()
+    assert md_out.exists()
+    assert not (output_root / "ES" / "2024.parquet").exists()
+
+
+def test_phase2_main_readiness_only_max_market_years_leaves_pending(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(profile_config, tier0_markets=["CL", "ES"])
+    raw_root = tmp_path / "data" / "raw"
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    reports_root = tmp_path / "reports" / "causal_base"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    json_out = reports_root / "phase2_readiness_summary.json"
+    md_out = reports_root / "phase2_readiness_summary.md"
+    _write_tier0_multi_alignment(
+        report_path,
+        raw_root,
+        market_years=[("CL", 2024), ("ES", 2024)],
+    )
+    for market in ["CL", "ES"]:
+        _write_raw(
+            raw_root / market / "2024.parquet",
+            [
+                _readiness_raw_row("2024-01-02T15:00:00Z", close=100.5),
+                _readiness_raw_row("2024-01-02T15:01:00Z", close=100.75),
+                _readiness_raw_row("2024-01-02T15:02:00Z", close=101.0),
+            ],
+        )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_causal_base_data.py",
+            "--profile",
+            "tier_0",
+            "--raw-root",
+            str(raw_root),
+            "--output-root",
+            str(output_root),
+            "--reports-root",
+            str(reports_root),
+            "--profile-config",
+            str(profile_config),
+            "--raw-alignment-report",
+            str(report_path),
+            "--readiness-only",
+            "--readiness-json-out",
+            str(json_out),
+            "--readiness-md-out",
+            str(md_out),
+            "--readiness-max-market-years",
+            "1",
+        ],
+    )
+
+    assert phase2_main() == 1
+
+    report = json.loads(json_out.read_text(encoding="utf-8"))
+    assert report["status"] == "FAIL"
+    assert report["selected_market_year_count"] == 2
+    assert report["scheduled_market_year_count"] == 1
+    assert report["checked_market_year_count"] == 1
+    assert report["pending_market_year_count"] == 1
+    assert not any(output_root.rglob("*.parquet"))
+
+
+def test_phase2_main_readiness_only_stop_after_blocker_writes_partial_report(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_profile_config(profile_config, tier0_markets=["CL", "ES"])
+    raw_root = tmp_path / "data" / "raw"
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    reports_root = tmp_path / "reports" / "causal_base"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    json_out = reports_root / "phase2_readiness_summary.json"
+    md_out = reports_root / "phase2_readiness_summary.md"
+    checkpoint_out = reports_root / "phase2_readiness_rows.jsonl"
+    _write_tier0_multi_alignment(
+        report_path,
+        raw_root,
+        market_years=[("CL", 2024), ("ES", 2024)],
+    )
+    _write_raw(raw_root / "CL" / "2024.parquet", _status_sparse_rows())
+    _write_raw(
+        raw_root / "ES" / "2024.parquet",
+        [
+            _readiness_raw_row("2024-01-02T15:00:00Z", close=100.5),
+            _readiness_raw_row("2024-01-02T15:01:00Z", close=100.75),
+            _readiness_raw_row("2024-01-02T15:02:00Z", close=101.0),
+        ],
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_causal_base_data.py",
+            "--profile",
+            "tier_0",
+            "--raw-root",
+            str(raw_root),
+            "--output-root",
+            str(output_root),
+            "--reports-root",
+            str(reports_root),
+            "--profile-config",
+            str(profile_config),
+            "--raw-alignment-report",
+            str(report_path),
+            "--readiness-only",
+            "--readiness-json-out",
+            str(json_out),
+            "--readiness-md-out",
+            str(md_out),
+            "--readiness-checkpoint-jsonl",
+            str(checkpoint_out),
+            "--readiness-stop-after-blockers",
+            "1",
+        ],
+    )
+
+    assert phase2_main() == 1
+
+    report = json.loads(json_out.read_text(encoding="utf-8"))
+    records = _read_jsonl(checkpoint_out)
+    checked_rows = [
+        record
+        for record in records
+        if record["stage"] == "phase2_readiness_market_year"
+    ]
+    assert report["checked_market_year_count"] == 1
+    assert report["pending_market_year_count"] == 1
+    assert report["blocker_count"] == 1
+    assert checked_rows[0]["market"] == "CL"
+    assert checked_rows[0]["status"] == "WARN"
+    assert records[-1]["stage"] == "phase2_readiness_checkpoint_summary"
+    assert records[-1]["blocker_count"] == 1
+    assert not any(output_root.rglob("*.parquet"))
 
 
 def test_phase2_readiness_passes_clean_fixture(tmp_path: Path) -> None:
@@ -4415,7 +5427,9 @@ def test_synthetic_warning_only_triggers_above_threshold(tmp_path: Path) -> None
     raw_path = tmp_path / "data" / "raw" / "ES" / "2024.parquet"
     out_path = tmp_path / "data" / "causally_gated_normalized" / "ES" / "2024.parquet"
     high_threshold_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    low_threshold_config = tmp_path / "configs" / "alpha_tiered_low.yaml"
     _write_profile_config(high_threshold_config, synthetic_pct=90.0)
+    _write_profile_config(low_threshold_config)
     _write_raw(
         raw_path,
         [
@@ -4462,6 +5476,7 @@ def test_synthetic_warning_only_triggers_above_threshold(tmp_path: Path) -> None
         tmp_path / "data" / "second" / "ES" / "2024.parquet",
         profile="tier_1",
         max_synthetic_gap_minutes=3,
+        profile_config_path=low_threshold_config,
     )
 
     assert high.synthetic_gap_threshold_breached is False
