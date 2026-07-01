@@ -7,6 +7,7 @@ import argparse
 import json
 import sys
 import time
+import traceback
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
@@ -128,6 +129,13 @@ def _validate_local_trades_access_window(start: pd.Timestamp, end: pd.Timestamp)
             f"[{_utc_iso(start)}, {_utc_iso(end)}) is outside configured local trades schema "
             f"access window [{_utc_iso(access_start)}, {_utc_iso(access_end)})"
         )
+
+
+def _scan_limit_failure(failures: list[str]) -> str | None:
+    for failure in failures:
+        if failure.startswith("--max-") and "limit exceeded" in failure:
+            return failure
+    return None
 
 
 def _timestamp_column(frame: pd.DataFrame, path: Path) -> pd.Series:
@@ -1258,8 +1266,25 @@ def build_report(
         reader = trade_frame_reader or _default_trade_frame_reader
         market_year_index = 0
         market_year_count = len(markets) * len(years)
+        stop_scan = False
         for market in markets:
             for year in years:
+                try:
+                    scan_budget.check_runtime()
+                except ScanLimitExceeded as exc:
+                    failure = str(exc)
+                    if failure not in failures:
+                        failures.append(failure)
+                    progress_writer.write(
+                        "scan_stopped",
+                        reason=failure,
+                        market=market,
+                        year=year,
+                        market_year_index=market_year_index + 1,
+                        market_year_count=market_year_count,
+                    )
+                    stop_scan = True
+                    break
                 year_start, year_end = _year_window(year, start, end)
                 if year_start >= year_end:
                     continue
@@ -1303,6 +1328,22 @@ def build_report(
                     failure_count=len(entries[-1]["failures"]),
                     summary=entries[-1]["summary"],
                 )
+                limit_failure = _scan_limit_failure(entries[-1]["failures"])
+                if limit_failure is not None:
+                    if limit_failure not in failures:
+                        failures.append(limit_failure)
+                    progress_writer.write(
+                        "scan_stopped",
+                        reason=limit_failure,
+                        market=market,
+                        year=year,
+                        market_year_index=market_year_index,
+                        market_year_count=market_year_count,
+                    )
+                    stop_scan = True
+                    break
+            if stop_scan:
+                break
 
     status = "FAIL" if failures or any(entry["status"] != "PASS" for entry in entries) else "PASS"
     summary = {
@@ -1409,6 +1450,73 @@ def write_markdown_report(report: dict[str, Any], path: Path) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _append_progress_event(path: Path | None, event: str, **payload: Any) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "generated_at_utc": datetime.now(UTC).isoformat(),
+        "event": event,
+        **payload,
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+
+def _exception_report(args: argparse.Namespace, exc: BaseException) -> dict[str, Any]:
+    start = _utc_ts(str(args.start))
+    end = _utc_ts(str(args.end))
+    max_runtime_seconds = getattr(args, "max_runtime_seconds", None)
+    return {
+        "generated_at_utc": datetime.now(UTC).isoformat(),
+        "status": "FAIL",
+        "failures": [f"unhandled exception: {type(exc).__name__}: {exc}"],
+        "traceback": traceback.format_exc(),
+        "method": "local trades DBN cross-check of OHLCV synthetic missing minutes",
+        "caveat": CAVEAT,
+        "inventory_only": bool(args.inventory_only),
+        "scope": {},
+        "window": {"start": _utc_iso(start), "end": _utc_iso(end)},
+        "local_trades_schema_access": {
+            "start": _utc_iso(_utc_ts(LOCAL_TRADES_SCHEMA_ACCESS_START)),
+            "end": _utc_iso(_utc_ts(LOCAL_TRADES_SCHEMA_ACCESS_END)),
+        },
+        "dbn_root": _relative_path(Path(args.dbn_root)),
+        "raw_root": _relative_path(Path(args.raw_root)),
+        "raw_overlay_root": _relative_path(Path(args.raw_overlay_root))
+        if getattr(args, "raw_overlay_root", None)
+        else None,
+        "causal_root": _relative_path(Path(args.causal_root)),
+        "chunk_size": int(args.chunk_size),
+        "scan_limits": {
+            "max_gap_windows": getattr(args, "max_gap_windows", None),
+            "max_trade_rows_scanned": getattr(args, "max_trade_rows_scanned", None),
+            "max_archives_read": getattr(args, "max_archives_read", None),
+            "max_runtime_seconds": float(max_runtime_seconds) if max_runtime_seconds is not None else None,
+        },
+        "max_gap_windows": getattr(args, "max_gap_windows", None),
+        "progress_jsonl": _relative_path(Path(str(args.progress_jsonl)))
+        if getattr(args, "progress_jsonl", None)
+        else None,
+        "preflight": {},
+        "summary": {
+            "market_count": 0,
+            "year_count": 0,
+            "market_year_count": 0,
+            "status_counts": {},
+            "synthetic_gap_count": 0,
+            "missing_minute_count": 0,
+            "verified_empty_minutes": 0,
+            "timestamp_basis_mismatch_minutes": 0,
+            "failed_minutes": 0,
+            "unverified_minutes": 0,
+            "trade_rows_scanned": 0,
+            "archives_read": 0,
+        },
+        "market_years": [],
+    }
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile-config", default="configs/alpha_tiered.yaml")
@@ -1437,7 +1545,22 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.causal_root is None:
         parser.error("--causal-root is required; pass an explicit causal root")
-    report = build_report(args)
+    try:
+        report = build_report(args)
+    except Exception as exc:
+        progress_path = Path(str(args.progress_jsonl)) if getattr(args, "progress_jsonl", None) else None
+        _append_progress_event(
+            progress_path,
+            "scan_exception",
+            exception_type=type(exc).__name__,
+            exception=str(exc),
+        )
+        report = _exception_report(args, exc)
+        write_json_report(report, Path(args.json_out))
+        if args.md_out:
+            write_markdown_report(report, Path(args.md_out))
+        print(f"status=FAIL exception={type(exc).__name__}: {exc}")
+        return 1
     write_json_report(report, Path(args.json_out))
     if args.md_out:
         write_markdown_report(report, Path(args.md_out))

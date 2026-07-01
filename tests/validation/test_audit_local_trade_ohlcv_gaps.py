@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 import yaml
 
+import scripts.validation.audit_local_trade_ohlcv_gaps as gap_audit
 from scripts.phase1A_download.download_databento_raw import (
     CME_DATASET,
     DownloadTask,
@@ -226,6 +227,48 @@ def test_main_requires_explicit_causal_root(tmp_path: Path) -> None:
     assert not md_out.exists()
 
 
+def test_main_writes_fail_report_when_scan_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    json_out = tmp_path / "reports" / "audit.json"
+    md_out = tmp_path / "reports" / "audit.md"
+    progress = tmp_path / "reports" / "audit.progress.jsonl"
+
+    def raise_error(args: argparse.Namespace) -> dict[str, object]:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(gap_audit, "build_report", raise_error)
+
+    exit_code = main(
+        [
+            "--profile-config",
+            str(tmp_path / "configs" / "alpha_tiered.yaml"),
+            "--profiles",
+            "tier_3_holdout",
+            "--dbn-root",
+            str(tmp_path / "data" / "dbn"),
+            "--raw-root",
+            str(tmp_path / "data" / "raw"),
+            "--causal-root",
+            str(tmp_path / "data" / "causally_gated_normalized"),
+            "--json-out",
+            str(json_out),
+            "--md-out",
+            str(md_out),
+            "--progress-jsonl",
+            str(progress),
+            "--inventory-only",
+        ]
+    )
+    report = json.loads(json_out.read_text(encoding="utf-8"))
+    progress_events = [json.loads(line)["event"] for line in progress.read_text(encoding="utf-8").splitlines()]
+
+    assert exit_code == 1
+    assert report["status"] == "FAIL"
+    assert "unhandled exception: RuntimeError: boom" in report["failures"]
+    assert "RuntimeError: boom" in report["traceback"]
+    assert md_out.exists()
+    assert progress_events == ["scan_exception"]
+
+
 def test_missing_trade_market_fails_closed(tmp_path: Path) -> None:
     _write_config(tmp_path / "configs" / "alpha_tiered.yaml", ["ES"])
     _write_archive(tmp_path / "data" / "dbn", schema="ohlcv-1m")
@@ -366,8 +409,8 @@ def test_max_runtime_seconds_limit_fails_closed(tmp_path: Path) -> None:
     assert report["status"] == "FAIL"
     assert report["summary"]["unverified_minutes"] == 0
     assert reader.calls == []
-    assert report["market_years"][0]["gap_windows"] == []
-    assert "--max-runtime-seconds limit exceeded" in report["market_years"][0]["failures"]
+    assert report["market_years"] == []
+    assert "--max-runtime-seconds limit exceeded" in report["failures"]
 
 
 def test_progress_jsonl_records_scan_and_market_year_events(tmp_path: Path) -> None:
