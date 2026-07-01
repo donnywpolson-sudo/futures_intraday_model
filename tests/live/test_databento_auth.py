@@ -20,7 +20,8 @@ def test_normalize_api_key_strips_wrapping_noise() -> None:
 
 
 def test_load_databento_api_key_from_file_supports_env_assignment(tmp_path: Path) -> None:
-    path = tmp_path / "databento.env"
+    path = tmp_path / "secrets" / "databento.env"
+    path.parent.mkdir()
     path.write_text(
         "# local ignored secret\nDATABENTO_API_KEY='db-file-test'\n",
         encoding="utf-8",
@@ -30,15 +31,14 @@ def test_load_databento_api_key_from_file_supports_env_assignment(tmp_path: Path
 
 
 def test_load_databento_api_key_from_file_supports_raw_key(tmp_path: Path) -> None:
-    path = tmp_path / "databento.env"
+    path = tmp_path / "api.env"
     path.write_text("  db-raw-test  \n", encoding="utf-8")
 
     assert load_databento_api_key_from_file(path) == "db-raw-test"
 
 
 def test_resolve_databento_api_key_prefers_env_over_files(tmp_path: Path) -> None:
-    key_file = tmp_path / "secrets" / "databento.env"
-    key_file.parent.mkdir()
+    key_file = tmp_path / "api.env"
     key_file.write_text("DATABENTO_API_KEY=db-file-test\n", encoding="utf-8")
 
     assert (
@@ -55,11 +55,59 @@ def test_resolve_databento_api_key_reads_secrets_file_when_env_not_injected(
     monkeypatch,
 ) -> None:
     monkeypatch.delenv("DATABENTO_API_KEY", raising=False)
-    key_file = tmp_path / "secrets" / "databento.env"
-    key_file.parent.mkdir()
-    key_file.write_text("DATABENTO_API_KEY=db-secrets-test\n", encoding="utf-8")
+    secrets_key_file = tmp_path / "secrets" / "databento.env"
+    api_key_file = tmp_path / "api.env"
+    legacy_key_file = tmp_path / "databento.env"
+    secrets_key_file.parent.mkdir()
+    secrets_key_file.write_text("DATABENTO_API_KEY=db-secrets-test\n", encoding="utf-8")
+    api_key_file.write_text("DATABENTO_API_KEY=db-api-test\n", encoding="utf-8")
+    legacy_key_file.write_text("DATABENTO_API_KEY=db-legacy-test\n", encoding="utf-8")
 
-    assert resolve_databento_api_key(key_files=[key_file]) == "db-secrets-test"
+    assert (
+        resolve_databento_api_key(
+            key_files=[secrets_key_file, api_key_file, legacy_key_file],
+        )
+        == "db-secrets-test"
+    )
+
+
+def test_resolve_databento_api_key_falls_back_to_api_env(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("DATABENTO_API_KEY", raising=False)
+    secrets_key_file = tmp_path / "secrets" / "databento.env"
+    api_key_file = tmp_path / "api.env"
+    legacy_key_file = tmp_path / "databento.env"
+    api_key_file.write_text("DATABENTO_API_KEY=db-api-test\n", encoding="utf-8")
+    legacy_key_file.write_text("DATABENTO_API_KEY=db-legacy-test\n", encoding="utf-8")
+
+    assert (
+        resolve_databento_api_key(
+            key_files=[secrets_key_file, api_key_file, legacy_key_file],
+        )
+        == "db-api-test"
+    )
+
+
+def test_resolve_databento_api_key_falls_back_to_legacy_databento_env(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("DATABENTO_API_KEY", raising=False)
+    legacy_key_file = tmp_path / "databento.env"
+    legacy_key_file.write_text("DATABENTO_API_KEY=db-legacy-test\n", encoding="utf-8")
+
+    assert (
+        resolve_databento_api_key(
+            key_files=[
+                tmp_path / "secrets" / "databento.env",
+                tmp_path / "api.env",
+                legacy_key_file,
+            ],
+        )
+        == "db-legacy-test"
+    )
 
 
 def test_injected_empty_env_does_not_read_real_or_fake_files(tmp_path: Path) -> None:

@@ -13,10 +13,15 @@
 
 - Active repo path verified on 2026-07-01: `C:\Users\donny\Desktop\futures_intraday_model`.
 - The environment path `C:\Users\donny\Desktop\15_min_long_short` was not present during this handoff update.
-- Git state before this handoff-only update: `main...origin/main [ahead 20]` with only the seven broad-loop untracked files listed below remaining dirty.
+- Git state before this handoff update: only the seven broad-loop untracked files listed below remained dirty.
+- Git state during the `PROJECT_OUTLINE.md` doc update showed tracked doc deletions for `DATA REBUILD.md`, `PIPELINE.md`, `README_RUNBOOK.md`, `RESEARCH_METRICS.html`, `RESOURCES.md`, and `quant_research_playbook.md`, plus new untracked `PROJECT_OUTLINE.md`. The approved 2026-07-01 doc-authority implementation restored `PIPELINE.md`, `README_RUNBOOK.md`, and `quant_research_playbook.md`; left root `DATA REBUILD.md` and `RESOURCES.md` deleted; left `RESEARCH_METRICS.html`, `PROJECT_OUTLINE.md`, and unrelated dirty files untouched.
+- 2026-07-01 worktree-disposition implementation state: auth fallback contract now preserves `secrets/databento.env` first, adds ignored `api.env` fallback, and keeps legacy root `databento.env` fallback; UTF-8 BOMs were removed from touched auth/script/test files; `RESEARCH_METRICS.html` was restored exactly as the tracked redirect stub. `PIPELINE.md`, `README_RUNBOOK.md`, and `quant_research_playbook.md` still have working-tree hashes equal to index hashes despite `git status` showing them modified, so treat those three as index/stat noise until refreshed.
+- 2026-07-01 LiveChartFeed auth/packaging implementation state: source runs use repo-local `secrets/databento.env`, `api.env`, `databento.env`, then `DATABENTO_API_KEY`; packaged exe runs use the same file order beside the exe, then `DATABENTO_API_KEY`. Databento 401/auth failures now print a safe key-source label and exit before chart launch when metadata or symbology rejects the key. A new packaged exe was built only under ignored `outputs\pyinstaller_dist\LiveChartFeed.exe`; the Desktop `C:\Users\donny\Desktop\LiveChartFeed.exe` was not replaced.
+- 2026-07-01 Desktop doc triage: `C:\Users\donny\Desktop\quant_research_playbook.md`, `C:\Users\donny\Desktop\DATA REBUILD.md`, and `C:\Users\donny\Desktop\RESOURCES.md` exactly match the deleted tracked `HEAD` blobs. `C:\Users\donny\Desktop\You_are_here_updated_current_FINAL_20260628_post_side_aware_commit.txt` is a stale 2026-06-28 checkpoint; commit `209f48f` still exists, but current `main` is ahead of origin by 22 commits and current authority is this handoff plus repo files.
 - Latest stabilization commits before this handoff-only update:
   - `2e6d23a Add coordination document checks`
   - `9927adb Add bounded OHLCV gap scan progress guards`
+  - `917cb15 Harden OHLCV gap scan process safety`
 - Remaining untracked broad build/loop files remain excluded from stabilization and proof-scan prep:
   - `scripts/validation/build_broad_manifest_527_rebuild.py`
   - `scripts/validation/monitor_broad_manifest_527_rebuild.py`
@@ -25,12 +30,21 @@
   - `scripts/validation/run_broad_manifest_source_gap_fail_closed_loop.py`
   - `tests/validation/test_build_broad_manifest_527_rebuild.py`
   - `tests/validation/test_run_broad_manifest_source_gap_fail_closed_loop.py`
-- Local trade/OHLCV proof remains no-go. The capped scan against `data\causal_proof_candidates\local_trade_2025_2026_v1` completed cleanly as `FAIL` after the approved `--max-runtime-seconds 900` limit.
+- Local trade/OHLCV proof remains no-go for the full 58 market-year proof scope. The first capped scan against `data\causal_proof_candidates\local_trade_2025_2026_v1` completed cleanly as `FAIL` after the approved `--max-runtime-seconds 900` limit.
 - Latest capped proof artifacts are ignored/generated local reports:
   - `reports\pipeline_audit\local_trade_ohlcv_gap_crosscheck_phase2_uncovered_29_candidate_capped_20250618_20260613.json`
   - `reports\pipeline_audit\local_trade_ohlcv_gap_crosscheck_phase2_uncovered_29_candidate_capped_20250618_20260613.md`
   - `reports\pipeline_audit\local_trade_ohlcv_gap_crosscheck_phase2_uncovered_29_candidate_capped_20250618_20260613.progress.jsonl`
 - Latest capped proof result: `status=FAIL`, failure `--max-runtime-seconds limit exceeded`, stopped at `YM 2025` (`market_year_index=5/58`), `status_counts={PASS:4, FAIL:1}`, `trade_rows_scanned=116752954`, `verified_empty_minutes=8717`, `unverified_minutes=2196`, `failed_minutes=0`.
+- The failed monolithic `NG_2025` shard was superseded for evidence handling by 28 bounded weekly shards under `reports\pipeline_audit\local_trade_shards_20250618_20260613\NG_2025_split_v1`. Aggregate result: 28 JSON reports, 28 progress files, all `PASS`, `total_missing=19379`, `total_verified=19379`, `total_unverified=0`, `total_failed=0`, `scan_exception_reports=0`, `limit_failures=0`.
+- `NG_2026` passed as a full bounded market-year shard under `reports\pipeline_audit\local_trade_shards_20250618_20260613\remaining_v1`: `missing=11187`, `verified=11187`, `unverified=0`, `failed=0`, `trade_rows_scanned=5825044`.
+- Additional user-requested `NG_2026_w01` split shard also passed for `[2026-01-01, 2026-01-08)` under `reports\pipeline_audit\local_trade_shards_20250618_20260613\NG_2026_split_v1`: `synthetic_gap_count=144`, `missing_minute_count=164`, `verified_empty_minutes=164`, `failed_minutes=0`, `unverified_minutes=0`, `trade_rows_scanned=5825044`, `archives_read=1`, `failures=[]`. This is supplemental generated evidence and does not replace the full `NG_2026` pass.
+- The failed monolithic `RB_2025` shard in `remaining_v1` was superseded for evidence handling by 28 bounded weekly shards under `reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2025_split_v1`. Aggregate result: 28 JSON reports, 28 progress files, all `PASS`, `total_missing=48826`, `total_verified=48826`, `total_unverified=0`, `total_failed=0`, `scan_exception_reports=0`, `limit_failures=0`.
+- `RB_2026_w01` passed for `[2026-01-01, 2026-01-08)` under `reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2026_split_v1`: `synthetic_gap_count=464`, `missing_minute_count=1141`, `verified_empty_minutes=1139`, `timestamp_basis_mismatch_minutes=2`, `failed_minutes=0`, `unverified_minutes=0`, `trade_rows_scanned=2474231`, `archives_read=1`, `failures=[]`.
+- `RB_2026_w02` passed for `[2026-01-08, 2026-01-15)` under `reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2026_split_v1`: `synthetic_gap_count=651`, `missing_minute_count=1714`, `verified_empty_minutes=1714`, `timestamp_basis_mismatch_minutes=0`, `failed_minutes=0`, `unverified_minutes=0`, `trade_rows_scanned=2474231`, `archives_read=1`, `failures=[]`.
+- `RB_2026_w03` passed for `[2026-01-15, 2026-01-22)` under `reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2026_split_v1`: `synthetic_gap_count=626`, `missing_minute_count=1818`, `verified_empty_minutes=1818`, `timestamp_basis_mismatch_minutes=0`, `failed_minutes=0`, `unverified_minutes=0`, `trade_rows_scanned=2474231`, `archives_read=1`, `failures=[]`.
+- `RB_2026_w04` passed for `[2026-01-22, 2026-01-29)` under `reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2026_split_v1`: `synthetic_gap_count=621`, `missing_minute_count=1438`, `verified_empty_minutes=1438`, `timestamp_basis_mismatch_minutes=0`, `failed_minutes=0`, `unverified_minutes=0`, `trade_rows_scanned=2474231`, `archives_read=1`, `failures=[]`.
+- `RB_2026_w05` passed for `[2026-01-29, 2026-02-05)` under `reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2026_split_v1`: `synthetic_gap_count=521`, `missing_minute_count=947`, `verified_empty_minutes=947`, `timestamp_basis_mismatch_minutes=0`, `failed_minutes=0`, `unverified_minutes=0`, `trade_rows_scanned=2474231`, `archives_read=1`, `failures=[]`.
 - Candidate causal proof inputs were previously generated under `data\causal_proof_candidates\local_trade_2025_2026_v1` for the 29 uncovered markets and 2025/2026 only. Treat these as ignored local generated artifacts unless separately approved.
 - Full 527-row promoted/canonical Phase 2 remains no-go.
 - Optional metadata is classified and blocked, but field-level point-in-time availability has not been proven.
@@ -38,7 +52,24 @@
 
 # Recent Changes
 
+- 2026-07-01: implemented the LiveChartFeed Databento auth failure plan. Changed `live_chart_feed.py`, `LiveChartFeed.spec`, `README_RUNBOOK.md`, and focused live-chart tests. Key behavior: frozen-exe-aware key lookup, safe key-source diagnostics without printing secrets, Databento 401/auth classification, pre-GUI metadata/symbology auth checks, and packaged config/PyYAML inclusion. Validation: `python -m pytest -q tests\live\test_databento_auth.py tests\test_live_chart_feed.py tests\phase1A_download\test_download_databento_raw.py` passed with `146 passed`; `git diff --check` passed with CRLF warnings only; `.venv\Scripts\python.exe -m PyInstaller --clean --workpath outputs\pyinstaller_work --distpath outputs\pyinstaller_dist LiveChartFeed.spec` passed; `outputs\pyinstaller_dist\LiveChartFeed.exe --list-markets --no-persist-selection` passed and listed 33 markets. No live Databento smoke was run and no Desktop exe was replaced.
+- 2026-07-01: implemented the approved narrow hygiene cleanup scope. Grandfathered existing tracked `reports/**` in `scripts/check_git_hygiene.py` while blocking newly staged generated artifacts, expanded pre-commit generated-artifact coverage, added focused utility tests, updated `.gitignore`, `.gitattributes`, `README.md`, and `README_RUNBOOK.md`, and removed tracked `build/LiveChartFeed/*` from the Git index only. This did not run proof scans or mutate generated `data/**` / `reports/**`.
+- 2026-07-01: implemented the approved worktree-disposition pass before any more proof scans. Changed auth fallback paths in `scripts/databento_auth.py`, `scripts/phase1A_download/download_databento_raw.py`, and `live_chart_feed.py`; added focused fallback tests in `tests/live/test_databento_auth.py`, `tests/phase1A_download/test_download_databento_raw.py`, and `tests/test_live_chart_feed.py`; restored `RESEARCH_METRICS.html`; removed BOMs from touched auth/script/test files; left `DATA REBUILD.md`, `RESOURCES.md`, `PROJECT_OUTLINE.md`, `_archive/desktop_doc_triage_20260701/DATA_REBUILD_prompt.md`, generated artifacts, and the seven broad-loop files unstaged/untouched. Validation so far: `git diff --check` passed with CRLF conversion warnings only; BOM check passed; focused pytest command passed with `149 passed`.
+- 2026-07-01: completed read-only adversarial audit of current state. Verified repo path and `main...origin/main [ahead 22]`; ran `git diff --check`, `python -m scripts.validation.check_coordination_docs`, auth/download/live targeted pytest files, and untracked broad-loop validation tests. All checks passed; live shadow tests emitted existing pandas fragmentation warnings. Verified ignored proof artifacts: `NG_2025` weekly split count 28 PASS, `RB_2025` weekly split count 28 PASS, `NG_2026` full shard PASS, `RB_2026` split shards present only through `w05` with aggregate `missing=7058`, `verified=7056`, `unverified=0`, `failed=0`, `timestamp_basis_mismatch_minutes=2`. No Python process was left running.
+- 2026-07-01: added `PROJECT_OUTLINE.md` as reference/planning material adapted from the `C:\Users\donny\Desktop\futures_research` workflow pattern and tailored to this repo's Databento intraday research/WFA pipeline. It does not authorize broad execution and does not replace `AGENTS.md`, `CODEX_HANDOFF.md`, or an active `PIPELINE.md`.
+- 2026-07-01: resolved the documentation authority blocker per approved plan: restored `PIPELINE.md`, `README_RUNBOOK.md`, and `quant_research_playbook.md`; left root `RESOURCES.md` deleted as redundant; left root `DATA REBUILD.md` deleted and added `_archive/desktop_doc_triage_20260701/DATA_REBUILD_prompt.md` as a non-authoritative prompt/template archive; did not modify the stale Desktop `You_are_here...txt` file.
+- 2026-07-01: ran `python -m scripts.validation.check_coordination_docs` after the doc-authority disposition; it passed with `PASS coordination docs are aligned`.
+- 2026-07-01: completed read-only relevance triage of the four Desktop docs named by the user. Recommended disposition: restore/keep `quant_research_playbook.md` as durable guidance if root docs are being restored; do not treat `RESOURCES.md` as separately needed because it duplicates weaker/older playbook content; keep `DATA REBUILD.md` only as an archived prompt/template, not active authority; archive/delete the June 28 `You_are_here...txt` after confirming no need for historical side-aware notes.
+- 2026-07-01: ran `python -m scripts.validation.check_coordination_docs`; it failed because `PIPELINE.md` and `README_RUNBOOK.md` are missing in the current worktree.
 - 2026-07-01: ran the capped local trade/OHLCV proof scan with `--causal-root data\causal_proof_candidates\local_trade_2025_2026_v1`; it completed cleanly with generated `FAIL` evidence after the 900-second runtime cap. No Python process remained afterward.
+- 2026-07-01: ran the approved `NG_2025` weekly split proof scan over 28 half-open windows from `2025-06-18` through `2026-01-01`; all weekly generated reports passed, verifying 19,379 missing minutes as empty with zero unverified or failed minutes.
+- 2026-07-01: resumed remaining proof scans; `NG_2026` passed as a full bounded shard. `RB_2025` failed as a monolithic shard on the approved 900-second runtime cap during gap grouping, then passed as 28 approved weekly split shards, verifying 48,826 missing minutes as empty with zero unverified or failed minutes.
+- 2026-07-01: ran one additional approved `NG_2026_w01` split shard exactly scoped to `[2026-01-01, 2026-01-08)`: `python -m scripts.validation.audit_local_trade_ohlcv_gaps --profiles tier_3_holdout tier_3_forward --markets NG --start 2026-01-01 --end 2026-01-08 --causal-root data\causal_proof_candidates\local_trade_2025_2026_v1 --json-out reports\pipeline_audit\local_trade_shards_20250618_20260613\NG_2026_split_v1\NG_2026_w01_20260101_20260108.json --md-out reports\pipeline_audit\local_trade_shards_20250618_20260613\NG_2026_split_v1\NG_2026_w01_20260101_20260108.md --progress-jsonl reports\pipeline_audit\local_trade_shards_20250618_20260613\NG_2026_split_v1\NG_2026_w01_20260101_20260108.progress.jsonl --max-gap-windows 10000 --max-trade-rows-scanned 200000000 --max-archives-read 2 --max-runtime-seconds 900`; it returned `PASS` with zero failed/unverified minutes.
+- 2026-07-01: ran the approved `RB_2026_w01` split shard exactly scoped to `[2026-01-01, 2026-01-08)`: `python -m scripts.validation.audit_local_trade_ohlcv_gaps --profiles tier_3_holdout tier_3_forward --markets RB --start 2026-01-01 --end 2026-01-08 --causal-root data\causal_proof_candidates\local_trade_2025_2026_v1 --json-out reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2026_split_v1\RB_2026_w01_20260101_20260108.json --md-out reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2026_split_v1\RB_2026_w01_20260101_20260108.md --progress-jsonl reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2026_split_v1\RB_2026_w01_20260101_20260108.progress.jsonl --max-gap-windows 10000 --max-trade-rows-scanned 200000000 --max-archives-read 2 --max-runtime-seconds 900`; it returned `PASS` with `failed_minutes=0`, `unverified_minutes=0`, and `timestamp_basis_mismatch_minutes=2`.
+- 2026-07-01: ran the approved `RB_2026_w02` split shard exactly scoped to `[2026-01-08, 2026-01-15)`: `python -m scripts.validation.audit_local_trade_ohlcv_gaps --profiles tier_3_holdout tier_3_forward --markets RB --start 2026-01-08 --end 2026-01-15 --causal-root data\causal_proof_candidates\local_trade_2025_2026_v1 --json-out reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2026_split_v1\RB_2026_w02_20260108_20260115.json --md-out reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2026_split_v1\RB_2026_w02_20260108_20260115.md --progress-jsonl reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2026_split_v1\RB_2026_w02_20260108_20260115.progress.jsonl --max-gap-windows 10000 --max-trade-rows-scanned 200000000 --max-archives-read 2 --max-runtime-seconds 900`; it returned `PASS` with `failed_minutes=0`, `unverified_minutes=0`, and `timestamp_basis_mismatch_minutes=0`.
+- 2026-07-01: ran the approved `RB_2026_w03` split shard exactly scoped to `[2026-01-15, 2026-01-22)`: `python -m scripts.validation.audit_local_trade_ohlcv_gaps --profiles tier_3_holdout tier_3_forward --markets RB --start 2026-01-15 --end 2026-01-22 --causal-root data\causal_proof_candidates\local_trade_2025_2026_v1 --json-out reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2026_split_v1\RB_2026_w03_20260115_20260122.json --md-out reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2026_split_v1\RB_2026_w03_20260115_20260122.md --progress-jsonl reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2026_split_v1\RB_2026_w03_20260115_20260122.progress.jsonl --max-gap-windows 10000 --max-trade-rows-scanned 200000000 --max-archives-read 2 --max-runtime-seconds 900`; it returned `PASS` with `failed_minutes=0`, `unverified_minutes=0`, and `timestamp_basis_mismatch_minutes=0`.
+- 2026-07-01: ran the approved `RB_2026_w04` split shard exactly scoped to `[2026-01-22, 2026-01-29)`: `python -m scripts.validation.audit_local_trade_ohlcv_gaps --profiles tier_3_holdout tier_3_forward --markets RB --start 2026-01-22 --end 2026-01-29 --causal-root data\causal_proof_candidates\local_trade_2025_2026_v1 --json-out reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2026_split_v1\RB_2026_w04_20260122_20260129.json --md-out reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2026_split_v1\RB_2026_w04_20260122_20260129.md --progress-jsonl reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2026_split_v1\RB_2026_w04_20260122_20260129.progress.jsonl --max-gap-windows 10000 --max-trade-rows-scanned 200000000 --max-archives-read 2 --max-runtime-seconds 900`; it returned `PASS` with `failed_minutes=0`, `unverified_minutes=0`, and `timestamp_basis_mismatch_minutes=0`.
+- 2026-07-01: ran the approved `RB_2026_w05` split shard exactly scoped to `[2026-01-29, 2026-02-05)`: `python -m scripts.validation.audit_local_trade_ohlcv_gaps --profiles tier_3_holdout tier_3_forward --markets RB --start 2026-01-29 --end 2026-02-05 --causal-root data\causal_proof_candidates\local_trade_2025_2026_v1 --json-out reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2026_split_v1\RB_2026_w05_20260129_20260205.json --md-out reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2026_split_v1\RB_2026_w05_20260129_20260205.md --progress-jsonl reports\pipeline_audit\local_trade_shards_20250618_20260613\RB_2026_split_v1\RB_2026_w05_20260129_20260205.progress.jsonl --max-gap-windows 10000 --max-trade-rows-scanned 200000000 --max-archives-read 2 --max-runtime-seconds 900`; it returned `PASS` with `failed_minutes=0`, `unverified_minutes=0`, and `timestamp_basis_mismatch_minutes=0`.
 - 2026-07-01: patched `scripts/validation/audit_local_trade_ohlcv_gaps.py` after stuck/opaque runs: added finer `--progress-jsonl` events, runtime checks during gap grouping, global stop on first scan-limit failure, faster nanosecond adjacent timestamp lookup, and exception-to-FAIL-report handling. Focused test file `tests/validation/test_audit_local_trade_ohlcv_gaps.py` now covers these paths.
 - 2026-07-01: stabilized the worktree before any proof scan by committing coordination docs/checker separately from OHLCV guard/progress changes. The proof scan was not run.
 - 2026-07-01: added coordination source-of-truth rules to `AGENTS.md` and added `scripts/validation/check_coordination_docs.py` with focused tests in `tests/validation/test_check_coordination_docs.py`.
@@ -51,17 +82,19 @@
 - Keep this handoff as the single current project-state file for Codex continuation.
 - Keep `AGENTS.md` as the durable agent-rule file.
 - Run `python -m scripts.validation.check_coordination_docs` after future coordination-doc edits when practical.
-- Decide whether to commit the local process-safety patch in `scripts\validation\audit_local_trade_ohlcv_gaps.py`, `tests\validation\test_audit_local_trade_ohlcv_gaps.py`, and this `CODEX_HANDOFF.md`.
-- After the process-safety patch is committed or explicitly left local, plan sharded capped proof scans; the single 29-market run reached only 5 of 58 market-years before the approved runtime cap.
+- Keep `PROJECT_OUTLINE.md` as reference/planning material only unless the user explicitly changes its authority.
+- Before continuing proof scans, decide disposition of the completed auth/doc/live-chart packaging worktree changes: leave local, commit as a narrow disposition scope, or otherwise explicitly approve the next cleanup step. After that, continue local trade/OHLCV proof with separately approved sharded capped proof scans, next at `RB_2026_w06` (`2026-02-05` to `2026-02-12`).
 - Keep the seven pre-existing untracked broad build/loop files out of any documentation-only or proof-scan commit unless the user explicitly approves their disposition.
 
 # Known Issues
 
-- Severe: local trade/OHLCV proof is still no-go; latest capped proof scan stopped at the approved runtime limit before completing all 58 market-years.
-- Medium: process-safety patch from the completed capped scan is local and uncommitted.
+- Severe: local trade/OHLCV proof is still no-go for the full scope; `NG_2025` and `RB_2025` are split-proved locally, `NG_2026` passed as a full shard, and `RB_2026_w01`/`w02`/`w03`/`w04`/`w05` passed, but remaining 2025/2026 market-year shards still need bounded proof scans.
+- Medium: completed auth/doc/live-chart packaging changes remain local and uncommitted/un-staged. Do not mix the later `RB_2026_w06` proof result with this local code/doc scope unless the user explicitly approves leaving the scope local.
+- Medium: `outputs\pyinstaller_dist\LiveChartFeed.exe` is a validated ignored local build only; replacing `C:\Users\donny\Desktop\LiveChartFeed.exe` still requires explicit approval and a backup of the old Desktop exe.
 - Medium: generated candidate causal proof data/reports are ignored local artifacts and should not be staged by default.
 - Medium: field-level point-in-time availability for optional metadata has not been proven.
 - Medium: full 527-row promoted/canonical Phase 2 remains no-go.
+- Medium: root `DATA REBUILD.md` and `RESOURCES.md` remain deleted in the working tree by approved doc triage; keep them out of unrelated proof/auth commits unless the user approves their disposition.
 - Medium: the original configured cwd `C:\Users\donny\Desktop\15_min_long_short` was absent; use `C:\Users\donny\Desktop\futures_intraday_model` unless the user says otherwise.
 - Medium: branch is ahead of origin and contains local commits; verify sync intent before pushing or rebasing.
 - Medium: seven broad-loop untracked files remain intentionally excluded.
@@ -70,32 +103,29 @@
 
 Exact next recommended step:
 
-Review and, if approved, commit only the process-safety scope: `scripts\validation\audit_local_trade_ohlcv_gaps.py`, `tests\validation\test_audit_local_trade_ohlcv_gaps.py`, and this `CODEX_HANDOFF.md`. Do not stage the seven broad build/loop files, generated `data/**`, generated reports, configs, models, predictions, cleanup, labels, feature matrices, modeling, WFA, metrics, or live/paper execution. After that, separately plan sharded capped proof scans rather than one full 29-market run.
+Decide the disposition of the completed local auth/doc/live-chart packaging worktree scope before planning `RB_2026_w06`: leave it local, commit it as a narrow non-proof disposition scope, or request another explicit cleanup change. Do not run or plan the next proof shard until this disposition decision is clear.
 
 Fresh-thread prompt:
 
 ```text
 Continue from CODEX_HANDOFF.md.
 
-Goal: decide whether to commit the local process-safety patch from the capped scan run, then plan sharded capped proof scans separately.
+Goal: decide and apply the disposition for the completed local auth/doc/live-chart packaging worktree scope before any more proof scans. After that disposition is clear, the next proof shard remains RB_2026_w06 over [2026-02-05, 2026-02-12).
 
 Rules:
 - First verify repo path, git status, and the current CODEX_HANDOFF.md.
+- Do not stage, restore, delete, or commit files unless explicitly approved.
+- Do not run data/model/WFA/proof-scan commands in Plan Mode.
+- Use PIPELINE.md as the runnable workflow authority; PROJECT_OUTLINE.md remains reference/planning material only.
+- Do not build or run a proof-scan command until the completed auth/doc/live-chart packaging disposition scope is explicitly left local or committed separately.
+- Current implemented auth contract is source runs use repo-local `secrets/databento.env`, ignored `api.env`, legacy root `databento.env`, then `DATABENTO_API_KEY`; packaged exe runs use the same file order beside the exe, then `DATABENTO_API_KEY`.
+- Ignored packaged build exists at `outputs\pyinstaller_dist\LiveChartFeed.exe`; Desktop `C:\Users\donny\Desktop\LiveChartFeed.exe` has not been replaced.
+- `RESEARCH_METRICS.html` has been restored as the tracked redirect stub.
 - Do not stage generated artifacts.
 - Do not refresh promoted Phase 2 reports.
 - Do not run broad build/loop files.
 - Do not promote canonical data.
 - Do not touch modeling, WFA, metrics, predictions, cleanup, labels, feature matrices, or live/paper execution.
-- If commit approval is missing, stop with a plan only.
-
-Allowed commit scope:
-- scripts\validation\audit_local_trade_ohlcv_gaps.py
-- tests\validation\test_audit_local_trade_ohlcv_gaps.py
-- CODEX_HANDOFF.md
-
-Do not stage:
-- generated data/**
-- generated reports
-- seven broad build/loop files
-- configs, models, predictions, cleanup, labels, feature matrices, modeling, WFA, metrics, or live/paper execution
+- Use the completed NG_2025 and RB_2025 weekly split reports plus RB_2026_w01/w02/w03/w04/w05 as local generated evidence only.
+- Do not stage generated data/**, generated reports, the seven broad build/loop files, configs, models, predictions, cleanup, labels, feature matrices, modeling, WFA, metrics, or live/paper execution.
 ```

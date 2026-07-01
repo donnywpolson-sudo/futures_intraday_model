@@ -11,6 +11,7 @@ API_KEY_NAME = "DATABENTO_API_KEY"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 API_KEY_FILES = (
     PROJECT_ROOT / "secrets" / "databento.env",
+    PROJECT_ROOT / "api.env",
     PROJECT_ROOT / "databento.env",
 )
 

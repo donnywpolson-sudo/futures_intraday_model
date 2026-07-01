@@ -47,6 +47,89 @@ def test_cli_timeframe_alias_parses_initial_timeframe() -> None:
     assert args.chart_timeframe == "5m"
 
 
+def test_resolve_api_key_prefers_local_file_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secrets_key_file = tmp_path / "secrets" / "databento.env"
+    api_key_file = tmp_path / "api.env"
+    legacy_key_file = tmp_path / "databento.env"
+    secrets_key_file.parent.mkdir()
+    secrets_key_file.write_text("DATABENTO_API_KEY=db-secrets-test\n", encoding="utf-8")
+    api_key_file.write_text("DATABENTO_API_KEY=db-api-test\n", encoding="utf-8")
+    legacy_key_file.write_text("DATABENTO_API_KEY=db-legacy-test\n", encoding="utf-8")
+    monkeypatch.setattr(
+        chart,
+        "ROOT_API_KEY_FILES",
+        (secrets_key_file, api_key_file, legacy_key_file),
+    )
+    monkeypatch.setattr(chart, "ROOT", tmp_path)
+
+    assert chart.resolve_api_key() == "db-secrets-test"
+    resolved = chart.resolve_api_key_source()
+    assert resolved is not None
+    assert resolved.key == "db-secrets-test"
+    assert resolved.source == "file secrets/databento.env"
+
+
+def test_resolve_api_key_falls_back_to_injected_env_when_no_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        chart,
+        "ROOT_API_KEY_FILES",
+        (
+            tmp_path / "secrets" / "databento.env",
+            tmp_path / "api.env",
+            tmp_path / "databento.env",
+        ),
+    )
+
+    assert chart.resolve_api_key(env={"DATABENTO_API_KEY": "db-env-test"}) == "db-env-test"
+    resolved = chart.resolve_api_key_source(env={"DATABENTO_API_KEY": "db-env-test"})
+    assert resolved is not None
+    assert resolved.source == "environment DATABENTO_API_KEY"
+
+
+def test_resolve_api_key_prefers_frozen_exe_adjacent_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exe_path = tmp_path / "LiveChartFeed.exe"
+    secrets_key_file = tmp_path / "secrets" / "databento.env"
+    api_key_file = tmp_path / "api.env"
+    legacy_key_file = tmp_path / "databento.env"
+    secrets_key_file.parent.mkdir()
+    secrets_key_file.write_text("DATABENTO_API_KEY=db-frozen-secrets-test\n", encoding="utf-8")
+    api_key_file.write_text("DATABENTO_API_KEY=db-frozen-api-test\n", encoding="utf-8")
+    legacy_key_file.write_text("DATABENTO_API_KEY=db-frozen-legacy-test\n", encoding="utf-8")
+    monkeypatch.setattr(chart.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(chart.sys, "executable", str(exe_path))
+    monkeypatch.setenv("DATABENTO_API_KEY", "db-env-secret")
+
+    resolved = chart.resolve_api_key_source()
+
+    assert resolved is not None
+    assert resolved.key == "db-frozen-secrets-test"
+    assert resolved.source == "file secrets/databento.env"
+
+
+def test_resolve_api_key_frozen_exe_falls_back_to_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(chart.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(chart.sys, "executable", str(tmp_path / "LiveChartFeed.exe"))
+    monkeypatch.setenv("DATABENTO_API_KEY", "db-env-test")
+
+    resolved = chart.resolve_api_key_source()
+
+    assert resolved is not None
+    assert resolved.key == "db-env-test"
+    assert resolved.source == "environment DATABENTO_API_KEY"
+
+
 def one_minute_candle(minute: int, close: float, volume: int = 1) -> dict[str, chart.CandleValue]:
     base = datetime(2026, 6, 21, 17, minute, tzinfo=timezone.utc)
     return {
@@ -730,11 +813,111 @@ class SwitchBackLive(FakeLive):
             FakeChart.WV.emit_queue.put(f"market_~_{switch_markets[switch_index]}")
 
 
+class AuthFailMetadataHistorical(FakeHistorical):
+    def __init__(self, key: str, state: SimpleNamespace) -> None:
+        super().__init__(key, state)
+
+        def fail_dataset_range(dataset: str) -> dict[str, object]:
+            _ = dataset
+            raise RuntimeError("401 auth_authentication_failed Authentication failed.")
+
+        self.metadata = SimpleNamespace(get_dataset_range=fail_dataset_range)
+
+
+class AuthFailSymbologyHistorical(FakeHistorical):
+    def resolve(self, **kwargs: object) -> dict[str, object]:
+        _ = kwargs
+        raise RuntimeError("401 auth_authentication_failed Authentication failed.")
+
+
 def fake_databento_module(state: SimpleNamespace, live_cls: type[FakeLive] = FakeLive) -> ModuleType:
     module = ModuleType("fake_databento")
     module.Historical = lambda key: FakeHistorical(key, state)
     module.Live = lambda key: live_cls(key, state)
     return module
+
+
+def fake_databento_module_with_historical(
+    state: SimpleNamespace,
+    historical_cls: type[FakeHistorical],
+) -> ModuleType:
+    module = ModuleType("fake_databento")
+    module.Historical = lambda key: historical_cls(key, state)
+    module.Live = lambda key: FakeLive(key, state)
+    return module
+
+
+def test_run_live_chart_auth_failure_in_metadata_does_not_open_chart() -> None:
+    state = SimpleNamespace(historical_requests=[], live_subscriptions=[], lives=[])
+    stderr = StringIO()
+    chart_created = False
+
+    def chart_factory() -> FakeChart:
+        nonlocal chart_created
+        chart_created = True
+        return FakeChart()
+
+    result = chart.run_live_chart(
+        chart.build_arg_parser().parse_args(
+            [
+                "--market",
+                "ES",
+                "--timeout-seconds",
+                "0",
+                "--no-persist-selection",
+            ]
+        ),
+        env={"DATABENTO_API_KEY": "db-secret-test"},
+        db_module=fake_databento_module_with_historical(state, AuthFailMetadataHistorical),
+        chart_factory=chart_factory,
+        series_factory=lambda candle: candle,
+        stdout=StringIO(),
+        stderr=stderr,
+        now=datetime(2026, 6, 21, 23, 0, tzinfo=timezone.utc),
+    )
+
+    text = stderr.getvalue()
+    assert result == 2
+    assert chart_created is False
+    assert "Databento API key source: environment DATABENTO_API_KEY" in text
+    assert "Databento authentication failed using environment DATABENTO_API_KEY" in text
+    assert "db-secret-test" not in text
+
+
+def test_run_live_chart_auth_failure_in_symbology_does_not_open_chart() -> None:
+    state = SimpleNamespace(historical_requests=[], live_subscriptions=[], lives=[])
+    stderr = StringIO()
+    chart_created = False
+
+    def chart_factory() -> FakeChart:
+        nonlocal chart_created
+        chart_created = True
+        return FakeChart()
+
+    result = chart.run_live_chart(
+        chart.build_arg_parser().parse_args(
+            [
+                "--market",
+                "ES",
+                "--timeout-seconds",
+                "0",
+                "--no-persist-selection",
+            ]
+        ),
+        env={"DATABENTO_API_KEY": "db-secret-test"},
+        db_module=fake_databento_module_with_historical(state, AuthFailSymbologyHistorical),
+        chart_factory=chart_factory,
+        series_factory=lambda candle: candle,
+        stdout=StringIO(),
+        stderr=stderr,
+        now=datetime(2026, 6, 21, 23, 0, tzinfo=timezone.utc),
+    )
+
+    text = stderr.getvalue()
+    assert result == 2
+    assert chart_created is False
+    assert "Databento authentication failed using environment DATABENTO_API_KEY" in text
+    assert "db-secret-test" not in text
 
 
 def test_run_live_chart_switches_backfill_and_subscription_to_selected_market(

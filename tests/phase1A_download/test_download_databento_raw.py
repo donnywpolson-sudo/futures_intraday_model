@@ -1061,8 +1061,9 @@ def test_normalize_api_key_strips_wrapping_noise() -> None:
     assert normalize_api_key("'db-test'") == "db-test"
 
 
-def test_load_databento_api_key_from_project_databento_env(tmp_path: Path) -> None:
-    key_file = tmp_path / "databento.env"
+def test_load_databento_api_key_from_project_secrets_env(tmp_path: Path) -> None:
+    key_file = tmp_path / "secrets" / "databento.env"
+    key_file.parent.mkdir()
     key_file.write_text(
         "# local Databento key\nDATABENTO_API_KEY='db-file-test'\n",
         encoding="utf-8",
@@ -1071,48 +1072,67 @@ def test_load_databento_api_key_from_project_databento_env(tmp_path: Path) -> No
     assert load_databento_api_key_from_file(key_file) == "db-file-test"
 
 
-def test_load_databento_api_key_accepts_raw_key_in_project_databento_env(
+def test_load_databento_api_key_accepts_raw_key_in_project_api_env(
     tmp_path: Path,
 ) -> None:
-    key_file = tmp_path / "databento.env"
+    key_file = tmp_path / "api.env"
     key_file.write_text("  db-raw-test  \n", encoding="utf-8")
 
     assert load_databento_api_key_from_file(key_file) == "db-raw-test"
 
 
-def test_resolve_databento_api_key_uses_project_databento_env(
+def test_resolve_databento_api_key_uses_project_secrets_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    key_file = tmp_path / "databento.env"
-    key_file.write_text("DATABENTO_API_KEY=db-file-test\n", encoding="utf-8")
-    monkeypatch.setattr(
-        "scripts.phase1A_download.download_databento_raw.API_KEY_FILE",
-        key_file,
-    )
-    monkeypatch.setattr(
-        "scripts.phase1A_download.download_databento_raw.API_KEY_FILES",
-        [key_file],
-    )
-
-    assert resolve_databento_api_key() == "db-file-test"
-
-
-def test_resolve_databento_api_key_prefers_secrets_databento_env(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root_key_file = tmp_path / "databento.env"
     secrets_key_file = tmp_path / "secrets" / "databento.env"
-    root_key_file.write_text("DATABENTO_API_KEY=db-root-test\n", encoding="utf-8")
-    secrets_key_file.parent.mkdir(parents=True)
+    api_key_file = tmp_path / "api.env"
+    legacy_key_file = tmp_path / "databento.env"
+    secrets_key_file.parent.mkdir()
     secrets_key_file.write_text("DATABENTO_API_KEY=db-secrets-test\n", encoding="utf-8")
+    api_key_file.write_text("DATABENTO_API_KEY=db-api-test\n", encoding="utf-8")
+    legacy_key_file.write_text("DATABENTO_API_KEY=db-legacy-test\n", encoding="utf-8")
     monkeypatch.setattr(
         "scripts.phase1A_download.download_databento_raw.API_KEY_FILES",
-        [secrets_key_file, root_key_file],
+        [secrets_key_file, api_key_file, legacy_key_file],
     )
 
     assert resolve_databento_api_key() == "db-secrets-test"
+
+
+def test_resolve_databento_api_key_falls_back_to_api_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secrets_key_file = tmp_path / "secrets" / "databento.env"
+    api_key_file = tmp_path / "api.env"
+    legacy_key_file = tmp_path / "databento.env"
+    api_key_file.write_text("DATABENTO_API_KEY=db-api-test\n", encoding="utf-8")
+    legacy_key_file.write_text("DATABENTO_API_KEY=db-legacy-test\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "scripts.phase1A_download.download_databento_raw.API_KEY_FILES",
+        [secrets_key_file, api_key_file, legacy_key_file],
+    )
+
+    assert resolve_databento_api_key() == "db-api-test"
+
+
+def test_resolve_databento_api_key_falls_back_to_legacy_databento_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy_key_file = tmp_path / "databento.env"
+    legacy_key_file.write_text("DATABENTO_API_KEY=db-legacy-test\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "scripts.phase1A_download.download_databento_raw.API_KEY_FILES",
+        [
+            tmp_path / "secrets" / "databento.env",
+            tmp_path / "api.env",
+            legacy_key_file,
+        ],
+    )
+
+    assert resolve_databento_api_key() == "db-legacy-test"
 
 
 def test_condition_is_degraded_classifies_quality_status() -> None:

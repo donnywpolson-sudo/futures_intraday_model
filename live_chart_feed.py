@@ -29,6 +29,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.databento_auth import (  # noqa: E402
     load_databento_api_key_from_file,
+    normalize_api_key,
     resolve_databento_api_key,
 )
 from live_ops.operator import OperatorStatusState, print_operator_status  # noqa: E402
@@ -64,7 +65,11 @@ VSCODE_RUN_BUTTON_ARGS = (
 VSCODE_RUN_CHILD_ENV = "LIVE_CHART_FEED_RUN_CHILD"
 VSCODE_ENV_KEYS = ("VSCODE_PID", "VSCODE_CWD", "VSCODE_IPC_HOOK_CLI")
 API_KEY_ENV = "DATABENTO_API_KEY"
-ROOT_API_KEY_FILE = ROOT / "databento.env"
+ROOT_API_KEY_FILES = (
+    ROOT / "secrets" / "databento.env",
+    ROOT / "api.env",
+    ROOT / "databento.env",
+)
 FIXED_PRICE_SCALE = 1_000_000_000
 UNDEF_PRICE = 9_223_372_036_854_775_807
 OHLCV_FIELDS = ("ts_event", "open", "high", "low", "close", "volume")
@@ -79,6 +84,12 @@ LIVE_CONNECTION_FAILURE_MARKERS = (
     "name or service not known",
     "temporary failure in name resolution",
     "timed out",
+)
+AUTH_FAILURE_MARKERS = (
+    "401",
+    "auth_authentication_failed",
+    "authentication failed",
+    "invalid username or api key",
 )
 TIMEFRAME_PATTERN = re.compile(r"^(\d+)([smhd])$")
 MARKET_SYMBOL_PATTERN = re.compile(r"^[A-Z0-9]{1,4}$")
@@ -196,6 +207,12 @@ class ResolvedInstrument:
     instrument_id: int
     raw_symbol: str | None
     candidates: tuple[SymbologyCandidate, ...]
+
+
+@dataclass(frozen=True)
+class ApiKeyResolution:
+    key: str
+    source: str
 
 
 @dataclass(frozen=True)
@@ -721,6 +738,18 @@ def is_live_connection_failure(exc: Exception) -> bool:
     return any(marker in text for marker in LIVE_CONNECTION_FAILURE_MARKERS)
 
 
+def is_databento_auth_error(exc: BaseException | str) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in AUTH_FAILURE_MARKERS)
+
+
+def format_databento_auth_error(source: str) -> str:
+    return (
+        f"Databento authentication failed using {source}. "
+        "Refresh the key from https://databento.com/docs/portal/api-keys."
+    )
+
+
 def format_chart_title(
     *,
     symbols: str,
@@ -806,13 +835,66 @@ def parse_symbols(value: str) -> str | list[str]:
     return symbols
 
 
-def resolve_api_key(env: dict[str, str] | None = None) -> str | None:
+def api_key_files_for_base(base: Path) -> tuple[Path, ...]:
+    return (
+        base / "secrets" / "databento.env",
+        base / "api.env",
+        base / "databento.env",
+    )
+
+
+def frozen_executable_dir() -> Path | None:
+    if not getattr(sys, "frozen", False):
+        return None
+    return Path(sys.executable).resolve().parent
+
+
+def runtime_api_key_base() -> Path:
+    return frozen_executable_dir() or ROOT
+
+
+def runtime_api_key_files() -> tuple[Path, ...]:
+    frozen_base = frozen_executable_dir()
+    if frozen_base is not None:
+        return api_key_files_for_base(frozen_base)
+    return ROOT_API_KEY_FILES
+
+
+def safe_api_key_file_label(path: Path, base: Path) -> str:
+    try:
+        return path.resolve().relative_to(base.resolve()).as_posix()
+    except ValueError:
+        return path.name
+
+
+def resolve_api_key_source(env: dict[str, str] | None = None) -> ApiKeyResolution | None:
+    key_base = runtime_api_key_base()
+    key_files = runtime_api_key_files()
     if env is None:
-        key = load_databento_api_key_from_file(ROOT_API_KEY_FILE, key_name=API_KEY_ENV)
-        if key:
-            return key
-    key = resolve_databento_api_key(env=env, key_name=API_KEY_ENV)
-    return key or None
+        for path in key_files:
+            key = load_databento_api_key_from_file(path, key_name=API_KEY_ENV)
+            if key:
+                return ApiKeyResolution(
+                    key=key,
+                    source=f"file {safe_api_key_file_label(path, key_base)}",
+                )
+    source = os.environ if env is None else env
+    key = normalize_api_key(source.get(API_KEY_ENV, ""))
+    if key:
+        return ApiKeyResolution(key=key, source=f"environment {API_KEY_ENV}")
+    key = resolve_databento_api_key(
+        env=env,
+        key_name=API_KEY_ENV,
+        key_files=key_files,
+    )
+    if key:
+        return ApiKeyResolution(key=key, source=f"environment {API_KEY_ENV}")
+    return None
+
+
+def resolve_api_key(env: dict[str, str] | None = None) -> str | None:
+    resolved = resolve_api_key_source(env)
+    return resolved.key if resolved is not None else None
 
 
 def fixed_price_to_float(value: object) -> float:
@@ -1124,6 +1206,8 @@ def lookup_dataset_available_exclusive_end(
     except TypeError:
         dataset_range = get_dataset_range(dataset)
     except Exception as exc:
+        if is_databento_auth_error(exc):
+            raise
         print(f"Databento dataset range lookup unavailable: {exc}", file=stderr)
         return None
     return available_exclusive_end_from_range(dataset_range)
@@ -2609,10 +2693,12 @@ def run_live_chart(
         print(str(exc), file=stderr)
         return 2
 
-    api_key = resolve_api_key(env)
-    if api_key is None:
+    api_key_resolution = resolve_api_key_source(env)
+    if api_key_resolution is None:
         print(f"Missing {API_KEY_ENV}; set it before running live chart.", file=stderr)
         return 2
+    print(f"Databento API key source: {api_key_resolution.source}", file=stderr)
+    api_key = api_key_resolution.key
 
     current_time = now or utc_now()
     live_start = resolve_window_start(args, now=current_time)
@@ -2663,15 +2749,6 @@ def run_live_chart(
             )
             return 2
 
-    if chart_factory is None or series_factory is None:
-        try:
-            chart_cls, runtime_series_factory = import_chart_runtime()
-        except RuntimeError as exc:
-            print(str(exc), file=stderr)
-            return 2
-        chart_factory = chart_factory or chart_cls
-        series_factory = series_factory or runtime_series_factory
-
     historical_cls = getattr(db_module, "Historical", None)
     if historical_cls is None:
         print("Databento Historical client is unavailable.", file=stderr)
@@ -2682,6 +2759,36 @@ def run_live_chart(
         end=historical_end,
         fallback_start=current_time,
     )
+    timing = LiveChartTiming(stderr=stderr)
+    try:
+        available_exclusive_end_date = lookup_dataset_available_exclusive_end(
+            historical,
+            dataset=args.dataset,
+            stderr=stderr,
+        )
+        timing.mark("dataset range lookup")
+        end_date = clamp_exclusive_end_date(
+            start_date=start_date,
+            requested_end_date=end_date,
+            available_exclusive_end_date=available_exclusive_end_date,
+            context="symbology",
+            stderr=stderr,
+        )
+        if args.historical_backfill:
+            historical_end = clamp_historical_end(
+                start=live_start,
+                requested_end=historical_end,
+                available_exclusive_end_date=available_exclusive_end_date,
+                stderr=stderr,
+            )
+    except ValueError as exc:
+        print(str(exc), file=stderr)
+        return 2
+    except Exception as exc:
+        if is_databento_auth_error(exc):
+            print(format_databento_auth_error(api_key_resolution.source), file=stderr)
+            return 2
+        raise
 
     timeframe_queue: queue.Queue[str] = queue.Queue()
     market_queue: queue.Queue[str] = queue.Queue()
@@ -2709,7 +2816,6 @@ def run_live_chart(
     )
     resolved_cache: dict[tuple[str, str], ResolvedInstrument] = {}
     market_runtime_cache: dict[tuple[object, ...], MarketRuntimeState] = {}
-    timing = LiveChartTiming(stderr=stderr)
 
     def set_chart_state(state: str, symbols: str | None = None) -> None:
         display.topbar_state = state
@@ -2841,6 +2947,27 @@ def run_live_chart(
         return runtime_state
 
     try:
+        resolve_cached_market(active_market)
+    except ValueError as exc:
+        print(str(exc), file=stderr)
+        return 2
+    except RuntimeError as exc:
+        if is_databento_auth_error(exc):
+            print(format_databento_auth_error(api_key_resolution.source), file=stderr)
+            return 2
+        print(str(exc), file=stderr)
+        return 1
+
+    if chart_factory is None or series_factory is None:
+        try:
+            chart_cls, runtime_series_factory = import_chart_runtime()
+        except RuntimeError as exc:
+            print(str(exc), file=stderr)
+            return 2
+        chart_factory = chart_factory or chart_cls
+        series_factory = series_factory or runtime_series_factory
+
+    try:
         chart = chart_factory()
         configure_chart(
             chart,
@@ -2867,36 +2994,15 @@ def run_live_chart(
         show_chart(chart)
         timing.mark("chart launch/show")
         set_chart_state(CHART_STATE_RESOLVING, active_market)
-        available_exclusive_end_date = lookup_dataset_available_exclusive_end(
-            historical,
-            dataset=args.dataset,
-            stderr=stderr,
-        )
-        timing.mark("dataset range lookup")
-        try:
-            end_date = clamp_exclusive_end_date(
-                start_date=start_date,
-                requested_end_date=end_date,
-                available_exclusive_end_date=available_exclusive_end_date,
-                context="symbology",
-                stderr=stderr,
-            )
-            if args.historical_backfill:
-                historical_end = clamp_historical_end(
-                    start=live_start,
-                    requested_end=historical_end,
-                    available_exclusive_end_date=available_exclusive_end_date,
-                    stderr=stderr,
-                )
-        except ValueError as exc:
-            print(str(exc), file=stderr)
-            return 2
         try:
             runtime_state = load_market_runtime(active_market, live_start)
         except ValueError as exc:
             print(str(exc), file=stderr)
             return 2
         except RuntimeError as exc:
+            if is_databento_auth_error(exc):
+                print(format_databento_auth_error(api_key_resolution.source), file=stderr)
+                return 2
             print(str(exc), file=stderr)
             return 1
         resolved = runtime_state.resolved
@@ -3174,6 +3280,10 @@ def run_live_chart(
         print("Interrupted; stopping live chart.", file=stderr)
         return 130
     except Exception as exc:
+        if is_databento_auth_error(exc):
+            finish_status_line(status, stdout)
+            print(format_databento_auth_error(api_key_resolution.source), file=stderr)
+            return 2
         finish_status_line(status, stdout)
         print(f"Databento live chart failed: {exc}", file=stderr)
         return 1

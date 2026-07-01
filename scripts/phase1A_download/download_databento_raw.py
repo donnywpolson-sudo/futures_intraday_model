@@ -48,8 +48,12 @@ from scripts.phase1_raw_contract import (  # noqa: E402
 
 API_KEY_NAME = "DATABENTO_API_KEY"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-API_KEY_FILE = PROJECT_ROOT / "databento.env"
-API_KEY_FILES = [PROJECT_ROOT / "secrets" / "databento.env", API_KEY_FILE]
+API_KEY_FILE = PROJECT_ROOT / "secrets" / "databento.env"
+API_KEY_FILES = [
+    API_KEY_FILE,
+    PROJECT_ROOT / "api.env",
+    PROJECT_ROOT / "databento.env",
+]
 CME_DATASET = REQUIRED_DATASET
 ALLOWED_DATASETS = {CME_DATASET}
 SCHEMA = "ohlcv-1m"
@@ -743,7 +747,7 @@ def get_client() -> DatabentoClient:
     key = resolve_databento_api_key()
     if not key:
         raise SystemExit(
-            f"Set {API_KEY_NAME} in secrets/databento.env or {API_KEY_FILE.name} at the project root."
+            f"Set {API_KEY_NAME} in secrets/databento.env, api.env, or databento.env."
         )
     import databento as db
 

@@ -261,33 +261,55 @@ Preferred `Next` prompt format:
 ```text
 You are in PLAN MODE.
 
-Context:
-- Current repo/task state:
-- Latest completed work:
-- Known blockers:
-- Important constraints:
-- Relevant files/artifacts:
+Parent project goal:
+- <one sentence describing the larger repo/project goal>
 
-Goal:
-- Produce one decision-complete implementation plan for the next executable phase or required blocker-clearing decision. The user will press `Implement Plan`; do not produce a separate execution prompt.
+Current milestone:
+- <active phase, checkpoint, or blocker being cleared>
+
+Progress ledger:
+- Verified current state:
+  - <repo status, dirty files, accepted evidence, blockers>
+- Completed last step:
+  - <exact thing completed>
+- Remaining known work:
+  - <known next phases, blockers, or None>
+
+Next atomic goal:
+- <one small, testable goal that directly advances the current milestone>
+
+Relevant files/artifacts:
+- <paths, reports, handoff files, configs, or generated artifacts to inspect/preserve>
+
+Required first step:
+- Re-check repo state and handoff truth before planning:
+  - git status --short --untracked-files=all
+  - git status --ignored --short -- <relevant ignored/local paths if any>
+  - git diff -- <relevant tracked paths if dirty>
+  - Read CODEX_HANDOFF.md first when present and relevant.
+- If current state conflicts with this prompt, trust the fresh repo evidence and call out the conflict.
 
 Rules:
 - Do not edit files.
+- Do not stage, unstage, commit, or run destructive commands.
 - Do not broaden scope.
+- Do not read secrets or print env-file contents.
 - Preserve project safety rules:
-  - <project-specific rule>
-  - <project-specific rule>
+  - no generated artifact staging
+  - no raw data mutation
+  - no unapproved pipeline/model runs
+  - no cleanup beyond the approved scope
+  - no commit unless explicitly requested
 
 Plan output required:
-1. Output one complete `<proposed_plan>` block.
-2. If a decision-complete plan cannot be produced, output only a short blocker/decision note and the exact missing decision needed.
+1. Brief diagnosis of the refreshed state.
+2. One recommended next action.
+3. One complete `<proposed_plan>` block for the next executable phase or blocker-clearing decision.
+4. Exact read-only verification commands and approval-required implementation commands, clearly separated.
+5. Acceptance criteria and stop conditions.
+6. Updated `Next` handoff only if real follow-up remains after the planned work; otherwise specify that final `Next` should be `None.`
 
-The plan must cover:
-
-- Objective and success criteria
-- Scope, files/artifacts, and explicit exclusions
-- Implementation steps and safety stop conditions
-- Verification commands and expected final output behavior
+The user will press `Implement Plan`; do not produce a separate execution prompt.
 ```
 
 ## Final Output Restrictions
