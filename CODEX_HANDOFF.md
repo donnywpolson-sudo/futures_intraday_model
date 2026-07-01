@@ -11,11 +11,13 @@
 
 # Current State
 
-- Active repo path verified on 2026-06-30: `C:\Users\donny\Desktop\futures_intraday_model`.
+- Active repo path verified on 2026-07-01: `C:\Users\donny\Desktop\futures_intraday_model`.
 - The environment path `C:\Users\donny\Desktop\15_min_long_short` was not present during this handoff update.
-- Git state before this documentation update: `main...origin/main [ahead 18]`.
-- Latest commit before this documentation update: `d7d9e89 Add bounded OHLCV gap scan guards`.
-- Pre-existing untracked broad build/loop files remain excluded from this documentation update:
+- Git state before this handoff-only update: `main...origin/main [ahead 20]` with only the seven broad-loop untracked files listed below remaining dirty.
+- Latest stabilization commits before this handoff-only update:
+  - `2e6d23a Add coordination document checks`
+  - `9927adb Add bounded OHLCV gap scan progress guards`
+- Remaining untracked broad build/loop files remain excluded from stabilization and proof-scan prep:
   - `scripts/validation/build_broad_manifest_527_rebuild.py`
   - `scripts/validation/monitor_broad_manifest_527_rebuild.py`
   - `scripts/validation/run_broad_manifest_527_step_loop.ps1`
@@ -31,15 +33,11 @@
 
 # Recent Changes
 
-- 2026-07-01: added coordination source-of-truth rules to `AGENTS.md` and added `scripts/validation/check_coordination_docs.py` with focused tests in `tests/validation/test_check_coordination_docs.py`. Validation: `python -m pytest tests\validation\test_check_coordination_docs.py -q` -> `4 passed`; `python -m scripts.validation.check_coordination_docs` -> `PASS coordination docs are aligned`; retired-doc `rg` found only intentional archive/policy references in `PIPELINE.md`, `CODEX_HANDOFF.md`, and `AGENTS.md`.
+- 2026-07-01: stabilized the worktree before any proof scan by committing coordination docs/checker separately from OHLCV guard/progress changes. The proof scan was not run.
+- 2026-07-01: added coordination source-of-truth rules to `AGENTS.md` and added `scripts/validation/check_coordination_docs.py` with focused tests in `tests/validation/test_check_coordination_docs.py`.
+- 2026-07-01: committed OHLCV local trade gap scan progress and fail-closed guard changes in `scripts/validation/audit_local_trade_ohlcv_gaps.py` and `tests/validation/test_audit_local_trade_ohlcv_gaps.py`.
 - 2026-06-30: compacted `CODEX_HANDOFF.md` into a single standing-state handoff with project overview, current state, recent changes, active tasks, known issues, and next steps.
-- 2026-06-30: added explicit handoff maintenance triggers to `AGENTS.md`.
 - 2026-06-30: local trade/OHLCV gap auditor guard fix was committed in `d7d9e89`; the auditor now has fail-closed scan limits and a default runtime ceiling.
-- 2026-06-30: prior tests reported for the guard scope were:
-  - `python -m pytest tests\validation\test_audit_local_trade_ohlcv_gaps.py -q` -> `15 passed`
-  - `python -m pytest tests\validation\test_check_phase2_local_trade_ohlcv_gap_proof.py -q` -> `7 passed`
-  - `python -m pytest tests\validation\test_inventory_phase2_local_trade_archive_coverage.py -q` -> `6 passed`
-- 2026-06-30: generated candidate causal inputs for `58` market-year rows were created under the candidate proof root, but the local trade/OHLCV proof scan still requires separate bounded approval.
 
 # Active Tasks
 
@@ -47,7 +45,7 @@
 - Keep `AGENTS.md` as the durable agent-rule file.
 - Run `python -m scripts.validation.check_coordination_docs` after future coordination-doc edits when practical.
 - Decide whether to run a capped local trade/OHLCV proof scan against `data\causal_proof_candidates\local_trade_2025_2026_v1`.
-- Keep the seven pre-existing untracked broad build/loop files out of any documentation-only commit unless the user explicitly approves their disposition.
+- Keep the seven pre-existing untracked broad build/loop files out of any documentation-only or proof-scan commit unless the user explicitly approves their disposition.
 
 # Known Issues
 
@@ -57,13 +55,13 @@
 - Medium: full 527-row promoted/canonical Phase 2 remains no-go.
 - Medium: the original configured cwd `C:\Users\donny\Desktop\15_min_long_short` was absent; use `C:\Users\donny\Desktop\futures_intraday_model` unless the user says otherwise.
 - Medium: branch is ahead of origin and contains local commits; verify sync intent before pushing or rebasing.
-- Medium: coordination-doc checker scope is local and uncommitted until explicitly staged/committed.
+- Medium: seven broad-loop untracked files remain intentionally excluded.
 
 # Next Steps
 
 Exact next recommended step:
 
-Approve or reject a capped local trade/OHLCV proof scan using existing local archives and `--causal-root data\causal_proof_candidates\local_trade_2025_2026_v1` for the same 29 uncovered markets and 2025/2026 only. The scan must specify explicit `--max-gap-windows`, `--max-trade-rows-scanned`, `--max-archives-read`, `--max-runtime-seconds`, and shell timeout. Do not stage generated artifacts, refresh promoted Phase 2 reports, run broad build/loop files, promote canonical data, or touch modeling, WFA, metrics, predictions, cleanup, labels, feature matrices, or live/paper execution.
+Approve or reject a capped local trade/OHLCV proof scan using existing local archives and `--causal-root data\causal_proof_candidates\local_trade_2025_2026_v1` for the same 29 uncovered markets and 2025/2026 only. The scan must specify explicit `--max-gap-windows`, `--max-trade-rows-scanned`, `--max-archives-read`, `--max-runtime-seconds`, `--progress-jsonl`, report output paths, shell timeout, and stop condition. Do not stage generated artifacts, refresh promoted Phase 2 reports, run broad build/loop files, promote canonical data, or touch modeling, WFA, metrics, predictions, cleanup, labels, feature matrices, or live/paper execution.
 
 Fresh-thread prompt:
 
@@ -86,6 +84,7 @@ Required bounds before any scan:
 - explicit --max-trade-rows-scanned
 - explicit --max-archives-read
 - explicit --max-runtime-seconds
+- explicit --progress-jsonl
 - explicit shell timeout
 - explicit report output paths
 - explicit stop condition
