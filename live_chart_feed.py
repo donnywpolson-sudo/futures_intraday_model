@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import importlib
 import json
+import multiprocessing
 import os
 import queue
 import re
@@ -65,6 +66,7 @@ VSCODE_RUN_BUTTON_ARGS = (
 VSCODE_RUN_CHILD_ENV = "LIVE_CHART_FEED_RUN_CHILD"
 VSCODE_ENV_KEYS = ("VSCODE_PID", "VSCODE_CWD", "VSCODE_IPC_HOOK_CLI")
 API_KEY_ENV = "DATABENTO_API_KEY"
+PROJECT_DIR_NAME = "futures_intraday_model"
 ROOT_API_KEY_FILES = (
     ROOT / "secrets" / "databento.env",
     ROOT / "api.env",
@@ -134,6 +136,7 @@ CHART_INSTALL_MESSAGE = (
     'Missing lightweight-charts package; install optional chart support with: '
     'python -m pip install "lightweight-charts>=2.1,<3"'
 )
+CHART_RUNTIME_ASSET_FILES = ("index.html", "bundle.js", "lightweight-charts.js", "styles.css")
 CandleValue = datetime | int | float
 SubscriptionStart = datetime | str | int | None
 
@@ -849,6 +852,10 @@ def frozen_executable_dir() -> Path | None:
     return Path(sys.executable).resolve().parent
 
 
+def frozen_project_api_key_files(frozen_base: Path) -> tuple[Path, ...]:
+    return (frozen_base / PROJECT_DIR_NAME / "api.env",)
+
+
 def runtime_api_key_base() -> Path:
     return frozen_executable_dir() or ROOT
 
@@ -856,7 +863,10 @@ def runtime_api_key_base() -> Path:
 def runtime_api_key_files() -> tuple[Path, ...]:
     frozen_base = frozen_executable_dir()
     if frozen_base is not None:
-        return api_key_files_for_base(frozen_base)
+        return (
+            *frozen_project_api_key_files(frozen_base),
+            *api_key_files_for_base(frozen_base),
+        )
     return ROOT_API_KEY_FILES
 
 
@@ -1630,6 +1640,8 @@ def import_chart_runtime() -> tuple[type[Any], Callable[[dict[str, CandleValue]]
             raise RuntimeError(CHART_INSTALL_MESSAGE) from exc
         raise
 
+    validate_chart_runtime_assets(chart_module)
+
     try:
         pandas_module = importlib.import_module("pandas")
     except ModuleNotFoundError as exc:
@@ -1638,6 +1650,34 @@ def import_chart_runtime() -> tuple[type[Any], Callable[[dict[str, CandleValue]]
         ) from exc
 
     return chart_module.Chart, pandas_module.Series
+
+
+def validate_chart_runtime_assets(chart_module: ModuleType) -> None:
+    abstract_module = getattr(chart_module, "abstract", None)
+    if abstract_module is None:
+        try:
+            abstract_module = importlib.import_module("lightweight_charts.abstract")
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "Missing lightweight_charts runtime assets; rebuild LiveChartFeed.exe "
+                "with the lightweight_charts/js data files."
+            ) from exc
+    index_value = getattr(abstract_module, "INDEX", None)
+    if not index_value:
+        raise RuntimeError(
+            "Missing lightweight_charts runtime asset index; rebuild LiveChartFeed.exe "
+            "with the lightweight_charts/js data files."
+        )
+    index_path = Path(index_value)
+    asset_dir = index_path.parent
+    required_paths = tuple(asset_dir / filename for filename in CHART_RUNTIME_ASSET_FILES)
+    missing = [path.name for path in required_paths if not path.is_file()]
+    if missing:
+        raise RuntimeError(
+            "Missing lightweight_charts runtime asset(s): "
+            + ", ".join(missing)
+            + ". Rebuild LiveChartFeed.exe with the lightweight_charts/js data files."
+        )
 
 
 def build_record_callback(
@@ -3304,5 +3344,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     return run_live_chart(args)
 
 
+def run_entrypoint() -> int:
+    multiprocessing.freeze_support()
+    return main()
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run_entrypoint())

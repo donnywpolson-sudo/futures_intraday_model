@@ -115,6 +115,27 @@ def test_resolve_api_key_prefers_frozen_exe_adjacent_files(
     assert resolved.source == "file secrets/databento.env"
 
 
+def test_resolve_api_key_prefers_frozen_repo_api_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exe_path = tmp_path / "Desktop" / "LiveChartFeed.exe"
+    repo_api_file = tmp_path / "Desktop" / "futures_intraday_model" / "api.env"
+    adjacent_key_file = tmp_path / "Desktop" / "secrets" / "databento.env"
+    repo_api_file.parent.mkdir(parents=True)
+    adjacent_key_file.parent.mkdir(parents=True)
+    repo_api_file.write_text("DATABENTO_API_KEY=db-repo-api-test\n", encoding="utf-8")
+    adjacent_key_file.write_text("DATABENTO_API_KEY=db-adjacent-secrets-test\n", encoding="utf-8")
+    monkeypatch.setattr(chart.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(chart.sys, "executable", str(exe_path))
+
+    resolved = chart.resolve_api_key_source()
+
+    assert resolved is not None
+    assert resolved.key == "db-repo-api-test"
+    assert resolved.source == "file futures_intraday_model/api.env"
+
+
 def test_resolve_api_key_frozen_exe_falls_back_to_environment(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -128,6 +149,47 @@ def test_resolve_api_key_frozen_exe_falls_back_to_environment(
     assert resolved is not None
     assert resolved.key == "db-env-test"
     assert resolved.source == "environment DATABENTO_API_KEY"
+
+
+def test_entrypoint_calls_freeze_support_before_main(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    def fake_freeze_support() -> None:
+        calls.append("freeze")
+
+    def fake_main() -> int:
+        calls.append("main")
+        return 7
+
+    monkeypatch.setattr(chart.multiprocessing, "freeze_support", fake_freeze_support)
+    monkeypatch.setattr(chart, "main", fake_main)
+
+    assert chart.run_entrypoint() == 7
+    assert calls == ["freeze", "main"]
+
+
+def test_validate_chart_runtime_assets_accepts_required_js_files(tmp_path: Path) -> None:
+    asset_dir = tmp_path / "js"
+    asset_dir.mkdir()
+    for filename in chart.CHART_RUNTIME_ASSET_FILES:
+        (asset_dir / filename).write_text("", encoding="utf-8")
+    chart_module = ModuleType("lightweight_charts")
+    chart_module.abstract = SimpleNamespace(INDEX=str(asset_dir / "index.html"))
+
+    chart.validate_chart_runtime_assets(chart_module)
+
+
+def test_validate_chart_runtime_assets_reports_missing_bundle(tmp_path: Path) -> None:
+    asset_dir = tmp_path / "js"
+    asset_dir.mkdir()
+    for filename in chart.CHART_RUNTIME_ASSET_FILES:
+        if filename != "bundle.js":
+            (asset_dir / filename).write_text("", encoding="utf-8")
+    chart_module = ModuleType("lightweight_charts")
+    chart_module.abstract = SimpleNamespace(INDEX=str(asset_dir / "index.html"))
+
+    with pytest.raises(RuntimeError, match="bundle\\.js.*lightweight_charts/js"):
+        chart.validate_chart_runtime_assets(chart_module)
 
 
 def one_minute_candle(minute: int, close: float, volume: int = 1) -> dict[str, chart.CandleValue]:

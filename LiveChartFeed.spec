@@ -2,6 +2,8 @@
 
 import os
 
+from PyInstaller.utils.hooks import collect_data_files
+
 
 os.environ.setdefault('SETUPTOOLS_USE_DISTUTILS', 'stdlib')
 
@@ -10,7 +12,10 @@ a = Analysis(
     ['live_chart_feed.py'],
     pathex=[],
     binaries=[],
-    datas=[('configs/alpha_tiered.yaml', 'configs')],
+    datas=[
+        ('configs/alpha_tiered.yaml', 'configs'),
+        *collect_data_files('lightweight_charts', includes=['js/*']),
+    ],
     hiddenimports=['databento', 'lightweight_charts', 'pandas', 'yaml'],
     hookspath=[],
     hooksconfig={},

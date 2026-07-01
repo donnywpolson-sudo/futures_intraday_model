@@ -101,15 +101,21 @@ Set-Content -Path .\secrets\databento.env -Value 'DATABENTO_API_KEY="YOUR_KEY"' 
 python live_chart_feed.py --market ES --historical-backfill --lookback-hours 2 --timeout-seconds 30
 ```
 
-For a packaged Desktop `LiveChartFeed.exe`, place the same ignored key file next
-to the exe as `secrets\databento.env`, or use adjacent `api.env`. If no valid
-adjacent key file exists, the exe falls back to the Windows
-`DATABENTO_API_KEY` environment variable; a stale environment value can still be
-used in that case. Persistent `401 auth_authentication_failed` means Databento
-rejected the selected key; refresh it from the Databento API keys portal:
+For a packaged Desktop `LiveChartFeed.exe`, the exe first checks the repo-local
+`api.env` beside the Desktop folder at
+`C:\Users\donny\Desktop\futures_intraday_model\api.env`. If that file is absent,
+place the same ignored key file next to the exe as `secrets\databento.env`, or
+use adjacent `api.env`. If no valid file exists, the exe falls back to the
+Windows `DATABENTO_API_KEY` environment variable; a stale environment value can
+still be used in that case. Persistent `401 auth_authentication_failed` means
+Databento rejected the selected key; refresh it from the Databento API keys portal:
 https://databento.com/docs/portal/api-keys. API auth references:
 https://databento.com/docs/api-reference-historical/basics/authentication and
 https://databento.com/docs/api-reference-live/basics/authentication.
+
+Packaged chart builds must bundle `lightweight_charts\js`, including
+`index.html`, `bundle.js`, `lightweight-charts.js`, and `styles.css`; missing
+assets can surface as `Lib is not defined` from the webview runtime.
 
 V1 stops by `--max-records`, `--timeout-seconds`, Ctrl+C, or SDK error; chart
 window-close detection is best-effort only. No live signals are implemented;
