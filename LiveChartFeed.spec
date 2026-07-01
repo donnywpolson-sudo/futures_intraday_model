@@ -1,16 +1,21 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+
+
+os.environ.setdefault('SETUPTOOLS_USE_DISTUTILS', 'stdlib')
+
 
 a = Analysis(
     ['live_chart_feed.py'],
     pathex=[],
     binaries=[],
     datas=[('configs/alpha_tiered.yaml', 'configs')],
-    hiddenimports=['yaml'],
+    hiddenimports=['databento', 'lightweight_charts', 'pandas', 'yaml'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['numba', 'pytest', 'scipy'],
     noarchive=False,
     optimize=0,
 )
