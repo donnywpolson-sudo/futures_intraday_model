@@ -8,17 +8,76 @@ import sys
 from pathlib import PurePosixPath
 
 
-BLOCKED_SUFFIXES = {".parquet", ".dbn", ".zst", ".pkl"}
-BLOCKED_FILENAMES = {".env", ".env.local", ".envrc", "credentials.json", "secrets.json"}
-BLOCKED_DIRS = {"cache", "data", "reports", "logs"}
+BLOCKED_SUFFIXES = {
+    ".arrow",
+    ".csv",
+    ".dbn",
+    ".duckdb",
+    ".exe",
+    ".feather",
+    ".h5",
+    ".hdf5",
+    ".joblib",
+    ".jsonl",
+    ".log",
+    ".npy",
+    ".npz",
+    ".parquet",
+    ".pickle",
+    ".pkl",
+    ".pkg",
+    ".pyz",
+    ".sqlite",
+    ".sqlite3",
+    ".toc",
+    ".zip",
+    ".zst",
+}
+ALLOWED_METADATA_SUFFIXES = {".csv", ".jsonl"}
+BLOCKED_FILENAMES = {
+    ".env",
+    ".env.local",
+    ".envrc",
+    "api.env",
+    "credentials.json",
+    "databento.env",
+    "secrets.json",
+}
+BLOCKED_NAME_PREFIXES = ("databento_api_key", ".databento_api_key")
+BLOCKED_DIRS = {
+    ".codex_home",
+    ".venv",
+    "artifacts",
+    "build",
+    "cache",
+    "codex-log",
+    "credentials",
+    "data",
+    "dist",
+    "logs",
+    "models",
+    "output",
+    "outputs",
+    "reports",
+    "secrets",
+    "venv",
+}
 
 
 def is_blocked(path: str) -> bool:
     normalized = path.replace("\\", "/").lstrip("/")
     parts = PurePosixPath(normalized).parts
+    name = PurePosixPath(normalized).name.lower()
+    suffix = PurePosixPath(normalized).suffix.lower()
+    is_allowed_manifest_metadata = (
+        bool(parts)
+        and parts[0] == "manifests"
+        and suffix in ALLOWED_METADATA_SUFFIXES
+    )
     return (
-        PurePosixPath(normalized).name.lower() in BLOCKED_FILENAMES
-        or PurePosixPath(normalized).suffix.lower() in BLOCKED_SUFFIXES
+        name in BLOCKED_FILENAMES
+        or any(name.startswith(prefix) for prefix in BLOCKED_NAME_PREFIXES)
+        or (suffix in BLOCKED_SUFFIXES and not is_allowed_manifest_metadata)
         or any(part in BLOCKED_DIRS for part in parts[:-1])
     )
 

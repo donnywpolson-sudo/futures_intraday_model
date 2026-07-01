@@ -1,12 +1,44 @@
-# Keep frequently edited project docs stable on Windows worktrees.
-.gitattributes text eol=lf
+# Keep text files stable on Windows worktrees.
+* text=auto eol=lf
+
+# Current project text formats.
+*.md text eol=lf
+*.py text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.toml text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.jsonl text eol=lf
+*.csv text eol=lf
+*.html text eol=lf
+*.spec text eol=lf
+*.ps1 text eol=lf
+
+# Coordination docs.
 AGENTS.md text eol=lf
-DATA_AUDIT_TODO.md text eol=lf
-CURRENT_PIPELINE.md text eol=lf
-"CODEX DO NEXT.md" text eol=lf
-scripts/phase8_model_selection/audit_policy_run_level_overlap.py text eol=lf
-tests/phase8_model_selection/test_audit_policy_run_level_overlap.py text eol=lf
-scripts/phase8_model_selection/audit_event_level_edge_feasibility.py text eol=lf
-tests/phase8_model_selection/test_audit_event_level_edge_feasibility.py text eol=lf
-scripts/phase3_labels/audit_target_construction_feasibility.py text eol=lf
-tests/phase3_labels/test_audit_target_construction_feasibility.py text eol=lf
+CODEX_HANDOFF.md text eol=lf
+PIPELINE.md text eol=lf
+README.md text eol=lf
+README_RUNBOOK.md text eol=lf
+
+# Binary and generated data formats.
+*.arrow -text
+*.dbn -text
+*.duckdb -text
+*.exe -text
+*.feather -text
+*.h5 -text
+*.hdf5 -text
+*.joblib -text
+*.npy -text
+*.npz -text
+*.parquet -text
+*.pickle -text
+*.pkl -text
+*.pkg -text
+*.pyz -text
+*.sqlite -text
+*.sqlite3 -text
+*.zst -text
+*.zip -text

@@ -93,11 +93,23 @@ when you want the local lightweight-charts window:
 python -m pip install "lightweight-charts>=2.1,<3"
 ```
 
-Run a bounded chart smoke only when `DATABENTO_API_KEY` is already set:
+For source runs, place the key in ignored `secrets/databento.env`:
 
 ```powershell
+New-Item -ItemType Directory -Force -Path .\secrets
+Set-Content -Path .\secrets\databento.env -Value 'DATABENTO_API_KEY="YOUR_KEY"' -Encoding utf8
 python live_chart_feed.py --market ES --historical-backfill --lookback-hours 2 --timeout-seconds 30
 ```
+
+For a packaged Desktop `LiveChartFeed.exe`, place the same ignored key file next
+to the exe as `secrets\databento.env`, or use adjacent `api.env`. If no valid
+adjacent key file exists, the exe falls back to the Windows
+`DATABENTO_API_KEY` environment variable; a stale environment value can still be
+used in that case. Persistent `401 auth_authentication_failed` means Databento
+rejected the selected key; refresh it from the Databento API keys portal:
+https://databento.com/docs/portal/api-keys. API auth references:
+https://databento.com/docs/api-reference-historical/basics/authentication and
+https://databento.com/docs/api-reference-live/basics/authentication.
 
 V1 stops by `--max-records`, `--timeout-seconds`, Ctrl+C, or SDK error; chart
 window-close detection is best-effort only. No live signals are implemented;
@@ -125,10 +137,14 @@ authorized for formal audit from this baseline.
 ## Smoke Tests
 
 ```powershell
-python -m py_compile scripts/write_project_inventory.py scripts/check_git_hygiene.py
 python scripts/check_git_hygiene.py
 python -m pytest -q tests\phase1A_download\test_download_databento_raw.py tests\validation\test_model_registry.py
 ```
+
+`python scripts/check_git_hygiene.py` blocks newly staged generated artifacts
+and large staged files. Historical tracked `reports/**` evidence is
+grandfathered for now; do not add new generated reports unless an explicit
+artifact policy approves them.
 
 ## Full Tests
 
@@ -162,4 +178,12 @@ Before committing, review what Git would add and run the hygiene check:
 ```powershell
 git add --dry-run .
 python scripts/check_git_hygiene.py
+```
+
+`pre-commit` is an optional developer tool, not part of the runtime
+requirements. Install it separately only if you want local Git hooks:
+
+```powershell
+python -m pip install pre-commit
+pre-commit install
 ```

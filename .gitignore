@@ -21,6 +21,7 @@ Thumbs.db
 .env.*
 !.env.example
 !.env.template
+api.env
 databento.env
 databento_api_key*
 .databento_api_key*
@@ -41,8 +42,10 @@ logs/
 logs/live/
 codex-log/
 artifacts/
+build/
 cache/
 .codex_home/
+dist/
 
 # Heavy or generated data file formats
 *.parquet
@@ -58,11 +61,16 @@ cache/
 *.npz
 *.arrow
 *.duckdb
+*.exe
 *.sqlite
 *.sqlite3
 *.csv
 *.jsonl
 *.log
+*.pkg
+*.pyz
+*.toc
+*.zip
 
 # Small source-of-truth metadata is intentionally trackable in configs/,
 # scripts/, pipeline/, src/, tests/, docs/, manifests/, README files, lockfiles,

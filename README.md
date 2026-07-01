@@ -86,13 +86,19 @@ Profile definitions live in `configs/alpha_tiered.yaml`.
 Pull latest code before working:
 
 ```powershell
-python pull_github.py
+git pull --ff-only
 ```
 
-Push safe code/docs changes after working:
+Before pushing code or docs, review the worktree and run the hygiene checks:
 
 ```powershell
-python push_github.py
+git status --short --untracked-files=all
+python scripts/check_git_hygiene.py
+git diff --check
 ```
 
-`push_github.py` blocks risky data, secret, and output paths before pushing.
+Push only reviewed code/docs changes:
+
+```powershell
+git push
+```
