@@ -32,6 +32,7 @@ SCHEMAS_TO_VERIFY = ("ohlcv-1m", "definition", "trades")
 LOCAL_TRADES_SCHEMA_ACCESS_START = "2025-06-18"
 LOCAL_TRADES_SCHEMA_ACCESS_END = "2026-06-13"
 DEFAULT_MAX_RUNTIME_SECONDS = 900.0
+GAP_GROUP_PROGRESS_INTERVAL = 50
 VERIFIED_NO_TRADE = "verified_no_trade_rows_inside_ohlcv_gap"
 TRADE_ACTIVITY = "trade_activity_inside_ohlcv_gap"
 TIMESTAMP_BASIS_MISMATCH = "timestamp_basis_mismatch_with_ohlcv_source_bar"
@@ -49,6 +50,25 @@ CAVEAT = (
 )
 
 TradeFrameReader = Callable[[Path, int], Iterable[pd.DataFrame]]
+
+
+class ProgressWriter:
+    def __init__(self, path: Path | None) -> None:
+        self.path = path
+        if self.path is not None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text("", encoding="utf-8")
+
+    def write(self, event: str, **payload: Any) -> None:
+        if self.path is None:
+            return
+        record = {
+            "generated_at_utc": datetime.now(UTC).isoformat(),
+            "event": event,
+            **payload,
+        }
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
 class ScanLimitExceeded(RuntimeError):
@@ -472,7 +492,9 @@ def _year_window(year: int, start: pd.Timestamp, end: pd.Timestamp) -> tuple[pd.
 def _prepare_raw_context(raw: pd.DataFrame, raw_ts: pd.Series) -> pd.DataFrame:
     work = raw.copy()
     work["_ts"] = raw_ts
-    return work.dropna(subset=["_ts"]).sort_values("_ts", kind="mergesort").reset_index(drop=True)
+    work = work.dropna(subset=["_ts"]).sort_values("_ts", kind="mergesort").reset_index(drop=True)
+    work["_ts_ns"] = work["_ts"].map(lambda value: int(pd.Timestamp(value).value)).astype("int64")
+    return work
 
 
 def _series_values(frame: pd.DataFrame, columns: list[str]) -> list[Any]:
@@ -491,9 +513,9 @@ def _resolve_adjacent_contract(
         before = pd.DataFrame()
         after = pd.DataFrame()
     else:
-        ts = raw_context["_ts"]
-        before_pos = int(ts.searchsorted(first_ts, side="left")) - 1
-        after_pos = int(ts.searchsorted(last_ts, side="right"))
+        ts_ns = raw_context["_ts_ns"].to_numpy(dtype="int64", copy=False)
+        before_pos = int(ts_ns.searchsorted(int(first_ts.value), side="left")) - 1
+        after_pos = int(ts_ns.searchsorted(int(last_ts.value), side="right"))
         before = raw_context.iloc[[before_pos]] if before_pos >= 0 else pd.DataFrame()
         after = raw_context.iloc[[after_pos]] if after_pos < len(raw_context) else pd.DataFrame()
     adjacent = pd.concat([before, after], ignore_index=True)
@@ -668,6 +690,9 @@ def _scan_trade_archives(
     chunk_size: int,
     trade_frame_reader: TradeFrameReader,
     scan_budget: ScanBudget | None,
+    progress_writer: ProgressWriter | None,
+    market: str,
+    year: int,
 ) -> dict[str, Any]:
     pending_indexes = [idx for idx, gap in enumerate(gaps) if gap["classification"] == PENDING]
     minute_to_gap_indexes: dict[int, list[int]] = defaultdict(list)
@@ -690,16 +715,39 @@ def _scan_trade_archives(
     matched_event_minutes_by_gap: dict[int, set[str]] = defaultdict(set)
     matched_recv_minutes_by_gap: dict[int, set[str]] = defaultdict(set)
     source_match_recv_minutes_by_gap: dict[int, set[str]] = defaultdict(set)
-    for path in archive_paths:
+    for archive_index, path in enumerate(archive_paths, start=1):
         try:
             if scan_budget is not None:
                 scan_budget.begin_archive()
             archives_read.append(_relative_path(path))
+            if progress_writer is not None:
+                progress_writer.write(
+                    "trade_archive_started",
+                    market=market,
+                    year=year,
+                    archive_index=archive_index,
+                    archive_count=len(archive_paths),
+                    archive_path=_relative_path(path),
+                    trade_rows_scanned=scanned_rows,
+                    trade_rows_considered=considered_rows,
+                )
             for frame in trade_frame_reader(path, chunk_size):
                 frame_rows = int(len(frame))
                 if scan_budget is not None:
                     scan_budget.begin_frame(frame_rows)
                 scanned_rows += frame_rows
+                if progress_writer is not None:
+                    progress_writer.write(
+                        "trade_frame_scanned",
+                        market=market,
+                        year=year,
+                        archive_index=archive_index,
+                        archive_count=len(archive_paths),
+                        archive_path=_relative_path(path),
+                        frame_rows=frame_rows,
+                        trade_rows_scanned=scanned_rows,
+                        trade_rows_considered=considered_rows,
+                    )
                 if frame.empty:
                     continue
                 if required_ids and "instrument_id" not in frame.columns:
@@ -785,8 +833,31 @@ def _scan_trade_archives(
                                     "ts_recv_matches_adjacent_ohlcv_source_bar": source_match,
                                 }
                             )
+            if progress_writer is not None:
+                progress_writer.write(
+                    "trade_archive_finished",
+                    market=market,
+                    year=year,
+                    archive_index=archive_index,
+                    archive_count=len(archive_paths),
+                    archive_path=_relative_path(path),
+                    trade_rows_scanned=scanned_rows,
+                    trade_rows_considered=considered_rows,
+                )
         except ScanLimitExceeded as exc:
             failures.append(str(exc))
+            if progress_writer is not None:
+                progress_writer.write(
+                    "scan_limit_exceeded",
+                    market=market,
+                    year=year,
+                    archive_index=archive_index,
+                    archive_count=len(archive_paths),
+                    archive_path=_relative_path(path),
+                    failure=str(exc),
+                    trade_rows_scanned=scanned_rows,
+                    trade_rows_considered=considered_rows,
+                )
             break
         except Exception as exc:
             failures.append(f"unreadable trades archive {_relative_path(path)}: {exc}")
@@ -878,12 +949,48 @@ def audit_market_year(
     max_gap_windows: int | None,
     trade_frame_reader: TradeFrameReader,
     scan_budget: ScanBudget | None,
+    progress_writer: ProgressWriter | None,
 ) -> dict[str, Any]:
     raw_path = _raw_path_for_market_year(raw_root, raw_overlay_root, market, year)
     causal_path = causal_root / market / f"{year}.parquet"
     failures = _market_year_coverage_failures(preflight, market, start, end)
+    if progress_writer is not None:
+        progress_writer.write(
+            "market_year_inputs_started",
+            market=market,
+            year=year,
+            raw_path=_relative_path(raw_path),
+            causal_path=_relative_path(causal_path),
+        )
+    if progress_writer is not None:
+        progress_writer.write("raw_parquet_read_started", market=market, year=year, path=_relative_path(raw_path))
     raw, raw_ts, raw_failures = _read_parquet_with_ts(raw_path)
+    if progress_writer is not None:
+        progress_writer.write(
+            "raw_parquet_read_finished",
+            market=market,
+            year=year,
+            path=_relative_path(raw_path),
+            row_count=int(len(raw)) if raw is not None else None,
+            failure_count=len(raw_failures),
+        )
+    if progress_writer is not None:
+        progress_writer.write(
+            "causal_parquet_read_started",
+            market=market,
+            year=year,
+            path=_relative_path(causal_path),
+        )
     causal, causal_ts, causal_failures = _read_parquet_with_ts(causal_path)
+    if progress_writer is not None:
+        progress_writer.write(
+            "causal_parquet_read_finished",
+            market=market,
+            year=year,
+            path=_relative_path(causal_path),
+            row_count=int(len(causal)) if causal is not None else None,
+            failure_count=len(causal_failures),
+        )
     failures.extend(raw_failures)
     failures.extend(causal_failures)
     if raw is None or causal is None:
@@ -927,12 +1034,53 @@ def audit_market_year(
     raw_window_ts = raw_ts.loc[raw_ts.ge(start) & raw_ts.lt(end)]
     causal_window = causal.loc[causal_ts.ge(start) & causal_ts.lt(end)].copy()
     causal_window_ts = causal_ts.loc[causal_window.index]
+    if progress_writer is not None:
+        progress_writer.write(
+            "synthetic_work_started",
+            market=market,
+            year=year,
+            raw_window_rows=int(len(raw_window_ts)),
+            causal_window_rows=int(len(causal_window)),
+        )
     work = _synthetic_work_frame(causal_window, causal_window_ts, raw_window_ts)
+    if progress_writer is not None:
+        progress_writer.write(
+            "synthetic_work_finished",
+            market=market,
+            year=year,
+            synthetic_missing_rows=int(len(work)),
+        )
+    if progress_writer is not None:
+        progress_writer.write("raw_context_started", market=market, year=year)
     raw_context = _prepare_raw_context(raw, raw_ts)
+    if progress_writer is not None:
+        progress_writer.write("raw_context_finished", market=market, year=year, row_count=int(len(raw_context)))
     gap_windows: list[dict[str, Any]] = []
-    for gap_id, group in _group_synthetic_minutes(work):
-        if max_gap_windows is not None and len(gap_windows) >= max_gap_windows:
+    gap_window_limit_exceeded = False
+    gap_grouping_failure: str | None = None
+    if progress_writer is not None:
+        progress_writer.write("gap_grouping_started", market=market, year=year)
+    for group_index, (gap_id, group) in enumerate(_group_synthetic_minutes(work), start=1):
+        try:
+            if scan_budget is not None:
+                scan_budget.check_runtime()
+        except ScanLimitExceeded as exc:
+            gap_grouping_failure = str(exc)
+            failures.append(gap_grouping_failure)
             break
+        if max_gap_windows is not None and len(gap_windows) >= max_gap_windows:
+            gap_window_limit_exceeded = True
+            break
+        if progress_writer is not None and (
+            group_index == 1 or group_index % GAP_GROUP_PROGRESS_INTERVAL == 0
+        ):
+            progress_writer.write(
+                "gap_grouping_progress",
+                market=market,
+                year=year,
+                gap_group_index=group_index,
+                gap_window_count=len(gap_windows),
+            )
         ts = pd.to_datetime(group["_ts"], utc=True, errors="coerce").dropna()
         context = _resolve_adjacent_contract(raw_context, pd.Timestamp(ts.min()), pd.Timestamp(ts.max()))
         coverage_failures = failures if failures else []
@@ -946,6 +1094,26 @@ def audit_market_year(
                 coverage_failures=coverage_failures,
             )
         )
+    if progress_writer is not None:
+        progress_writer.write(
+            "gap_grouping_finished",
+            market=market,
+            year=year,
+            gap_window_count=len(gap_windows),
+            gap_window_limit_exceeded=gap_window_limit_exceeded,
+            failure=gap_grouping_failure,
+        )
+    if gap_window_limit_exceeded:
+        failures.append("--max-gap-windows limit exceeded")
+        for gap in gap_windows:
+            if gap["classification"] == PENDING:
+                gap["classification"] = UNVERIFIED_MISSING_COVERAGE
+                gap["failures"].append("--max-gap-windows limit exceeded")
+    if gap_grouping_failure:
+        for gap in gap_windows:
+            if gap["classification"] == PENDING:
+                gap["classification"] = UNVERIFIED_MISSING_COVERAGE
+                gap["failures"].append(gap_grouping_failure)
 
     trade_scan = {
         "trade_rows_scanned": 0,
@@ -960,6 +1128,9 @@ def audit_market_year(
             chunk_size=chunk_size,
             trade_frame_reader=trade_frame_reader,
             scan_budget=scan_budget,
+            progress_writer=progress_writer,
+            market=market,
+            year=year,
         )
         failures.extend(trade_scan["failures"])
 
@@ -1039,6 +1210,15 @@ def build_report(
         if max_runtime_seconds is not None
         else None,
     )
+    progress_writer = ProgressWriter(
+        Path(str(args.progress_jsonl)) if getattr(args, "progress_jsonl", None) else None
+    )
+    scan_limits = {
+        "max_gap_windows": getattr(args, "max_gap_windows", None),
+        "max_trade_rows_scanned": scan_budget.max_trade_rows_scanned,
+        "max_archives_read": scan_budget.max_archives_read,
+        "max_runtime_seconds": float(max_runtime_seconds) if max_runtime_seconds is not None else None,
+    }
 
     scope, scope_failures = _load_scope(
         Path(args.profile_config),
@@ -1066,13 +1246,33 @@ def build_report(
     failures.extend(preflight["failures"])
 
     entries: list[dict[str, Any]] = []
+    progress_writer.write(
+        "scan_started",
+        inventory_only=bool(args.inventory_only),
+        markets=markets,
+        years=years,
+        market_year_count=len(markets) * len(years),
+        scan_limits=scan_limits,
+    )
     if not bool(args.inventory_only):
         reader = trade_frame_reader or _default_trade_frame_reader
+        market_year_index = 0
+        market_year_count = len(markets) * len(years)
         for market in markets:
             for year in years:
                 year_start, year_end = _year_window(year, start, end)
                 if year_start >= year_end:
                     continue
+                market_year_index += 1
+                progress_writer.write(
+                    "market_year_started",
+                    market=market,
+                    year=year,
+                    market_year_index=market_year_index,
+                    market_year_count=market_year_count,
+                    window={"start": _utc_iso(year_start), "end": _utc_iso(year_end)},
+                )
+                started = time.monotonic()
                 entries.append(
                     audit_market_year(
                         market=market,
@@ -1089,7 +1289,19 @@ def build_report(
                         max_gap_windows=getattr(args, "max_gap_windows", None),
                         trade_frame_reader=reader,
                         scan_budget=scan_budget,
+                        progress_writer=progress_writer,
                     )
+                )
+                progress_writer.write(
+                    "market_year_finished",
+                    market=market,
+                    year=year,
+                    market_year_index=market_year_index,
+                    market_year_count=market_year_count,
+                    elapsed_seconds=round(time.monotonic() - started, 3),
+                    status=entries[-1]["status"],
+                    failure_count=len(entries[-1]["failures"]),
+                    summary=entries[-1]["summary"],
                 )
 
     status = "FAIL" if failures or any(entry["status"] != "PASS" for entry in entries) else "PASS"
@@ -1109,7 +1321,7 @@ def build_report(
         "trade_rows_scanned": sum(int(entry["summary"]["trade_rows_scanned"]) for entry in entries),
         "archives_read": sum(int(entry["summary"]["archives_read"]) for entry in entries),
     }
-    return {
+    report = {
         "generated_at_utc": datetime.now(UTC).isoformat(),
         "status": status,
         "failures": failures,
@@ -1129,17 +1341,17 @@ def build_report(
         else None,
         "causal_root": _relative_path(Path(args.causal_root)),
         "chunk_size": int(args.chunk_size),
-        "scan_limits": {
-            "max_gap_windows": getattr(args, "max_gap_windows", None),
-            "max_trade_rows_scanned": scan_budget.max_trade_rows_scanned,
-            "max_archives_read": scan_budget.max_archives_read,
-            "max_runtime_seconds": float(max_runtime_seconds) if max_runtime_seconds is not None else None,
-        },
+        "scan_limits": scan_limits,
         "max_gap_windows": getattr(args, "max_gap_windows", None),
+        "progress_jsonl": _relative_path(Path(str(args.progress_jsonl)))
+        if getattr(args, "progress_jsonl", None)
+        else None,
         "preflight": preflight,
         "summary": summary,
         "market_years": entries,
     }
+    progress_writer.write("scan_finished", status=status, failure_count=len(failures), summary=summary)
+    return report
 
 
 def write_json_report(report: dict[str, Any], path: Path) -> None:
@@ -1215,6 +1427,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-trade-rows-scanned", type=int)
     parser.add_argument("--max-archives-read", type=int)
     parser.add_argument("--max-runtime-seconds", type=float, default=DEFAULT_MAX_RUNTIME_SECONDS)
+    parser.add_argument("--progress-jsonl")
     parser.add_argument("--inventory-only", action="store_true")
     return parser
 

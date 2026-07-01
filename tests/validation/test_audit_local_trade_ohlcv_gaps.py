@@ -154,6 +154,7 @@ def _args(root: Path, *, inventory_only: bool = False) -> argparse.Namespace:
         max_trade_rows_scanned=None,
         max_archives_read=None,
         max_runtime_seconds=None,
+        progress_jsonl=None,
         inventory_only=inventory_only,
     )
 
@@ -327,6 +328,31 @@ def test_max_trade_rows_scanned_limit_fails_closed(tmp_path: Path) -> None:
     assert "--max-trade-rows-scanned limit exceeded" in gap["failures"]
 
 
+def test_max_gap_windows_limit_fails_closed(tmp_path: Path) -> None:
+    _write_config(tmp_path / "configs" / "alpha_tiered.yaml", ["ES"])
+    _write_all_archives(tmp_path / "data" / "dbn")
+    _write_raw_causal(tmp_path)
+    causal_path = tmp_path / "data" / "causally_gated_normalized" / "ES" / "2025.parquet"
+    causal = pd.read_parquet(causal_path)
+    extra_gap = causal.iloc[[1]].copy()
+    extra_gap["ts"] = pd.Timestamp("2025-06-18T00:03:00Z")
+    extra_gap["synthetic_gap_id"] = "gap-2"
+    extra_gap["synthetic_gap_size_minutes"] = 1
+    pd.concat([causal, extra_gap], ignore_index=True).to_parquet(causal_path, index=False)
+    args = _args(tmp_path)
+    args.max_gap_windows = 1
+
+    report = build_report(args, trade_frame_reader=FakeTradeReader([]))
+    gap = report["market_years"][0]["gap_windows"][0]
+
+    assert report["status"] == "FAIL"
+    assert report["summary"]["synthetic_gap_count"] == 1
+    assert report["summary"]["unverified_minutes"] == 1
+    assert "--max-gap-windows limit exceeded" in report["market_years"][0]["failures"]
+    assert gap["classification"] == UNVERIFIED_MISSING_COVERAGE
+    assert "--max-gap-windows limit exceeded" in gap["failures"]
+
+
 def test_max_runtime_seconds_limit_fails_closed(tmp_path: Path) -> None:
     _write_config(tmp_path / "configs" / "alpha_tiered.yaml", ["ES"])
     _write_all_archives(tmp_path / "data" / "dbn")
@@ -336,13 +362,40 @@ def test_max_runtime_seconds_limit_fails_closed(tmp_path: Path) -> None:
     reader = FakeTradeReader([_trade_frame(["2025-06-18T00:01:30Z"])])
 
     report = build_report(args, trade_frame_reader=reader)
-    gap = report["market_years"][0]["gap_windows"][0]
 
     assert report["status"] == "FAIL"
-    assert report["summary"]["unverified_minutes"] == 1
+    assert report["summary"]["unverified_minutes"] == 0
     assert reader.calls == []
-    assert gap["classification"] == UNVERIFIED_MISSING_COVERAGE
-    assert "--max-runtime-seconds limit exceeded" in gap["failures"]
+    assert report["market_years"][0]["gap_windows"] == []
+    assert "--max-runtime-seconds limit exceeded" in report["market_years"][0]["failures"]
+
+
+def test_progress_jsonl_records_scan_and_market_year_events(tmp_path: Path) -> None:
+    _write_config(tmp_path / "configs" / "alpha_tiered.yaml", ["ES"])
+    _write_all_archives(tmp_path / "data" / "dbn")
+    _write_raw_causal(tmp_path)
+    args = _args(tmp_path)
+    args.progress_jsonl = str(tmp_path / "reports" / "audit_progress.jsonl")
+    reader = FakeTradeReader([_trade_frame(["2025-06-18T00:00:30Z", "2025-06-18T00:02:30Z"])])
+
+    report = build_report(args, trade_frame_reader=reader)
+    records = [
+        json.loads(line)
+        for line in Path(args.progress_jsonl).read_text(encoding="utf-8").splitlines()
+    ]
+    events = [record["event"] for record in records]
+
+    assert report["status"] == "PASS"
+    assert report["progress_jsonl"].endswith("reports/audit_progress.jsonl")
+    assert events[0] == "scan_started"
+    assert "market_year_started" in events
+    assert "gap_grouping_progress" in events
+    assert "trade_archive_started" in events
+    assert "trade_frame_scanned" in events
+    assert "trade_archive_finished" in events
+    assert "market_year_finished" in events
+    assert events[-1] == "scan_finished"
+    assert records[-1]["status"] == "PASS"
 
 
 def test_boundary_trade_reclassified_when_recv_minute_matches_ohlcv_source(tmp_path: Path) -> None:
