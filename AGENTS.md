@@ -4,6 +4,18 @@ These instructions are repo-local guidance for this repository. For work inside 
 
 Minimize tokens, reads, edits, commands, and output. Make the smallest safe change.
 
+## Codex Operating Discipline
+
+- Be concise. Prefer concrete findings, file paths, commands, test results, and next actions over narration.
+- Do not produce filler, praise, or repeated status updates that do not add new information.
+- Do not expose hidden chain-of-thought. Provide brief rationale, assumptions, evidence, and decisions instead.
+- Stay scoped to the user's latest request. Do not wander into unrelated refactors, speculative research, or broad cleanup.
+- Before editing files, state the intended edit briefly.
+- Distinguish evidence from assumptions. Evidence includes inspected files, command output, tests, and cited documentation. If something is inferred, label it as an assumption.
+- Anti-loop rule: if the same approach fails twice, stop repeating it. Summarize the failure, change strategy, and proceed with a different diagnostic path.
+- Blocker rule: after three unsuccessful attempts against the same blocker, stop and ask for the smallest missing input or approval needed to continue.
+- Final responses should be short and outcome-focused: what changed, what was verified, and what remains.
+
 ## Workflow
 
 - Work only in the active Git repo unless explicitly asked.
@@ -16,6 +28,14 @@ Minimize tokens, reads, edits, commands, and output. Make the smallest safe chan
 - Read files directly by path instead of asking for pasted large files, reports, logs, or full test output.
 - Use short summaries instead of long copied output.
 - Ask for full logs only when a short summary is not enough.
+
+## Coordination source of truth
+
+- `PIPELINE.md` is the project outline and runnable workflow authority. Update it only when phase order, phase commands, acceptance checks, stop conditions, or current project outline changes.
+- `AGENTS.md` is the durable agent-rule authority. Update it only when agent behavior, safety policy, output format, bounded-command policy, or coordination maintenance rules change.
+- `CODEX_HANDOFF.md` is mutable cross-run state. Update it after meaningful multi-step work, discovered blockers, research decisions, changed next steps, or any fresh-thread continuation need.
+- Do not let `CODEX_HANDOFF.md` override repo evidence. Reconcile material handoff claims against `PIPELINE.md`, current files/reports, command output, and `git status` before acting.
+- Run `python -m scripts.validation.check_coordination_docs` after coordination-doc edits when practical.
 
 ## Worktree hygiene
 
@@ -160,6 +180,12 @@ If the gate is incomplete, do not run the command. Ask for the missing decision 
 ## Multi-step work
 
 Use repo-local `CODEX_HANDOFF.md` only for work expected to continue across prompts or fresh Codex threads.
+- For this solo project, keep only `AGENTS.md` and `CODEX_HANDOFF.md` as Codex coordination docs; do not create `PROJECT_STATE.md`, `research/JOURNAL.md`, or parallel handoff/state files unless explicitly requested.
+- Maintain `CODEX_HANDOFF.md` whenever:
+  - A major feature is completed
+  - Strategy direction changes
+  - New issues are discovered
+  - Research conclusions are reached
 - At the start of non-trivial work, inspect repo path and `git status --short`, then inspect `CODEX_HANDOFF.md` if it exists before deciding scope. Read only the newest/current active section first; treat older sections as historical evidence, not default instructions. Search older handoff history only when the newest section points to it, current state is ambiguous, or exact evidence is needed.
 - Treat `CODEX_HANDOFF.md` as mutable cross-run state, not committed truth, final output, or approval by itself. Reconcile it against current repo files, reports, command output, and `git status` before relying on material claims.
 - At the end of each multi-step run, update `CODEX_HANDOFF.md` before the final response with:
