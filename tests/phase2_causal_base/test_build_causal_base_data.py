@@ -4116,6 +4116,108 @@ def test_phase2_readiness_prefers_explicit_raw_alignment_market_years() -> None:
     }
 
 
+def test_es_development_lineage_sources_derive_manifest_paths(tmp_path: Path) -> None:
+    input_path = tmp_path / "data" / "raw" / "ES" / "2010.parquet"
+    ohlcv_path = tmp_path / "data" / "dbn" / "ohlcv_1m_parent" / "ES" / "2010.dbn.zst"
+    definition_path = tmp_path / "data" / "dbn" / "definition" / "ES" / "2010.dbn.zst"
+    raw_alignment = {
+        "raw_file_metrics": [
+            {
+                "market": "ES",
+                "year": 2010,
+                "output_path": input_path.as_posix(),
+                "ohlcv_input_paths": [ohlcv_path.as_posix()],
+                "definition_paths": [definition_path.as_posix()],
+            }
+        ]
+    }
+
+    sources, failures = causal_base.es_development_lineage_sources_from_raw_alignment(
+        raw_alignment,
+        [("ES", 2010, input_path)],
+    )
+
+    assert failures == []
+    source = sources[("ES", 2010)]
+    assert source.raw_ohlcv_manifest_path.endswith("2010.dbn.zst.manifest.json")
+    assert source.raw_definition_manifest_path.endswith("2010.dbn.zst.manifest.json")
+
+
+@pytest.mark.parametrize(
+    ("market", "year"),
+    [
+        ("CL", 2010),
+        ("ES", 2021),
+    ],
+)
+def test_es_development_lineage_sources_fail_closed_outside_scope(
+    tmp_path: Path,
+    market: str,
+    year: int,
+) -> None:
+    input_path = tmp_path / "data" / "raw" / market / f"{year}.parquet"
+    raw_alignment = {"raw_file_metrics": []}
+
+    _sources, failures = causal_base.es_development_lineage_sources_from_raw_alignment(
+        raw_alignment,
+        [(market, year, input_path)],
+    )
+
+    assert any("outside ES development window" in failure for failure in failures)
+
+
+def test_candidate_lineage_sidecar_payload_has_only_allowed_fields(
+    tmp_path: Path,
+) -> None:
+    output_path = tmp_path / "data" / "causal_base_candidates" / "ES" / "2010.parquet"
+    payload = causal_base.candidate_lineage_sidecar_payload(
+        market="ES",
+        year=2010,
+        output_path=output_path,
+        profile="tier_0",
+        profile_config_path=Path("configs/alpha_tiered.yaml"),
+        lineage_source=causal_base.CandidateLineageSource(
+            raw_ohlcv_manifest_path=(
+                "data/dbn/ohlcv_1m_parent/ES/2010.dbn.zst.manifest.json"
+            ),
+            raw_definition_manifest_path=(
+                "data/dbn/definition/ES/2010.dbn.zst.manifest.json"
+            ),
+        ),
+    )
+
+    assert set(payload) == causal_base.LINEAGE_SIDECAR_FIELDS
+    assert set(payload["build_identity"]) == causal_base.LINEAGE_BUILD_IDENTITY_FIELDS
+    assert causal_base.candidate_lineage_sidecar_payload_failures(payload) == []
+    assert (
+        causal_base.candidate_lineage_sidecar_path(output_path).name
+        == "2010.parquet.lineage.json"
+    )
+
+
+def test_process_file_lineage_sidecar_fails_closed_before_input_read(
+    tmp_path: Path,
+) -> None:
+    input_path = tmp_path / "data" / "raw" / "CL" / "2010.parquet"
+    output_path = tmp_path / "data" / "causal_base_candidates" / "CL" / "2010.parquet"
+
+    result = process_file(
+        input_path,
+        output_path,
+        profile="metadata_optional_test",
+        write_lineage_sidecar=True,
+        lineage_source=causal_base.CandidateLineageSource(
+            raw_ohlcv_manifest_path="data/dbn/ohlcv_1m_parent/CL/2010.dbn.zst.manifest.json",
+            raw_definition_manifest_path="data/dbn/definition/CL/2010.dbn.zst.manifest.json",
+        ),
+    )
+
+    assert result.status == "FAIL"
+    assert any("outside ES development window" in failure for failure in result.failures)
+    assert not output_path.exists()
+    assert not causal_base.candidate_lineage_sidecar_path(output_path).exists()
+
+
 def test_causal_base_config_uses_smoke_profile_thresholds(tmp_path: Path) -> None:
     profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
     _write_profile_defaults_config(profile_config)

@@ -61,6 +61,21 @@ BALANCED_RESEARCH_YEARS = list(range(2018, 2025))
 LONG_RESEARCH_YEARS = list(range(2010, 2025))
 FINAL_HOLDOUT_YEARS = [2025]
 FORWARD_YEARS = [2026]
+ES_DEVELOPMENT_LINEAGE_MARKET = "ES"
+ES_DEVELOPMENT_LINEAGE_YEARS = frozenset(range(2010, 2021))
+LINEAGE_SIDECAR_FIELDS = frozenset(
+    {
+        "build_identity",
+        "market",
+        "year",
+        "raw_ohlcv_manifest_path",
+        "raw_definition_manifest_path",
+        "output_candidate_path",
+    }
+)
+LINEAGE_BUILD_IDENTITY_FIELDS = frozenset(
+    {"builder", "profile", "profile_config_path"}
+)
 STATIC_PROFILE_ALIASES = {
     "tier_0_smoke": "tier_0",
     "tier_1": "tier_1_research",
@@ -396,6 +411,12 @@ class SessionCalendar:
         return "regular_session_only"
 
 
+@dataclass(frozen=True)
+class CandidateLineageSource:
+    raw_ohlcv_manifest_path: str
+    raw_definition_manifest_path: str
+
+
 @dataclass
 class ValidationResult:
     profile: str
@@ -534,6 +555,19 @@ def _resolve_evidence_path(path_value: str) -> Path:
     if not path.is_absolute():
         path = Path.cwd() / path
     return path
+
+
+def _resolved_path_text(path: Path) -> str:
+    return path.resolve(strict=False).as_posix()
+
+
+def _paths_match(left: Path, right: Path) -> bool:
+    return _resolved_path_text(left) == _resolved_path_text(right)
+
+
+def _manifest_path_for_source(path_value: str) -> str:
+    source_path = _resolve_evidence_path(path_value)
+    return relative_source_path(Path(str(source_path) + ".manifest.json"))
 
 
 def _path_matches_suffix(path_value: str, suffix: str) -> bool:
@@ -2347,11 +2381,229 @@ def filter_inputs_by_raw_alignment(
     return selected, sorted(expected_pairs - input_pairs)
 
 
+def es_development_lineage_scope_failures(
+    selected_inputs: Iterable[tuple[str, int, Path]],
+) -> list[str]:
+    failures: list[str] = []
+    pairs = [(str(market), int(year)) for market, year, _ in selected_inputs]
+    for market, year in pairs:
+        if (
+            market != ES_DEVELOPMENT_LINEAGE_MARKET
+            or year not in ES_DEVELOPMENT_LINEAGE_YEARS
+        ):
+            failures.append(
+                "lineage sidecar scope outside ES development window: "
+                f"{market} {year}"
+            )
+    if not pairs:
+        failures.append("lineage sidecar scope selected no outputs")
+    return failures
+
+
+def _single_lineage_source_path(
+    output: dict[str, object],
+    *,
+    field_name: str,
+    market: str,
+    year: int,
+) -> tuple[str | None, list[str]]:
+    value = output.get(field_name)
+    if not isinstance(value, list) or len(value) != 1:
+        return (
+            None,
+            [
+                "lineage sidecar source field must contain exactly one path: "
+                f"{market} {year} {field_name}"
+            ],
+        )
+    path_value = value[0]
+    if not isinstance(path_value, str) or not path_value:
+        return (
+            None,
+            [
+                "lineage sidecar source field must contain a non-empty path: "
+                f"{market} {year} {field_name}"
+            ],
+        )
+    return path_value, []
+
+
+def es_development_lineage_sources_from_raw_alignment(
+    raw_alignment: dict[str, Any],
+    selected_inputs: Iterable[tuple[str, int, Path]],
+) -> tuple[dict[tuple[str, int], CandidateLineageSource], list[str]]:
+    inputs = [
+        (str(market), int(year), Path(input_path))
+        for market, year, input_path in selected_inputs
+    ]
+    failures = es_development_lineage_scope_failures(inputs)
+    input_by_pair: dict[tuple[str, int], Path] = {}
+    for market, year, input_path in inputs:
+        pair = (market, year)
+        if pair in input_by_pair:
+            failures.append(f"duplicate lineage sidecar input: {market} {year}")
+        input_by_pair[pair] = input_path
+
+    raw_file_metrics = raw_alignment.get("raw_file_metrics")
+    if not isinstance(raw_file_metrics, list):
+        failures.append("raw alignment raw_file_metrics missing or not a list")
+        return {}, failures
+
+    sources: dict[tuple[str, int], CandidateLineageSource] = {}
+    for item in raw_file_metrics:
+        if not isinstance(item, dict):
+            continue
+        try:
+            market = str(item["market"])
+            year = int(item["year"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        pair = (market, year)
+        if pair not in input_by_pair:
+            continue
+        item_failures: list[str] = []
+        if pair in sources:
+            item_failures.append(f"duplicate raw alignment lineage row: {market} {year}")
+
+        output_path_value = item.get("output_path")
+        if not isinstance(output_path_value, str) or not output_path_value:
+            item_failures.append(
+                f"raw alignment output_path missing for lineage row: {market} {year}"
+            )
+        elif not _paths_match(
+            _resolve_evidence_path(output_path_value),
+            input_by_pair[pair],
+        ):
+            item_failures.append(
+                "raw alignment output_path does not match selected input: "
+                f"{market} {year}"
+            )
+
+        ohlcv_path, ohlcv_failures = _single_lineage_source_path(
+            item,
+            field_name="ohlcv_input_paths",
+            market=market,
+            year=year,
+        )
+        definition_path, definition_failures = _single_lineage_source_path(
+            item,
+            field_name="definition_paths",
+            market=market,
+            year=year,
+        )
+        item_failures.extend(ohlcv_failures)
+        item_failures.extend(definition_failures)
+        if item_failures:
+            failures.extend(item_failures)
+            continue
+
+        assert ohlcv_path is not None
+        assert definition_path is not None
+        sources[pair] = CandidateLineageSource(
+            raw_ohlcv_manifest_path=_manifest_path_for_source(ohlcv_path),
+            raw_definition_manifest_path=_manifest_path_for_source(definition_path),
+        )
+
+    for market, year in input_by_pair:
+        if (market, year) not in sources:
+            failures.append(
+                f"raw alignment lineage row missing for selected input: {market} {year}"
+            )
+    return sources, failures
+
+
 def infer_market_year(path: Path) -> tuple[str, int]:
     try:
         return path.parent.name, int(path.stem)
     except ValueError as exc:
         raise ValueError(f"Cannot infer market/year from {path}") from exc
+
+
+def candidate_lineage_sidecar_path(output_path: Path) -> Path:
+    return Path(str(output_path) + ".lineage.json")
+
+
+def candidate_lineage_sidecar_payload(
+    *,
+    market: str,
+    year: int,
+    output_path: Path,
+    profile: str,
+    profile_config_path: Path,
+    lineage_source: CandidateLineageSource,
+) -> dict[str, object]:
+    return {
+        "build_identity": {
+            "builder": "scripts/phase2_causal_base/build_causal_base_data.py",
+            "profile": profile,
+            "profile_config_path": relative_source_path(profile_config_path),
+        },
+        "market": market,
+        "year": year,
+        "raw_ohlcv_manifest_path": lineage_source.raw_ohlcv_manifest_path,
+        "raw_definition_manifest_path": lineage_source.raw_definition_manifest_path,
+        "output_candidate_path": relative_source_path(output_path),
+    }
+
+
+def candidate_lineage_sidecar_payload_failures(
+    payload: dict[str, object],
+) -> list[str]:
+    failures: list[str] = []
+    actual_fields = set(payload)
+    if actual_fields != LINEAGE_SIDECAR_FIELDS:
+        failures.append(
+            "lineage sidecar fields mismatch: "
+            f"expected={sorted(LINEAGE_SIDECAR_FIELDS)} observed={sorted(actual_fields)}"
+        )
+    build_identity = payload.get("build_identity")
+    if not isinstance(build_identity, dict):
+        failures.append("lineage sidecar build_identity must be an object")
+    elif set(build_identity) != LINEAGE_BUILD_IDENTITY_FIELDS:
+        failures.append(
+            "lineage sidecar build_identity fields mismatch: "
+            f"expected={sorted(LINEAGE_BUILD_IDENTITY_FIELDS)} "
+            f"observed={sorted(build_identity)}"
+        )
+    if payload.get("market") != ES_DEVELOPMENT_LINEAGE_MARKET:
+        failures.append("lineage sidecar market must be ES")
+    try:
+        year = int(payload.get("year"))
+    except (TypeError, ValueError):
+        failures.append("lineage sidecar year must be an integer")
+    else:
+        if year not in ES_DEVELOPMENT_LINEAGE_YEARS:
+            failures.append("lineage sidecar year outside ES development window")
+    for field_name in (
+        "raw_ohlcv_manifest_path",
+        "raw_definition_manifest_path",
+        "output_candidate_path",
+    ):
+        value = payload.get(field_name)
+        if not isinstance(value, str) or not value:
+            failures.append(f"lineage sidecar {field_name} must be a non-empty path")
+    output_candidate_path = payload.get("output_candidate_path")
+    if isinstance(output_candidate_path, str) and not output_candidate_path.endswith(
+        ".parquet"
+    ):
+        failures.append("lineage sidecar output_candidate_path must end with .parquet")
+    return failures
+
+
+def _write_candidate_lineage_sidecar(
+    output_path: Path,
+    payload: dict[str, object],
+) -> Path:
+    failures = candidate_lineage_sidecar_payload_failures(payload)
+    if failures:
+        raise ValueError("; ".join(failures))
+    sidecar_path = candidate_lineage_sidecar_path(output_path)
+    sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+    sidecar_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return sidecar_path
 
 
 def _session_metadata(ts: pd.Series, calendar: SessionCalendar | None = None) -> pd.DataFrame:
@@ -3282,6 +3534,8 @@ def process_file(
     session_config_path: Path = DEFAULT_SESSION_CONFIG,
     allow_hardcoded_calendar: bool = False,
     write_output: bool = True,
+    write_lineage_sidecar: bool = False,
+    lineage_source: CandidateLineageSource | None = None,
     allow_broad_build_after_readiness_pass: bool = False,
     broad_build_approval_token: str | None = None,
 ) -> ValidationResult:
@@ -3349,6 +3603,37 @@ def process_file(
             else "not_applicable"
         ),
     )
+
+    lineage_payload: dict[str, object] | None = None
+    if write_lineage_sidecar:
+        if not write_output:
+            result.failures.append("lineage sidecar requested without output write")
+        if (
+            market != ES_DEVELOPMENT_LINEAGE_MARKET
+            or year not in ES_DEVELOPMENT_LINEAGE_YEARS
+        ):
+            result.failures.append(
+                "lineage sidecar requested outside ES development window: "
+                f"{market} {year}"
+            )
+        if lineage_source is None:
+            result.failures.append(
+                f"lineage source metadata missing for {market} {year}"
+            )
+        else:
+            lineage_payload = candidate_lineage_sidecar_payload(
+                market=market,
+                year=year,
+                output_path=output_path,
+                profile=profile,
+                profile_config_path=profile_config_path,
+                lineage_source=lineage_source,
+            )
+            result.failures.extend(
+                candidate_lineage_sidecar_payload_failures(lineage_payload)
+            )
+        if result.failures:
+            return result
 
     if not calendar.config_available:
         result.warnings.append("hardcoded session calendar used")
@@ -3744,6 +4029,8 @@ def process_file(
         )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output.to_parquet(output_path, index=False)
+        if lineage_payload is not None:
+            _write_candidate_lineage_sidecar(output_path, lineage_payload)
     return result
 
 
@@ -4832,6 +5119,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "data/**: start, one row per processed market-year, and final summary."
         ),
     )
+    parser.add_argument(
+        "--write-es-development-lineage-sidecars",
+        action="store_true",
+        help=(
+            "Write one adjacent lineage JSON sidecar per ES 2010-2020 output. "
+            "Fails closed outside that exact scope."
+        ),
+    )
     return parser
 
 
@@ -4862,6 +5157,7 @@ def main() -> int:
         or args.broad_build_approval_token
         or args.build_max_market_years is not None
         or args.build_progress_checkpoint_jsonl
+        or args.write_es_development_lineage_sidecars
     )
     if readiness_only_options and not args.readiness_only:
         parser.error(
@@ -4873,7 +5169,8 @@ def main() -> int:
         parser.error(
             "--allow-broad-build-after-readiness-pass, "
             "--broad-build-approval-token, --build-max-market-years, "
-            "and --build-progress-checkpoint-jsonl require non-readiness build mode"
+            "--build-progress-checkpoint-jsonl, and "
+            "--write-es-development-lineage-sidecars require non-readiness build mode"
         )
     if args.readiness_max_market_years is not None and args.readiness_max_market_years < 1:
         print("FAIL readiness_max_market_years: value must be >= 1")
@@ -4943,6 +5240,15 @@ def main() -> int:
             print(f"FAIL input_selection: {failure}")
         return 1
     inputs = selection.inputs
+    lineage_sources: dict[tuple[str, int], CandidateLineageSource] = {}
+    if args.write_es_development_lineage_sidecars:
+        lineage_sources, lineage_failures = (
+            es_development_lineage_sources_from_raw_alignment(raw_alignment, inputs)
+        )
+        if lineage_failures:
+            for failure in lineage_failures:
+                print(f"FAIL es_development_lineage_sidecar: {failure}")
+            return 1
     if not args.readiness_only:
         output_root_failures = output_root_guard_failures(
             output_root=output_root,
@@ -5088,6 +5394,8 @@ def main() -> int:
                 profile_config_path=profile_config_path,
                 session_config_path=session_config_path,
                 allow_hardcoded_calendar=args.allow_hardcoded_calendar,
+                write_lineage_sidecar=args.write_es_development_lineage_sidecars,
+                lineage_source=lineage_sources.get((market, year)),
                 allow_broad_build_after_readiness_pass=(
                     args.allow_broad_build_after_readiness_pass
                 ),
