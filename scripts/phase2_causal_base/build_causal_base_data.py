@@ -45,6 +45,7 @@ MANDATORY_LOCAL_TRADE_GAP_AUDIT_PROFILES: tuple[str, ...] = tuple()
 LOCAL_TRADE_GAP_AUDIT_DBN_ROOT = Path("data/dbn")
 LOCAL_TRADE_GAP_AUDIT_JSON = "local_trade_ohlcv_gap_crosscheck_2025_2026.json"
 LOCAL_TRADE_GAP_AUDIT_MD = "local_trade_ohlcv_gap_crosscheck_2025_2026.md"
+LOCAL_TRADE_GAP_SKIPPED_STATUS = "SKIPPED"
 LOCAL_TRADE_GAP_VALIDATED_STATUS = "validated_by_local_trades_window_convention"
 LOCAL_TRADE_GAP_FAILED_STATUS = "failed_local_trades_window_gate"
 LOCAL_TRADE_GAP_NOT_RUN_STATUS = "local_trades_window_gate_not_run"
@@ -1495,13 +1496,54 @@ def _with_local_trade_validation_fields(
     return enriched
 
 
+def local_trade_ohlcv_gap_gate_skipped(
+    *,
+    profile: str,
+    profile_config_path: Path,
+    selected_markets: Iterable[str],
+) -> dict[str, Any]:
+    _, _, aliases, _ = load_profile_map(profile_config_path)
+    resolved_profile = resolve_profile_name(profile, aliases)
+    markets = sorted({str(market) for market in selected_markets})
+    return {
+        "status": LOCAL_TRADE_GAP_SKIPPED_STATUS,
+        "method": "local trades DBN cross-check of OHLCV synthetic missing minutes",
+        "profiles": list(LOCAL_TRADE_GAP_AUDIT_PROFILES),
+        "selected_markets": markets,
+        "profile": profile,
+        "resolved_profile": resolved_profile,
+        "reason": "profile_not_required",
+        "window": {
+            "start": f"{LOCAL_TRADE_GAP_AUDIT_START}T00:00:00Z",
+            "end": f"{LOCAL_TRADE_GAP_AUDIT_END}T00:00:00Z",
+        },
+        "report_paths": {},
+        "caveat": "Local-trades OHLCV gap validation is not required for this profile.",
+        "summary": {},
+        "market_statuses": {market: LOCAL_TRADE_GAP_SKIPPED_STATUS for market in markets},
+        "validation_status_by_market": {
+            market: LOCAL_TRADE_GAP_NOT_IN_SCOPE_STATUS for market in markets
+        },
+        "failures": [],
+    }
+
+
+def local_trade_gap_gate_failed(local_trade_gap_gate: dict[str, Any] | None) -> bool:
+    if local_trade_gap_gate is None:
+        return False
+    return local_trade_gap_gate.get("status") not in {
+        "PASS",
+        LOCAL_TRADE_GAP_SKIPPED_STATUS,
+    }
+
+
 def phase2_exit_code(
     results: Iterable[ValidationResult],
     local_trade_gap_gate: dict[str, Any] | None = None,
 ) -> int:
     if any(result.failures for result in results):
         return 1
-    if local_trade_gap_gate is not None and local_trade_gap_gate.get("status") != "PASS":
+    if local_trade_gap_gate_failed(local_trade_gap_gate):
         return 1
     return 0
 
@@ -4355,9 +4397,7 @@ def write_reports(
                 "failures": exception_failures,
             }
         )
-    gate_failed = (
-        local_trade_gap_gate is not None and local_trade_gap_gate.get("status") != "PASS"
-    )
+    gate_failed = local_trade_gap_gate_failed(local_trade_gap_gate)
     if gate_failed:
         run_failures.append(
             {
@@ -5667,7 +5707,15 @@ def main() -> int:
             f"markets={len(local_trade_gap_gate['selected_markets'])}"
         )
     else:
-        print("local_trade_ohlcv_gap_gate status=SKIPPED")
+        local_trade_gap_gate = local_trade_ohlcv_gap_gate_skipped(
+            profile=args.profile,
+            profile_config_path=profile_config_path,
+            selected_markets=sorted({result.market for result in results}),
+        )
+        print(
+            "local_trade_ohlcv_gap_gate "
+            f"status={local_trade_gap_gate['status']}"
+        )
 
     write_reports(
         results,

@@ -14,6 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import scripts.phase2_causal_base.build_causal_base_data as causal_base
 from scripts.phase2_causal_base.build_causal_base_data import (
     LOCAL_TRADE_GAP_FAILED_STATUS,
+    LOCAL_TRADE_GAP_NOT_IN_SCOPE_STATUS,
+    LOCAL_TRADE_GAP_SKIPPED_STATUS,
     LOCAL_TRADE_GAP_VALIDATED_STATUS,
     OUTPUT_COLUMNS,
     build_phase2_readiness_report as _build_phase2_readiness_report,
@@ -3577,10 +3579,24 @@ def test_phase2_main_skips_local_trade_gate_for_smoke_profile(
     assert phase2_main() == 0
 
     manifest = json.loads((reports_root / "causal_base_manifest.json").read_text())
+    validation = json.loads((reports_root / "causal_base_validation.json").read_text())
     assert manifest["status"] == "PASS"
-    assert manifest["local_trade_ohlcv_gap_gate"] is None
-    assert manifest["summary"]["local_trade_ohlcv_gap_gate_status"] == "NOT_RUN"
-    assert manifest["outputs"][0]["local_trade_gap_gate_status"] == "NOT_RUN"
+    assert manifest["local_trade_ohlcv_gap_gate"]["status"] == LOCAL_TRADE_GAP_SKIPPED_STATUS
+    assert validation["local_trade_ohlcv_gap_gate"]["status"] == LOCAL_TRADE_GAP_SKIPPED_STATUS
+    assert (
+        manifest["summary"]["local_trade_ohlcv_gap_gate_status"]
+        == LOCAL_TRADE_GAP_SKIPPED_STATUS
+    )
+    assert (
+        validation["summary"]["local_trade_ohlcv_gap_gate_status"]
+        == LOCAL_TRADE_GAP_SKIPPED_STATUS
+    )
+    assert manifest["outputs"][0]["local_trade_gap_gate_status"] == LOCAL_TRADE_GAP_SKIPPED_STATUS
+    assert validation["files"][0]["local_trade_gap_gate_status"] == LOCAL_TRADE_GAP_SKIPPED_STATUS
+    assert (
+        manifest["outputs"][0]["local_trade_gap_validation_status"]
+        == LOCAL_TRADE_GAP_NOT_IN_SCOPE_STATUS
+    )
 
 
 def test_phase2_main_build_max_market_years_writes_checkpoint(
@@ -5011,6 +5027,7 @@ def test_phase2_exit_code_fails_when_local_trades_gate_fails(tmp_path: Path) -> 
     result = process_file(raw_path, out_path, profile="tier_0")
 
     assert phase2_exit_code([result], _local_trade_gate(status="PASS")) == 0
+    assert phase2_exit_code([result], {"status": LOCAL_TRADE_GAP_SKIPPED_STATUS}) == 0
     assert phase2_exit_code([result], _local_trade_gate(status="FAIL")) == 1
 
 
