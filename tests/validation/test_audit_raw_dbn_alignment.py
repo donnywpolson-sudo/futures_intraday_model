@@ -19,6 +19,7 @@ from scripts.phase1A_download.download_databento_raw import (
 from scripts.phase1C_validate.audit_raw_dbn_alignment import (
     TRADES_RECONSTRUCTED_SOURCE_SCHEMA,
     build_report,
+    load_market_year_include_list,
 )
 from scripts.validation.triage_raw_dbn_alignment import (
     build_definition_path_report,
@@ -266,6 +267,74 @@ def test_raw_dbn_alignment_expected_only_ignores_raw_outside_profile(
     assert report["expected_only"] is True
     assert report["raw_market_year_count"] == 1
     assert report["raw_only_count"] == 0
+
+
+def test_raw_dbn_alignment_include_list_limits_profile_matched_report(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES", "CL"], [2024])
+    dbn_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m", market="ES", year=2024)
+    definition = _write_dbn_with_manifest(dbn_root, "definition", market="ES", year=2024)
+    _write_required_metadata_dbns(dbn_root, market="ES", year=2024)
+    _write_raw(raw_root, ohlcv, market="ES", year=2024)
+    _write_raw(raw_root, ohlcv, market="CL", year=2024)
+    _install_fake_databento(monkeypatch, {definition: _definition_frame()})
+
+    report = build_report(
+        config_path=config,
+        profile="tier_3",
+        dbn_root=dbn_root,
+        raw_root=raw_root,
+        expected_only=True,
+        include_market_years=[("ES", 2024)],
+    )
+
+    assert report["status"] == "PASS"
+    assert report["profile"] == "tier_3"
+    assert report["resolved_profile"] == "tier_3_research"
+    assert report["market_year_include_list_applied"] is True
+    assert report["markets"] == ["ES"]
+    assert report["years"] == [2024]
+    assert report["market_years"] == [{"market": "ES", "year": 2024}]
+    assert report["requested_market_years"] == [{"market": "ES", "year": 2024}]
+    assert report["missing_include_profile_market_year_count"] == 0
+    assert report["expected_market_year_count"] == 1
+    assert report["raw_market_year_count"] == 1
+    assert report["raw_file_metrics"][0]["output_path"] == (
+        raw_root / "ES" / "2024.parquet"
+    ).as_posix()
+    assert report["raw_only_count"] == 0
+
+
+def test_raw_dbn_alignment_include_list_fails_closed_outside_profile(tmp_path: Path) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2024])
+
+    report = build_report(
+        config_path=config,
+        profile="tier_3",
+        dbn_root=tmp_path / "data" / "dbn",
+        raw_root=tmp_path / "data" / "raw",
+        expected_only=True,
+        include_market_years=[("NQ", 2024)],
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["market_year_include_list_applied"] is True
+    assert report["market_years"] == []
+    assert report["missing_include_profile_market_years"] == [
+        {"market": "NQ", "year": 2024}
+    ]
+    assert report["failures"] == ["include-list market-years missing from profile: 1"]
+
+
+def test_raw_dbn_alignment_loads_market_year_include_csv(tmp_path: Path) -> None:
+    include_path = tmp_path / "include.csv"
+    include_path.write_text("market,year\nES,2024\n", encoding="utf-8")
+
+    assert load_market_year_include_list(include_path) == [("ES", 2024)]
 
 
 def test_raw_dbn_alignment_reports_dbn_only_market_year_as_phase1b_gap(tmp_path: Path, monkeypatch) -> None:

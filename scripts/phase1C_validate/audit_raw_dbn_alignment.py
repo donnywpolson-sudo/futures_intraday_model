@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -133,6 +134,85 @@ def _index_raw_files(raw_root: Path) -> dict[tuple[str, int], Path]:
             continue
         index[(path.parent.name, year)] = path
     return index
+
+
+def _coerce_market_year_pair(item: Any, *, field_name: str) -> tuple[str, int]:
+    if isinstance(item, dict):
+        try:
+            market = str(item["market"]).strip()
+            year = int(item["year"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"{field_name} must contain market and year") from exc
+    elif isinstance(item, (list, tuple)) and len(item) >= 2:
+        try:
+            market = str(item[0]).strip()
+            year = int(item[1])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field_name} must contain market and year") from exc
+    else:
+        raise ValueError(f"{field_name} must be an object or pair")
+    if not market:
+        raise ValueError(f"{field_name} market must be non-empty")
+    return market, year
+
+
+def _validate_market_year_pairs(pairs: list[tuple[str, int]]) -> list[tuple[str, int]]:
+    if not pairs:
+        raise ValueError("market-year include list is empty")
+    seen: set[tuple[str, int]] = set()
+    duplicates: list[tuple[str, int]] = []
+    for pair in pairs:
+        if pair in seen:
+            duplicates.append(pair)
+        seen.add(pair)
+    if duplicates:
+        duplicate_text = ", ".join(f"{market} {year}" for market, year in duplicates)
+        raise ValueError(f"market-year include list contains duplicates: {duplicate_text}")
+    return pairs
+
+
+def load_market_year_include_list(path: Path) -> list[tuple[str, int]]:
+    if not path.exists():
+        raise ValueError(f"market-year include list missing: {path.as_posix()}")
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            rows = None
+            for key in (
+                "market_years",
+                "include_market_years",
+                "eligible_market_years",
+                "rows",
+            ):
+                if key in payload:
+                    rows = payload[key]
+                    break
+            if rows is None:
+                raise ValueError(
+                    "market-year include list JSON object must contain one of "
+                    "market_years, include_market_years, eligible_market_years, or rows"
+                )
+        else:
+            rows = payload
+        if not isinstance(rows, list):
+            raise ValueError("market-year include list JSON rows must be a list")
+        pairs = [
+            _coerce_market_year_pair(item, field_name=f"market_years[{index}]")
+            for index, item in enumerate(rows)
+        ]
+    elif suffix == ".csv":
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if reader.fieldnames is None or not {"market", "year"} <= set(reader.fieldnames):
+                raise ValueError("market-year include list CSV requires market,year columns")
+            pairs = [
+                _coerce_market_year_pair(row, field_name=f"market_years[{index}]")
+                for index, row in enumerate(reader)
+            ]
+    else:
+        raise ValueError("market-year include list must be .json or .csv")
+    return _validate_market_year_pairs(pairs)
 
 
 def _expected_market_years(
@@ -643,6 +723,7 @@ def build_report(
     skip_definition_join: bool = False,
     repair_manifest_path: Path | None = None,
     expected_only: bool = False,
+    include_market_years: Iterable[tuple[str, int]] | None = None,
     required_schema_exceptions_config: Path | None = DEFAULT_REQUIRED_SCHEMA_EXCEPTIONS_CONFIG,
 ) -> dict[str, Any]:
     ohlcv_index = _index_schema_dbns(dbn_root, SCHEMA)
@@ -665,6 +746,22 @@ def build_report(
         markets = sorted({market for market, _ in expected})
         years = sorted({year for _, year in expected})
         pre_availability_exemptions = []
+    requested_market_years: list[tuple[str, int]] = []
+    missing_include_profile_market_years: list[tuple[str, int]] = []
+    if include_market_years is not None:
+        requested_market_years = _validate_market_year_pairs(
+            [(str(market), int(year)) for market, year in include_market_years]
+        )
+        requested_set = set(requested_market_years)
+        missing_include_profile_market_years = sorted(requested_set - expected)
+        expected = expected & requested_set
+        pre_availability_exemptions = [
+            row
+            for row in pre_availability_exemptions
+            if (str(row.get("market")), int(row.get("year"))) in requested_set
+        ]
+        markets = sorted({market for market, _ in expected})
+        years = sorted({year for _, year in expected})
     status_exception_keys, status_exceptions, exception_failures = required_schema_exception_keys(
         required_schema_exceptions_config,
         schema="status",
@@ -675,7 +772,7 @@ def build_report(
         exception_failures.append(
             f"required schema exception is stale because status archive is present: {market} {year}"
         )
-    if expected_only:
+    if expected_only or include_market_years is not None:
         ohlcv_index = {key: value for key, value in ohlcv_index.items() if key in expected}
         definition_index = {key: value for key, value in definition_index.items() if key in expected}
         status_index = {key: value for key, value in status_index.items() if key in expected}
@@ -785,6 +882,11 @@ def build_report(
         failures.append(f"source hash mismatches: {len(source_hash_mismatches)}")
     if definition_join_mismatches:
         failures.append(f"definition join mismatches: {len(definition_join_mismatches)}")
+    if missing_include_profile_market_years:
+        failures.append(
+            "include-list market-years missing from profile: "
+            f"{len(missing_include_profile_market_years)}"
+        )
 
     return {
         "stage": "raw_dbn_alignment_audit",
@@ -801,6 +903,19 @@ def build_report(
         "resolved_profile": resolved_profile,
         "markets": markets,
         "years": years,
+        "market_years": [_row(key) for key in sorted(expected)],
+        "market_year_include_list_applied": include_market_years is not None,
+        "requested_market_years": (
+            [_row(key) for key in sorted(requested_market_years)]
+            if include_market_years is not None
+            else []
+        ),
+        "missing_include_profile_market_year_count": len(
+            missing_include_profile_market_years
+        ),
+        "missing_include_profile_market_years": [
+            _row(key) for key in missing_include_profile_market_years
+        ],
         "dbn_root": dbn_root.as_posix(),
         "raw_root": raw_root.as_posix(),
         "expected_market_year_count": len(expected),
@@ -928,6 +1043,10 @@ def parse_args() -> argparse.Namespace:
         help="Bound smoke scope to profile/discovery expected market-years instead of auditing all files under roots.",
     )
     parser.add_argument(
+        "--market-year-include-list",
+        help="Optional .json or .csv include list with market,year rows that narrows the audited profile scope.",
+    )
+    parser.add_argument(
         "--required-schema-exceptions-config",
         default=DEFAULT_REQUIRED_SCHEMA_EXCEPTIONS_CONFIG.as_posix(),
     )
@@ -947,6 +1066,11 @@ def main() -> int:
         skip_definition_join=bool(args.skip_definition_join),
         repair_manifest_path=Path(args.repair_manifest) if args.repair_manifest else None,
         expected_only=bool(args.expected_only),
+        include_market_years=(
+            load_market_year_include_list(Path(args.market_year_include_list))
+            if args.market_year_include_list
+            else None
+        ),
         required_schema_exceptions_config=(
             None if args.disable_required_schema_exceptions else Path(args.required_schema_exceptions_config)
         ),
