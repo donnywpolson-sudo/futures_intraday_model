@@ -14,11 +14,12 @@
 - Active repo path verified on 2026-07-01: `C:\Users\donny\Desktop\futures_intraday_model`.
 - GitHub upload target: `https://github.com/donnywpolson-sudo/futures_intraday_model`; current `origin` matches this target.
 - The environment path `C:\Users\donny\Desktop\15_min_long_short` was not present during this handoff update.
+- 2026-07-02 post-push state: `8e30e84 Clarify documentation workflow and proof handoff` was committed and pushed; `git status --short --branch` shows `## main...origin/main`; the worktree is clean after the docs-only push.
 - Git state before this handoff update: only the seven broad-loop untracked files listed below remained dirty.
 - Git state during the `PROJECT_OUTLINE.md` doc update showed tracked doc deletions for `DATA REBUILD.md`, `PIPELINE.md`, `README_RUNBOOK.md`, `RESEARCH_METRICS.html`, `RESOURCES.md`, and `quant_research_playbook.md`, plus new untracked `PROJECT_OUTLINE.md`. The approved 2026-07-01 doc-authority implementation restored `PIPELINE.md`, `README_RUNBOOK.md`, and `quant_research_playbook.md`; left root `DATA REBUILD.md` and `RESOURCES.md` deleted; left `RESEARCH_METRICS.html`, `PROJECT_OUTLINE.md`, and unrelated dirty files untouched.
 - 2026-07-01 worktree-disposition implementation state: auth fallback contract now preserves `secrets/databento.env` first, adds ignored `api.env` fallback, and keeps legacy root `databento.env` fallback; UTF-8 BOMs were removed from touched auth/script/test files; `RESEARCH_METRICS.html` was restored exactly as the tracked redirect stub. `PIPELINE.md`, `README_RUNBOOK.md`, and `quant_research_playbook.md` still have working-tree hashes equal to index hashes despite `git status` showing them modified, so treat those three as index/stat noise until refreshed.
 - 2026-07-01 LiveChartFeed auth/packaging implementation state: source runs use repo-local `secrets/databento.env`, `api.env`, `databento.env`, then `DATABENTO_API_KEY`; packaged Desktop exe runs use `futures_intraday_model\api.env` relative to the exe directory first, then `secrets\databento.env`, adjacent `api.env`, adjacent `databento.env`, then `DATABENTO_API_KEY`. For `C:\Users\donny\Desktop\LiveChartFeed.exe`, the first packaged key path is `C:\Users\donny\Desktop\futures_intraday_model\api.env`. Databento 401/auth failures now print a safe key-source label and exit before chart launch when metadata or symbology rejects the key. Latest packaged exe is ignored local build `outputs\pyinstaller_dist\LiveChartFeed.exe`, length `68074217`, SHA256 `60FA189772F179DCF1FDFB4107B90BB2644630A91939E8E9D4306741448354E9`, and includes the Windows frozen multiprocessing startup fix, repo `api.env` packaged lookup, and bundled `lightweight_charts\js` runtime assets. Desktop `C:\Users\donny\Desktop\LiveChartFeed.exe` now matches that hash and passed the bounded ES smoke without the previous auth, missing-package, multiprocessing, or chart-JS failures.
-- 2026-07-01 Desktop doc triage: `C:\Users\donny\Desktop\quant_research_playbook.md`, `C:\Users\donny\Desktop\DATA REBUILD.md`, and `C:\Users\donny\Desktop\RESOURCES.md` exactly match the deleted tracked `HEAD` blobs. `C:\Users\donny\Desktop\You_are_here_updated_current_FINAL_20260628_post_side_aware_commit.txt` is a stale 2026-06-28 checkpoint; commit `209f48f` still exists, but current `main` is ahead of origin by 22 commits and current authority is this handoff plus repo files.
+- 2026-07-01 Desktop doc triage: `C:\Users\donny\Desktop\quant_research_playbook.md`, `C:\Users\donny\Desktop\DATA REBUILD.md`, and `C:\Users\donny\Desktop\RESOURCES.md` exactly match the deleted tracked `HEAD` blobs. `C:\Users\donny\Desktop\You_are_here_updated_current_FINAL_20260628_post_side_aware_commit.txt` is a stale 2026-06-28 checkpoint; commit `209f48f` still exists, but current authority is this handoff plus repo files.
 - Latest stabilization commits before this handoff-only update:
   - `2e6d23a Add coordination document checks`
   - `9927adb Add bounded OHLCV gap scan progress guards`
@@ -251,32 +252,30 @@
 - Keep `AGENTS.md` as the durable agent-rule file.
 - Run `python -m scripts.validation.check_coordination_docs` after future coordination-doc edits when practical.
 - Keep `PROJECT_OUTLINE.md` as reference/planning material only unless the user explicitly changes its authority.
-- No bounded split proof shard remains in this recovery path; preserve generated evidence as ignored local artifacts and decide tracked documentation disposition separately from generated reports.
+- No bounded split proof shard remains in this recovery path; preserve generated evidence as ignored local artifacts and plan proof-status promotion separately from generated reports.
 - Keep generated data/reports and broad build/loop artifacts out of any documentation-only or proof-scan commit unless the user explicitly approves their disposition.
 
 # Known Issues
 
 - Medium: accepted generated recovery evidence has passed read-only reconciliation, but proof-status promotion has not been approved; generated evidence must stay ignored unless separately approved.
-- Medium: uncommitted tracked documentation changes remain in `AGENTS.md` and `CODEX_HANDOFF.md`; choose leave local, commit as documentation-only scope, or revert before any push.
 - Medium: generated candidate causal proof data/reports are ignored local artifacts and should not be staged by default.
 - Medium: field-level point-in-time availability for optional metadata has not been proven.
 - Medium: full 527-row promoted/canonical Phase 2 remains no-go.
 - Medium: root `DATA REBUILD.md` and `RESOURCES.md` remain deleted in the working tree by approved doc triage; keep them out of unrelated proof/auth commits unless the user approves their disposition.
 - Medium: the original configured cwd `C:\Users\donny\Desktop\15_min_long_short` was absent; use `C:\Users\donny\Desktop\futures_intraday_model` unless the user says otherwise.
-- Medium: branch is ahead of origin by local commit `7e429d5`; verify sync intent before pushing or rebasing.
 
 # Next Steps
 
 Exact next recommended step:
 
-Decide disposition for tracked documentation and sync only: leave local, commit `AGENTS.md`/`CODEX_HANDOFF.md` as documentation-only scope, or revert the tracked documentation changes. Do not stage generated reports, and do not push without explicit approval.
+Plan proof-status promotion from the 133 accepted generated PASS reports without staging generated artifacts.
 
 Fresh-thread prompt:
 
 ```text
 Continue from CODEX_HANDOFF.md.
 
-Goal: decide tracked documentation and sync disposition after accepted generated recovery evidence passed read-only reconciliation.
+Goal: plan proof-status promotion from the 133 accepted generated PASS reports without staging generated artifacts.
 
 Rules:
 - First verify repo path, git status, and the current CODEX_HANDOFF.md.
