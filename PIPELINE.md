@@ -334,6 +334,19 @@ Outputs:
   - `local_trade_ohlcv_gap_crosscheck_2025_2026.json`
   - `local_trade_ohlcv_gap_crosscheck_2025_2026.md`
 
+Bounded split recovery helper:
+
+```powershell
+python -m scripts.validation.run_local_trade_ohlcv_split --market HO --year 2026 --shard-index 4 --causal-root data\causal_proof_candidates\local_trade_2025_2026_v1 --max-shards 1 --max-gap-windows 10000 --max-trade-rows-scanned 200000000 --max-archives-read 2 --max-runtime-seconds 900
+```
+
+- Writes per-shard reports under
+  `reports/pipeline_audit/local_trade_shards_20250618_20260613/{market}_{year}_split_v1/`.
+- Defaults to one executable shard, skips existing `PASS` JSON reports, and stops
+  on the first non-`PASS` shard or protected existing non-`PASS` report.
+- Use `--dry-run` to inspect the planned shard command without running the
+  underlying proof scan. Use `--rerun-existing` only with explicit approval.
+
 Acceptance checks:
 
 - Output market-years match the resolved profile.
