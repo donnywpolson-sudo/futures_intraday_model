@@ -198,6 +198,11 @@ def test_raw_dbn_alignment_passes_clean_market_year(tmp_path: Path, monkeypatch)
     assert report["raw_schema_failure_count"] == 0
     assert report["source_hash_mismatch_count"] == 0
     assert report["definition_join_mismatch_count"] == 0
+    metrics = report["raw_file_metrics"][0]
+    assert metrics["path"] == (raw_root / "ES" / "2024.parquet").as_posix()
+    assert metrics["output_path"] == (raw_root / "ES" / "2024.parquet").as_posix()
+    assert metrics["ohlcv_input_paths"] == [ohlcv.as_posix()]
+    assert metrics["definition_paths"] == [definition.as_posix()]
 
 
 def test_raw_dbn_alignment_discovery_profile_uses_raw_market_years(

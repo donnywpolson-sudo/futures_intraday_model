@@ -725,6 +725,18 @@ def build_report(
     for key, path in sorted(raw_index.items()):
         df = _read_raw_audit_frame(path, raw_columns)
         failures, metrics = _validate_raw_schema_and_values(key=key, path=path, df=df)
+        metrics.update(
+            {
+                "output_path": path.as_posix(),
+                "ohlcv_input_paths": [
+                    source_path.as_posix() for source_path in ohlcv_index.get(key, [])
+                ],
+                "definition_paths": [
+                    source_path.as_posix()
+                    for source_path in definition_index.get(key, [])
+                ],
+            }
+        )
         raw_file_metrics.append(metrics)
         if failures:
             raw_schema_failures.append({**_row(key, path=path.as_posix()), "failures": failures})
