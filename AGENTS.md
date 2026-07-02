@@ -4,6 +4,16 @@ These instructions are repo-local guidance for this repository. For work inside 
 
 Minimize tokens, reads, edits, commands, and output. Make the smallest safe change.
 
+## Runtime Preference
+
+- Use `gpt5.5` with `extra high` reasoning for this project whenever the model and reasoning settings are user-controllable.
+- If that model or reasoning level is unavailable, state the mismatch before substantive repo work and ask whether to proceed with a different setting.
+
+## GitHub Upload Target
+
+- This repository must upload to `https://github.com/donnywpolson-sudo/futures_intraday_model`.
+- Do not push to any other remote. If `origin` points elsewhere, stop and ask for explicit approval before changing remotes or pushing.
+
 ## Codex Operating Discipline
 
 - Be concise. Prefer concrete findings, file paths, commands, test results, and next actions over narration.
