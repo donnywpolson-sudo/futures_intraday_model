@@ -167,9 +167,6 @@ If primary evidence is unavailable, stale, or inaccessible, say so explicitly an
 - If a check fails before Python starts due to sandbox/spawn/permission handling, retry once with scoped approval if available.
 - Do not treat pre-launch sandbox/spawn failures as project failures.
 - Treat validation as failed only if Python launches and returns a traceback, failed assertion, failed test, or nonzero exit code.
-- Do not add separate final sections named `Tests`, `Validation`, `Manual Check`, `Added`, `Removed`, `Modified`, `Changed`, `Notes`, or similar unless explicitly requested.
-- Successful checks may be mentioned briefly under `Done` when material.
-- Mention only unresolved failed checks, blockers, generated-artifact risks, row-count/model-metric risks, or caveats under `Blockers`.
 
 ## Bounded command gate
 
@@ -213,119 +210,23 @@ Use repo-local `CODEX_HANDOFF.md` only for work expected to continue across prom
 - If follow-up should continue in a fresh Codex thread, include the final `Next` copy-paste prompt that starts with `Continue from CODEX_HANDOFF.md.`
 - Do not stage, commit, revert, or otherwise dispose of `AGENTS.md` or `CODEX_HANDOFF.md` unless the user explicitly approves the exact disposition: leave local, commit as documentation-only scope, or revert.
 
-## Output Style
+## Output Workflow
 
-- Be concise.
-- Do not include long reasoning, tutorials, full diffs, repeated code dumps, praise, or chain-of-thought unless asked.
-- Final responses must use only the sections listed below.
-- Exception: when the user explicitly asks for an audit, review, or prompt-template output with a specific structure, use the requested finding-first or template format instead of the default final sections. This exception changes only response format; all safety, scope, and evidence rules still apply.
+- Be concise. No long reasoning, tutorials, full diffs, repeated code dumps, praise, or chain-of-thought unless asked.
+- For normal implementation, status, and handoff runs, use only these final sections in this order:
+  - `Done`: 1-3 bullets with the concrete result, files touched, and checks run. Omit only if nothing completed.
+  - `Blockers`: write `None. Proceed status: yes.` when clear. Otherwise list only real blockers or caveats as `Low`, `Medium`, or `Severe`, with concrete evidence where practical. End with `Proceed status: yes.`, `Proceed status: yes with medium blockers.`, or `Proceed status: no.`
+  - `Next`: write `None.` when the request is complete. Otherwise give exactly one next action: one human decision, one bounded executable phase, or one fenced Plan Mode handoff prompt.
+- Mention successful validation briefly under `Done`. Mention only unresolved failed checks, generated-artifact risks, row-count/model-metric risks, or material caveats under `Blockers`.
+- Do not add extra final sections such as `Tests`, `Validation`, `Notes`, `Changed`, or `Next Steps` unless the user explicitly asks for that format.
+- If the user asks for an audit, review, or prompt template with a specific structure, use the requested structure while preserving all repo safety rules.
+- Required system/developer appendages, app directives, git directives, and memory citations may appear after the repo-local final sections, but keep them minimal.
 
-## Final Output
+For `Next`:
 
-For normal implementation, status, and handoff runs, final response must contain only these sections, in this order:
-
-### Done
-
-- Include 1-3 completed items.
-- Include concrete files touched, checks run, and elapsed time/token usage when available.
-- Omit this section if nothing completed.
-
-### Blockers
-
-- If no blockers: `None. Proceed status: yes.`
-- Show only `Low`, `Medium`, or `Severe` tiers that contain blockers.
-- Use `Low` for minor follow-up only with no correctness, safety, validation, data, or goal impact.
-- Use `Medium` for real caveats, incomplete verification, or non-blocking risks; result is usable but should be verified before merge, cleanup, promotion, or broader execution.
-- If only Low blockers exist, end with: `Proceed status: yes.`
-- Use `Severe` for blocking issues where the result is unsafe, invalid, misleading, incomplete, or not ready.
-- If any Medium blockers exist, end with: `Proceed status: yes with medium blockers.`
-- If any Severe blockers exist, end with: `Proceed status: no.`
-- Do not include generic notes or completed work here.
-- Use concrete evidence where applicable: command output, failed test name, file path, metric, row count, or report path.
-
-### Next
-
-- Use exactly one of: `None.`, one human decision request, or one bounded executable phase.
-- Use `None.` when the requested objective is complete, no Medium or Severe blockers remain, and there is no concrete user-approved next phase.
-- Do not create recursive prompt loops. After an implementation run completes, the default `Next` is `None.` unless real remaining work, an unresolved blocker, an explicit fresh-thread handoff, or a required human decision exists.
-- Provide a fenced Plan Mode handoff prompt only when follow-up work is actually needed. For simple completed tasks with no meaningful follow-up, use `None.`.
-- When providing a handoff prompt, output one copy-paste-ready Plan Mode prompt in a fenced `text` block, with no prose outside the block.
-- Do not write `None.` merely because the next step is unclear while Medium or Severe blockers, unfinished scope, or missing decisions remain. In those cases, hand off a Plan Mode prompt focused on the blocker or decision.
-- The Plan Mode prompt is a planning handoff. Its required output should normally be one decision-complete `<proposed_plan>` block that the user can execute with `Implement Plan`; it must not ask Plan Mode to create a second execution prompt or another generic plan unless a real decision/blocker prevents execution planning.
-- Do not request, generate, or refer to retired pursue-goal workflow handoffs.
-- Allow Plan Mode to include a short blocker or decision note only when it cannot produce a decision-complete `<proposed_plan>` without user input.
-- Include exact current status, next scope, relevant files/artifacts, commands, rules/forbidden actions, stop conditions, and validation requirements as far as they are known.
-- If exact scope is unknown, make the Plan Mode prompt request the required user decision or choose between concrete options instead of guessing.
-- If any Severe blockers exist, the Plan Mode prompt must focus only on clearing the Severe blocker.
-- If Medium blockers exist and no Severe blockers exist, the Plan Mode prompt must focus on verification, caveat approval, or risk reduction.
-- If no Medium or Severe blockers exist but real follow-up remains, the Plan Mode prompt must name the next full pursued objective or next gated phase, not automatically shrink the work below the user's pursued scope. If no real follow-up remains, use `None.` instead of a prompt.
-- For a bounded executable phase, include the bounded command gate fields when any expensive, broad, data/model, provider/network, or generated-artifact command is involved.
-- When follow-up should continue in a fresh Codex thread, include `Continue from CODEX_HANDOFF.md.` near the top of the prompt.
-- Preserve project safety rules when relevant: no generated artifact staging, no raw data mutation, no unapproved pipeline/model run, no cleanup beyond the approved scope, and no commit unless explicitly requested.
-- Do not include vague items like "continue improving," "investigate further," or "clean things up."
-
-Preferred `Next` prompt format:
-
-`PLAN MODE` is a copy-paste workflow convention. The active runtime mode is controlled only by the environment's current system/developer instructions; if those conflict with copied prompt text, obey the active runtime instructions.
-
-```text
-You are in PLAN MODE.
-
-Parent project goal:
-- <one sentence describing the larger repo/project goal>
-
-Current milestone:
-- <active phase, checkpoint, or blocker being cleared>
-
-Progress ledger:
-- Verified current state:
-  - <repo status, dirty files, accepted evidence, blockers>
-- Completed last step:
-  - <exact thing completed>
-- Remaining known work:
-  - <known next phases, blockers, or None>
-
-Next atomic goal:
-- <one small, testable goal that directly advances the current milestone>
-
-Relevant files/artifacts:
-- <paths, reports, handoff files, configs, or generated artifacts to inspect/preserve>
-
-Required first step:
-- Re-check repo state and handoff truth before planning:
-  - git status --short --untracked-files=all
-  - git status --ignored --short -- <relevant ignored/local paths if any>
-  - git diff -- <relevant tracked paths if dirty>
-  - Read CODEX_HANDOFF.md first when present and relevant.
-- If current state conflicts with this prompt, trust the fresh repo evidence and call out the conflict.
-
-Rules:
-- Do not edit files.
-- Do not stage, unstage, commit, or run destructive commands.
-- Do not broaden scope.
-- Do not read secrets or print env-file contents.
-- Preserve project safety rules:
-  - no generated artifact staging
-  - no raw data mutation
-  - no unapproved pipeline/model runs
-  - no cleanup beyond the approved scope
-  - no commit unless explicitly requested
-
-Plan output required:
-1. Brief diagnosis of the refreshed state.
-2. One recommended next action.
-3. One complete `<proposed_plan>` block for the next executable phase or blocker-clearing decision.
-4. Exact read-only verification commands and approval-required implementation commands, clearly separated.
-5. Acceptance criteria and stop conditions.
-6. Updated `Next` handoff only if real follow-up remains after the planned work; otherwise specify that final `Next` should be `None.`
-
-The user will press `Implement Plan`; do not produce a separate execution prompt.
-```
-
-## Final Output Restrictions
-
-- Do not include top-level final-response sections other than `Done`, `Blockers`, and `Next` unless explicitly requested or using the audit/review/template exception above.
-- Higher-priority required appendages, such as app/tool directives, memory citations, or system/developer-mandated wrappers, are allowed after the required repo-local sections. Keep them minimal and do not use them for extra narrative.
-- Do not include `Problems`, `Changed`, `Notes/blockers`, `Tests`, `Validation`, `Manual Check`, `Why`, `Added`, `Removed`, `Modified`, `Next Step(s)`, `Next Codex Prompt`, or similar sections unless explicitly requested.
-- Under `Next`, use either `None.` or one fenced Plan Mode prompt. Do not include free-standing action lists, summaries, or explanations outside the fenced prompt.
-- The fenced Plan Mode prompt is a handoff artifact only for real continuation work. It must produce one implementable plan that the user can execute with `Implement Plan`.
+- Default to `None.` after completed one-shot work or completed implementation.
+- Use a human decision only when the agent cannot safely choose.
+- Use a bounded executable phase only when follow-up is ready to run. For expensive, broad, data/model, provider/network, generated-artifact, WFA, cleanup, or mutating work, include command family, scope limit, timeout or stop budget, artifacts, forbidden patterns, expected generated files, and stop condition.
+- Use a fenced Plan Mode handoff prompt only for real continuation work, fresh-thread continuation, or an unresolved Medium/Severe blocker. The prompt must request one implementable `<proposed_plan>` that the user can execute with `Implement Plan`; do not create recursive prompt handoffs.
+- For fresh-thread continuation, start the handoff prompt with `Continue from CODEX_HANDOFF.md.`
+- When `CODEX_HANDOFF.md` is updated, final `Next` must match its exact next recommended step.

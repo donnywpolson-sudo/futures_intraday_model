@@ -125,7 +125,7 @@
 - `HO_2026_w24` passed for `[2026-06-11, 2026-06-13)` under `reports\pipeline_audit\local_trade_shards_20250618_20260613\HO_2026_split_v1`: `synthetic_gap_count=258`, `missing_minute_count=631`, `verified_empty_minutes=631`, `timestamp_basis_mismatch_minutes=0`, `failed_minutes=0`, `unverified_minutes=0`, `trade_rows_scanned=2372210`, `archives_read=1`, `failures=[]`.
 - `HO_2026_split_v1` read-only reconciliation passed across 24 expected shard JSON files for `[2026-01-01, 2026-06-13)`: `synthetic_gap_count=14518`, `missing_minute_count=33811`, `verified_empty_minutes=33810`, `timestamp_basis_mismatch_minutes=1`, `failed_minutes=0`, `unverified_minutes=0`.
 - Accepted generated recovery evidence reconciliation passed across 133 reports: `NG_2025_split_v1` (28 shards), `remaining_v1\NG_2026.json` (1 full shard), `RB_2025_split_v1` (28 shards), `RB_2026_split_v1` (24 shards), `HO_2025_split_v1` (28 shards), and `HO_2026_split_v1` (24 shards). Aggregate accepted evidence: `synthetic_gap_count=84674`, `missing_minute_count=194905`, `verified_empty_minutes=194902`, `timestamp_basis_mismatch_minutes=3`, `failed_minutes=0`, `unverified_minutes=0`.
-- Superseded generated failures remain present and must stay classified as superseded evidence, not current accepted failures: `remaining_v1\RB_2025.json` failed on `--max-runtime-seconds limit exceeded`, and `remaining_v1\HO_2026.json` failed on `--max-gap-windows limit exceeded`.
+- Superseded generated failures remain present and must stay classified as superseded evidence, not current accepted failures: `remaining_v1\RB_2025.json` failed on `--max-runtime-seconds limit exceeded`, `HO_2025.json` failed on `--max-runtime-seconds limit exceeded`, and `remaining_v1\HO_2026.json` failed on `--max-gap-windows limit exceeded`.
 - Candidate causal proof inputs were previously generated under `data\causal_proof_candidates\local_trade_2025_2026_v1` for the 29 uncovered markets and 2025/2026 only. Treat these as ignored local generated artifacts unless separately approved.
 - Full 527-row promoted/canonical Phase 2 remains no-go.
 - Optional metadata is classified and blocked, but field-level point-in-time availability has not been proven.
@@ -136,7 +136,7 @@
 - 2026-07-02: implemented the bounded local trade split runner without running proof scans. Added `scripts/validation/run_local_trade_ohlcv_split.py` and `tests/validation/test_run_local_trade_ohlcv_split.py`; documented the helper in `PIPELINE.md`. The runner defaults to one executable shard, requires explicit `--market`, `--year`, and `--causal-root`, skips existing `PASS` reports, blocks protected existing non-`PASS` reports unless `--rerun-existing` is explicitly passed, writes runner summary/progress artifacts, and calls `scripts.validation.audit_local_trade_ohlcv_gaps` with the existing budget flags.
 - 2026-07-02: ran the approved `HO_2026_w24` split-recovery shard exactly scoped to `[2026-06-11, 2026-06-13)` using the bounded split runner: `python -m scripts.validation.run_local_trade_ohlcv_split --market HO --year 2026 --shard-index 24 --causal-root data\causal_proof_candidates\local_trade_2025_2026_v1 --max-shards 1 --max-gap-windows 10000 --max-trade-rows-scanned 200000000 --max-archives-read 2 --max-runtime-seconds 900`; it returned `PASS` with `gaps=258`, `missing_minutes=631`, `verified_empty_minutes=631`, `timestamp_basis_mismatch_minutes=0`, `failed_minutes=0`, `unverified_minutes=0`, `trade_rows_scanned=2372210`, and runner summary `reports\pipeline_audit\local_trade_shards_20250618_20260613\HO_2026_split_v1\HO_2026_split_runner_summary.json`.
 - 2026-07-02: ran a read-only reconciliation check for `HO_2026_split_v1`; it found 24 expected shard JSON files covering `[2026-01-01, 2026-06-13)`, all `PASS`, with aggregate `gaps=14518`, `missing_minutes=33811`, `verified_empty_minutes=33810`, `timestamp_basis_mismatch_minutes=1`, `failed_minutes=0`, and `unverified_minutes=0`.
-- 2026-07-02: ran a read-only accepted-evidence reconciliation across the current generated recovery set. Accepted evidence contains 133 reports with aggregate `gaps=84674`, `missing_minutes=194905`, `verified_empty_minutes=194902`, `timestamp_basis_mismatch_minutes=3`, `failed_minutes=0`, and `unverified_minutes=0`; superseded monolithic `remaining_v1\RB_2025.json` and `remaining_v1\HO_2026.json` remain failed generated artifacts and must not be treated as current accepted failures.
+- 2026-07-02: ran a read-only accepted-evidence reconciliation across the current generated recovery set. Accepted evidence contains 133 reports with aggregate `gaps=84674`, `missing_minutes=194905`, `verified_empty_minutes=194902`, `timestamp_basis_mismatch_minutes=3`, `failed_minutes=0`, and `unverified_minutes=0`; superseded monolithic `remaining_v1\RB_2025.json`, `HO_2025.json`, and `remaining_v1\HO_2026.json` remain failed generated artifacts and must not be treated as current accepted failures.
 - 2026-07-02: ran the approved `HO_2026_w23` split-recovery shard exactly scoped to `[2026-06-04, 2026-06-11)` using the bounded split runner: `python -m scripts.validation.run_local_trade_ohlcv_split --market HO --year 2026 --shard-index 23 --causal-root data\causal_proof_candidates\local_trade_2025_2026_v1 --max-shards 1 --max-gap-windows 10000 --max-trade-rows-scanned 200000000 --max-archives-read 2 --max-runtime-seconds 900`; it returned `PASS` with `gaps=718`, `missing_minutes=1502`, `verified_empty_minutes=1502`, `timestamp_basis_mismatch_minutes=0`, `failed_minutes=0`, `unverified_minutes=0`, `trade_rows_scanned=2372210`, and runner summary `reports\pipeline_audit\local_trade_shards_20250618_20260613\HO_2026_split_v1\HO_2026_split_runner_summary.json`.
 - 2026-07-02: ran the approved `HO_2026_w22` split-recovery shard exactly scoped to `[2026-05-28, 2026-06-04)` using the bounded split runner: `python -m scripts.validation.run_local_trade_ohlcv_split --market HO --year 2026 --shard-index 22 --causal-root data\causal_proof_candidates\local_trade_2025_2026_v1 --max-shards 1 --max-gap-windows 10000 --max-trade-rows-scanned 200000000 --max-archives-read 2 --max-runtime-seconds 900`; it returned `PASS` with `gaps=728`, `missing_minutes=1644`, `verified_empty_minutes=1644`, `timestamp_basis_mismatch_minutes=0`, `failed_minutes=0`, `unverified_minutes=0`, `trade_rows_scanned=2372210`, and runner summary `reports\pipeline_audit\local_trade_shards_20250618_20260613\HO_2026_split_v1\HO_2026_split_runner_summary.json`.
 - 2026-07-02: ran the approved `HO_2026_w21` split-recovery shard exactly scoped to `[2026-05-21, 2026-05-28)` using the bounded split runner: `python -m scripts.validation.run_local_trade_ohlcv_split --market HO --year 2026 --shard-index 21 --causal-root data\causal_proof_candidates\local_trade_2025_2026_v1 --max-shards 1 --max-gap-windows 10000 --max-trade-rows-scanned 200000000 --max-archives-read 2 --max-runtime-seconds 900`; it returned `PASS` with `gaps=736`, `missing_minutes=1643`, `verified_empty_minutes=1643`, `timestamp_basis_mismatch_minutes=0`, `failed_minutes=0`, `unverified_minutes=0`, `trade_rows_scanned=2372210`, and runner summary `reports\pipeline_audit\local_trade_shards_20250618_20260613\HO_2026_split_v1\HO_2026_split_runner_summary.json`.
@@ -251,33 +251,32 @@
 - Keep `AGENTS.md` as the durable agent-rule file.
 - Run `python -m scripts.validation.check_coordination_docs` after future coordination-doc edits when practical.
 - Keep `PROJECT_OUTLINE.md` as reference/planning material only unless the user explicitly changes its authority.
-- No bounded split proof shard remains in this recovery path; preserve generated evidence as ignored local artifacts and decide the disposition of local runner/doc/handoff changes separately from generated reports.
+- No bounded split proof shard remains in this recovery path; preserve generated evidence as ignored local artifacts and decide tracked documentation disposition separately from generated reports.
 - Keep generated data/reports and broad build/loop artifacts out of any documentation-only or proof-scan commit unless the user explicitly approves their disposition.
 
 # Known Issues
 
-- Medium: accepted generated recovery evidence has passed read-only reconciliation, but no commit or proof-status promotion has been approved; superseded failed monolithic reports must remain clearly labeled and generated evidence must stay ignored unless separately approved.
-- Medium: this handoff and the new bounded split runner implementation remain local until explicitly staged/committed.
+- Medium: accepted generated recovery evidence has passed read-only reconciliation, but proof-status promotion has not been approved; generated evidence must stay ignored unless separately approved.
+- Medium: uncommitted tracked documentation changes remain in `AGENTS.md` and `CODEX_HANDOFF.md`; choose leave local, commit as documentation-only scope, or revert before any push.
 - Medium: generated candidate causal proof data/reports are ignored local artifacts and should not be staged by default.
 - Medium: field-level point-in-time availability for optional metadata has not been proven.
 - Medium: full 527-row promoted/canonical Phase 2 remains no-go.
 - Medium: root `DATA REBUILD.md` and `RESOURCES.md` remain deleted in the working tree by approved doc triage; keep them out of unrelated proof/auth commits unless the user approves their disposition.
 - Medium: the original configured cwd `C:\Users\donny\Desktop\15_min_long_short` was absent; use `C:\Users\donny\Desktop\futures_intraday_model` unless the user says otherwise.
-- Medium: branch is ahead of origin and contains local commits; verify sync intent before pushing or rebasing.
-- Medium: branch is ahead of origin and contains local commits plus the latest local handoff update; verify sync intent before pushing or rebasing.
+- Medium: branch is ahead of origin by local commit `7e429d5`; verify sync intent before pushing or rebasing.
 
 # Next Steps
 
 Exact next recommended step:
 
-Decide disposition for the local runner/doc/handoff changes and the ignored generated evidence: leave local, plan a runner/doc-only commit, or plan a separate proof-status documentation update. Do not stage generated reports by default.
+Decide disposition for tracked documentation and sync only: leave local, commit `AGENTS.md`/`CODEX_HANDOFF.md` as documentation-only scope, or revert the tracked documentation changes. Do not stage generated reports, and do not push without explicit approval.
 
 Fresh-thread prompt:
 
 ```text
 Continue from CODEX_HANDOFF.md.
 
-Goal: decide disposition after accepted generated recovery evidence passed read-only reconciliation.
+Goal: decide tracked documentation and sync disposition after accepted generated recovery evidence passed read-only reconciliation.
 
 Rules:
 - First verify repo path, git status, and the current CODEX_HANDOFF.md.
@@ -293,6 +292,6 @@ Rules:
 - Do not run broad build/loop files.
 - Do not promote canonical data.
 - Do not touch modeling, WFA, metrics, predictions, cleanup, labels, feature matrices, or live/paper execution.
-- Use the completed NG_2025 and RB_2025 weekly split reports plus RB_2026_w01/w02/w03/w04/w05/w06/w07/w08/w09/w10/w11/w12/w13/w14/w15/w16/w17/w18/w19/w20/w21/w22/w23/w24, HO_2025_w01/w02/w03/w04/w05/w06/w07/w08/w09/w10/w11/w12/w13/w14/w15/w16/w17/w18/w19/w20/w21/w22/w23/w24/w25/w26/w27/w28, and HO_2026_w01/w02/w03/w04/w05/w06/w07/w08/w09/w10/w11/w12/w13/w14/w15/w16/w17/w18/w19/w20/w21/w22/w23/w24 as local generated evidence only; treat the monolithic HO_2025 report as superseded by split recovery and the full HO_2026 report as failed generated evidence.
+- Use the completed NG_2025 and RB_2025 weekly split reports plus RB_2026_w01/w02/w03/w04/w05/w06/w07/w08/w09/w10/w11/w12/w13/w14/w15/w16/w17/w18/w19/w20/w21/w22/w23/w24, HO_2025_w01/w02/w03/w04/w05/w06/w07/w08/w09/w10/w11/w12/w13/w14/w15/w16/w17/w18/w19/w20/w21/w22/w23/w24/w25/w26/w27/w28, and HO_2026_w01/w02/w03/w04/w05/w06/w07/w08/w09/w10/w11/w12/w13/w14/w15/w16/w17/w18/w19/w20/w21/w22/w23/w24 as local generated evidence only; treat the monolithic RB_2025, HO_2025, and HO_2026 reports as superseded generated failures, not accepted evidence.
 - Do not stage generated data/**, generated reports, the seven broad build/loop files, configs, models, predictions, cleanup, labels, feature matrices, modeling, WFA, metrics, or live/paper execution.
 ```
