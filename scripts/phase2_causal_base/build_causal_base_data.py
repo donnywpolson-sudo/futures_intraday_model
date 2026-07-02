@@ -63,18 +63,50 @@ FINAL_HOLDOUT_YEARS = [2025]
 FORWARD_YEARS = [2026]
 ES_DEVELOPMENT_LINEAGE_MARKET = "ES"
 ES_DEVELOPMENT_LINEAGE_YEARS = frozenset(range(2010, 2021))
+LINEAGE_SIDECAR_SCHEMA_VERSION = "v1_candidate_lineage_sidecar_1"
+LINEAGE_BUILD_ID = "phase2_causal_base_es_development_v1"
+LINEAGE_BUILD_NAME = "Phase 2 causal base ES development-window candidate rebuild"
 LINEAGE_SIDECAR_FIELDS = frozenset(
     {
-        "build_identity",
+        "schema_version",
+        "build_id",
+        "build_name",
+        "transform_identity",
         "market",
         "year",
-        "raw_ohlcv_manifest_path",
-        "raw_definition_manifest_path",
-        "output_candidate_path",
+        "window",
+        "raw_inputs",
+        "output",
+        "validation",
     }
 )
-LINEAGE_BUILD_IDENTITY_FIELDS = frozenset(
-    {"builder", "profile", "profile_config_path"}
+LINEAGE_TRANSFORM_IDENTITY_FIELDS = frozenset(
+    {"code_ref", "config_ref", "command_ref"}
+)
+LINEAGE_WINDOW_FIELDS = frozenset(
+    {"name", "start", "end", "holdout_excluded"}
+)
+LINEAGE_RAW_INPUTS_FIELDS = frozenset(
+    {"ohlcv_manifest_path", "definition_manifest_path"}
+)
+LINEAGE_OUTPUT_FIELDS = frozenset({"candidate_path"})
+LINEAGE_VALIDATION_FIELDS = frozenset(
+    {
+        "market_is_es_only",
+        "year_is_in_development_window",
+        "raw_ohlcv_manifest_path_present",
+        "raw_definition_manifest_path_present",
+        "output_candidate_path_present",
+        "same_year_inputs_and_output",
+        "holdout_scope_excluded",
+        "non_es_scope_excluded",
+        "parquet_content_read_for_lineage",
+        "parquet_schema_read_for_lineage",
+        "row_counts_in_sidecar",
+        "timestamps_in_sidecar",
+        "data_values_in_sidecar",
+        "secrets_in_sidecar",
+    }
 )
 STATIC_PROFILE_ALIASES = {
     "tier_0_smoke": "tier_0",
@@ -2530,20 +2562,85 @@ def candidate_lineage_sidecar_payload(
     output_path: Path,
     profile: str,
     profile_config_path: Path,
+    command_ref: str,
     lineage_source: CandidateLineageSource,
 ) -> dict[str, object]:
     return {
-        "build_identity": {
-            "builder": "scripts/phase2_causal_base/build_causal_base_data.py",
-            "profile": profile,
-            "profile_config_path": relative_source_path(profile_config_path),
+        "schema_version": LINEAGE_SIDECAR_SCHEMA_VERSION,
+        "build_id": LINEAGE_BUILD_ID,
+        "build_name": LINEAGE_BUILD_NAME,
+        "transform_identity": {
+            "code_ref": "scripts/phase2_causal_base/build_causal_base_data.py::process_file",
+            "config_ref": f"{relative_source_path(profile_config_path)}#{profile}",
+            "command_ref": command_ref,
         },
         "market": market,
         "year": year,
-        "raw_ohlcv_manifest_path": lineage_source.raw_ohlcv_manifest_path,
-        "raw_definition_manifest_path": lineage_source.raw_definition_manifest_path,
-        "output_candidate_path": relative_source_path(output_path),
+        "window": {
+            "name": "D0003_development",
+            "start": "2010-01-01",
+            "end": "2020-12-31",
+            "holdout_excluded": True,
+        },
+        "raw_inputs": {
+            "ohlcv_manifest_path": lineage_source.raw_ohlcv_manifest_path,
+            "definition_manifest_path": lineage_source.raw_definition_manifest_path,
+        },
+        "output": {
+            "candidate_path": relative_source_path(output_path),
+        },
+        "validation": {
+            "market_is_es_only": market == ES_DEVELOPMENT_LINEAGE_MARKET,
+            "year_is_in_development_window": year in ES_DEVELOPMENT_LINEAGE_YEARS,
+            "raw_ohlcv_manifest_path_present": bool(
+                lineage_source.raw_ohlcv_manifest_path
+            ),
+            "raw_definition_manifest_path_present": bool(
+                lineage_source.raw_definition_manifest_path
+            ),
+            "output_candidate_path_present": bool(relative_source_path(output_path)),
+            "same_year_inputs_and_output": True,
+            "holdout_scope_excluded": True,
+            "non_es_scope_excluded": True,
+            "parquet_content_read_for_lineage": False,
+            "parquet_schema_read_for_lineage": False,
+            "row_counts_in_sidecar": False,
+            "timestamps_in_sidecar": False,
+            "data_values_in_sidecar": False,
+            "secrets_in_sidecar": False,
+        },
     }
+
+
+def _object_field_failures(
+    payload: dict[str, object],
+    *,
+    field_name: str,
+    expected_fields: frozenset[str],
+) -> tuple[dict[str, object] | None, list[str]]:
+    value = payload.get(field_name)
+    if not isinstance(value, dict):
+        return None, [f"lineage sidecar {field_name} must be an object"]
+    actual_fields = set(value)
+    if actual_fields != expected_fields:
+        return (
+            value,
+            [
+                f"lineage sidecar {field_name} fields mismatch: "
+                f"expected={sorted(expected_fields)} observed={sorted(actual_fields)}"
+            ],
+        )
+    return value, []
+
+
+def _required_bool(
+    payload: dict[str, object],
+    field_name: str,
+    expected: bool,
+) -> list[str]:
+    if payload.get(field_name) is not expected:
+        return [f"lineage sidecar validation {field_name} must be {expected}"]
+    return []
 
 
 def candidate_lineage_sidecar_payload_failures(
@@ -2556,15 +2653,97 @@ def candidate_lineage_sidecar_payload_failures(
             "lineage sidecar fields mismatch: "
             f"expected={sorted(LINEAGE_SIDECAR_FIELDS)} observed={sorted(actual_fields)}"
         )
-    build_identity = payload.get("build_identity")
-    if not isinstance(build_identity, dict):
-        failures.append("lineage sidecar build_identity must be an object")
-    elif set(build_identity) != LINEAGE_BUILD_IDENTITY_FIELDS:
-        failures.append(
-            "lineage sidecar build_identity fields mismatch: "
-            f"expected={sorted(LINEAGE_BUILD_IDENTITY_FIELDS)} "
-            f"observed={sorted(build_identity)}"
-        )
+    if payload.get("schema_version") != LINEAGE_SIDECAR_SCHEMA_VERSION:
+        failures.append("lineage sidecar schema_version mismatch")
+    if payload.get("build_id") != LINEAGE_BUILD_ID:
+        failures.append("lineage sidecar build_id mismatch")
+    if payload.get("build_name") != LINEAGE_BUILD_NAME:
+        failures.append("lineage sidecar build_name mismatch")
+
+    transform_identity, transform_failures = _object_field_failures(
+        payload,
+        field_name="transform_identity",
+        expected_fields=LINEAGE_TRANSFORM_IDENTITY_FIELDS,
+    )
+    failures.extend(transform_failures)
+    if transform_identity is not None:
+        for field_name in sorted(LINEAGE_TRANSFORM_IDENTITY_FIELDS):
+            value = transform_identity.get(field_name)
+            if not isinstance(value, str) or not value:
+                failures.append(
+                    f"lineage sidecar transform_identity {field_name} must be non-empty"
+                )
+
+    window, window_failures = _object_field_failures(
+        payload,
+        field_name="window",
+        expected_fields=LINEAGE_WINDOW_FIELDS,
+    )
+    failures.extend(window_failures)
+    if window is not None:
+        expected_window = {
+            "name": "D0003_development",
+            "start": "2010-01-01",
+            "end": "2020-12-31",
+            "holdout_excluded": True,
+        }
+        for field_name, expected_value in expected_window.items():
+            if window.get(field_name) != expected_value:
+                failures.append(
+                    f"lineage sidecar window {field_name} must be {expected_value!r}"
+                )
+
+    raw_inputs, raw_input_failures = _object_field_failures(
+        payload,
+        field_name="raw_inputs",
+        expected_fields=LINEAGE_RAW_INPUTS_FIELDS,
+    )
+    failures.extend(raw_input_failures)
+    if raw_inputs is not None:
+        for field_name in sorted(LINEAGE_RAW_INPUTS_FIELDS):
+            value = raw_inputs.get(field_name)
+            if not isinstance(value, str) or not value:
+                failures.append(f"lineage sidecar raw_inputs {field_name} missing")
+
+    output, output_failures = _object_field_failures(
+        payload,
+        field_name="output",
+        expected_fields=LINEAGE_OUTPUT_FIELDS,
+    )
+    failures.extend(output_failures)
+    if output is not None:
+        candidate_path = output.get("candidate_path")
+        if not isinstance(candidate_path, str) or not candidate_path:
+            failures.append("lineage sidecar output candidate_path missing")
+        elif not candidate_path.endswith(".parquet"):
+            failures.append("lineage sidecar output candidate_path must end with .parquet")
+
+    validation, validation_failures = _object_field_failures(
+        payload,
+        field_name="validation",
+        expected_fields=LINEAGE_VALIDATION_FIELDS,
+    )
+    failures.extend(validation_failures)
+    if validation is not None:
+        expected_validation = {
+            "market_is_es_only": True,
+            "year_is_in_development_window": True,
+            "raw_ohlcv_manifest_path_present": True,
+            "raw_definition_manifest_path_present": True,
+            "output_candidate_path_present": True,
+            "same_year_inputs_and_output": True,
+            "holdout_scope_excluded": True,
+            "non_es_scope_excluded": True,
+            "parquet_content_read_for_lineage": False,
+            "parquet_schema_read_for_lineage": False,
+            "row_counts_in_sidecar": False,
+            "timestamps_in_sidecar": False,
+            "data_values_in_sidecar": False,
+            "secrets_in_sidecar": False,
+        }
+        for field_name, expected_value in expected_validation.items():
+            failures.extend(_required_bool(validation, field_name, expected_value))
+
     if payload.get("market") != ES_DEVELOPMENT_LINEAGE_MARKET:
         failures.append("lineage sidecar market must be ES")
     try:
@@ -2574,19 +2753,19 @@ def candidate_lineage_sidecar_payload_failures(
     else:
         if year not in ES_DEVELOPMENT_LINEAGE_YEARS:
             failures.append("lineage sidecar year outside ES development window")
-    for field_name in (
-        "raw_ohlcv_manifest_path",
-        "raw_definition_manifest_path",
-        "output_candidate_path",
-    ):
-        value = payload.get(field_name)
-        if not isinstance(value, str) or not value:
-            failures.append(f"lineage sidecar {field_name} must be a non-empty path")
-    output_candidate_path = payload.get("output_candidate_path")
-    if isinstance(output_candidate_path, str) and not output_candidate_path.endswith(
-        ".parquet"
-    ):
-        failures.append("lineage sidecar output_candidate_path must end with .parquet")
+        if output is not None:
+            candidate_path = output.get("candidate_path")
+            if isinstance(candidate_path, str) and f"{year}.parquet" not in candidate_path:
+                failures.append(
+                    "lineage sidecar output candidate_path must include the sidecar year"
+                )
+        if raw_inputs is not None:
+            for field_name in sorted(LINEAGE_RAW_INPUTS_FIELDS):
+                value = raw_inputs.get(field_name)
+                if isinstance(value, str) and str(year) not in value:
+                    failures.append(
+                        f"lineage sidecar raw_inputs {field_name} must include the sidecar year"
+                    )
     return failures
 
 
@@ -3536,6 +3715,7 @@ def process_file(
     write_output: bool = True,
     write_lineage_sidecar: bool = False,
     lineage_source: CandidateLineageSource | None = None,
+    lineage_command_ref: str | None = None,
     allow_broad_build_after_readiness_pass: bool = False,
     broad_build_approval_token: str | None = None,
 ) -> ValidationResult:
@@ -3620,13 +3800,18 @@ def process_file(
             result.failures.append(
                 f"lineage source metadata missing for {market} {year}"
             )
-        else:
+        if not lineage_command_ref:
+            result.failures.append(
+                f"lineage command reference missing for {market} {year}"
+            )
+        if lineage_source is not None and lineage_command_ref:
             lineage_payload = candidate_lineage_sidecar_payload(
                 market=market,
                 year=year,
                 output_path=output_path,
                 profile=profile,
                 profile_config_path=profile_config_path,
+                command_ref=lineage_command_ref,
                 lineage_source=lineage_source,
             )
             result.failures.extend(
@@ -5127,6 +5312,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Fails closed outside that exact scope."
         ),
     )
+    parser.add_argument(
+        "--lineage-command-ref",
+        help=(
+            "Approved rebuild command id or command record reference to record "
+            "inside ES development lineage sidecars."
+        ),
+    )
     return parser
 
 
@@ -5158,6 +5350,7 @@ def main() -> int:
         or args.build_max_market_years is not None
         or args.build_progress_checkpoint_jsonl
         or args.write_es_development_lineage_sidecars
+        or args.lineage_command_ref
     )
     if readiness_only_options and not args.readiness_only:
         parser.error(
@@ -5170,13 +5363,26 @@ def main() -> int:
             "--allow-broad-build-after-readiness-pass, "
             "--broad-build-approval-token, --build-max-market-years, "
             "--build-progress-checkpoint-jsonl, and "
-            "--write-es-development-lineage-sidecars require non-readiness build mode"
+            "--write-es-development-lineage-sidecars/--lineage-command-ref "
+            "require non-readiness build mode"
         )
     if args.readiness_max_market_years is not None and args.readiness_max_market_years < 1:
         print("FAIL readiness_max_market_years: value must be >= 1")
         return 1
     if args.build_max_market_years is not None and args.build_max_market_years < 1:
         print("FAIL build_max_market_years: value must be >= 1")
+        return 1
+    if args.lineage_command_ref and not args.write_es_development_lineage_sidecars:
+        print(
+            "FAIL es_development_lineage_sidecar: "
+            "--lineage-command-ref requires --write-es-development-lineage-sidecars"
+        )
+        return 1
+    if args.write_es_development_lineage_sidecars and not args.lineage_command_ref:
+        print(
+            "FAIL es_development_lineage_sidecar: "
+            "--lineage-command-ref is required"
+        )
         return 1
     if not args.readiness_only:
         broad_build_approval_failures = _broad_manifest_527_rebuild_approval_failures(
@@ -5396,6 +5602,7 @@ def main() -> int:
                 allow_hardcoded_calendar=args.allow_hardcoded_calendar,
                 write_lineage_sidecar=args.write_es_development_lineage_sidecars,
                 lineage_source=lineage_sources.get((market, year)),
+                lineage_command_ref=args.lineage_command_ref,
                 allow_broad_build_after_readiness_pass=(
                     args.allow_broad_build_after_readiness_pass
                 ),

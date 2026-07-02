@@ -4176,6 +4176,7 @@ def test_candidate_lineage_sidecar_payload_has_only_allowed_fields(
         output_path=output_path,
         profile="tier_0",
         profile_config_path=Path("configs/alpha_tiered.yaml"),
+        command_ref="D_future_es_development_rebuild_command",
         lineage_source=causal_base.CandidateLineageSource(
             raw_ohlcv_manifest_path=(
                 "data/dbn/ohlcv_1m_parent/ES/2010.dbn.zst.manifest.json"
@@ -4187,7 +4188,44 @@ def test_candidate_lineage_sidecar_payload_has_only_allowed_fields(
     )
 
     assert set(payload) == causal_base.LINEAGE_SIDECAR_FIELDS
-    assert set(payload["build_identity"]) == causal_base.LINEAGE_BUILD_IDENTITY_FIELDS
+    assert payload["schema_version"] == "v1_candidate_lineage_sidecar_1"
+    assert payload["build_id"] == causal_base.LINEAGE_BUILD_ID
+    assert payload["build_name"] == causal_base.LINEAGE_BUILD_NAME
+    assert set(payload["transform_identity"]) == (
+        causal_base.LINEAGE_TRANSFORM_IDENTITY_FIELDS
+    )
+    assert payload["transform_identity"]["command_ref"] == (
+        "D_future_es_development_rebuild_command"
+    )
+    assert set(payload["window"]) == causal_base.LINEAGE_WINDOW_FIELDS
+    assert payload["window"]["name"] == "D0003_development"
+    assert payload["window"]["holdout_excluded"] is True
+    assert set(payload["raw_inputs"]) == causal_base.LINEAGE_RAW_INPUTS_FIELDS
+    assert payload["raw_inputs"]["ohlcv_manifest_path"].endswith(
+        "2010.dbn.zst.manifest.json"
+    )
+    assert payload["raw_inputs"]["definition_manifest_path"].endswith(
+        "2010.dbn.zst.manifest.json"
+    )
+    assert set(payload["output"]) == causal_base.LINEAGE_OUTPUT_FIELDS
+    assert payload["output"]["candidate_path"].endswith("ES/2010.parquet")
+    assert set(payload["validation"]) == causal_base.LINEAGE_VALIDATION_FIELDS
+    assert payload["validation"] == {
+        "market_is_es_only": True,
+        "year_is_in_development_window": True,
+        "raw_ohlcv_manifest_path_present": True,
+        "raw_definition_manifest_path_present": True,
+        "output_candidate_path_present": True,
+        "same_year_inputs_and_output": True,
+        "holdout_scope_excluded": True,
+        "non_es_scope_excluded": True,
+        "parquet_content_read_for_lineage": False,
+        "parquet_schema_read_for_lineage": False,
+        "row_counts_in_sidecar": False,
+        "timestamps_in_sidecar": False,
+        "data_values_in_sidecar": False,
+        "secrets_in_sidecar": False,
+    }
     assert causal_base.candidate_lineage_sidecar_payload_failures(payload) == []
     assert (
         causal_base.candidate_lineage_sidecar_path(output_path).name
@@ -4206,6 +4244,7 @@ def test_process_file_lineage_sidecar_fails_closed_before_input_read(
         output_path,
         profile="metadata_optional_test",
         write_lineage_sidecar=True,
+        lineage_command_ref="D_future_es_development_rebuild_command",
         lineage_source=causal_base.CandidateLineageSource(
             raw_ohlcv_manifest_path="data/dbn/ohlcv_1m_parent/CL/2010.dbn.zst.manifest.json",
             raw_definition_manifest_path="data/dbn/definition/CL/2010.dbn.zst.manifest.json",
