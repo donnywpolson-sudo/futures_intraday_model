@@ -30,6 +30,15 @@ DEFAULT_REPORTS_ROOT = Path("reports/wfa")
 DEFAULT_PROFILE_CONFIG = Path("configs/alpha_tiered.yaml")
 DEFAULT_MODELS_CONFIG = Path("configs/models.yaml")
 DEFAULT_FEATURE_MANIFEST = Path("reports/features_baseline/baseline_feature_manifest.json")
+ES_ONLY_FULLY_UNAVAILABLE_INTERMARKET_WARNING = (
+    "features fully unavailable: "
+    "feature_rel_ret_vs_ES_15,feature_rel_ret_vs_ZN_15,feature_rel_ret_vs_CL_15,"
+    "feature_rel_ret_vs_6E_15,feature_corr_vs_ES_60,feature_corr_vs_ZN_60,"
+    "feature_corr_vs_CL_60,feature_corr_vs_6E_60,feature_es_zn_divergence_30,"
+    "feature_cl_es_divergence_30,feature_tier1_direction_agreement_15,"
+    "feature_tier1_return_dispersion_15,feature_tier1_risk_on_score_30,"
+    "feature_es_zn_risk_regime_30,feature_cl_es_macro_divergence_30"
+)
 
 
 @dataclass(frozen=True)
@@ -45,6 +54,8 @@ class ProfilePlan:
     final_holdout_years: list[int]
     forbid_research_use: bool
     intent: str
+    feature_manifest_profile: str | None
+    feature_manifest_resolved_profile: str | None
 
 
 @dataclass(frozen=True)
@@ -57,10 +68,31 @@ class WfaPolicy:
 
 
 def accepted_phase4_feature_warning_messages(markets: Iterable[str]) -> tuple[str, ...]:
-    return tuple(
+    market_list = [str(market) for market in markets]
+    messages = [
         f"features fully unavailable: feature_rel_ret_vs_{market}_15,feature_corr_vs_{market}_60"
-        for market in markets
-    )
+        for market in market_list
+    ]
+    if market_list == ["ES"]:
+        messages.append(ES_ONLY_FULLY_UNAVAILABLE_INTERMARKET_WARNING)
+    return tuple(messages)
+
+
+def _csv_strings(value: str | None) -> list[str] | None:
+    if value is None:
+        return None
+    values = [item.strip() for item in value.split(",") if item.strip()]
+    return values or None
+
+
+def _csv_ints(value: str | None) -> list[int] | None:
+    values = _csv_strings(value)
+    if values is None:
+        return None
+    try:
+        return [int(item) for item in values]
+    except ValueError as exc:
+        raise SystemExit(f"invalid --years value: {value}") from exc
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -175,6 +207,61 @@ def load_profile_plan(profile: str, profile_config: Path) -> ProfilePlan:
         final_holdout_years=[int(year) for year in final_holdout_years],
         forbid_research_use=bool(profile_entry.get("forbid_research_use", False)),
         intent=str(profile_entry.get("intent", "")),
+        feature_manifest_profile=(
+            str(profile_entry["feature_manifest_profile"])
+            if profile_entry.get("feature_manifest_profile") is not None
+            else None
+        ),
+        feature_manifest_resolved_profile=(
+            str(profile_entry["feature_manifest_resolved_profile"])
+            if profile_entry.get("feature_manifest_resolved_profile") is not None
+            else None
+        ),
+    )
+
+
+def filter_profile_plan(
+    plan: ProfilePlan,
+    *,
+    markets: Iterable[str] | None = None,
+    years: Iterable[int] | None = None,
+) -> ProfilePlan:
+    selected_markets = list(plan.markets)
+    selected_years = list(plan.years)
+    if markets is not None:
+        requested_markets = [str(market) for market in markets]
+        missing = sorted(set(requested_markets) - set(plan.markets))
+        if missing:
+            raise SystemExit(
+                f"requested markets {missing!r} are outside profile {plan.requested_profile!r}"
+            )
+        selected_markets = requested_markets
+    if years is not None:
+        requested_years = [int(year) for year in years]
+        missing_years = sorted(set(requested_years) - set(plan.years))
+        if missing_years:
+            raise SystemExit(
+                f"requested years {missing_years!r} are outside profile {plan.requested_profile!r}"
+            )
+        selected_years = requested_years
+    if not selected_markets:
+        raise SystemExit("WFA profile filter selected no markets")
+    if not selected_years:
+        raise SystemExit("WFA profile filter selected no years")
+    return ProfilePlan(
+        requested_profile=plan.requested_profile,
+        resolved_profile=plan.resolved_profile,
+        markets=selected_markets,
+        years=selected_years,
+        settings_profile=plan.settings_profile,
+        train_days=plan.train_days,
+        test_days=plan.test_days,
+        step_days=plan.step_days,
+        final_holdout_years=plan.final_holdout_years,
+        forbid_research_use=plan.forbid_research_use,
+        intent=plan.intent,
+        feature_manifest_profile=plan.feature_manifest_profile,
+        feature_manifest_resolved_profile=plan.feature_manifest_resolved_profile,
     )
 
 
@@ -337,6 +424,7 @@ def build_market_folds(
                     "market": market,
                     "fold_id": f"{market}_{split_group}_{fold_number:04d}",
                     "fold_number": fold_number,
+                    "year": int(test_rows_frame.iloc[0].year),
                     "split_group": split_group,
                     "train_start": _iso(train_before_frame.iloc[0]),
                     "train_end": _iso(train_before_frame.iloc[-1]),
@@ -374,8 +462,14 @@ def build_split_plan(
     allow_final_holdout: bool = False,
     data_audit_universe_json: Path | None = None,
     feature_manifest: str | Path | None = None,
+    markets: Iterable[str] | None = None,
+    years: Iterable[int] | None = None,
 ) -> dict[str, Any]:
-    plan = load_profile_plan(profile, profile_config)
+    plan = filter_profile_plan(
+        load_profile_plan(profile, profile_config),
+        markets=markets,
+        years=years,
+    )
     permission_failure = final_holdout_permission_failure(
         is_final_holdout=is_final_holdout_year_set(plan.years, plan.final_holdout_years),
         allow_final_holdout=allow_final_holdout,
@@ -402,8 +496,8 @@ def build_split_plan(
             default_manifest_path=DEFAULT_FEATURE_MANIFEST,
             search_name="baseline_feature_manifest.json",
             expected_stage=None,
-            expected_profile=plan.requested_profile,
-            expected_resolved_profile=plan.resolved_profile,
+            expected_profile=plan.feature_manifest_profile or plan.requested_profile,
+            expected_resolved_profile=plan.feature_manifest_resolved_profile or plan.resolved_profile,
             expected_output_root=input_root,
             expected_market_years=((market, year) for market, year, _ in inputs),
             gate_name="feature_manifest_gate",
@@ -492,6 +586,8 @@ def build_split_plan(
         "markets": plan.markets,
         "years": plan.years,
         "settings_profile": plan.settings_profile,
+        "feature_manifest_profile": plan.feature_manifest_profile,
+        "feature_manifest_resolved_profile": plan.feature_manifest_resolved_profile,
         "window_policy": {
             "train_days": plan.train_days,
             "test_days": plan.test_days,
@@ -541,6 +637,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="auto",
         help="Path to Phase 4 baseline_feature_manifest.json, or 'auto' to find a matching PASS manifest under reports/.",
     )
+    parser.add_argument("--markets", default=None, help="Comma-separated market filter within the profile.")
+    parser.add_argument("--years", default=None, help="Comma-separated year filter within the profile.")
     parser.add_argument("--allow-final-holdout", action="store_true")
     parser.add_argument("--data-audit-universe-json", default=None)
     return parser
@@ -562,6 +660,8 @@ def main() -> int:
             Path(args.data_audit_universe_json) if args.data_audit_universe_json else None
         ),
         feature_manifest=args.feature_manifest,
+        markets=_csv_strings(args.markets),
+        years=_csv_ints(args.years),
     )
     status = "FAIL" if manifest["failure_count"] else "PASS"
     print(

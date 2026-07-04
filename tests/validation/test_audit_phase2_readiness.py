@@ -281,6 +281,65 @@ def test_cli_checkpoint_preserves_completed_rows_when_builder_stops(
     ]
 
 
+def test_load_checkpoint_rows_ignores_known_metadata_rows(tmp_path: Path) -> None:
+    checkpoint_path = tmp_path / "checkpoint.jsonl"
+    checkpoint_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "stage": "phase2_readiness_checkpoint_start",
+                        "profile": "tier_3_forward",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "stage": "phase2_readiness_market_year",
+                        "profile": "tier_3_forward",
+                        "resolved_profile": "tier_3_forward",
+                        "market": "ES",
+                        "year": 2026,
+                        "status": "WARN",
+                        "warnings": [
+                            "degraded threshold breached: rows_pct=1.74227 bars=2760 sessions=3"
+                        ],
+                        "failures": [],
+                    }
+                ),
+                json.dumps(
+                    {
+                        "stage": "phase2_readiness_checkpoint_summary",
+                        "status": "FAIL",
+                        "checked_market_year_count": 1,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rows = load_checkpoint_rows(checkpoint_path)
+
+    assert [(row["market"], row["year"], row["status"]) for row in rows] == [
+        ("ES", 2026, "WARN")
+    ]
+
+
+def test_load_checkpoint_rows_rejects_unknown_rows_without_market_year(
+    tmp_path: Path,
+) -> None:
+    checkpoint_path = tmp_path / "checkpoint.jsonl"
+    checkpoint_path.write_text(
+        json.dumps({"stage": "unexpected_checkpoint_metadata", "status": "FAIL"})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="checkpoint row 1 missing market/year"):
+        load_checkpoint_rows(checkpoint_path)
+
+
 def test_cli_resume_skips_completed_checkpoint_rows(
     tmp_path: Path,
     monkeypatch,

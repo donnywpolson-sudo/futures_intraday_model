@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import math
+import re
 import subprocess
 import warnings
 from dataclasses import dataclass, field
@@ -256,6 +257,41 @@ FEATURE_FAMILIES: dict[str, list[str]] = {
 FEATURE_COLS = [feature for features in FEATURE_FAMILIES.values() for feature in features]
 FEATURE_TO_FAMILY = {
     feature: family for family, features in FEATURE_FAMILIES.items() for feature in features
+}
+
+FEATURE_AUDIT_REQUIRED_FIELDS = (
+    "feature",
+    "family",
+    "source_column_artifact",
+    "availability_timestamp",
+    "lookback_window",
+    "economic_rationale",
+    "leakage_risk",
+    "train_only_transform_status",
+    "drift_decay_check_status",
+)
+
+FEATURE_FAMILY_RATIONALE = {
+    "baseline_ohlcv": "Capture local return, range, volume, and intraday timing state.",
+    "fade_safety_trend_danger": "Identify trend persistence that can make fade entries unsafe.",
+    "breakout_rejection": "Measure breakout acceptance versus failed breakout rejection.",
+    "range_chop": "Characterize range compression, overlap, and choppy market structure.",
+    "session_structure": "Represent position within the current session auction.",
+    "volatility_volume": "Separate volatility expansion, shock, and volume participation regimes.",
+    "higher_timeframe_prior_session": "Carry causal higher-timeframe and prior-session context.",
+    "time_buckets": "Represent recurring intraday liquidity and participation windows.",
+    "tier1_intermarket": "Capture causal cross-market relative-move and correlation context.",
+    "effort_result": "Compare traded effort against price progress.",
+    "trend_day_open_drive": "Detect opening-drive and trend-day auction structure.",
+    "auction_acceptance": "Measure acceptance or rejection around session range extension.",
+    "shock_decay": "Measure continuation or decay after unusually large bars.",
+    "tier1_cross_market_regime": "Summarize cross-market risk-on/risk-off regime context.",
+}
+
+FEATURE_FAMILY_LEAKAGE_RISK = {
+    "higher_timeframe_prior_session": "medium",
+    "tier1_intermarket": "medium",
+    "tier1_cross_market_regime": "medium",
 }
 
 REQUIRED_INPUT_COLUMNS = [
@@ -1317,6 +1353,76 @@ def validate_registry(feature_cols: list[str]) -> list[str]:
     return failures
 
 
+def feature_lookback_window(feature: str, family: str) -> str:
+    if family == "higher_timeframe_prior_session":
+        return "current row plus causal higher-timeframe/prior-session context"
+    if family in {"session_structure", "auction_acceptance", "trend_day_open_drive"}:
+        return "current session rows through feature timestamp"
+    numbers = [int(value) for value in re.findall(r"\d+", feature)]
+    if numbers:
+        return f"current row plus trailing {max(numbers)} one-minute/session rows"
+    return "current causal row or session state at feature timestamp"
+
+
+def build_feature_audit_records(feature_cols: list[str]) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    for feature in feature_cols:
+        family = FEATURE_TO_FAMILY.get(feature, "unknown")
+        records.append(
+            {
+                "feature": feature,
+                "family": family,
+                "source_column_artifact": (
+                    "Phase 3 labeled parquet derived from Phase 2 causal/session-normalized "
+                    "OHLCV inputs"
+                ),
+                "availability_timestamp": "feature row timestamp `ts`; no future rows allowed",
+                "lookback_window": feature_lookback_window(feature, family),
+                "economic_rationale": FEATURE_FAMILY_RATIONALE.get(
+                    family,
+                    "Family rationale must be registered before model use.",
+                ),
+                "leakage_risk": FEATURE_FAMILY_LEAKAGE_RISK.get(family, "low"),
+                "train_only_transform_status": (
+                    "Phase 4 uses deterministic causal transforms only; fitted transforms "
+                    "must occur inside downstream train folds"
+                ),
+                "drift_decay_check_status": (
+                    "registered_for_pre_promotion_review; Phase 8/9 promotion requires "
+                    "stability evidence"
+                ),
+            }
+        )
+    return records
+
+
+def validate_feature_audit_records(
+    feature_cols: list[str],
+    records: list[Mapping[str, object]],
+) -> list[str]:
+    failures: list[str] = []
+    by_feature = {
+        str(record.get("feature")): record
+        for record in records
+        if isinstance(record, Mapping) and record.get("feature") is not None
+    }
+    missing_records = [feature for feature in feature_cols if feature not in by_feature]
+    if missing_records:
+        failures.append(f"feature audit records missing for: {missing_records}")
+    for feature in feature_cols:
+        record = by_feature.get(feature)
+        if record is None:
+            continue
+        missing_fields = [
+            field
+            for field in FEATURE_AUDIT_REQUIRED_FIELDS
+            if not str(record.get(field, "")).strip()
+        ]
+        if missing_fields:
+            failures.append(f"feature audit record for {feature} missing fields: {missing_fields}")
+    return failures
+
+
 def process_file(
     input_path: Path,
     output_path: Path,
@@ -1394,23 +1500,41 @@ def write_json(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def write_registries(output_root: Path, reports_root: Path, columns: list[str]) -> dict[str, list[str] | dict[str, str]]:
+def write_registries(
+    output_root: Path,
+    reports_root: Path,
+    columns: list[str],
+) -> dict[str, object]:
     feature_cols = FEATURE_COLS.copy()
     target_cols = target_columns(columns)
     metadata_cols = metadata_columns(columns)
     excluded_cols = excluded_columns(columns, feature_cols, target_cols, metadata_cols)
+    feature_audit = build_feature_audit_records(feature_cols)
+    feature_audit_failures = validate_feature_audit_records(feature_cols, feature_audit)
+    feature_audit_gate = {
+        "gate_name": "feature_audit_gate",
+        "status": "PASS" if not feature_audit_failures else "FAIL",
+        "required_fields": list(FEATURE_AUDIT_REQUIRED_FIELDS),
+        "feature_count": len(feature_cols),
+        "audit_record_count": len(feature_audit),
+        "failure_count": len(feature_audit_failures),
+        "failures": feature_audit_failures,
+    }
     registry = {
         "feature_cols": feature_cols,
         "target_cols": target_cols,
         "metadata_cols": metadata_cols,
         "excluded_cols": excluded_cols,
         "feature_families": FEATURE_TO_FAMILY,
+        "feature_audit_gate": feature_audit_gate,
+        "feature_audit": feature_audit,
     }
     write_json(output_root / "feature_cols.json", feature_cols)
     write_json(output_root / "target_cols.json", target_cols)
     write_json(output_root / "metadata_cols.json", metadata_cols)
     write_json(output_root / "excluded_cols.json", excluded_cols)
     write_json(reports_root / "feature_registry.json", registry)
+    write_json(reports_root / "feature_audit.json", feature_audit)
     return registry
 
 
@@ -1473,8 +1597,11 @@ def write_reports(
     if not output_columns:
         output_columns = FEATURE_COLS.copy()
     registry = write_registries(output_root, reports_root, output_columns)
+    feature_audit_gate = registry.get("feature_audit_gate", {})
     corr_pairs = high_correlation_report(results, FEATURE_COLS, reports_root)
     failures = [failure for result in results for failure in result.failures]
+    if isinstance(feature_audit_gate, Mapping):
+        failures.extend(str(item) for item in feature_audit_gate.get("failures", []))
     warnings = [warning for result in results for warning in result.warnings]
     input_hashes = file_hash_map(Path(result.input_path) for result in results)
     output_hashes = file_hash_map(Path(result.output_path) for result in results)
@@ -1512,6 +1639,7 @@ def write_reports(
         **authority,
         "feature_count": len(FEATURE_COLS),
         "feature_family_counts": {family: len(features) for family, features in FEATURE_FAMILIES.items()},
+        "feature_audit_gate": dict(feature_audit_gate) if isinstance(feature_audit_gate, Mapping) else {},
         "forbidden_feature_leakage_failures": validate_registry(FEATURE_COLS),
         "warning_count": len(warnings),
         "failure_count": len(failures),
@@ -1549,6 +1677,7 @@ def write_reports(
             "feature_count": len(FEATURE_COLS),
             "high_corr_pair_count": corr_pairs,
         },
+        "feature_audit_gate": manifest["feature_audit_gate"],
         "files": [result.to_dict() for result in results],
         "warning_count": len(warnings),
         "failure_count": len(failures),

@@ -972,12 +972,29 @@ def test_process_file_writes_matrix_registries_and_reports(tmp_path: Path) -> No
     assert (reports_root / "baseline_feature_manifest.json").exists()
     assert (reports_root / "baseline_feature_report.json").exists()
     assert (reports_root / "feature_registry.json").exists()
+    assert (reports_root / "feature_audit.json").exists()
     assert (reports_root / "feature_correlation_report.csv").exists()
     registry = json.loads((reports_root / "feature_registry.json").read_text())
     assert registry["feature_families"]["feature_ret_1"] == "baseline_ohlcv"
+    assert registry["feature_audit_gate"]["status"] == "PASS"
+    assert registry["feature_audit_gate"]["feature_count"] == len(FEATURE_COLS)
+    audit_records = json.loads((reports_root / "feature_audit.json").read_text())
+    assert len(audit_records) == len(FEATURE_COLS)
+    first_audit = audit_records[0]
+    for field in (
+        "source_column_artifact",
+        "availability_timestamp",
+        "lookback_window",
+        "economic_rationale",
+        "leakage_risk",
+        "train_only_transform_status",
+        "drift_decay_check_status",
+    ):
+        assert first_audit[field]
     manifest = json.loads((reports_root / "baseline_feature_manifest.json").read_text())
     report = json.loads((reports_root / "baseline_feature_report.json").read_text())
     for payload in (manifest, report):
+        assert payload["feature_audit_gate"]["status"] == "PASS"
         assert payload["input_root"] == input_root.as_posix()
         assert payload["output_root"] == output_root.as_posix()
         assert payload["input_selection"]["profile_input_count"] == 8

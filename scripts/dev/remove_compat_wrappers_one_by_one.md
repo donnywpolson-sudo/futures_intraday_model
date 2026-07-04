@@ -20,10 +20,9 @@ and stop with a concise report before removing another wrapper.
   paths unless the wrapper removal explicitly requires updating an import/module
   path.
 - Preserve behavior through a canonical replacement command/import.
-- Do not remove wrappers documented in `PIPELINE.md`, `README_RUNBOOK.md`,
-  tests, phase tables, or docs as canonical/public entrypoints unless this same
-  one-pass removal explicitly migrates those references and validates the
-  replacement.
+- Do not remove wrappers documented in `PIPELINE.md`, tests, phase tables, or
+  docs as canonical/public entrypoints unless this same one-pass removal
+  explicitly migrates those references and validates the replacement.
 - If a wrapper has any logic beyond delegating imports and `main`, stop and
   report it as not safe for automated wrapper removal.
 
@@ -51,7 +50,7 @@ A file is safe to treat as a compatibility wrapper only if all are true:
 2. Find wrapper candidates:
 
    ```powershell
-   rg -n "Compatibility wrapper|from scripts\\..* import \\*|from scripts\\..* import main|raise SystemExit\\(main\\(\\)\\)" scripts tests PIPELINE.md README.md README_RUNBOOK.md docs
+   rg -n "Compatibility wrapper|from scripts\\..* import \\*|from scripts\\..* import main|raise SystemExit\\(main\\(\\)\\)" scripts tests PIPELINE.md README.md docs
    ```
 
 3. Pick exactly one candidate. Prefer the smallest, clearest wrapper with the
@@ -65,7 +64,7 @@ A file is safe to treat as a compatibility wrapper only if all are true:
 4. Search for public-entrypoint references before deleting anything:
 
    ```powershell
-   rg -n "<old.module.path>|python -m <old.module.path>|<old/path.py>" PIPELINE.md README.md README_RUNBOOK.md docs scripts tests
+   rg -n "<old.module.path>|python -m <old.module.path>|<old/path.py>" PIPELINE.md README.md docs scripts tests
    ```
 
    Classify the candidate as one of:
@@ -84,7 +83,7 @@ A file is safe to treat as a compatibility wrapper only if all are true:
 5. Update all references from the wrapper module to the canonical module:
 
    ```powershell
-   rg -n "<old.module.path>|python -m <old.module.path>|<old/path.py>" PIPELINE.md README.md README_RUNBOOK.md docs scripts tests
+   rg -n "<old.module.path>|python -m <old.module.path>|<old/path.py>" PIPELINE.md README.md docs scripts tests
    ```
 
 6. Delete only that wrapper file.
@@ -111,7 +110,7 @@ A file is safe to treat as a compatibility wrapper only if all are true:
 9. Prove the old path is gone:
 
    ```powershell
-   rg -n "<old.module.path>|python -m <old.module.path>|<old/path.py>" PIPELINE.md README.md README_RUNBOOK.md docs scripts tests
+   rg -n "<old.module.path>|python -m <old.module.path>|<old/path.py>" PIPELINE.md README.md docs scripts tests
    ```
 
    This command should return no matches unless a deliberate changelog note is
@@ -120,7 +119,7 @@ A file is safe to treat as a compatibility wrapper only if all are true:
 10. Run final hygiene:
 
    ```powershell
-   git diff --check -- PIPELINE.md README.md README_RUNBOOK.md docs scripts tests
+   git diff --check -- PIPELINE.md README.md docs scripts tests
    git status --short --untracked-files=all
    ```
 
@@ -133,14 +132,15 @@ Do not automatically delete these root `scripts/*.py` files:
 
 - `__init__.py`: package marker.
 - `build_metric_visualizations.py`: referenced by docs/tests.
-- `check_git_hygiene.py`: referenced by `README_RUNBOOK.md`.
+- `check_git_hygiene.py`: referenced by `README.md`.
 - `databento_auth.py`: shared live Databento auth helper.
 - `export_live_shadow_bundle.py`: live shadow export tool with tests.
 - `live_shadow_runner.py`: live shadow runner used by export/tests.
-- `live_smoke_databento.py`: referenced by `README_RUNBOOK.md` and tests.
+- `live_smoke_databento.py`: covered by live Databento tests.
 - `phase1_raw_contract.py`: shared Phase 1 schema/constants.
 - `profile_scope.py`: shared profile-scope helper.
-- `write_project_inventory.py`: referenced by docs/runbook.
+- `write_project_inventory.py`: inventory utility; do not remove without a
+  dedicated reference and usage audit.
 
 Known likely wrapper candidates must still go through the one-pass proof gate:
 

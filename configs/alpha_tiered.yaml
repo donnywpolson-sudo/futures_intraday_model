@@ -632,6 +632,31 @@ profiles:
     requires_all_market_configs: true
     requires_cost_configs: true
     market_families: *full_market_families
+    accepted_readiness_exceptions:
+      - category: statistics_enrichment_sparse
+        market: ES
+        year: 2026
+        reason: bounded_es2026_statistics_enrichment_sparse_accepted_warning_packet_20260703
+        evidence_paths:
+          - reports/pipeline_audit/local_trade_es2026_p1_repair_plan_v2/readiness_warning_evidence/ES_2026_readiness_warning_evidence.json
+          - reports/pipeline_audit/local_trade_es2026_p1_repair_plan_v2/readiness_warning_evidence/ES_2026_readiness_warning_evidence.md
+        warning_prefixes:
+          - 'statistics enrichment sparse: missing_rows=6 stale_rows=6'
+
+  local_trade_es2026_p1_research_smoke:
+    description: "Candidate research smoke: exact ES 2026 only; not promotion, holdout, forward-validation, paper, or live evidence."
+    intent: local_trade_es2026_p1_research_smoke
+    requirement_set: production_like
+    settings_profile: smoke
+    markets: ["ES"]
+    years: [2026]
+    feature_manifest_profile: tier_3_forward
+    feature_manifest_resolved_profile: tier_3_forward
+    forbid_research_use: false
+    requires_all_market_configs: true
+    requires_cost_configs: true
+    market_families:
+      ES: equity_index
 
   all_raw:
     description: "Inventory every discovered raw parquet file."

@@ -38,6 +38,33 @@
   },
   "hypotheses": [
     {
+      "target_hypothesis_id": "tier1_core_directional_baseline_v1",
+      "status": "REJECTED",
+      "wfa_allowed": false,
+      "target_family": "tier1_core_directional_baseline",
+      "scope": {
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": [
+          "ES",
+          "CL",
+          "ZN",
+          "6E"
+        ],
+        "years": [
+          2023,
+          2024
+        ]
+      },
+      "description": "Pre-registered Tier 1 research thesis: test whether the baseline causal directional target and feature set can produce stable post-cost directional edge across ES, CL, ZN, and 6E before any ES-only retuning or broader robustness work.",
+      "status_reason": "Rejected by bounded Phase 9 Tier 1 market-balanced cost-clearability discovery smoke: STOP_BRANCH_PERMANENTLY. Control comparisons failed, ZN cost drag failed, and market contribution balance failed; this is oracle/feasibility evidence only, not alpha evidence or executable strategy PnL.",
+      "source_reports": [
+        "reports/pipeline_audit/tier1_core_directional_baseline_v1_discovery_smoke_20260704T025853Z.md",
+        "reports/pipeline_audit/tier1_core_directional_baseline_v1_discovery_smoke_20260704T025853Z.json"
+      ],
+      "next_allowed_actions": []
+    },
+    {
       "target_hypothesis_id": "directional_path_quality_target_v1",
       "status": "REJECTED",
       "wfa_allowed": false,
@@ -63,6 +90,234 @@
         "reports/pipeline_audit/directional_path_quality_target_v1_smoke_20260617T095912Z.json"
       ],
       "next_allowed_actions": []
+    },
+    {
+      "target_hypothesis_id": "es_30m_directional_extension_target_v1",
+      "status": "REJECTED",
+      "wfa_allowed": false,
+      "target_family": "es_directional_extension_30m",
+      "scope": {
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": [
+          "ES"
+        ],
+        "years": [
+          2023,
+          2024
+        ]
+      },
+      "description": "Pre-registered Phase 9 ES-only target-construction smoke candidate using next-open entry and 30-minute same-session directional extension labels.",
+      "status_reason": "Rejected by bounded discovery smoke: STOP_UNSTABLE_FOLDS, only 1 of 4 discovery folds had positive top net, and total discovery top net was negative.",
+      "source_reports": [
+        "reports/pipeline_audit/es_30m_directional_extension_target_v1_discovery_smoke.md",
+        "reports/pipeline_audit/es_30m_directional_extension_target_v1_discovery_smoke.json"
+      ],
+      "next_allowed_actions": []
+    },
+    {
+      "target_hypothesis_id": "vol_scaled_terminal_30m_v1",
+      "status": "REJECTED",
+      "wfa_allowed": false,
+      "target_family": "es_vol_scaled_terminal_30m",
+      "scope": {
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": [
+          "ES"
+        ],
+        "years": [
+          2023,
+          2024
+        ]
+      },
+      "description": "Pre-registered Phase 9 ES-only target-construction smoke candidate using next-open entry, 30-minute terminal exit, and a causal rolling-volatility-scaled deadzone.",
+      "status_reason": "Rejected by bounded ES-only discovery smoke: STOP_UNSTABLE_FOLDS, 0 of 4 discovery folds had positive top net, and total discovery top net was negative.",
+      "source_reports": [
+        "reports/pipeline_audit/es_30m_target_triage_v1_vol_scaled_terminal_30m_v1_discovery_smoke.md",
+        "reports/pipeline_audit/es_30m_target_triage_v1_vol_scaled_terminal_30m_v1_discovery_smoke.json"
+      ],
+      "next_allowed_actions": []
+    },
+    {
+      "target_hypothesis_id": "triple_barrier_30m_v1",
+      "status": "REJECTED",
+      "wfa_allowed": false,
+      "target_family": "es_triple_barrier_30m",
+      "scope": {
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": [
+          "ES"
+        ],
+        "years": [
+          2023,
+          2024
+        ]
+      },
+      "description": "Pre-registered Phase 9 ES-only target-construction smoke candidate using next-open entry and 30-minute causal rolling-volatility-scaled profit/stop barriers.",
+      "status_reason": "Rejected by bounded ES-only discovery smoke: STOP_UNSTABLE_FOLDS, 0 of 4 discovery folds had positive top net, and total discovery top net was negative.",
+      "source_reports": [
+        "reports/pipeline_audit/es_30m_target_triage_v1_triple_barrier_30m_v1_discovery_smoke.md",
+        "reports/pipeline_audit/es_30m_target_triage_v1_triple_barrier_30m_v1_discovery_smoke.json"
+      ],
+      "next_allowed_actions": []
+    },
+    {
+      "target_hypothesis_id": "prior_extreme_failure_30m_v1",
+      "status": "REJECTED",
+      "wfa_allowed": false,
+      "target_family": "es_prior_extreme_failure_30m",
+      "scope": {
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": [
+          "ES"
+        ],
+        "years": [
+          2023,
+          2024
+        ]
+      },
+      "description": "Pre-registered Phase 9 ES-only target-construction smoke candidate conditioned on probing a completed prior-session high/low, closing back inside, and then moving in the failure direction over the next 30 minutes.",
+      "status_reason": "Rejected by bounded ES-only discovery smoke: STOP_CLASS_COLLAPSE, long/short event counts were below minimum, duplicate overlap exceeded the cap, only 1 of 4 discovery folds had positive top net, and total discovery top net was negative.",
+      "source_reports": [
+        "reports/pipeline_audit/es_30m_target_triage_v1_prior_extreme_failure_30m_v1_discovery_smoke.md",
+        "reports/pipeline_audit/es_30m_target_triage_v1_prior_extreme_failure_30m_v1_discovery_smoke.json"
+      ],
+      "next_allowed_actions": []
+    },
+    {
+      "target_hypothesis_id": "vwap_reversion_30m_v1",
+      "status": "REJECTED",
+      "wfa_allowed": false,
+      "target_family": "es_vwap_reversion_30m",
+      "scope": {
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": [
+          "ES"
+        ],
+        "years": [
+          2023,
+          2024
+        ]
+      },
+      "description": "Pre-registered Phase 9 ES-only target-construction smoke candidate conditioned on stretching away from causal same-session VWAP and then moving back toward VWAP over the next 30 minutes.",
+      "status_reason": "Rejected by bounded ES-only locked smoke after discovery and confirmation passes: STOP_UNSTABLE_FOLDS, only 1 of 4 locked folds had positive top net, and total locked top net was negative.",
+      "source_reports": [
+        "reports/pipeline_audit/es_30m_target_triage_v1_vwap_reversion_30m_v1_discovery_smoke.md",
+        "reports/pipeline_audit/es_30m_target_triage_v1_vwap_reversion_30m_v1_discovery_smoke.json",
+        "reports/pipeline_audit/es_30m_target_triage_v1_vwap_reversion_30m_v1_confirmation_smoke.md",
+        "reports/pipeline_audit/es_30m_target_triage_v1_vwap_reversion_30m_v1_confirmation_smoke.json",
+        "reports/pipeline_audit/es_30m_target_triage_v1_vwap_reversion_30m_v1_locked_smoke.md",
+        "reports/pipeline_audit/es_30m_target_triage_v1_vwap_reversion_30m_v1_locked_smoke.json"
+      ],
+      "next_allowed_actions": []
+    },
+    {
+      "target_hypothesis_id": "opportunity_risk_asymmetry_30m_v1",
+      "status": "REJECTED",
+      "wfa_allowed": false,
+      "target_family": "es_opportunity_risk_asymmetry_30m",
+      "scope": {
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": [
+          "ES"
+        ],
+        "years": [
+          2023,
+          2024
+        ]
+      },
+      "description": "Pre-registered Phase 9 ES-only target-construction smoke candidate comparing future 30-minute path opportunity versus adverse path risk from the next-open entry using a fixed cost-plus-profit risk floor.",
+      "status_reason": "Rejected by bounded ES-only discovery smoke: STOP_UNSTABLE_FOLDS, only 1 of 4 discovery folds had positive top net, and total discovery top net was negative.",
+      "source_reports": [
+        "reports/pipeline_audit/es_30m_target_triage_v1_opportunity_risk_asymmetry_30m_v1_discovery_smoke.md",
+        "reports/pipeline_audit/es_30m_target_triage_v1_opportunity_risk_asymmetry_30m_v1_discovery_smoke.json"
+      ],
+      "next_allowed_actions": []
+    },
+    {
+      "target_hypothesis_id": "opportunity_risk_component_rank_30m_v1",
+      "status": "REJECTED",
+      "wfa_allowed": false,
+      "target_family": "es_opportunity_risk_component_rank_30m",
+      "scope": {
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": [
+          "ES"
+        ],
+        "years": [
+          2023,
+          2024
+        ]
+      },
+      "description": "Pre-registered Phase 9 ES-only target-construction smoke candidate that fits continuous 30-minute long/short opportunity and risk components first, then tests whether predicted high-opportunity/low-risk setup rankings have stable realized rank uplift before any directional promotion.",
+      "status_reason": "Rejected by bounded ES-only component-rank discovery smoke: STOP_UNSTABLE_RANK_UPLIFT, only 1 of 4 discovery folds had positive rank uplift, and aggregate top rank-score uplift was negative.",
+      "source_reports": [
+        "reports/pipeline_audit/es_30m_target_triage_v1_opportunity_risk_component_rank_30m_v1_discovery_smoke.json",
+        "reports/pipeline_audit/es_30m_target_triage_v1_opportunity_risk_component_rank_30m_v1_discovery_smoke.md"
+      ],
+      "next_allowed_actions": []
+    },
+    {
+      "target_hypothesis_id": "opening_range_acceptance_continuation_30m_v1",
+      "status": "FROZEN",
+      "wfa_allowed": true,
+      "target_family": "es_opening_range_acceptance_continuation_30m",
+      "scope": {
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": [
+          "ES"
+        ],
+        "years": [
+          2023,
+          2024
+        ]
+      },
+      "description": "Pre-registered Phase 9 ES-only target-construction candidate testing whether post-opening-range acceptance outside the completed 30-minute opening range predicts same-session 30-minute continuation after costs, without reusing stopped terminal, barrier, VWAP-reversion, prior-extreme-failure, opportunity/risk, Tier 1 baseline, or cost-clearability rescue branches.",
+      "status_reason": "Frozen after discovery, confirmation, and locked bounded ES-only target-construction smokes passed once. Discovery: DISCOVERY_PASS, top total net 37929.0, 4 of 4 positive folds. Confirmation: CONFIRMATION_PASS, top total net 45715.0, 4 of 4 positive folds. Locked: LOCKED_PASS, failure_count=0, all gates passed, top total net 50403.0, 4 of 4 locked folds positive, duplicate overlap 0.6320268179473956. This is target-smoke readiness evidence only; WFA/modeling, Phase 8, promotion, paper, and live execution remain unrun and require separate bounded approval.",
+      "pre_registration": {
+        "research_question": "After the first 30 minutes of the ES session, does a causal break and acceptance outside the completed opening range identify continuation opportunities over the next 30 minutes that are learnable from existing baseline features and survive cost-aware discovery gates?",
+        "entry_condition": "Candidate event rows are ES rows after opening_range_30_ready where price is outside the completed opening-range high or low, with direction set by the side of the break. The future implementation must use only information available at the event timestamp for the entry condition.",
+        "target_definition": "Use next-open entry, 30-minute same-session horizon, existing path-validity filters, non-overlapping events, configured ES costs, and a continuation label that requires the future path to clear round-turn cost ticks plus min_profit_ticks in the breakout direction.",
+        "controls": [
+          "compare duplicate overlap with current 15m deadzone target",
+          "require class-balance and event-count gates",
+          "require fold-stability gates on ES_research_0001 through ES_research_0004",
+          "do not tune thresholds, features, costs, folds, markets, or years after seeing discovery output"
+        ],
+        "discovery_success_rule": "Discovery can advance only if the registered bounded smoke reports DISCOVERY_PASS with positive stage net, at least half of discovery folds positive, nonconstant predictions, sufficient event/class balance, and duplicate overlap at or below the registered cap.",
+        "stop_rules": [
+          "STOP_INPUT_FAILURE on stale/missing registry, split, feature, cost, or matrix evidence",
+          "STOP_CLASS_COLLAPSE if long, short, or flat events fail minimum count or rate gates",
+          "STOP_DUPLICATE_TARGET if overlap with the current 15m deadzone target exceeds the registered cap",
+          "STOP_UNSTABLE_FOLDS if fewer than half of discovery folds have positive top net",
+          "STOP_DISCOVERY_NEGATIVE_NET if discovery top net is nonpositive"
+        ],
+        "forbidden_actions": [
+          "no WFA/modeling, Phase 8, promotion, paper, or live execution without separate bounded next-phase approval",
+          "no holdout or forward rows for selection",
+          "no threshold, feature, cost, fold, market, or year retuning after discovery output",
+          "no reuse as a new hypothesis if stopped"
+        ],
+        "implementation_status": "Implemented in the Phase 9 ES 30m target smoke harness; discovery, confirmation, and locked smokes passed once; next-phase work requires separate bounded approval."
+      },
+      "source_reports": [
+        "reports/pipeline_audit/es_30m_target_smoke_opening_range_acceptance_continuation_30m_v1_discovery_smoke.md",
+        "reports/pipeline_audit/es_30m_target_smoke_opening_range_acceptance_continuation_30m_v1_discovery_smoke.json",
+        "reports/pipeline_audit/es_30m_target_smoke_opening_range_acceptance_continuation_30m_v1_confirmation_smoke.md",
+        "reports/pipeline_audit/es_30m_target_smoke_opening_range_acceptance_continuation_30m_v1_confirmation_smoke.json",
+        "reports/pipeline_audit/es_30m_target_smoke_opening_range_acceptance_continuation_30m_v1_locked_smoke.md",
+        "reports/pipeline_audit/es_30m_target_smoke_opening_range_acceptance_continuation_30m_v1_locked_smoke.json"
+      ],
+      "next_allowed_actions": [
+        "PREPARE_BOUNDED_NEXT_PHASE_PLAN"
+      ]
     }
   ]
 }

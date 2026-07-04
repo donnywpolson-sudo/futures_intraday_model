@@ -216,6 +216,75 @@ def prediction_artifact_evidence_failures(manifest: Mapping[str, Any]) -> list[s
     return failures
 
 
+def build_model_risk_gate(
+    model_config: Mapping[str, Any],
+    model_specs: list[ModelSpec],
+    diagnostics: list[dict[str, Any]],
+) -> dict[str, Any]:
+    policy = model_config.get("policy", {})
+    policy = policy if isinstance(policy, Mapping) else {}
+    calibration = model_config.get("calibration", {})
+    calibration = calibration if isinstance(calibration, Mapping) else {}
+    dummy_fallback_count = sum(1 for item in diagnostics if item.get("dummy_fallback_used") is True)
+    convergence_warning_count = sum(
+        1
+        for item in diagnostics
+        if any("convergence" in str(warning).lower() for warning in item.get("warnings", []))
+    )
+    failures: list[str] = []
+    if policy.get("hyperparameter_tuning_allowed_initially") is not False:
+        failures.append("hyperparameter_tuning_allowed_initially must be false")
+    if policy.get("random_splits_allowed") is not False:
+        failures.append("random_splits_allowed must be false")
+    if policy.get("final_holdout_tuning_allowed") is not False:
+        failures.append("final_holdout_tuning_allowed must be false")
+    if convergence_warning_count:
+        failures.append("model convergence warnings must be zero")
+    trust_blockers = [
+        "feature-importance stability is registered for pre-promotion review and is not standalone trust evidence"
+    ]
+    return {
+        "gate_name": "model_risk_gate",
+        "status": "PASS_METADATA_READY" if not failures else "FAIL",
+        "model_risk_metadata_ready": not failures,
+        "model_trust_ready": False,
+        "model_trust_blockers": trust_blockers if not failures else [*failures, *trust_blockers],
+        "failure_count": len(failures),
+        "failures": failures,
+        "hyperparameter_budget": {
+            "hyperparameter_tuning_allowed_initially": policy.get(
+                "hyperparameter_tuning_allowed_initially"
+            ),
+            "budget": "fixed Phase 7A baseline controls only; no search in this runner",
+        },
+        "seed_policy": {
+            "random_splits_allowed": policy.get("random_splits_allowed"),
+            "determinism_source": "chronological split_plan plus deterministic sklearn baseline estimators",
+        },
+        "calibration": {
+            "calibration_id": NO_CALIBRATION_ID,
+            "test_fold_fit_allowed": calibration.get("test_fold_fit_allowed", False),
+            "final_holdout_fit_allowed": calibration.get("final_holdout_fit_allowed", False),
+            "method": "no calibration fit in Phase 6; scores carry no_calibration marker",
+        },
+        "class_imbalance_handling": {
+            "class_counts_recorded_per_fold": True,
+            "dummy_fallback_count": dummy_fallback_count,
+            "dummy_fallback_policy": "diagnostic only; class-prior-only predictions fail promotion review",
+        },
+        "regularization": {
+            "ridge_regression": "Ridge(alpha=1.0)",
+            "logistic_regression": "LogisticRegression(max_iter=1000)",
+        },
+        "feature_importance_stability": {
+            "status": "registered_for_pre_promotion_review",
+            "evidence": "fold diagnostics and fixed feature set recorded; promotion requires stability review",
+        },
+        "model_families": sorted({spec.family for spec in model_specs}),
+        "model_ids": [spec.model_id for spec in model_specs],
+    }
+
+
 def _stable_hash(payload: object) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode(
         "utf-8"
@@ -1198,6 +1267,9 @@ def run_wfa(
             f"stale prediction output exists from a previous run: {stale_output['stale_output_path']}"
         )
 
+    model_risk_gate = build_model_risk_gate(model_config, model_specs, diagnostics)
+    failures.extend(str(item) for item in model_risk_gate["failures"])
+
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "git_commit": _git_commit(),
@@ -1212,6 +1284,7 @@ def run_wfa(
         "models": [spec.__dict__ for spec in model_specs],
         "feature_count": len(feature_cols),
         "feature_set": feature_set.manifest,
+        "model_risk_gate": model_risk_gate,
         "fold_count": len(selectable_folds),
         "unfiltered_selectable_fold_count": unfiltered_selectable_count,
         "fold_selection": {
@@ -1265,6 +1338,7 @@ def run_wfa(
         "model_ids": [spec.model_id for spec in model_specs],
         "target_names": [spec.target for spec in model_specs],
         "feature_count": len(feature_cols),
+        "model_risk_gate": model_risk_gate,
         "fold_count": len(selectable_folds),
         "unfiltered_selectable_fold_count": unfiltered_selectable_count,
         "fold_selection": {

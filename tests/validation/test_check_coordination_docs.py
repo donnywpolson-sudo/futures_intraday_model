@@ -13,10 +13,10 @@ def _write_valid_coordination_tree(root: Path) -> None:
         "\n".join(
             [
                 "# Project Overview",
-                "- Pipeline authority: use `PIPELINE.md` for phase order.",
+                "- Project outline authority: use `PROJECT_OUTLINE.md` for phase order.",
                 "- Repo guidance authority: use `AGENTS.md` for agent workflow.",
                 "- Handoff role: this file is mutable cross-run state.",
-                "- Solo Codex files: keep `AGENTS.md` and `CODEX_HANDOFF.md` only.",
+                "- Solo Codex files: keep `AGENTS.md`, `PROJECT_OUTLINE.md`, and `CODEX_HANDOFF.md` only.",
                 "# Current State",
                 "# Recent Changes",
                 "# Active Tasks",
@@ -30,12 +30,43 @@ def _write_valid_coordination_tree(root: Path) -> None:
         "\n".join(
             [
                 "# AGENTS",
-                "## Coordination source of truth",
-                "- `PIPELINE.md` is the project outline and runnable workflow authority.",
+                "## Project-Specific Rules",
+                "### Coordination Source Of Truth",
+                "- `PROJECT_OUTLINE.md` is the project outline, workflow, and runnable command authority.",
+                "- `PIPELINE.md`, when kept, is a compatibility pointer for older references only.",
                 "- `AGENTS.md` is the durable agent-rule authority.",
                 "- `CODEX_HANDOFF.md` is mutable cross-run state.",
                 "- Update after meaningful multi-step work, discovered blockers, research decisions, changed next steps, or any fresh-thread continuation need.",
                 "- At the end of each multi-step run, update `CODEX_HANDOFF.md` before the final response.",
+                "## General Codex Rules For This Repo",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (root / "PROJECT_OUTLINE.md").write_text(
+        "\n".join(
+            [
+                "# Project Outline",
+                "`AGENTS.md` is the active operating rulebook.",
+                "This file is the project outline, workflow, and runnable command authority.",
+                "Detailed runnable commands live in this file under `Detailed Pipeline Runbook`.",
+                "`PROJECT_OUTLINE.md`: project objective, layout, phase workflow, detailed runnable commands.",
+                "This section is the authoritative workflow map.",
+                "Feature promotion requires an audit record.",
+                "## Production Deferral Gate",
+                "Live/paper claims remain deferred.",
+                "contract-specific execution mapping.",
+                "## Detailed Pipeline Runbook",
+                "Feature audit gate:",
+                "Model risk gate:",
+                "Statistical validity gate:",
+                "Probability of Backtest Overfitting.",
+                "Deflated Sharpe.",
+                "Probabilistic Sharpe.",
+                "bootstrap confidence intervals.",
+                "multiple-testing adjustment.",
+                "parameter stability.",
+                "regime breakdowns.",
             ]
         ),
         encoding="utf-8",
@@ -44,26 +75,62 @@ def _write_valid_coordination_tree(root: Path) -> None:
         "\n".join(
             [
                 "# Pipeline",
-                "This file is the repo authority for pipeline rules, layout, runnable steps.",
-                "Do not reintroduce parallel phase checklists.",
+                "The detailed pipeline runbook has been merged into `PROJECT_OUTLINE.md`.",
+                "This file is kept only as a compatibility pointer.",
+                "Do not add parallel phase checklists or runnable command catalogs here.",
             ]
         ),
         encoding="utf-8",
     )
     (root / "README.md").write_text(
-        "Use `PIPELINE.md` for the authoritative downloader smoke test. "
-        "Keep runnable pipeline commands there so setup docs do not drift.",
-        encoding="utf-8",
-    )
-    (root / "README_RUNBOOK.md").write_text(
-        "Use `PIPELINE.md` for the authoritative pipeline rebuild order, "
-        "validation coverage command, phase commands, acceptance checks, and current stop rules.",
+        "Use `PROJECT_OUTLINE.md` for the authoritative project outline. "
+        "`PIPELINE.md` is only a compatibility pointer.",
         encoding="utf-8",
     )
 
 
 def test_current_repo_coordination_docs_pass() -> None:
     assert check_coordination_docs(ROOT) == []
+
+
+def test_pipeline_pointer_is_optional_when_absent(tmp_path: Path) -> None:
+    _write_valid_coordination_tree(tmp_path)
+    (tmp_path / "PIPELINE.md").unlink()
+
+    assert check_coordination_docs(tmp_path) == []
+
+
+def test_pipeline_pointer_is_validated_when_present(tmp_path: Path) -> None:
+    _write_valid_coordination_tree(tmp_path)
+    (tmp_path / "PIPELINE.md").write_text("# Pipeline\nstale runnable catalog", encoding="utf-8")
+
+    errors = check_coordination_docs(tmp_path)
+
+    assert any(
+        error.startswith(
+            "PIPELINE.md missing required phrase: The detailed pipeline runbook"
+        )
+        for error in errors
+    )
+
+
+def test_project_outline_missing_research_gate_fails(tmp_path: Path) -> None:
+    _write_valid_coordination_tree(tmp_path)
+    project_outline = tmp_path / "PROJECT_OUTLINE.md"
+    project_outline.write_text(
+        project_outline.read_text(encoding="utf-8").replace(
+            "Feature audit gate:\n",
+            "",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = check_coordination_docs(tmp_path)
+
+    assert (
+        "PROJECT_OUTLINE.md missing required phrase: Feature audit gate:"
+        in errors
+    )
 
 
 def test_missing_handoff_section_fails(tmp_path: Path) -> None:
@@ -94,7 +161,7 @@ def test_missing_role_links_fail(tmp_path: Path) -> None:
     handoff = tmp_path / "CODEX_HANDOFF.md"
     handoff.write_text(
         handoff.read_text(encoding="utf-8").replace(
-            "- Pipeline authority: use `PIPELINE.md` for phase order.\n",
+            "- Project outline authority: use `PROJECT_OUTLINE.md` for phase order.\n",
             "",
         ),
         encoding="utf-8",
@@ -103,6 +170,8 @@ def test_missing_role_links_fail(tmp_path: Path) -> None:
     errors = check_coordination_docs(tmp_path)
 
     assert any(
-        error.startswith("CODEX_HANDOFF.md missing required phrase: Pipeline authority")
+        error.startswith(
+            "CODEX_HANDOFF.md missing required phrase: Project outline authority"
+        )
         for error in errors
     )

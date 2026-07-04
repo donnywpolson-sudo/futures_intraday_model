@@ -360,6 +360,9 @@ def _write_roll_maturity_exception_config(
 
 
 STATUS_SPARSE_TEST_WARNING = "synthetic threshold breached: rows_pct=81.818182 max_gap_minutes=10"
+STATISTICS_ENRICHMENT_SPARSE_TEST_WARNING = (
+    "statistics enrichment sparse: missing_rows=2 stale_rows=2"
+)
 DEGRADED_RAW_QUALITY_TEST_WARNING = (
     "degraded threshold breached: rows_pct=66.666667 bars=2 sessions=1"
 )
@@ -402,6 +405,44 @@ def _write_status_sparse_exception_config(
                 f"        market: {exception_market}",
                 "        year: 2024",
                 "        reason: accepted test status-sparse review",
+                "        evidence_paths:",
+                f"          - {evidence_path.as_posix()}",
+                "        warning_prefixes:",
+                f"          - '{warning}'",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_statistics_enrichment_sparse_exception_config(
+    path: Path,
+    *,
+    profile_market: str,
+    exception_market: str,
+    evidence_path: Path,
+    warning: str = STATISTICS_ENRICHMENT_SPARSE_TEST_WARNING,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "defaults:",
+                "  years: [2024]",
+                "  max_synthetic_gap_minutes: 120",
+                "  max_synthetic_rows_pct: 2.0",
+                "  max_degraded_rows_pct: 1.0",
+                "  max_roll_window_rows_pct: 1.0",
+                "  require_roll_metadata_for_profiles: []",
+                "profiles:",
+                "  tier_0:",
+                f"    markets: [{profile_market}]",
+                "    years: [2024]",
+                "    accepted_readiness_exceptions:",
+                "      - category: statistics_enrichment_sparse",
+                f"        market: {exception_market}",
+                "        year: 2024",
+                "        reason: accepted test statistics-enrichment sparse review",
                 "        evidence_paths:",
                 f"          - {evidence_path.as_posix()}",
                 "        warning_prefixes:",
@@ -967,6 +1008,26 @@ def _status_sparse_rows() -> list[dict[str, object]]:
         row = _readiness_raw_row(ts_event, close=close)
         row["status_missing"] = True
         row["status_stale"] = True
+        rows.append(row)
+    return rows
+
+
+def _statistics_enrichment_sparse_rows(
+    *,
+    include_status_gap: bool = False,
+    degraded: bool = False,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for index, ts_event in enumerate(
+        ["2024-01-02T15:00:00Z", "2024-01-02T15:01:00Z"]
+    ):
+        row = _readiness_raw_row(ts_event, close=100.5 + index)
+        row["statistics_missing"] = True
+        row["statistics_stale"] = True
+        row["status_missing"] = include_status_gap
+        row["status_stale"] = include_status_gap
+        row["data_quality_status"] = "degraded" if degraded else "available"
+        row["data_quality_degraded"] = degraded
         rows.append(row)
     return rows
 
@@ -2223,6 +2284,188 @@ def test_phase2_readiness_rejects_overbroad_status_sparse_warning_prefix(
     report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
     _write_tier0_alignment(report_path, raw_root)
     _write_raw(raw_root / "ES" / "2024.parquet", _status_sparse_rows())
+
+    with pytest.raises(ValueError, match="exact current warning strings"):
+        build_phase2_readiness_report(
+            profile="tier_0",
+            raw_root=raw_root,
+            raw_alignment_report=report_path,
+            profile_config_path=profile_config,
+        )
+
+
+def test_phase2_readiness_accepts_exact_statistics_enrichment_sparse_exception(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "reports" / "statistics_sparse_decision.md"
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text(
+        "accepted statistics-enrichment sparse test decision\n",
+        encoding="utf-8",
+    )
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_statistics_enrichment_sparse_exception_config(
+        profile_config,
+        profile_market="ES",
+        exception_market="ES",
+        evidence_path=evidence_path,
+    )
+    raw_root = tmp_path / "data" / "raw"
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(raw_root / "ES" / "2024.parquet", _statistics_enrichment_sparse_rows())
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        output_root=output_root,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "PASS"
+    assert report["blocker_count"] == 0
+    assert report["accepted_exception_count"] == 1
+    assert report["accepted_exception_failure_count"] == 0
+    accepted = report["accepted_readiness_exceptions"][0]
+    assert accepted["market"] == "ES"
+    assert accepted["year"] == 2024
+    assert accepted["category"] == "statistics_enrichment_sparse"
+    assert accepted["warnings"] == [STATISTICS_ENRICHMENT_SPARSE_TEST_WARNING]
+    assert accepted["status_enrichment_missing_rows"] == 0
+    assert accepted["status_enrichment_stale_rows"] == 0
+    assert accepted["statistics_enrichment_missing_rows"] == 2
+    assert accepted["statistics_enrichment_stale_rows"] == 2
+    assert accepted["degraded_bar_rows"] == 0
+    assert not (output_root / "ES" / "2024.parquet").exists()
+
+
+def test_phase2_readiness_rejects_statistics_exception_missing_evidence(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "reports" / "missing_statistics_sparse_decision.md"
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_statistics_enrichment_sparse_exception_config(
+        profile_config,
+        profile_market="ES",
+        exception_market="ES",
+        evidence_path=evidence_path,
+    )
+    raw_root = tmp_path / "data" / "raw"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(raw_root / "ES" / "2024.parquet", _statistics_enrichment_sparse_rows())
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["blocker_count"] == 1
+    assert report["accepted_exception_count"] == 0
+    assert report["accepted_exception_failure_count"] == 1
+    assert "evidence missing" in report["accepted_readiness_exception_failures"][0]
+
+
+def test_phase2_readiness_rejects_statistics_exception_with_status_gap(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "reports" / "statistics_sparse_decision.md"
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text(
+        "accepted statistics-enrichment sparse test decision\n",
+        encoding="utf-8",
+    )
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_statistics_enrichment_sparse_exception_config(
+        profile_config,
+        profile_market="ES",
+        exception_market="ES",
+        evidence_path=evidence_path,
+    )
+    raw_root = tmp_path / "data" / "raw"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(
+        raw_root / "ES" / "2024.parquet",
+        _statistics_enrichment_sparse_rows(include_status_gap=True),
+    )
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["accepted_exception_count"] == 0
+    assert report["accepted_exception_failure_count"] == 1
+    assert "stale or unmatched" in report["accepted_readiness_exception_failures"][0]
+
+
+def test_phase2_readiness_rejects_statistics_exception_with_degraded_rows(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "reports" / "statistics_sparse_decision.md"
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text(
+        "accepted statistics-enrichment sparse test decision\n",
+        encoding="utf-8",
+    )
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_statistics_enrichment_sparse_exception_config(
+        profile_config,
+        profile_market="ES",
+        exception_market="ES",
+        evidence_path=evidence_path,
+    )
+    raw_root = tmp_path / "data" / "raw"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(
+        raw_root / "ES" / "2024.parquet",
+        _statistics_enrichment_sparse_rows(degraded=True),
+    )
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["accepted_exception_count"] == 0
+    assert report["accepted_exception_failure_count"] == 1
+    assert "stale or unmatched" in report["accepted_readiness_exception_failures"][0]
+
+
+def test_phase2_readiness_rejects_overbroad_statistics_warning_prefix(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "reports" / "statistics_sparse_decision.md"
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text(
+        "accepted statistics-enrichment sparse test decision\n",
+        encoding="utf-8",
+    )
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_statistics_enrichment_sparse_exception_config(
+        profile_config,
+        profile_market="ES",
+        exception_market="ES",
+        evidence_path=evidence_path,
+        warning="statistics enrichment sparse",
+    )
+    raw_root = tmp_path / "data" / "raw"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(raw_root / "ES" / "2024.parquet", _statistics_enrichment_sparse_rows())
 
     with pytest.raises(ValueError, match="exact current warning strings"):
         build_phase2_readiness_report(

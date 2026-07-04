@@ -37,8 +37,8 @@ Decision: `CONDITIONAL_GO_RAW_SOURCE_AND_CANONICAL_PHASE2_460_ONLY`.
 - The worktree remains dirty with pre-existing code, config, report, and test
   changes outside the documentation/audit-readiness scope.
 - Deleted tracked docs were restored before this packet was written:
-  `PIPELINE.md`, `README_RUNBOOK.md`, `DATA REBUILD.md`, `RESOURCES.md`, and
-  the tracked `docs/*` files.
+  `PIPELINE.md`, `DATA REBUILD.md`, `RESOURCES.md`, and the tracked `docs/*`
+  files.
 - `reports/data_manifest/master_data_health_summary.md` reports:
   - expected market/year rows: `527`
   - `raw_parquet_present`: `527/527`
@@ -135,7 +135,7 @@ Recommended checks after this packet is accepted:
 git status --short
 Test-Path PIPELINE.md
 Test-Path docs
-rg -n "audit_readiness_packet|PIPELINE.md|raw/source|Phase 2" README.md PIPELINE.md README_RUNBOOK.md docs
+rg -n "audit_readiness_packet|PIPELINE.md|raw/source|Phase 2" README.md PIPELINE.md docs
 python -m pytest tests/validation/test_refresh_master_data_health_matrix.py tests/validation/test_audit_raw_dbn_alignment.py -q
 ```
 

@@ -24,15 +24,18 @@ RETIRED_COORDINATION_PATHS = (
 )
 
 HANDOFF_REQUIRED_PHRASES = (
-    "Pipeline authority: use `PIPELINE.md`",
+    "Project outline authority: use `PROJECT_OUTLINE.md`",
     "Repo guidance authority: use `AGENTS.md`",
     "Handoff role: this file is mutable cross-run state",
-    "Solo Codex files: keep `AGENTS.md` and `CODEX_HANDOFF.md` only",
+    "Solo Codex files: keep `AGENTS.md`, `PROJECT_OUTLINE.md`, and `CODEX_HANDOFF.md` only",
 )
 
 AGENTS_REQUIRED_PHRASES = (
-    "## Coordination source of truth",
-    "`PIPELINE.md` is the project outline and runnable workflow authority",
+    "## Project-Specific Rules",
+    "## General Codex Rules For This Repo",
+    "### Coordination Source Of Truth",
+    "`PROJECT_OUTLINE.md` is the project outline, workflow, and runnable command authority",
+    "`PIPELINE.md`, when kept, is a compatibility pointer for older references only",
     "`AGENTS.md` is the durable agent-rule authority",
     "`CODEX_HANDOFF.md` is mutable cross-run state",
     "meaningful multi-step work",
@@ -43,26 +46,51 @@ AGENTS_REQUIRED_PHRASES = (
     "At the end of each multi-step run, update `CODEX_HANDOFF.md`",
 )
 
+PROJECT_OUTLINE_REQUIRED_PHRASES = (
+    "`AGENTS.md` is the active operating rulebook",
+    "This file is the project outline, workflow, and runnable command authority",
+    "Detailed runnable commands live in this file under `Detailed Pipeline Runbook`",
+    "`PROJECT_OUTLINE.md`: project objective, layout, phase workflow, detailed runnable commands",
+    "This section is the authoritative workflow map",
+    "Feature promotion requires an audit record",
+    "## Production Deferral Gate",
+    "Live/paper claims remain deferred",
+    "contract-specific execution mapping",
+    "## Detailed Pipeline Runbook",
+    "Feature audit gate:",
+    "Model risk gate:",
+    "Statistical validity gate:",
+    "Probability of Backtest Overfitting",
+    "Deflated Sharpe",
+    "Probabilistic Sharpe",
+    "bootstrap confidence intervals",
+    "multiple-testing adjustment",
+    "parameter stability",
+    "regime breakdowns",
+)
+
 PIPELINE_REQUIRED_PHRASES = (
-    "This file is the repo authority for pipeline rules, layout, runnable steps",
-    "do not reintroduce parallel phase checklists",
+    "The detailed pipeline runbook has been merged into `PROJECT_OUTLINE.md`",
+    "This file is kept only as a compatibility pointer",
+    "add parallel phase checklists or runnable command catalogs here",
 )
 
 README_REQUIRED_PHRASES = (
-    "Use `PIPELINE.md` for the authoritative downloader smoke test",
-    "Keep runnable pipeline commands there so setup docs do not",
+    "Use `PROJECT_OUTLINE.md` for the authoritative project outline",
+    "`PIPELINE.md` is only a compatibility pointer",
 )
-
-RUNBOOK_REQUIRED_PHRASES = (
-    "Use `PIPELINE.md` for the authoritative pipeline rebuild order",
-    "validation coverage command, phase commands, acceptance checks",
-)
-
 
 def _read_required(root: Path, relative_path: str, errors: list[str]) -> str:
     path = root / relative_path
     if not path.is_file():
         errors.append(f"missing required file: {relative_path}")
+        return ""
+    return path.read_text(encoding="utf-8")
+
+
+def _read_optional(root: Path, relative_path: str) -> str:
+    path = root / relative_path
+    if not path.is_file():
         return ""
     return path.read_text(encoding="utf-8")
 
@@ -111,9 +139,9 @@ def check_coordination_docs(root: Path) -> list[str]:
 
     handoff = _read_required(root, "CODEX_HANDOFF.md", errors)
     agents = _read_required(root, "AGENTS.md", errors)
-    pipeline = _read_required(root, "PIPELINE.md", errors)
+    project_outline = _read_required(root, "PROJECT_OUTLINE.md", errors)
+    pipeline = _read_optional(root, "PIPELINE.md")
     readme = _read_required(root, "README.md", errors)
-    runbook = _read_required(root, "README_RUNBOOK.md", errors)
 
     if handoff:
         _check_required_handoff_sections(handoff, errors)
@@ -130,6 +158,13 @@ def check_coordination_docs(root: Path) -> list[str]:
             phrases=AGENTS_REQUIRED_PHRASES,
             errors=errors,
         )
+    if project_outline:
+        _require_phrases(
+            project_outline,
+            relative_path="PROJECT_OUTLINE.md",
+            phrases=PROJECT_OUTLINE_REQUIRED_PHRASES,
+            errors=errors,
+        )
     if pipeline:
         _require_phrases(
             pipeline,
@@ -142,13 +177,6 @@ def check_coordination_docs(root: Path) -> list[str]:
             readme,
             relative_path="README.md",
             phrases=README_REQUIRED_PHRASES,
-            errors=errors,
-        )
-    if runbook:
-        _require_phrases(
-            runbook,
-            relative_path="README_RUNBOOK.md",
-            phrases=RUNBOOK_REQUIRED_PHRASES,
             errors=errors,
         )
 

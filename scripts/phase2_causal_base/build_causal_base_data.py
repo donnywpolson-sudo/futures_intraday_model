@@ -274,6 +274,7 @@ DEFAULT_SYNTHETIC_GAP_THRESHOLD_ACTION = "warn"
 SYNTHETIC_GAP_THRESHOLD_ACTIONS = {"warn", "diagnostic"}
 ROLL_MATURITY_EXCEPTION_CATEGORY = "roll_maturity"
 STATUS_SPARSE_EXCEPTION_CATEGORY = "status_sparse"
+STATISTICS_ENRICHMENT_SPARSE_EXCEPTION_CATEGORY = "statistics_enrichment_sparse"
 DEGRADED_RAW_QUALITY_EXCEPTION_CATEGORY = "degraded_raw_quality"
 VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY = "vendor_trusted_ohlcv_no_trade"
 PARENT_SPARSE_OHLCV_NO_TRADE_EXCEPTION_CATEGORY = "parent_sparse_ohlcv_no_trade"
@@ -288,6 +289,7 @@ SPARSE_ROLL_WINDOW_THRESHOLD_STATUS = (
 ACCEPTED_READINESS_EXCEPTION_CATEGORIES = {
     ROLL_MATURITY_EXCEPTION_CATEGORY,
     STATUS_SPARSE_EXCEPTION_CATEGORY,
+    STATISTICS_ENRICHMENT_SPARSE_EXCEPTION_CATEGORY,
     DEGRADED_RAW_QUALITY_EXCEPTION_CATEGORY,
     VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY,
     PARENT_SPARSE_OHLCV_NO_TRADE_EXCEPTION_CATEGORY,
@@ -1126,6 +1128,24 @@ def _accepted_readiness_exception_for_result(
                 continue
             if tuple(result.warnings) != exception.warning_prefixes:
                 continue
+        elif exception.category == STATISTICS_ENRICHMENT_SPARSE_EXCEPTION_CATEGORY:
+            if (
+                result.statistics_enrichment_missing_rows <= 0
+                and result.statistics_enrichment_stale_rows <= 0
+            ):
+                continue
+            if (
+                result.status_enrichment_missing_rows
+                or result.status_enrichment_stale_rows
+                or result.degraded_bar_rows
+                or result.degraded_threshold_breached
+                or result.synthetic_gap_threshold_breached
+                or result.roll_window_threshold_breached
+                or result.roll_maturity_backstep_count
+            ):
+                continue
+            if tuple(result.warnings) != exception.warning_prefixes:
+                continue
         elif exception.category == DEGRADED_RAW_QUALITY_EXCEPTION_CATEGORY:
             if (
                 not result.degraded_threshold_breached
@@ -1676,6 +1696,7 @@ def _parse_accepted_readiness_exceptions(
             category
             in {
                 STATUS_SPARSE_EXCEPTION_CATEGORY,
+                STATISTICS_ENRICHMENT_SPARSE_EXCEPTION_CATEGORY,
                 DEGRADED_RAW_QUALITY_EXCEPTION_CATEGORY,
                 VENDOR_TRUSTED_OHLCV_NO_TRADE_EXCEPTION_CATEGORY,
                 PARENT_SPARSE_OHLCV_NO_TRADE_EXCEPTION_CATEGORY,
@@ -4247,6 +4268,25 @@ def process_file(
             "degraded threshold breached: "
             f"rows_pct={result.degraded_rows_pct} bars={result.degraded_bar_rows} "
             f"sessions={result.degraded_session_rows}"
+        )
+    statistics_sparse_only = (
+        (
+            result.statistics_enrichment_missing_rows > 0
+            or result.statistics_enrichment_stale_rows > 0
+        )
+        and result.status_enrichment_missing_rows == 0
+        and result.status_enrichment_stale_rows == 0
+        and result.degraded_bar_rows == 0
+        and not result.synthetic_gap_threshold_breached
+        and not result.roll_window_threshold_breached
+        and not result.degraded_threshold_breached
+        and result.roll_maturity_backstep_count == 0
+    )
+    if statistics_sparse_only:
+        result.warnings.append(
+            "statistics enrichment sparse: "
+            f"missing_rows={result.statistics_enrichment_missing_rows} "
+            f"stale_rows={result.statistics_enrichment_stale_rows}"
         )
 
     if write_output:

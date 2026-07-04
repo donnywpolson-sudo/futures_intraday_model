@@ -18,6 +18,7 @@ from scripts.phase3_labels.build_labels import (
     load_market_config,
     process_file,
     resolve_profile_inputs,
+    select_profile_inputs,
     write_reports,
 )
 
@@ -68,6 +69,46 @@ def _write_upstream_manifest(
                 "failures": [],
             }
         ],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _write_multi_upstream_manifest(
+    path: Path,
+    *,
+    profile: str,
+    output_root: Path,
+    market_years: list[tuple[str, int]],
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    output_hashes = {}
+    outputs = []
+    for market, year in market_years:
+        output_path = output_root / market / f"{year}.parquet"
+        output_hashes[output_path.as_posix()] = file_sha256(output_path)
+        outputs.append(
+            {
+                "market": market,
+                "year": year,
+                "status": "PASS",
+                "warning_count": 0,
+                "failure_count": 0,
+                "failures": [],
+            }
+        )
+    payload = {
+        "stage": "causal_base",
+        "status": "PASS",
+        "profile": profile,
+        "resolved_profile": profile,
+        "output_root": output_root.as_posix(),
+        "warning_count": 0,
+        "failure_count": 0,
+        "failures": [],
+        "summary": {"fail_count": 0, "warn_count": 0},
+        "output_file_hashes": output_hashes,
+        "outputs": outputs,
     }
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -196,6 +237,140 @@ def _patch_tier1_approval_paths(
         "APPROVED_TIER1_ACCEPTED_EXCEPTIONS_PATH",
         exceptions_path,
     )
+
+
+def _write_es2026_profile_config(
+    path: Path,
+    *,
+    warning: str | None = None,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    expected = labels_mod.APPROVED_ES2026_ACCEPTED_EXCEPTION
+    warning_value = warning if warning is not None else str(expected["warning"])
+    evidence_paths = expected["evidence_paths"]
+    path.write_text(
+        "\n".join(
+            [
+                "profiles:",
+                "  tier_3_forward:",
+                "    markets: [ES]",
+                "    years: [2026]",
+                "    accepted_readiness_exceptions:",
+                "      - category: statistics_enrichment_sparse",
+                "        market: ES",
+                "        year: 2026",
+                "        reason: bounded_es2026_statistics_enrichment_sparse_accepted_warning_packet_20260703",
+                "        evidence_paths:",
+                f"          - {evidence_paths[0]}",
+                f"          - {evidence_paths[1]}",
+                "        warning_prefixes:",
+                f"          - '{warning_value}'",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _write_es2026_candidate_input(root: Path) -> None:
+    path = root / "ES" / "2026.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"ES 2026")
+
+
+def _write_es2026_candidate_manifest(path: Path, root: Path) -> Path:
+    output_path = root / "ES" / "2026.parquet"
+    warning = str(labels_mod.APPROVED_ES2026_ACCEPTED_EXCEPTION["warning"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "stage": "causal_base",
+        "status": "PASS",
+        "profile": "tier_3_forward",
+        "resolved_profile": "tier_3_forward",
+        "output_root": root.as_posix(),
+        "warning_count": 0,
+        "failure_count": 0,
+        "failures": [],
+        "summary": {"fail_count": 0, "warn_count": 0},
+        "output_file_hashes": {output_path.as_posix(): file_sha256(output_path)},
+        "outputs": [
+            {
+                "market": "ES",
+                "year": 2026,
+                "status": "PASS",
+                "warning_count": 1,
+                "warnings": [warning],
+                "failure_count": 0,
+                "failures": [],
+            }
+        ],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _run_es2026_candidate_main(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    input_root: Path,
+    manifest_path: Path,
+    profile_config: Path,
+) -> dict[str, object]:
+    captured: dict[str, object] = {}
+
+    def fake_process(
+        input_path: Path,
+        output_path: Path,
+        *,
+        profile: str,
+        costs_config: Path,
+    ) -> labels_mod.LabelResult:
+        return labels_mod.LabelResult(
+            profile=profile,
+            market=input_path.parent.name,
+            year=int(input_path.stem),
+            input_path=input_path.as_posix(),
+            output_path=output_path.as_posix(),
+        )
+
+    def fake_write_reports(*args: object, **kwargs: object) -> None:
+        captured["gate"] = kwargs["causal_base_gate"]
+
+    monkeypatch.setattr(labels_mod, "process_file", fake_process)
+    monkeypatch.setattr(labels_mod, "write_reports", fake_write_reports)
+    monkeypatch.setattr(labels_mod, "APPROVED_ES2026_CANDIDATE_ROOT", input_root)
+    monkeypatch.setattr(labels_mod, "APPROVED_ES2026_ACCEPTED_EXCEPTIONS_PATH", profile_config)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_labels.py",
+            "--profile",
+            "tier_3_forward",
+            "--input-root",
+            input_root.as_posix(),
+            "--output-root",
+            (tmp_path / "data" / "labeled").as_posix(),
+            "--reports-root",
+            (tmp_path / "reports" / "labels").as_posix(),
+            "--profile-config",
+            profile_config.as_posix(),
+            "--costs-config",
+            (tmp_path / "configs" / "costs.yaml").as_posix(),
+            "--causal-base-manifest",
+            manifest_path.as_posix(),
+            "--accepted-readiness-exceptions",
+            profile_config.as_posix(),
+            "--markets",
+            "ES",
+            "--years",
+            "2026",
+        ],
+    )
+
+    assert labels_mod.main() == 0
+    return captured
 
 
 def _run_tier1_candidate_main(
@@ -518,6 +693,67 @@ def test_phase3_main_accepts_exact_tier1_candidate_exceptions(
     assert gate["accepted_readiness_exceptions_path"] == exceptions.as_posix()  # type: ignore[index]
 
 
+def test_phase3_main_accepts_exact_es2026_profile_config_packet(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_root = (
+        tmp_path
+        / "data"
+        / "causally_gated_normalized"
+        / "local_trade_es2026_p1_candidate"
+    )
+    manifest = tmp_path / "reports" / "candidate" / "causal_base_manifest.json"
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_es2026_candidate_input(input_root)
+    _write_es2026_candidate_manifest(manifest, input_root)
+    _write_es2026_profile_config(profile_config)
+
+    captured = _run_es2026_candidate_main(
+        tmp_path,
+        monkeypatch,
+        input_root=input_root,
+        manifest_path=manifest,
+        profile_config=profile_config,
+    )
+
+    gate = captured["gate"]
+    assert gate["status"] == "PASS"  # type: ignore[index]
+    assert gate["accepted_warning_count"] == 1  # type: ignore[index]
+    assert gate["accepted_readiness_exception_count"] == 1  # type: ignore[index]
+    assert gate["accepted_readiness_exceptions_path"] == profile_config.as_posix()  # type: ignore[index]
+    accepted = gate["accepted_readiness_exceptions"][0]  # type: ignore[index]
+    assert accepted["market"] == "ES"
+    assert accepted["year"] == 2026
+    assert accepted["category"] == "statistics_enrichment_sparse"
+
+
+def test_phase3_main_rejects_mutated_es2026_profile_config_packet(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_root = (
+        tmp_path
+        / "data"
+        / "causally_gated_normalized"
+        / "local_trade_es2026_p1_candidate"
+    )
+    manifest = tmp_path / "reports" / "candidate" / "causal_base_manifest.json"
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_es2026_candidate_input(input_root)
+    _write_es2026_candidate_manifest(manifest, input_root)
+    _write_es2026_profile_config(profile_config, warning="statistics enrichment sparse: missing_rows=7")
+
+    with pytest.raises(SystemExit, match="wrong warning_prefixes"):
+        _run_es2026_candidate_main(
+            tmp_path,
+            monkeypatch,
+            input_root=input_root,
+            manifest_path=manifest,
+            profile_config=profile_config,
+        )
+
+
 def test_phase3_main_rejects_wrong_exception_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -762,6 +998,130 @@ def test_profile_resolution_uses_alpha_tier_aliases(tmp_path: Path) -> None:
     assert resolved[0] == ("CL", 2023, input_root / "CL" / "2023.parquet")
     assert resolved[-1] == ("ZN", 2025, input_root / "ZN" / "2025.parquet")
     assert len(resolved) == 9
+
+
+def test_phase3_input_filters_are_deterministic(tmp_path: Path) -> None:
+    inputs = [
+        ("ES", 2025, tmp_path / "ES" / "2025.parquet"),
+        ("ES", 2026, tmp_path / "ES" / "2026.parquet"),
+        ("NG", 2025, tmp_path / "NG" / "2025.parquet"),
+        ("NG", 2026, tmp_path / "NG" / "2026.parquet"),
+    ]
+
+    selected, selection = select_profile_inputs(
+        inputs,
+        markets={"NG", "ES"},
+        years={2026},
+    )
+
+    assert [(market, year) for market, year, _ in selected] == [("ES", 2026), ("NG", 2026)]
+    assert selection["profile_input_count"] == 4
+    assert selection["selected_input_count"] == 2
+    assert selection["requested_markets"] == ["ES", "NG"]
+    assert selection["requested_years"] == [2026]
+    assert selection["selected_markets"] == ["ES", "NG"]
+    assert selection["selected_years"] == [2026]
+
+
+def test_phase3_input_filters_fail_when_scope_is_empty(tmp_path: Path) -> None:
+    inputs = [("ES", 2025, tmp_path / "ES" / "2025.parquet")]
+
+    with pytest.raises(SystemExit, match="No Phase 3 inputs selected after filters"):
+        select_profile_inputs(inputs, markets={"NG"})
+
+
+def test_phase3_main_applies_market_year_filters_to_gate_and_reports(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_root = tmp_path / "data" / "causally_gated_normalized"
+    market_years = [("ES", 2025), ("ES", 2026), ("NG", 2025), ("NG", 2026)]
+    for market, year in market_years:
+        path = input_root / market / f"{year}.parquet"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"{market} {year}".encode("utf-8"))
+
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    profile_config.parent.mkdir(parents=True, exist_ok=True)
+    profile_config.write_text(
+        "\n".join(
+            [
+                "profiles:",
+                "  local_trade:",
+                "    markets: [ES, NG]",
+                "    years: [2025, 2026]",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manifest = _write_multi_upstream_manifest(
+        tmp_path / "reports" / "causal_base" / "causal_base_manifest.json",
+        profile="local_trade",
+        output_root=input_root,
+        market_years=market_years,
+    )
+    captured: dict[str, object] = {"processed": []}
+
+    def fake_process(
+        input_path: Path,
+        output_path: Path,
+        *,
+        profile: str,
+        costs_config: Path,
+    ) -> labels_mod.LabelResult:
+        processed = captured["processed"]
+        assert isinstance(processed, list)
+        processed.append((input_path.parent.name, int(input_path.stem), output_path))
+        return labels_mod.LabelResult(
+            profile=profile,
+            market=input_path.parent.name,
+            year=int(input_path.stem),
+            input_path=input_path.as_posix(),
+            output_path=output_path.as_posix(),
+        )
+
+    def fake_write_reports(*args: object, **kwargs: object) -> None:
+        captured["input_selection"] = kwargs["input_selection"]
+        captured["causal_base_gate"] = kwargs["causal_base_gate"]
+
+    monkeypatch.setattr(labels_mod, "process_file", fake_process)
+    monkeypatch.setattr(labels_mod, "write_reports", fake_write_reports)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_labels.py",
+            "--profile",
+            "local_trade",
+            "--input-root",
+            input_root.as_posix(),
+            "--output-root",
+            (tmp_path / "data" / "labeled").as_posix(),
+            "--reports-root",
+            (tmp_path / "reports" / "labels").as_posix(),
+            "--profile-config",
+            profile_config.as_posix(),
+            "--costs-config",
+            (tmp_path / "configs" / "costs.yaml").as_posix(),
+            "--causal-base-manifest",
+            manifest.as_posix(),
+            "--markets",
+            "NG",
+            "--years",
+            "2026",
+        ],
+    )
+
+    assert labels_mod.main() == 0
+    assert [(market, year) for market, year, _ in captured["processed"]] == [("NG", 2026)]  # type: ignore[index]
+    selection = captured["input_selection"]
+    assert selection["profile_input_count"] == 4  # type: ignore[index]
+    assert selection["selected_input_count"] == 1  # type: ignore[index]
+    assert selection["requested_markets"] == ["NG"]  # type: ignore[index]
+    assert selection["requested_years"] == [2026]  # type: ignore[index]
+    gate = captured["causal_base_gate"]
+    assert gate["status"] == "PASS"  # type: ignore[index]
+    assert gate["expected_market_year_count"] == 1  # type: ignore[index]
 
 
 def test_invalid_reasons_for_current_and_future_path_flags(tmp_path: Path) -> None:

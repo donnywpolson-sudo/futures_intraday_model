@@ -29,6 +29,15 @@ DEFAULT_RUN = "baseline"
 NO_CALIBRATION_ID = "no_calibration"
 EXECUTION_POLICY_NAME = "max_one_contract_non_overlapping_target_window"
 EXECUTION_REALISM = "research_non_overlapping_target_window_execution_policy"
+STATISTICAL_VALIDITY_REQUIRED_CHECKS = {
+    "pbo": "Probability of Backtest Overfitting",
+    "deflated_sharpe": "Deflated Sharpe",
+    "probabilistic_sharpe": "Probabilistic Sharpe",
+    "bootstrap_confidence_intervals": "bootstrap confidence intervals",
+    "multiple_testing_adjustment": "multiple-testing adjustment",
+    "parameter_stability": "parameter stability",
+    "regime_breakdowns": "regime breakdowns",
+}
 
 POLICY_REQUIRED_TARGETS = {
     "expected_return": ("target_ret_15m", "y_pred_calibrated"),
@@ -1025,6 +1034,44 @@ def evaluate_promotion_gate(
     }
 
 
+def build_statistical_validity_gate(prediction_manifest: Mapping[str, Any]) -> dict[str, Any]:
+    evidence = prediction_manifest.get("statistical_validity_gate")
+    if not isinstance(evidence, Mapping):
+        evidence = prediction_manifest.get("statistical_validity")
+    if not isinstance(evidence, Mapping):
+        evidence = {}
+
+    check_results: dict[str, dict[str, Any]] = {}
+    blockers: list[str] = []
+    for key, label in STATISTICAL_VALIDITY_REQUIRED_CHECKS.items():
+        raw_check = evidence.get(key)
+        check = raw_check if isinstance(raw_check, Mapping) else {}
+        status = str(check.get("status", "")).upper()
+        passed = status in {"PASS", "NOT_APPLICABLE_WITH_SUBSTITUTE_EVIDENCE"}
+        check_results[key] = {
+            "label": label,
+            "status": status or "MISSING",
+            "passed": passed,
+            "evidence": dict(check),
+        }
+        if not passed:
+            blockers.append(f"statistical-validity evidence missing or failing: {label}")
+
+    return {
+        "gate_name": "statistical_validity_gate",
+        "status": "PASS" if not blockers else "FAIL",
+        "statistical_validity_ready": not blockers,
+        "required_checks": dict(STATISTICAL_VALIDITY_REQUIRED_CHECKS),
+        "check_results": check_results,
+        "failure_count": len(blockers),
+        "failures": blockers,
+        "promotion_policy": (
+            "gross/net metrics, Sharpe-like summaries, and isolated fold/market wins "
+            "are diagnostic only until this gate passes"
+        ),
+    }
+
+
 def _score_column_for_target(frame: pd.DataFrame, target_name: str) -> pd.Series:
     if target_name == "target_fade_success_15m":
         return pd.to_numeric(frame["p_fade_success"], errors="coerce")
@@ -1227,6 +1274,17 @@ def evaluate_predictions(
         model_comparison = build_model_comparison(predictions)
         calibration_report = build_calibration_report(predictions, models)
     promotion_gate_report = evaluate_promotion_gate(policy_metrics, promotion_gate)
+    statistical_validity_gate = build_statistical_validity_gate(manifest)
+    if not statistical_validity_gate["statistical_validity_ready"]:
+        promotion_gate_report["research_alpha_ready"] = False
+        promotion_gate_report["model_promotion_allowed"] = False
+        promotion_gate_report["promotion_blockers"] = [
+            *promotion_gate_report["promotion_blockers"],
+            *statistical_validity_gate["failures"],
+        ]
+        promotion_gate_report["promotion_blocker_count"] = len(
+            promotion_gate_report["promotion_blockers"]
+        )
     if failures:
         promotion_gate_report["research_alpha_ready"] = False
         promotion_gate_report["model_promotion_allowed"] = False
@@ -1293,6 +1351,7 @@ def evaluate_predictions(
         "final_holdout_touched": bool(final_holdout_touched),
         "trading_semantics_changed": False,
         "promotion_gate": promotion_gate_report,
+        "statistical_validity_gate": statistical_validity_gate,
         "live_execution_ready": False,
         "execution_realism": EXECUTION_REALISM,
         "execution_policy": EXECUTION_POLICY_NAME,
@@ -1335,6 +1394,7 @@ def evaluate_predictions(
         "warnings": warnings,
         "policy_config": asdict(policy),
         "promotion_gate": promotion_gate_report,
+        "statistical_validity_gate": statistical_validity_gate,
         "research_alpha_ready": promotion_gate_report["research_alpha_ready"],
         "model_promotion_allowed": promotion_gate_report["model_promotion_allowed"],
         "policy_metrics_overall": policy_metrics["overall"],
@@ -1381,6 +1441,7 @@ def evaluate_predictions(
         "research_alpha_ready": promotion_gate_report["research_alpha_ready"],
         "model_promotion_allowed": promotion_gate_report["model_promotion_allowed"],
         "promotion_gate": promotion_gate_report,
+        "statistical_validity_gate": statistical_validity_gate,
         "blockers": promotion_gate_report["promotion_blockers"],
         "costed_oos": policy_metrics["overall"],
         "markets": market_summaries,

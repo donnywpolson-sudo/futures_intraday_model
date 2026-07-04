@@ -47,6 +47,22 @@ APPROVED_TIER1_ACCEPTED_EXCEPTIONS = {
     },
 }
 APPROVED_TIER1_GLOBAL_SYNTHETIC_THRESHOLD = 2.0
+APPROVED_ES2026_CANDIDATE_ROOT = Path(
+    "data/causally_gated_normalized/local_trade_es2026_p1_candidate"
+)
+APPROVED_ES2026_ACCEPTED_EXCEPTIONS_PATH = Path("configs/alpha_tiered.yaml")
+APPROVED_ES2026_ACCEPTED_EXCEPTIONS_PROFILE = "tier_3_forward"
+APPROVED_ES2026_ACCEPTED_EXCEPTION = {
+    "category": "statistics_enrichment_sparse",
+    "market": "ES",
+    "year": 2026,
+    "reason": "bounded_es2026_statistics_enrichment_sparse_accepted_warning_packet_20260703",
+    "evidence_paths": [
+        "reports/pipeline_audit/local_trade_es2026_p1_repair_plan_v2/readiness_warning_evidence/ES_2026_readiness_warning_evidence.json",
+        "reports/pipeline_audit/local_trade_es2026_p1_repair_plan_v2/readiness_warning_evidence/ES_2026_readiness_warning_evidence.md",
+    ],
+    "warning": "statistics enrichment sparse: missing_rows=6 stale_rows=6",
+}
 CORE_PROFILE_MARKETS = ["ES", "CL", "ZN", "6E"]
 BALANCED_PROFILE_MARKETS = ["ES", "NQ", "CL", "NG", "GC", "HG", "SR3", "ZN", "ZB", "6E", "6J", "6B", "ZC", "ZS", "LE"]
 FULL_PROFILE_MARKETS = ["ES", "NQ", "RTY", "YM", "CL", "NG", "RB", "HO", "GC", "SI", "HG", "SR3", "SR1", "TN", "ZT", "ZF", "ZN", "ZB", "UB", "6A", "6B", "6C", "6E", "6J", "6M", "ZC", "ZS", "ZL", "ZM", "ZW", "KE", "LE", "HE"]
@@ -366,9 +382,22 @@ def _same_path(left: Path, right: Path) -> bool:
 def load_accepted_readiness_exceptions(
     exceptions_path: Path | None,
     input_root: Path,
+    *,
+    profile: str,
+    profile_config_path: Path = DEFAULT_PROFILE_CONFIG,
+    selected_market_years: Iterable[tuple[str, int]] | None = None,
 ) -> AcceptedReadinessExceptions | None:
     if exceptions_path is None:
         return None
+    if _same_path(exceptions_path, profile_config_path) and _same_path(
+        exceptions_path, APPROVED_ES2026_ACCEPTED_EXCEPTIONS_PATH
+    ):
+        return load_es2026_accepted_readiness_exceptions(
+            exceptions_path,
+            input_root,
+            profile=profile,
+            selected_market_years=selected_market_years,
+        )
     if not _same_path(exceptions_path, APPROVED_TIER1_ACCEPTED_EXCEPTIONS_PATH):
         raise SystemExit(
             "accepted_readiness_exceptions path is not approved: "
@@ -474,6 +503,94 @@ def load_accepted_readiness_exceptions(
             for key in sorted(APPROVED_TIER1_ACCEPTED_EXCEPTIONS)
         ],
         exceptions=sorted(accepted, key=lambda row: (str(row["market"]), int(row["year"]))),
+    )
+
+
+def load_es2026_accepted_readiness_exceptions(
+    exceptions_path: Path,
+    input_root: Path,
+    *,
+    profile: str,
+    selected_market_years: Iterable[tuple[str, int]] | None,
+) -> AcceptedReadinessExceptions:
+    if profile != APPROVED_ES2026_ACCEPTED_EXCEPTIONS_PROFILE:
+        raise SystemExit(
+            "accepted_readiness_exceptions ES 2026 packet requires profile "
+            f"{APPROVED_ES2026_ACCEPTED_EXCEPTIONS_PROFILE}: {profile}"
+        )
+    if not _same_path(input_root, APPROVED_ES2026_CANDIDATE_ROOT):
+        raise SystemExit(
+            "accepted_readiness_exceptions ES 2026 packet requires input-root "
+            f"{APPROVED_ES2026_CANDIDATE_ROOT.as_posix()}: "
+            f"{relative_path(input_root)}"
+        )
+    selected = sorted(
+        (str(market), int(year))
+        for market, year in (selected_market_years or [])
+    )
+    if selected != [("ES", 2026)]:
+        raise SystemExit(
+            "accepted_readiness_exceptions ES 2026 packet requires exact selected scope "
+            f"[('ES', 2026)]: {selected}"
+        )
+    if not exceptions_path.exists():
+        raise SystemExit(
+            "accepted_readiness_exceptions file missing: "
+            f"{relative_path(exceptions_path)}"
+        )
+    try:
+        payload = yaml.safe_load(exceptions_path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        raise SystemExit(
+            "accepted_readiness_exceptions file unreadable: "
+            f"{relative_path(exceptions_path)}: {exc}"
+        ) from exc
+    if not isinstance(payload, Mapping):
+        raise SystemExit("accepted_readiness_exceptions profile config is not a YAML object")
+    profiles = payload.get("profiles")
+    profile_payload = (
+        profiles.get(APPROVED_ES2026_ACCEPTED_EXCEPTIONS_PROFILE)
+        if isinstance(profiles, Mapping)
+        else None
+    )
+    if not isinstance(profile_payload, Mapping):
+        raise SystemExit(
+            "accepted_readiness_exceptions profile config missing "
+            f"{APPROVED_ES2026_ACCEPTED_EXCEPTIONS_PROFILE}"
+        )
+    raw_exceptions = profile_payload.get("accepted_readiness_exceptions")
+    if not isinstance(raw_exceptions, list):
+        raise SystemExit("accepted_readiness_exceptions ES 2026 packet is not a list")
+    if len(raw_exceptions) != 1:
+        raise SystemExit(
+            "accepted_readiness_exceptions ES 2026 packet count is not exactly 1"
+        )
+    item = raw_exceptions[0]
+    if not isinstance(item, Mapping):
+        raise SystemExit("accepted_readiness_exceptions ES 2026 packet row is not an object")
+    expected = APPROVED_ES2026_ACCEPTED_EXCEPTION
+    for field_name in ("category", "market", "year", "reason", "evidence_paths"):
+        if item.get(field_name) != expected[field_name]:
+            raise SystemExit(
+                "accepted_readiness_exceptions ES 2026 packet has wrong "
+                f"{field_name}: {item.get(field_name)!r}"
+            )
+    if item.get("warning_prefixes") != [expected["warning"]]:
+        raise SystemExit(
+            "accepted_readiness_exceptions ES 2026 packet has wrong warning_prefixes"
+        )
+    accepted = {
+        "market": expected["market"],
+        "year": expected["year"],
+        "category": expected["category"],
+        "reason": expected["reason"],
+        "evidence_paths": expected["evidence_paths"],
+        "warning": expected["warning"],
+    }
+    return AcceptedReadinessExceptions(
+        path=exceptions_path,
+        warning_messages=[str(expected["warning"])],
+        exceptions=[accepted],
     )
 
 
@@ -619,6 +736,43 @@ def resolve_profile_inputs(
         for market in profile_markets[resolved_profile]
         for year in profile_years[resolved_profile]
     ]
+
+
+def parse_csv_filter(value: str | None, *, cast_type: type = str) -> set[object] | None:
+    if value is None or not value.strip():
+        return None
+    parsed: set[object] = set()
+    for raw_item in value.split(","):
+        item = raw_item.strip()
+        if item:
+            parsed.add(cast_type(item))
+    return parsed
+
+
+def select_profile_inputs(
+    inputs: list[tuple[str, int, Path]],
+    *,
+    markets: set[object] | None = None,
+    years: set[object] | None = None,
+) -> tuple[list[tuple[str, int, Path]], dict[str, object]]:
+    selected = list(inputs)
+    requested_markets = {str(item) for item in markets} if markets else None
+    requested_years = {int(item) for item in years} if years else None
+    if requested_markets is not None:
+        selected = [item for item in selected if item[0] in requested_markets]
+    if requested_years is not None:
+        selected = [item for item in selected if item[1] in requested_years]
+    if not selected:
+        raise SystemExit("No Phase 3 inputs selected after filters")
+    selection = {
+        "profile_input_count": len(inputs),
+        "selected_input_count": len(selected),
+        "requested_markets": sorted(requested_markets) if requested_markets else None,
+        "requested_years": sorted(requested_years) if requested_years else None,
+        "selected_markets": sorted({market for market, _, _ in selected}),
+        "selected_years": sorted({year for _, year, _ in selected}),
+    }
+    return selected, selection
 
 
 def infer_market_year(path: Path) -> tuple[str, int]:
@@ -1142,6 +1296,7 @@ def write_reports(
     input_root: Path | None = None,
     output_root: Path | None = None,
     causal_base_gate: Mapping[str, object] | None = None,
+    input_selection: Mapping[str, object] | None = None,
 ) -> None:
     reports_root.mkdir(parents=True, exist_ok=True)
     rows = [result.to_dict() for result in results]
@@ -1172,7 +1327,9 @@ def write_reports(
         profile_config=profile_config_path,
         status=status,
         failure_count=failure_count,
-        selected_input_count=len(rows),
+        selected_input_count=int(input_selection.get("selected_input_count", len(rows)))
+        if input_selection
+        else len(rows),
     )
     scope = load_profile_scope(profile, profile_config_path, strict=False)
     resolved_profile = scope.resolved_profile if scope is not None else profile
@@ -1197,6 +1354,7 @@ def write_reports(
         "resolved_profile": resolved_profile,
         "markets": sorted({str(row["market"]) for row in rows}),
         "years": sorted({int(row["year"]) for row in rows}),
+        "input_selection": dict(input_selection or {}),
         "warning_count": warning_count,
         "failure_count": failure_count,
         "failures": run_failures,
@@ -1286,6 +1444,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--costs-config", default="configs/costs.yaml")
     parser.add_argument("--profile-config", default=str(DEFAULT_PROFILE_CONFIG))
     parser.add_argument(
+        "--markets",
+        default=None,
+        help="Optional comma-separated market roots to process inside the selected profile.",
+    )
+    parser.add_argument(
+        "--years",
+        default=None,
+        help="Optional comma-separated years to process inside the selected profile.",
+    )
+    parser.add_argument(
         "--causal-base-manifest",
         default="auto",
         help="Path to Phase 2 causal_base_manifest.json, or 'auto' to find a matching PASS manifest under reports/.",
@@ -1293,7 +1461,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--accepted-readiness-exceptions",
         default=None,
-        help="Approved tier_1 candidate accepted-readiness exceptions JSON.",
+        help=(
+            "Approved accepted-readiness exceptions evidence. Supported values are the "
+            "legacy tier_1 candidate JSON or the bounded ES 2026 profile config packet."
+        ),
     )
     return parser
 
@@ -1308,7 +1479,12 @@ def main() -> int:
     reports_root = Path(args.reports_root)
     costs_config = Path(args.costs_config)
     profile_config = Path(args.profile_config)
-    inputs = resolve_profile_inputs(args.profile, input_root, profile_config)
+    profile_inputs = resolve_profile_inputs(args.profile, input_root, profile_config)
+    inputs, input_selection = select_profile_inputs(
+        profile_inputs,
+        markets=parse_csv_filter(args.markets),
+        years=parse_csv_filter(args.years, cast_type=int),
+    )
     scope = load_profile_scope(args.profile, profile_config, strict=False)
     resolved_profile = scope.resolved_profile if scope is not None else None
     accepted_readiness_exceptions = load_accepted_readiness_exceptions(
@@ -1316,6 +1492,9 @@ def main() -> int:
         if args.accepted_readiness_exceptions
         else None,
         input_root,
+        profile=args.profile,
+        profile_config_path=profile_config,
+        selected_market_years=((market, year) for market, year, _ in inputs),
     )
     causal_base_gate = resolve_upstream_manifest_gate(
         manifest_arg=args.causal_base_manifest,
@@ -1367,6 +1546,7 @@ def main() -> int:
         input_root=input_root,
         output_root=output_root,
         causal_base_gate=causal_base_gate.evidence,
+        input_selection=input_selection,
     )
     return 1 if any(result.failures for result in results) else 0
 

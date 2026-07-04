@@ -10,7 +10,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.pipeline_gates import file_sha256
-from scripts.phase5_wfa.build_wfa_splits import build_arg_parser, build_split_plan, main
+from scripts.phase5_wfa.build_wfa_splits import (
+    ES_ONLY_FULLY_UNAVAILABLE_INTERMARKET_WARNING,
+    build_arg_parser,
+    build_split_plan,
+    main,
+)
 
 
 def _write_profile_config(path: Path, *, profile: str = "research") -> Path:
@@ -233,6 +238,36 @@ def test_cli_accepts_explicit_feature_roots(tmp_path: Path) -> None:
     assert Path(report_args.input_root).as_posix() == report_root.as_posix()
 
 
+def test_build_split_plan_filters_profile_to_requested_market_year(tmp_path: Path) -> None:
+    profile_config = _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml", profile="mixed_audit")
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    feature_root = _feature_root(tmp_path)
+    matrix = _write_matrix(feature_root, market="ES", year=2024, start="2024-01-01T00:00:00Z")
+    manifest = _write_feature_manifest(
+        tmp_path / "reports" / "features" / "baseline_feature_manifest.json",
+        profile="selected",
+        resolved_profile="mixed_audit",
+        output_root=feature_root,
+        output_path=matrix,
+    )
+
+    result = build_split_plan(
+        profile="selected",
+        input_root=feature_root,
+        reports_root=tmp_path / "reports" / "wfa",
+        profile_config=profile_config,
+        models_config=models_config,
+        feature_manifest=manifest,
+        markets=["ES"],
+        years=[2024],
+    )
+
+    assert result["failure_count"] == 0
+    assert result["markets"] == ["ES"]
+    assert result["years"] == [2024]
+    assert result["feature_manifest_gate"]["expected_market_year_count"] == 1
+
+
 def test_build_split_plan_rejects_warn_feature_manifest(tmp_path: Path) -> None:
     profile_config = _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
     models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
@@ -293,6 +328,37 @@ def test_build_split_plan_accepts_zero_failure_feature_manifest_with_accepted_wa
     assert result["feature_manifest_gate"]["status"] == "PASS"
     assert result["feature_manifest_gate"]["upstream_status"] == "WARN"
     assert result["feature_manifest_gate"]["accepted_warnings"] == [warning]
+
+
+def test_build_split_plan_accepts_es_only_unavailable_intermarket_warning(tmp_path: Path) -> None:
+    profile_config = _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    feature_root = _feature_root(tmp_path)
+    matrix = _write_matrix(feature_root, year=2024, start="2024-01-01T00:00:00Z")
+    manifest = _write_feature_manifest(
+        tmp_path / "reports" / "features" / "baseline_feature_manifest.json",
+        profile="research",
+        resolved_profile="research",
+        output_root=feature_root,
+        output_path=matrix,
+        status="WARN",
+        warning_count=1,
+        warnings=[ES_ONLY_FULLY_UNAVAILABLE_INTERMARKET_WARNING],
+    )
+
+    result = build_split_plan(
+        profile="research",
+        input_root=feature_root,
+        reports_root=tmp_path / "reports" / "wfa",
+        profile_config=profile_config,
+        models_config=models_config,
+        feature_manifest=manifest,
+    )
+
+    assert result["failure_count"] == 0
+    assert result["feature_manifest_gate"]["accepted_warnings"] == [
+        ES_ONLY_FULLY_UNAVAILABLE_INTERMARKET_WARNING
+    ]
 
 
 def test_build_split_plan_accepts_passed_feature_manifest(tmp_path: Path) -> None:

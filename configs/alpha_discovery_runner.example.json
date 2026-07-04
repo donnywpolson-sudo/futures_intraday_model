@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "template": true,
+  "runner_mode": "preflight",
+  "hypothesis_id": "replace_with_registered_candidate_id",
+  "market": "ES",
+  "profile": "tier_1",
+  "stage": "discovery",
+  "target_policy_contract": {
+    "payoff_basis": "path_favorable_excursion",
+    "entry_rule": "next_bar_open",
+    "exit_or_capture_rule": "first_touch_take_profit_or_stop_loss_else_horizon_exit",
+    "horizon_bars": 30,
+    "cost_threshold_source": "configs/costs.yaml",
+    "required_compatible_policy": "first_touch_path_capture",
+    "compatible_policy_evaluation_basis": [
+      "first_touch_path_capture"
+    ],
+    "incompatible_policy_evaluation_basis": [
+      "fixed_horizon_exit"
+    ]
+  },
+  "source_test_commands": [
+    [
+      "python",
+      "-m",
+      "pytest",
+      "-q",
+      "-p",
+      "no:cacheprovider",
+      "tests/phase9_research/test_es_30m_target_smoke_harness.py",
+      "tests/validation/test_model_registry.py"
+    ]
+  ],
+  "discovery_command": [
+    "python",
+    "-m",
+    "scripts.phase9_research.es_30m_target_smoke_harness",
+    "--hypothesis-id",
+    "replace_with_registered_candidate_id",
+    "--run",
+    "replace_with_bounded_run_name",
+    "--stage",
+    "discovery",
+    "--folds",
+    "ES_research_0001,ES_research_0002,ES_research_0003,ES_research_0004",
+    "--input-root",
+    "data/feature_matrices/baseline_tier1_rebuild_v1",
+    "--split-plan",
+    "reports/wfa/split_plan.json",
+    "--reports-root",
+    "reports/pipeline_audit",
+    "--costs-config",
+    "configs/costs.yaml",
+    "--target-registry",
+    "manifests/target_hypotheses/registry.json",
+    "--target-trial-statuses",
+    "manifests/target_hypotheses/trial_statuses.jsonl",
+    "--top-fraction",
+    "0.05"
+  ],
+  "timeout_seconds": 300,
+  "approval_token": "APPROVE_ALPHA_DISCOVERY_DISCOVERY_RUN_V1",
+  "expected_outputs": [
+    "reports/pipeline_audit/replace_with_bounded_run_name_replace_with_registered_candidate_id_discovery_smoke.json",
+    "reports/pipeline_audit/replace_with_bounded_run_name_replace_with_registered_candidate_id_discovery_smoke.md"
+  ],
+  "forbidden_actions": [
+    "confirmation smoke",
+    "locked smoke",
+    "WFA/modeling",
+    "Phase 8 diagnostics",
+    "tuning",
+    "promotion",
+    "registry/status mutation",
+    "staging",
+    "commit",
+    "push",
+    "paper trading",
+    "live trading"
+  ]
+}

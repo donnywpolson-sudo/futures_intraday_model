@@ -449,11 +449,18 @@ def test_policy_metrics_do_not_hard_block_aggregate_trend_danger(tmp_path: Path)
     assert metrics["execution_policy"] == "max_one_contract_non_overlapping_target_window"
     assert metrics["research_alpha_ready"] is False
     assert metrics["model_promotion_allowed"] is False
+    assert metrics["statistical_validity_gate"]["status"] == "FAIL"
+    assert "pbo" in metrics["statistical_validity_gate"]["check_results"]
     assert metrics["policy_config"]["p_trend_danger_blocks_fade_trades"] is False
     assert metrics["policy_config"]["side_aware_trend_blocks_fade_trades"] is True
     assert phase8_metrics["metrics"]["overall"]["net_return_dollars"] == 120.0
     assert decision["promoted"] is False
     assert decision["model_promotion_allowed"] is False
+    assert decision["statistical_validity_gate"]["statistical_validity_ready"] is False
+    assert any(
+        "Probability of Backtest Overfitting" in blocker
+        for blocker in decision["blockers"]
+    )
     assert "trade_count 3 below minimum 100" in decision["blockers"]
     assert "market_count 1 below minimum 2" in decision["blockers"]
     assert decision["final_holdout_touched"] is False

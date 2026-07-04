@@ -1,0 +1,34 @@
+# Fixed Phase 7A model-smoke config for the frozen Phase 9 target
+# opening_range_acceptance_continuation_30m_v1.
+#
+# The materialization adapter maps the frozen target direction into the generic
+# WFA directional target column so the existing Phase 6 probability contract
+# emits p_long / p_short / p_flat without changing the WFA runner.
+
+policy:
+  random_splits_allowed: false
+  final_holdout_tuning_allowed: false
+  neural_nets_allowed: false
+  transformers_allowed: false
+  reinforcement_learning_allowed: false
+  hyperparameter_tuning_allowed_initially: false
+  optional_external_model_dependencies_required: false
+
+purge:
+  entry_lag_bars: 1
+  target_horizon_bars: 30
+  trend_horizon_bars: 30
+  purge_bars: auto
+  resolved_purge_bars: 31
+
+model_selection_reports:
+  final_holdout_excluded_from_selection: true
+
+models:
+  logistic_opening_range_acceptance_continuation_30m_v1:
+    stage: phase_7a_linear_controls
+    family: logistic_regression
+    task: classification
+    enabled: true
+    requires_optional_dependency: false
+    target: target_sign_with_deadzone

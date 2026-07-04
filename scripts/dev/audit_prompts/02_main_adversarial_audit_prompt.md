@@ -86,7 +86,7 @@ Scope:
 - Current expected Tier 1 research scope to verify: `ES`, `CL`, `ZN`, `6E` for years `2023`, `2024`.
 - Do not audit `tier_1_holdout` or `tier_1_forward` except for leakage/contamination checks.
 - Use `PIPELINE.md` as orientation; independently verify all claims.
-- Treat docs/planning files as orientation only, not pipeline truth: `README.md`, `README_RUNBOOK.md`, `quant_research_playbook.md`, `RESEARCH_METRICS.html`.
+- Treat docs/planning files as orientation only, not pipeline truth: `README.md`, `quant_research_playbook.md`, `RESEARCH_METRICS.html`.
 - Ignore `_archive/` and cleanup folders unless auditing provenance explicitly.
 
 Current feature/target research state to verify, not assume:

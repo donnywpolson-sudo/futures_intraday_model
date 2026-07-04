@@ -412,6 +412,16 @@ def test_run_wfa_writes_oos_predictions_and_manifest(tmp_path: Path) -> None:
     assert manifest["prediction_artifact_write_skipped"] is False
     assert manifest["artifact_evidence_ready"] is True
     assert manifest["artifact_evidence_failures"] == []
+    assert manifest["model_risk_gate"]["status"] == "PASS_METADATA_READY"
+    assert manifest["model_risk_gate"]["model_risk_metadata_ready"] is True
+    assert manifest["model_risk_gate"]["model_trust_ready"] is False
+    assert manifest["model_risk_gate"]["model_trust_blockers"]
+    assert manifest["model_risk_gate"]["hyperparameter_budget"][
+        "hyperparameter_tuning_allowed_initially"
+    ] is False
+    assert manifest["model_risk_gate"]["feature_importance_stability"]["status"] == (
+        "registered_for_pre_promotion_review"
+    )
     assert manifest["data_audit_universe"] is None
     assert manifest["feature_set"] is None
     assert manifest["stale_output_path_exists"] is False

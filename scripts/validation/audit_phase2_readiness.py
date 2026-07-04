@@ -122,6 +122,12 @@ def dedupe_checkpoint_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+CHECKPOINT_METADATA_STAGES = {
+    "phase2_readiness_checkpoint_start",
+    "phase2_readiness_checkpoint_summary",
+}
+
+
 def load_checkpoint_rows(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         raise FileNotFoundError(f"resume checkpoint missing: {path}")
@@ -133,6 +139,8 @@ def load_checkpoint_rows(path: Path) -> list[dict[str, Any]]:
         if not isinstance(row, dict):
             raise ValueError(f"checkpoint row {line_number} is not a JSON object")
         if "market" not in row or "year" not in row:
+            if row.get("stage") in CHECKPOINT_METADATA_STAGES:
+                continue
             raise ValueError(f"checkpoint row {line_number} missing market/year")
         rows.append(row)
     return dedupe_checkpoint_rows(rows)

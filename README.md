@@ -63,10 +63,10 @@ python -m pytest -q
 
 ### 6. Pipeline and data rebuilds
 
-Use `PIPELINE.md` for the authoritative downloader smoke test, DBN archive
-download, DBN-to-parquet conversion, phase order, commands, acceptance checks,
-and stop conditions. Keep runnable pipeline commands there so setup docs do not
-drift.
+Use `PROJECT_OUTLINE.md` for the authoritative project outline, phase order,
+runnable phase commands, acceptance checks, and stop conditions. `PIPELINE.md`
+is only a compatibility pointer for older references. Keep runnable pipeline
+commands out of setup docs so they do not drift.
 
 Generated local outputs are ignored by Git:
 
