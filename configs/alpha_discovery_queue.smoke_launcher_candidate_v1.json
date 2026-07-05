@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "runner_mode": "preflight",
+  "max_candidates": 1,
+  "stop_on_infrastructure_failure": true,
+  "log_root": "logs/alpha_discovery_queue",
+  "candidates": [
+    {
+      "id": "smoke_launcher_candidate_v1",
+      "config": "configs/alpha_discovery_runner.smoke_launcher_candidate_v1.json",
+      "approved": false
+    }
+  ]
+}

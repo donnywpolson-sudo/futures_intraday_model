@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "runner_mode": "preflight",
+  "max_candidates": 100,
+  "stop_on_infrastructure_failure": true,
+  "log_root": "logs/alpha_discovery_queue",
+  "candidates": [
+    {
+      "id": "replace_with_registered_candidate_id",
+      "config": "configs/alpha_discovery_runner.replace_with_registered_candidate_id.json",
+      "approved": false
+    }
+  ]
+}

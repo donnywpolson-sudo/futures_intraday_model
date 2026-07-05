@@ -1,12 +1,44 @@
 # Futures Intraday Model
 
-Intraday futures research pipeline using Databento continuous-contract 1-minute OHLCV data.
+A local research workspace for testing intraday futures ideas with Databento
+continuous-contract 1-minute OHLCV data.
 
-## New Machine Setup
+This repo is for research and walk-forward validation only. It is not a
+live-trading bot, broker connection, or production trading system.
 
-These steps assume the new machine only has the files cloned from GitHub. Local data, reports, virtual environments, and secrets are intentionally not stored in GitHub.
+## If You Use Codex Or ChatGPT
 
-### 1. Install prerequisites
+Start by asking Codex:
+
+```text
+Read AGENTS.md, PROJECT_OUTLINE.md, and the current section of CODEX_HANDOFF.md.
+Tell me the current project status and the safest next step. Do not run broad
+data builds, model runs, downloads, commits, pushes, paper trading, or live
+trading unless I explicitly approve the exact bounded command.
+```
+
+Use `PROJECT_OUTLINE.md` for the authoritative project outline. `PIPELINE.md`
+is only a compatibility pointer.
+Use `PROJECT_OUTLINE.md` for the real workflow and runnable pipeline commands.
+This README is only for setup and orientation.
+
+## What Is In This Repo
+
+- `AGENTS.md`: rules Codex should follow in this repo.
+- `PROJECT_OUTLINE.md`: project workflow, phase order, checks, and commands.
+- `CODEX_HANDOFF.md`: latest working state and continuation notes.
+- `configs/`: local settings, markets, years, sessions, costs, and profiles.
+- `scripts/`: research, data, validation, and reporting code.
+- `tests/`: checks Codex can run after code changes.
+
+Local data, reports, secrets, logs, model outputs, and cache files are not meant
+to be stored in GitHub.
+
+## New Computer Setup
+
+These steps assume you are on Windows PowerShell.
+
+### 1. Install basics
 
 Install:
 
@@ -15,14 +47,14 @@ Git
 Python 3.11
 ```
 
-Confirm PowerShell can see them:
+Check that PowerShell can see them:
 
 ```powershell
 git --version
 python --version
 ```
 
-### 2. Clone the repo
+### 2. Download the repo
 
 ```powershell
 git clone https://github.com/donnywpolson-sudo/futures_intraday_model.git futures_intraday_model
@@ -38,37 +70,58 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-When returning to the project later, reactivate the environment before running scripts:
+Each time you come back to the project, reactivate the environment first:
 
 ```powershell
 .\.venv\Scripts\activate
 ```
 
-### 4. Add the Databento API key
+### 4. Add your Databento API key
 
-Create the ignored local secrets folder and key file:
+Create the ignored local secrets file:
 
 ```powershell
 New-Item -ItemType Directory -Force .\secrets
 Set-Content -Path .\secrets\databento.env -Value 'DATABENTO_API_KEY="YOUR_KEY_HERE"' -Encoding utf8
 ```
 
-Do not commit `secrets/`, `.env`, API keys, raw data, reports, or model outputs.
+Replace `YOUR_KEY_HERE` with your real key. Do not commit or paste real API keys
+into chat.
 
-### 5. Verify the checkout
+### 5. Check the install
 
 ```powershell
 python -m pytest -q
 ```
 
-### 6. Pipeline and data rebuilds
+If this fails, ask Codex to inspect the error and suggest the narrowest fix.
 
-Use `PROJECT_OUTLINE.md` for the authoritative project outline, phase order,
-runnable phase commands, acceptance checks, and stop conditions. `PIPELINE.md`
-is only a compatibility pointer for older references. Keep runnable pipeline
-commands out of setup docs so they do not drift.
+## Daily Use
 
-Generated local outputs are ignored by Git:
+Before asking Codex to work on the project:
+
+```powershell
+.\.venv\Scripts\activate
+git pull --ff-only
+```
+
+Before pushing reviewed code or docs:
+
+```powershell
+git status --short --untracked-files=all
+python scripts/check_git_hygiene.py
+git diff --check
+```
+
+Only push changes you reviewed:
+
+```powershell
+git push
+```
+
+## Local Files GitHub Should Ignore
+
+These are local outputs and should normally stay off GitHub:
 
 ```text
 data/
@@ -77,28 +130,7 @@ models/
 outputs/
 logs/
 cache/
+secrets/
 ```
 
 Profile definitions live in `configs/alpha_tiered.yaml`.
-
-### 7. Sync with GitHub
-
-Pull latest code before working:
-
-```powershell
-git pull --ff-only
-```
-
-Before pushing code or docs, review the worktree and run the hygiene checks:
-
-```powershell
-git status --short --untracked-files=all
-python scripts/check_git_hygiene.py
-git diff --check
-```
-
-Push only reviewed code/docs changes:
-
-```powershell
-git push
-```

@@ -16,6 +16,11 @@ REQUIRED_HANDOFF_SECTIONS = (
     "# Next Steps",
 )
 
+MAX_HANDOFF_LINES = 180
+EXACT_NEXT_MARKER = "Exact next recommended step:"
+EXACT_NEXT_DECISION_MARKER = "Exact next decision:"
+FRESH_THREAD_MARKER = "Continue from CODEX_HANDOFF.md"
+
 RETIRED_COORDINATION_PATHS = (
     Path("PROJECT_STATE.md"),
     Path("research") / "JOURNAL.md",
@@ -122,6 +127,42 @@ def _check_required_handoff_sections(text: str, errors: list[str]) -> None:
         errors.append("CODEX_HANDOFF.md required sections are out of order")
 
 
+def _check_handoff_continuation_markers(text: str, errors: list[str]) -> None:
+    line_count = len(text.splitlines())
+    if line_count > MAX_HANDOFF_LINES:
+        errors.append(
+            "CODEX_HANDOFF.md exceeds maximum active handoff length: "
+            f"{line_count} lines > {MAX_HANDOFF_LINES}"
+        )
+
+    exact_next_count = text.count(EXACT_NEXT_MARKER)
+    if exact_next_count != 1:
+        errors.append(
+            "CODEX_HANDOFF.md must contain exactly one "
+            f"{EXACT_NEXT_MARKER} marker; found {exact_next_count}"
+        )
+
+    next_steps_position = text.find("# Next Steps")
+    exact_next_position = text.find(EXACT_NEXT_MARKER)
+    if exact_next_position >= 0 and (
+        next_steps_position < 0 or exact_next_position < next_steps_position
+    ):
+        errors.append(
+            "CODEX_HANDOFF.md Exact next recommended step must appear "
+            "after # Next Steps"
+        )
+
+    if EXACT_NEXT_DECISION_MARKER in text:
+        errors.append(
+            f"CODEX_HANDOFF.md contains stale marker: {EXACT_NEXT_DECISION_MARKER}"
+        )
+
+    if FRESH_THREAD_MARKER in text:
+        errors.append(
+            f"CODEX_HANDOFF.md contains stale fresh-thread prompt: {FRESH_THREAD_MARKER}"
+        )
+
+
 def _check_retired_paths(root: Path, errors: list[str]) -> None:
     for relative_path in RETIRED_COORDINATION_PATHS:
         if (root / relative_path).exists():
@@ -145,6 +186,7 @@ def check_coordination_docs(root: Path) -> list[str]:
 
     if handoff:
         _check_required_handoff_sections(handoff, errors)
+        _check_handoff_continuation_markers(handoff, errors)
         _require_phrases(
             handoff,
             relative_path="CODEX_HANDOFF.md",

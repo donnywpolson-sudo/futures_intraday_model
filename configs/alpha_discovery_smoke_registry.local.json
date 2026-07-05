@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "hypotheses": [
+    {
+      "target_hypothesis_id": "smoke_launcher_candidate_v1",
+      "status": "CANDIDATE",
+      "wfa_allowed": false,
+      "target_family": "launcher_smoke_test_only",
+      "scope": {
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": [
+          "ES"
+        ],
+        "years": [
+          2023,
+          2024
+        ]
+      },
+      "description": "Local smoke-test candidate used only to verify RUN_ALPHA_DISCOVERY.bat enters the repo and reaches alpha-discovery preflight.",
+      "status_reason": "Synthetic local launcher smoke candidate; not a research hypothesis and not eligible for discovery execution, WFA, promotion, paper trading, or live trading.",
+      "source_reports": [],
+      "next_allowed_actions": [
+        "preflight_smoke_only"
+      ]
+    }
+  ]
+}

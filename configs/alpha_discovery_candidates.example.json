@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "batch_id": "example_batch",
+  "description": "Example only. Copy this file and replace candidates with IDs that are already CANDIDATE entries in manifests/target_hypotheses and supported by the ES 30m target smoke harness.",
+  "template_config": "configs/alpha_discovery_runner.example.json",
+  "output_config_dir": "configs/alpha_discovery_generated/example_batch",
+  "output_queue": "configs/alpha_discovery_generated/alpha_discovery_queue.example_batch.json",
+  "max_candidates": 100,
+  "candidates": [
+    {
+      "id": "replace_with_canonical_target_candidate_id",
+      "run": "replace_with_bounded_batch_run_name"
+    }
+  ]
+}

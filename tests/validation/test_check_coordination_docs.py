@@ -22,6 +22,7 @@ def _write_valid_coordination_tree(root: Path) -> None:
                 "# Active Tasks",
                 "# Known Issues",
                 "# Next Steps",
+                "Exact next recommended step: review the active handoff decision.",
             ]
         ),
         encoding="utf-8",
@@ -172,6 +173,112 @@ def test_missing_role_links_fail(tmp_path: Path) -> None:
     assert any(
         error.startswith(
             "CODEX_HANDOFF.md missing required phrase: Project outline authority"
+        )
+        for error in errors
+    )
+
+
+def test_duplicate_exact_next_blocks_fail(tmp_path: Path) -> None:
+    _write_valid_coordination_tree(tmp_path)
+    handoff = tmp_path / "CODEX_HANDOFF.md"
+    handoff.write_text(
+        handoff.read_text(encoding="utf-8")
+        + "\nExact next recommended step: stale duplicate.\n",
+        encoding="utf-8",
+    )
+
+    errors = check_coordination_docs(tmp_path)
+
+    assert any(
+        error.startswith(
+            "CODEX_HANDOFF.md must contain exactly one Exact next recommended step:"
+        )
+        for error in errors
+    )
+
+
+def test_exact_next_outside_next_steps_fails(tmp_path: Path) -> None:
+    _write_valid_coordination_tree(tmp_path)
+    handoff = tmp_path / "CODEX_HANDOFF.md"
+    handoff.write_text(
+        handoff.read_text(encoding="utf-8")
+        .replace(
+            "# Next Steps\nExact next recommended step: review the active handoff decision.",
+            "# Next Steps",
+        )
+        .replace(
+            "# Current State",
+            "Exact next recommended step: stale location.\n# Current State",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = check_coordination_docs(tmp_path)
+
+    assert (
+        "CODEX_HANDOFF.md Exact next recommended step must appear after # Next Steps"
+        in errors
+    )
+
+
+def test_exact_next_decision_leakage_fails(tmp_path: Path) -> None:
+    _write_valid_coordination_tree(tmp_path)
+    handoff = tmp_path / "CODEX_HANDOFF.md"
+    handoff.write_text(
+        handoff.read_text(encoding="utf-8")
+        + "\nExact next decision: approve stale command.\n",
+        encoding="utf-8",
+    )
+
+    errors = check_coordination_docs(tmp_path)
+
+    assert (
+        "CODEX_HANDOFF.md contains stale marker: Exact next decision:"
+        in errors
+    )
+
+
+def test_continue_from_handoff_leakage_fails_only_in_handoff(tmp_path: Path) -> None:
+    _write_valid_coordination_tree(tmp_path)
+    agents = tmp_path / "AGENTS.md"
+    agents.write_text(
+        agents.read_text(encoding="utf-8")
+        + "\nContinue from CODEX_HANDOFF.md.\n",
+        encoding="utf-8",
+    )
+
+    assert check_coordination_docs(tmp_path) == []
+
+    handoff = tmp_path / "CODEX_HANDOFF.md"
+    handoff.write_text(
+        handoff.read_text(encoding="utf-8")
+        + "\nContinue from CODEX_HANDOFF.md.\n",
+        encoding="utf-8",
+    )
+
+    errors = check_coordination_docs(tmp_path)
+
+    assert (
+        "CODEX_HANDOFF.md contains stale fresh-thread prompt: "
+        "Continue from CODEX_HANDOFF.md"
+    ) in errors
+
+
+def test_over_budget_handoff_length_fails(tmp_path: Path) -> None:
+    _write_valid_coordination_tree(tmp_path)
+    handoff = tmp_path / "CODEX_HANDOFF.md"
+    handoff.write_text(
+        handoff.read_text(encoding="utf-8")
+        + "\n"
+        + "\n".join(f"- historical line {index}" for index in range(200)),
+        encoding="utf-8",
+    )
+
+    errors = check_coordination_docs(tmp_path)
+
+    assert any(
+        error.startswith(
+            "CODEX_HANDOFF.md exceeds maximum active handoff length:"
         )
         for error in errors
     )

@@ -2571,15 +2571,38 @@ Rules:
 
 Guarded alpha discovery batch runner:
 
-- `run_alpha_discovery.bat` is a launcher, not pipeline authority; it delegates
-  to `python -m scripts.validation.run_alpha_discovery` and writes ignored logs
-  under `logs/alpha_discovery/`.
+- `C:\Users\donny\Desktop\RUN_ALPHA_DISCOVERY.bat` is the user-facing
+  launcher, not pipeline authority. The launcher resolves the repo root by
+  first checking its own folder and then falling back to
+  `%USERPROFILE%\Desktop\futures_intraday_model`. With `--generate-candidates`,
+  it delegates to
+  `python -m scripts.validation.generate_alpha_discovery_candidates` to write
+  copied preflight-only candidate configs and one queue JSON under `configs/`.
+  With `--config`, it delegates to
+  `python -m scripts.validation.run_alpha_discovery` for one candidate and
+  writes ignored logs under `logs/alpha_discovery/`. With `--queue`, it
+  delegates to `python -m scripts.validation.run_alpha_discovery_queue` for a
+  serial queue of candidate-specific configs and writes ignored logs under
+  `logs/alpha_discovery_queue/`.
 - Allowed modes are `preflight`, `source-tests`, `discovery-packet`,
   `discovery-run`, and `review`; the runner must stop at the current approved
   discovery boundary.
+- Candidate generation is config-only: it uses an explicit candidate list,
+  enforces a hard 100-candidate cap, refuses overwrites, writes only under
+  `configs/`, forces generated configs to `preflight`, and does not run
+  discovery or mutate registry/status, reports, data, logs, models, staging,
+  commits, or pushes.
+- Candidate generation also enforces canonical Phase 9 target-discovery scope:
+  each candidate must already be a clean `CANDIDATE` in
+  `manifests/target_hypotheses/registry.json` and latest
+  `register_candidate` row in `manifests/target_hypotheses/trial_statuses.jsonl`,
+  must use canonical registry/status paths, and must match the ES 30m target
+  smoke harness `TARGET_SPECS`.
+- Queue mode consumes already-created candidate-specific configs only; it does
+  not register, mutate, stage, commit, or promote hypotheses.
 - `discovery-run` requires `--approve-discovery-run`, the exact configured
-  approval token, absent/ignored expected outputs, and one generated JSON/MD
-  review before any next decision.
+  approval token, absent/ignored expected outputs, approved queue entries when
+  `--queue` is used, and one generated JSON/MD review before any next decision.
 - A runner-completed status means the wrapper finished its bounded job, not
   that the candidate passed. Candidate pass/fail must be read from the
   generated JSON decision, and any `STOP_*` decision stops that candidate
