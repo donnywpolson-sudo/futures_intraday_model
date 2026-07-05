@@ -80,7 +80,7 @@ def _config() -> dict[str, object]:
             "ES_research_0001,ES_research_0002",
         ],
         "timeout_seconds": 300,
-        "approval_token": "APPROVE_ALPHA_DISCOVERY_DISCOVERY_RUN_V1",
+        "approval_token": "RUN_PHASE9_DISCOVERY_ONCE",
         "expected_outputs": [
             "reports/pipeline_audit/candidate_v1_discovery_smoke.json",
             "reports/pipeline_audit/candidate_v1_discovery_smoke.md",
@@ -190,7 +190,7 @@ def test_discovery_pass_json_is_candidate_pass(tmp_path: Path, monkeypatch: pyte
         config,
         root=root,
         mode="discovery-run",
-        approval_token="APPROVE_ALPHA_DISCOVERY_DISCOVERY_RUN_V1",
+        approval_token="RUN_PHASE9_DISCOVERY_ONCE",
     )
 
     assert result["status"] == "DISCOVERY_RUN_CANDIDATE_DISCOVERY_PASS"
@@ -231,7 +231,7 @@ def test_stop_json_is_candidate_stop_even_when_process_returns_zero(
         config,
         root=root,
         mode="discovery-run",
-        approval_token="APPROVE_ALPHA_DISCOVERY_DISCOVERY_RUN_V1",
+        approval_token="RUN_PHASE9_DISCOVERY_ONCE",
     )
 
     assert result["status"] == "DISCOVERY_RUN_CANDIDATE_STOPPED"
@@ -265,7 +265,7 @@ def test_missing_discovery_json_after_execution_remains_review_required(
         config,
         root=root,
         mode="discovery-run",
-        approval_token="APPROVE_ALPHA_DISCOVERY_DISCOVERY_RUN_V1",
+        approval_token="RUN_PHASE9_DISCOVERY_ONCE",
     )
 
     assert result["status"] == "DISCOVERY_RUN_REVIEW_REQUIRED"

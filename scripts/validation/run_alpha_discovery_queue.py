@@ -15,6 +15,9 @@ from scripts.validation import run_alpha_discovery as single_runner
 
 
 DEFAULT_LOG_ROOT = Path("logs/alpha_discovery_queue")
+DEFAULT_DISCOVERY_MAX_CANDIDATES = 10
+ABSOLUTE_DISCOVERY_MAX_CANDIDATES = 100
+DISCOVERY_APPROVAL_PHRASE = "RUN_PHASE9_DISCOVERY_ONCE"
 INFRASTRUCTURE_FAILURE_MARKERS = (
     "approval token",
     "config is marked template=true",
@@ -53,6 +56,13 @@ def _relative(root: Path, path: Path) -> str:
         return path.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
         return str(path)
+
+
+def _assert_under(root: Path, path: Path, base: Path, *, field: str) -> None:
+    try:
+        path.resolve().relative_to(base.resolve())
+    except ValueError as exc:
+        raise QueueError(f"{field} must be under {_relative(root, base)}: {_relative(root, path)}") from exc
 
 
 def _utc_stamp() -> str:
@@ -183,6 +193,25 @@ def _candidate_row(
     return row
 
 
+def _timeout_row(*, candidate: dict[str, Any], index: int, mode: str, timeout: float | None) -> dict[str, Any]:
+    row = _candidate_row(
+        candidate=candidate,
+        index=index,
+        mode=mode,
+        status="INFRASTRUCTURE_FAILURE",
+        failure=f"command timed out after {timeout} seconds",
+    )
+    row.update(
+        {
+            "decision": "STOP_INFRASTRUCTURE_TIMEOUT",
+            "failure_bucket": "infrastructure_timeout",
+            "allowed_next_action": "RETRY_WITH_BOUNDED_INFRA_FIX",
+            "derived_followup_blocked": True,
+        }
+    )
+    return row
+
+
 def _summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     candidate_error_count = sum(1 for row in rows if row["status"] == "CANDIDATE_FAILED")
     infrastructure_failure_count = sum(
@@ -223,6 +252,30 @@ def _queue_status(summary: dict[str, Any]) -> str:
     return "QUEUE_COMPLETED"
 
 
+def _enforce_discovery_bounds(
+    *,
+    root: Path,
+    candidates: list[dict[str, Any]],
+    log_root: Path,
+    max_discovery_candidates: int | None,
+) -> None:
+    limit = max_discovery_candidates or DEFAULT_DISCOVERY_MAX_CANDIDATES
+    if limit <= 0 or limit > ABSOLUTE_DISCOVERY_MAX_CANDIDATES:
+        raise QueueError(
+            f"max discovery candidates must be between 1 and {ABSOLUTE_DISCOVERY_MAX_CANDIDATES}"
+        )
+    if len(candidates) > limit:
+        raise QueueError(
+            f"discovery-run candidate count {len(candidates)} exceeds approved bound {limit}"
+        )
+    if len(candidates) > ABSOLUTE_DISCOVERY_MAX_CANDIDATES:
+        raise QueueError(
+            f"discovery-run candidate count {len(candidates)} exceeds hard cap "
+            f"{ABSOLUTE_DISCOVERY_MAX_CANDIDATES}"
+        )
+    _assert_under(root, log_root, root / "logs" / "alpha_discovery_queue", field="log_root")
+
+
 def run_queue(
     *,
     queue_path: Path,
@@ -231,25 +284,33 @@ def run_queue(
     approval_token: str | None,
     approve_discovery_run: bool,
     log_root_override: Path | None = None,
+    max_discovery_candidates: int | None = None,
 ) -> dict[str, Any]:
     queue_payload = _read_json(queue_path)
     candidates, stop_on_infrastructure_failure = _validate_queue(queue_payload, root=root)
     mode = _effective_mode(queue_payload, mode_override)
-    if mode == "discovery-run":
-        if not approve_discovery_run:
-            raise QueueError("queue discovery-run requires --approve-discovery-run")
-        if not approval_token:
-            raise QueueError("queue discovery-run requires --approval-token")
-        unapproved = [candidate["id"] for candidate in candidates if not candidate["approved"]]
-        if unapproved:
-            raise QueueError(f"queue discovery-run has unapproved candidates: {unapproved}")
-    else:
-        approval_token = None
-
     configured_log_root = queue_payload.get("log_root", str(DEFAULT_LOG_ROOT))
     if not isinstance(configured_log_root, str) or not configured_log_root.strip():
         raise QueueError("queue log_root must be a non-empty string when provided")
     log_root = log_root_override or _as_path(root, configured_log_root)
+    if mode == "discovery-run":
+        if not approve_discovery_run:
+            raise QueueError("queue discovery-run requires --approve-discovery-run")
+        unapproved = [candidate["id"] for candidate in candidates if not candidate["approved"]]
+        if unapproved:
+            raise QueueError(f"queue discovery-run has unapproved candidates: {unapproved}")
+        if approval_token != DISCOVERY_APPROVAL_PHRASE:
+            raise QueueError(
+                f"queue discovery-run requires approval phrase {DISCOVERY_APPROVAL_PHRASE!r}"
+            )
+        _enforce_discovery_bounds(
+            root=root,
+            candidates=candidates,
+            log_root=log_root,
+            max_discovery_candidates=max_discovery_candidates,
+        )
+    else:
+        approval_token = None
     stamp = _utc_stamp()
     row_log_path = log_root / f"alpha_discovery_queue_{stamp}.jsonl"
     summary_path = log_root / f"alpha_discovery_queue_{stamp}.json"
@@ -273,12 +334,11 @@ def run_queue(
                 result=result,
             )
         except subprocess.TimeoutExpired as exc:
-            row = _candidate_row(
+            row = _timeout_row(
                 candidate=candidate,
                 index=index,
                 mode=mode,
-                status="CANDIDATE_FAILED",
-                failure=f"command timed out after {exc.timeout} seconds",
+                timeout=exc.timeout,
             )
         except single_runner.RunnerError as exc:
             failure = str(exc)
@@ -322,6 +382,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-root", help="ignored log directory for queue summaries")
     parser.add_argument("--approval-token", help="required exact token for discovery-run mode")
     parser.add_argument(
+        "--max-discovery-candidates",
+        type=int,
+        help="approved discovery-run candidate bound; defaults to 10 and cannot exceed 100",
+    )
+    parser.add_argument(
         "--approve-discovery-run",
         action="store_true",
         help="required explicit flag for discovery-run mode",
@@ -343,6 +408,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             approval_token=args.approval_token,
             approve_discovery_run=args.approve_discovery_run,
             log_root_override=log_root,
+            max_discovery_candidates=args.max_discovery_candidates,
         )
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0 if payload["status"] == "QUEUE_COMPLETED" else 1

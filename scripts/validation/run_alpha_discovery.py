@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -164,15 +166,51 @@ def validate_discovery_command(command: Any, hypothesis_id: str) -> None:
         raise RunnerError("discovery_command must declare bounded folds")
 
 
+def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except Exception:
+        process.kill()
+
+
 def _run_capture(argv: list[str], *, cwd: Path, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    creationflags = 0
+    start_new_session = sys.platform != "win32"
+    if sys.platform == "win32":
+        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    process = subprocess.Popen(
         argv,
         cwd=str(cwd),
         text=True,
-        capture_output=True,
-        timeout=timeout,
-        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        creationflags=creationflags,
+        start_new_session=start_new_session,
     )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        _terminate_process_tree(process)
+        try:
+            stdout, stderr = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+        timeout_exc = subprocess.TimeoutExpired(exc.cmd or argv, exc.timeout, output=stdout, stderr=stderr)
+        raise timeout_exc from exc
+    return subprocess.CompletedProcess(argv, process.returncode, stdout=stdout, stderr=stderr)
 
 
 def _read_registry(root: Path, registry_path: Path) -> dict[str, Any]:

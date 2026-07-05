@@ -2572,10 +2572,12 @@ Rules:
 Guarded alpha discovery batch runner:
 
 - `C:\Users\donny\Desktop\RUN_ALPHA_DISCOVERY.bat` is the user-facing
-  launcher, not pipeline authority. The launcher resolves the repo root by
-  first checking its own folder and then falling back to
-  `%USERPROFILE%\Desktop\futures_intraday_model`. With `--generate-candidates`,
-  it delegates to
+  launcher, not pipeline authority. The repo-owned launcher template is
+  `RUN_ALPHA_DISCOVERY.bat`; the Desktop copy must match it by static
+  self-check before wizard work starts. With no arguments, the launcher
+  delegates to `python -m scripts.validation.run_alpha_discovery_wizard`.
+  With `--self-check`, it runs a non-interactive launcher hash/template check.
+  With `--generate-candidates`, it delegates to
   `python -m scripts.validation.generate_alpha_discovery_candidates` to write
   copied preflight-only candidate configs and one queue JSON under `configs/`.
   With `--config`, it delegates to
@@ -2592,6 +2594,16 @@ Guarded alpha discovery batch runner:
   `configs/`, forces generated configs to `preflight`, and does not run
   discovery or mutate registry/status, reports, data, logs, models, staging,
   commits, or pushes.
+- Wizard autopsy is separate from generation. After generation/preflight, the
+  wizard writes an ignored readiness autopsy under
+  `reports/pipeline_audit/alpha_discovery_autopsy/<batch>/readiness/`. If the
+  user explicitly approves optional discovery-run, the wizard first prints the
+  exact Desktop-launcher queue command, requires the fixed acknowledgement and
+  approval phrase, writes a separate approved queue copy under `configs/`, runs
+  the bounded queue, and writes an ignored discovery autopsy under
+  `reports/pipeline_audit/alpha_discovery_autopsy/<batch>/discovery/`.
+  Discovery-run may write ignored logs under `logs/alpha_discovery_queue/<batch>/`
+  and ignored discovery reports under `reports/pipeline_audit/alpha_discovery/<batch>/`.
 - Candidate generation also enforces canonical Phase 9 target-discovery scope:
   each candidate must already be a clean `CANDIDATE` in
   `manifests/target_hypotheses/registry.json` and latest
@@ -2600,13 +2612,22 @@ Guarded alpha discovery batch runner:
   smoke harness `TARGET_SPECS`.
 - Queue mode consumes already-created candidate-specific configs only; it does
   not register, mutate, stage, commit, or promote hypotheses.
-- `discovery-run` requires `--approve-discovery-run`, the exact configured
-  approval token, absent/ignored expected outputs, approved queue entries when
-  `--queue` is used, and one generated JSON/MD review before any next decision.
+- `discovery-run` requires `--approve-discovery-run`, the non-secret approval
+  phrase `RUN_PHASE9_DISCOVERY_ONCE`, absent/ignored expected outputs, approved
+  queue entries when `--queue` is used, and one generated JSON/MD review before
+  any next decision. Queue discovery defaults to at most 10 candidates per
+  invocation, has an absolute 100-candidate cap, runs serially, and stops on
+  infrastructure failure, timeout, missing JSON, nonzero wrapper error,
+  unapproved output path, or malformed candidate decision.
 - A runner-completed status means the wrapper finished its bounded job, not
   that the candidate passed. Candidate pass/fail must be read from the
   generated JSON decision, and any `STOP_*` decision stops that candidate
   boundary even if the subprocess exit code is zero.
+- Autopsy reports must carry the stamp
+  `FEASIBILITY ONLY - NOT MODEL-TRUST EVIDENCE - DO NOT RETUNE FROM THIS AUTOPSY`.
+  Failed or stopped candidates must not be ranked as follow-up targets; aggregate
+  failure patterns are diagnostic only and require separate pre-registration
+  with materially different rationale before any new candidate work.
 - The runner cannot approve confirmation smoke, locked smoke, WFA/modeling,
   Phase 8 diagnostics, tuning, promotion, registry/status mutation, artifact
   staging, commits, pushes, paper trading, or live trading.

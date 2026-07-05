@@ -71,7 +71,7 @@ def _template_config() -> dict[str, Any]:
             "manifests/target_hypotheses/trial_statuses.jsonl",
         ],
         "timeout_seconds": 300,
-        "approval_token": "APPROVE_ALPHA_DISCOVERY_DISCOVERY_RUN_V1",
+        "approval_token": "RUN_PHASE9_DISCOVERY_ONCE",
         "expected_outputs": [
             "reports/pipeline_audit/replace_with_bounded_run_name_replace_with_registered_candidate_id_discovery_smoke.json",
             "reports/pipeline_audit/replace_with_bounded_run_name_replace_with_registered_candidate_id_discovery_smoke.md",
