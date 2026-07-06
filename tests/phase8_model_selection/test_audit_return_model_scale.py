@@ -197,7 +197,7 @@ def test_return_model_scale_cli_missing_feature_root_fails_clearly(
 
 
 def test_return_model_scale_cli_accepts_explicit_feature_roots(tmp_path: Path) -> None:
-    rebuilt_root = Path("data/feature_matrices/baseline_tier1_rebuild_v1")
+    rebuilt_root = Path("data/feature_matrices")
     report_root = tmp_path / "reports" / "wfa" / "feature_matrix_fixture"
 
     rebuilt_args = build_arg_parser().parse_args(["--feature-root", rebuilt_root.as_posix()])

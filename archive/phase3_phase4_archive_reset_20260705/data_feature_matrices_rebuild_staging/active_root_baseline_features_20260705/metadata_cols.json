@@ -1,0 +1,9 @@
+[
+  "ts",
+  "market",
+  "year",
+  "feature_input_valid",
+  "feature_row_valid",
+  "training_row_valid",
+  "target_valid"
+]

@@ -54,10 +54,12 @@ def classify_folder(path: Path) -> tuple[str, str]:
     if rel_path == "data/dbn" or rel_path.startswith("data/dbn/"):
         if "candidate" in rel_lower or "repair" in rel_lower:
             return "quarantine_candidate", "source-like DBN candidate/repair subtree"
-        return "canonical_raw_source", "DBN archive source subtree"
+        return "canonical_raw_source", "active source-of-truth DBN subtree"
+    if rel_path == "data/archive" or rel_path.startswith("data/archive/"):
+        return "stale_legacy", "dead archive evidence; not an active source root"
     rel_parts = rel_path.split("/")
     if len(rel_parts) >= 2 and rel_parts[0] == "data" and rel_parts[1].endswith("_sr_parent_candidate"):
-        return "quarantine_candidate", "source-like parent candidate subtree pending audit"
+        return "stale_legacy", "legacy parent candidate subtree; canonical DBN source belongs under data/dbn"
     if rel_path.startswith("data/causally_gated_normalized_pre_replace"):
         return "quarantine_candidate", "derived backup subtree pending audit"
     if rel_path in CURRENT_DERIVED_PREFIXES or any(rel_path.startswith(prefix + "/") for prefix in CURRENT_DERIVED_PREFIXES):
@@ -289,6 +291,7 @@ def render_canonical_map(folder_rows: list[dict[str, Any]]) -> str:
         "# Proposed Canonical Data Map",
         "",
         "- Canonical raw Databento DBN source: `data/dbn`.",
+        "- DBN files under `data/archive` are dead archive evidence, not active source inputs.",
         "- Current derived raw parquet: `data/raw` when present.",
         "- Modeling input: explicit configured path required; no hardcoded derived default is approved.",
         "- Labels/features/predictions are derived outputs, not source evidence.",

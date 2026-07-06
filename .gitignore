@@ -43,6 +43,7 @@ logs/live/
 codex-log/
 artifacts/
 build/
+live_chart/
 cache/
 .codex_home/
 dist/

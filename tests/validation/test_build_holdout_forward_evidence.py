@@ -71,7 +71,7 @@ def test_build_evidence_classifies_33_holdout_and_33_forward_rows(tmp_path: Path
         repo_root=tmp_path,
         alpha_config_path=config,
         input_root=tmp_path / "data" / "raw",
-        output_root=tmp_path / "data" / "causal_base_candidates" / "broad_manifest_527_rebuild_v1",
+        output_root=tmp_path / "data" / "causally_gated_normalized",
         generated_at_utc="2026-06-30T00:00:00Z",
         raw_inspector=_ready_raw,
         phase2_inspector=_passing_phase2,
@@ -111,7 +111,7 @@ def test_rejects_profile_without_research_use_lock(tmp_path: Path) -> None:
             repo_root=tmp_path,
             alpha_config_path=config,
             input_root=tmp_path / "data" / "raw",
-            output_root=tmp_path / "data" / "causal_base_candidates" / "broad_manifest_527_rebuild_v1",
+            output_root=tmp_path / "data" / "causally_gated_normalized",
             raw_inspector=_ready_raw,
             phase2_inspector=_passing_phase2,
         )
@@ -126,7 +126,7 @@ def test_rejects_wrong_holdout_year(tmp_path: Path) -> None:
             repo_root=tmp_path,
             alpha_config_path=config,
             input_root=tmp_path / "data" / "raw",
-            output_root=tmp_path / "data" / "causal_base_candidates" / "broad_manifest_527_rebuild_v1",
+            output_root=tmp_path / "data" / "causally_gated_normalized",
             raw_inspector=_ready_raw,
             phase2_inspector=_passing_phase2,
         )
@@ -141,7 +141,7 @@ def test_rejects_duplicate_markets(tmp_path: Path) -> None:
             repo_root=tmp_path,
             alpha_config_path=config,
             input_root=tmp_path / "data" / "raw",
-            output_root=tmp_path / "data" / "causal_base_candidates" / "broad_manifest_527_rebuild_v1",
+            output_root=tmp_path / "data" / "causally_gated_normalized",
             raw_inspector=_ready_raw,
             phase2_inspector=_passing_phase2,
         )
@@ -156,7 +156,7 @@ def test_rejects_non_66_scope(tmp_path: Path) -> None:
             repo_root=tmp_path,
             alpha_config_path=config,
             input_root=tmp_path / "data" / "raw",
-            output_root=tmp_path / "data" / "causal_base_candidates" / "broad_manifest_527_rebuild_v1",
+            output_root=tmp_path / "data" / "causally_gated_normalized",
             raw_inspector=_ready_raw,
             phase2_inspector=_passing_phase2,
         )
@@ -164,7 +164,7 @@ def test_rejects_non_66_scope(tmp_path: Path) -> None:
 
 def test_rejects_existing_holdout_or_forward_candidate_outputs(tmp_path: Path) -> None:
     config = tmp_path / "configs" / "alpha_tiered.yaml"
-    output_root = tmp_path / "data" / "causal_base_candidates" / "broad_manifest_527_rebuild_v1"
+    output_root = tmp_path / "data" / "causally_gated_normalized"
     existing = output_root / MARKETS[0] / "2025.parquet"
     _write_config(config)
     existing.parent.mkdir(parents=True, exist_ok=True)

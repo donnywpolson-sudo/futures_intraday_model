@@ -28,7 +28,8 @@ DEFAULT_SOURCE_RESOLUTION = (
 DEFAULT_JSON_OUT = REPO_ROOT / REVIEW_ROOT / "broad_manifest_527_rebuild_gate_summary.json"
 DEFAULT_MARKDOWN_OUT = REPO_ROOT / REVIEW_ROOT / "broad_manifest_527_rebuild_gate_summary.md"
 
-FUTURE_ROOT = "data/causal_base_candidates/broad_manifest_527_rebuild_v1"
+FUTURE_ROOT = "data/causally_gated_normalized"
+SR_PARENT_SOURCE_ROOT = "data/dbn/ohlcv_1m_parent"
 OUTPUT_STAGE = "broad_causal_rebuild_gate_summary"
 GATE_STATUS = "BLOCKED_NO_BUILD_APPROVAL"
 GATE_DECISION = "broad_rebuild_blocked"
@@ -268,8 +269,8 @@ def validate_readiness(
         _require_equal(reference.get("source_present"), False, f"{pair}.source_present", failures)
         _require_equal(reference.get("actual_sha256"), None, f"{pair}.actual_sha256", failures)
         _require_equal(reference.get("hash_matches"), False, f"{pair}.hash_matches", failures)
-        if not str(reference.get("source_file") or "").startswith("data/dbn_sr_parent_candidate/"):
-            failures.append(f"{pair}.source_file is not a data/dbn_sr_parent_candidate path")
+        if not str(reference.get("source_file") or "").startswith(f"{SR_PARENT_SOURCE_ROOT}/"):
+            failures.append(f"{pair}.source_file is not a {SR_PARENT_SOURCE_ROOT} path")
     if failures:
         raise ValueError("raw/source readiness invariant failure: " + "; ".join(failures))
     return rows
@@ -402,8 +403,8 @@ def validate_source_resolution(
     _require_equal(repair_pairs, resolved_pairs, "source_resolution.repairs.pairs", failures)
     for repair in repairs:
         pair = str(repair.get("pair"))
-        if not str(repair.get("source_file") or "").startswith("data/dbn_sr_parent_candidate/"):
-            failures.append(f"{pair}.source_file is not a data/dbn_sr_parent_candidate path")
+        if not str(repair.get("source_file") or "").startswith(f"{SR_PARENT_SOURCE_ROOT}/"):
+            failures.append(f"{pair}.source_file is not a {SR_PARENT_SOURCE_ROOT} path")
         if not str(repair.get("raw_path") or "").startswith("data/raw/"):
             failures.append(f"{pair}.raw_path is not a data/raw path")
         for field in ("new_source_sha256", "new_raw_parquet_sha256"):

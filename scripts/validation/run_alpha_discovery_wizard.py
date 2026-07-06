@@ -53,42 +53,25 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(_read_bytes(path)).hexdigest()
 
 
-def _quote_ps(path: Path) -> str:
-    return "'" + str(path).replace("'", "''") + "'"
-
-
 def launcher_template_path(root: Path) -> Path:
     return root / "RUN_ALPHA_DISCOVERY.bat"
 
 
-def default_desktop_launcher_path(root: Path) -> Path:
-    return root.parent / "RUN_ALPHA_DISCOVERY.bat"
-
-
-def _remediation(root: Path, launcher_path: Path, template_path: Path) -> dict[str, str]:
-    review_command = (
-        "Compare-Object "
-        f"(Get-Content -Raw -LiteralPath {_quote_ps(launcher_path)}) "
-        f"(Get-Content -Raw -LiteralPath {_quote_ps(template_path)})"
-    )
-    replacement_command = (
-        "Copy-Item "
-        f"-LiteralPath {_quote_ps(template_path)} "
-        f"-Destination {_quote_ps(launcher_path)} -Force"
-    )
-    return {
-        "review_command": review_command,
-        "replacement_warning": "OVERWRITES DESKTOP LAUNCHER - run only after review.",
-        "replacement_command": replacement_command,
-    }
+def default_launcher_path(root: Path) -> Path:
+    return launcher_template_path(root)
 
 
 def launcher_self_check(*, root: Path, launcher_path: Path) -> dict[str, Any]:
     template_path = launcher_template_path(root)
+    resolved_launcher_path = launcher_path.resolve()
+    resolved_template_path = template_path.resolve()
+    if resolved_launcher_path != resolved_template_path:
+        raise WizardError(
+            "launcher self-check failed: only the repo-local launcher is supported. "
+            f"launcher_path={resolved_launcher_path}; expected_launcher_path={resolved_template_path}"
+        )
     template_text = _read_bytes(template_path).decode("utf-8", errors="replace")
-    launcher_text = _read_bytes(launcher_path).decode("utf-8", errors="replace")
     template_hash = _sha256(template_path)
-    launcher_hash = _sha256(launcher_path)
     required_markers = (
         "scripts.validation.run_alpha_discovery_wizard",
         "--self-check",
@@ -98,20 +81,10 @@ def launcher_self_check(*, root: Path, launcher_path: Path) -> dict[str, Any]:
     )
     missing_markers = [marker for marker in required_markers if marker not in template_text]
     if missing_markers:
-        raise WizardError(f"launcher template is missing required route markers: {missing_markers}")
-    if template_hash != launcher_hash or template_text != launcher_text:
-        remediation = _remediation(root, launcher_path, template_path)
-        raise WizardError(
-            "Desktop launcher self-check failed: content hash mismatch. "
-            f"launcher_path={launcher_path}; template_path={template_path}; "
-            f"expected_hash={template_hash}; detected_hash={launcher_hash}; "
-            f"review_command={remediation['review_command']}; "
-            f"{remediation['replacement_warning']} "
-            f"replacement_command={remediation['replacement_command']}"
-        )
+        raise WizardError(f"repo-local launcher is missing required route markers: {missing_markers}")
     return {
         "status": "LAUNCHER_SELF_CHECK_PASS",
-        "launcher_path": str(launcher_path),
+        "launcher_path": str(template_path),
         "template_path": str(template_path),
         "hash": template_hash,
         "no_arg_route": "scripts.validation.run_alpha_discovery_wizard",
@@ -221,7 +194,7 @@ def _approved_queue_copy(*, root: Path, queue_path: Path, batch_id: str) -> Path
 
 def _discovery_command(*, root: Path, batch_id: str, approved_queue_path: Path, candidate_count: int) -> list[str]:
     return [
-        str(default_desktop_launcher_path(root)),
+        str(default_launcher_path(root)),
         "--queue",
         _relative(root, approved_queue_path),
         "--mode",
@@ -261,6 +234,53 @@ def _print_discovery_prompt(
     print("Exact command:")
     print(" ".join(command))
     return command
+
+
+def _print_wizard_intro() -> None:
+    print("Alpha Discovery Wizard")
+    print(
+        "Safety: feasibility-only. No WFA, Phase 8, promotion, deployment, "
+        "registry/status mutation, staging, commits, or pushes."
+    )
+
+
+def _print_human_summary(payload: dict[str, Any]) -> None:
+    status = payload.get("status")
+    print()
+    if status == "LAUNCHER_SELF_CHECK_PASS":
+        print("Launcher check passed.")
+        print("The batch file is pointing at the repo-local alpha discovery wizard.")
+        return
+    if status == "NO_CANONICAL_CANDIDATES":
+        print("Nothing ran.")
+        print("Reason: no alpha-discovery candidates are registered and ready.")
+        print("Next: create/register a candidate first, then run RUN_ALPHA_DISCOVERY.bat again.")
+        return
+    if status == "WIZARD_PREFLIGHT_COMPLETE":
+        generation = payload.get("generation", {})
+        candidate_count = generation.get("candidate_count", "unknown")
+        queue_path = generation.get("queue_path")
+        print("Preflight complete. No discovery run was started.")
+        print(f"Candidates prepared: {candidate_count}.")
+        if queue_path:
+            print(f"Queue: {queue_path}")
+        print("Next: review the readiness output, then run discovery only if you want the bounded optional run.")
+        return
+    if status == "WIZARD_DISCOVERY_COMPLETE":
+        discovery = payload.get("discovery") or {}
+        result = discovery.get("result") or {}
+        summary = result.get("summary") or {}
+        approved_queue_path = discovery.get("approved_queue_path")
+        print("Discovery run complete.")
+        if "candidate_count" in summary:
+            print(f"Candidates run: {summary['candidate_count']}.")
+        if "discovery_pass_count" in summary:
+            print(f"Discovery passes: {summary['discovery_pass_count']}.")
+        if approved_queue_path:
+            print(f"Approved queue: {approved_queue_path}")
+        print("Reminder: this is feasibility-only, not model-trust evidence.")
+        return
+    print(f"Finished with status: {status or 'UNKNOWN'}.")
 
 
 def _maybe_run_discovery(
@@ -329,14 +349,20 @@ def _maybe_run_discovery(
     }
 
 
-def run_wizard(*, root: Path, launcher_path: Path) -> dict[str, Any]:
+def run_wizard(
+    *,
+    root: Path,
+    launcher_path: Path,
+    skip_initial_ack: bool = False,
+    show_intro: bool = True,
+) -> dict[str, Any]:
     self_check = launcher_self_check(root=root, launcher_path=launcher_path)
-    print(SAFE_REPORT_STAMP)
-    print("Phase 9 Alpha Discovery Wizard")
-    print("Blocked actions: no WFA, no Phase 8, no promotion, no deployment evidence, no registry/status mutation, no staging, no commits, no pushes.")
-    acknowledgement = input("Type ACK to continue: ").strip()
-    if acknowledgement != "ACK":
-        raise WizardError("wizard acknowledgement was not provided")
+    if show_intro:
+        _print_wizard_intro()
+    if not skip_initial_ack:
+        acknowledgement = input("Type ACK to continue: ").strip()
+        if acknowledgement != "ACK":
+            raise WizardError("wizard acknowledgement was not provided")
     ready = _ready_candidates(root)
     if not ready:
         return {
@@ -393,6 +419,8 @@ def run_wizard(*, root: Path, launcher_path: Path) -> dict[str, Any]:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--self-check", action="store_true", help="run static launcher self-check and exit")
+    parser.add_argument("--skip-initial-ack", action="store_true", help="skip the first wizard ACK prompt")
+    parser.add_argument("--json", action="store_true", help="print the raw machine-readable result")
     parser.add_argument("--launcher-path", help="path to the launcher that invoked the wizard")
     return parser
 
@@ -400,20 +428,37 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: Iterable[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     root = repo_root()
-    launcher_path = Path(args.launcher_path) if args.launcher_path else default_desktop_launcher_path(root)
+    launcher_path = Path(args.launcher_path) if args.launcher_path else default_launcher_path(root)
     try:
         if args.self_check:
             payload = launcher_self_check(root=root, launcher_path=launcher_path)
         else:
-            payload = run_wizard(root=root, launcher_path=launcher_path)
-        print(json.dumps(payload, indent=2, sort_keys=True))
+            payload = run_wizard(
+                root=root,
+                launcher_path=launcher_path,
+                skip_initial_ack=args.skip_initial_ack,
+                show_intro=not args.json,
+            )
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            _print_human_summary(payload)
         return 0
     except (WizardError, generator.GeneratorError, queue_runner.QueueError, autopsy.AutopsyError) as exc:
-        print(json.dumps({"status": "FAIL", "failure": str(exc)}, indent=2, sort_keys=True), file=sys.stderr)
+        payload = {"status": "FAIL", "failure": str(exc)}
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True), file=sys.stderr)
+        else:
+            print("Stopped.", file=sys.stderr)
+            print(f"Reason: {exc}", file=sys.stderr)
         return 1
     except Exception as exc:  # pragma: no cover - defensive fail-closed path.
         payload = {"status": "FAIL", "failure": f"unexpected error: {type(exc).__name__}: {exc}"}
-        print(json.dumps(payload, indent=2, sort_keys=True), file=sys.stderr)
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True), file=sys.stderr)
+        else:
+            print("Stopped.", file=sys.stderr)
+            print(f"Reason: unexpected error: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 
 

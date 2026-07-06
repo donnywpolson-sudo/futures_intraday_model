@@ -1,0 +1,22 @@
+{
+  "vendor": "databento",
+  "dataset": "GLBX.MDP3",
+  "schema": "ohlcv-1m",
+  "market": "KE",
+  "symbols_requested": [
+    "KE.v.0"
+  ],
+  "start": "2021-01-01",
+  "end": "2022-01-01",
+  "stype_in": "continuous",
+  "stype_out": "instrument_id",
+  "encoding": "dbn",
+  "compression": "zstd",
+  "downloaded_at": "2026-07-06T02:56:46.411234+00:00",
+  "path": "archive/dbn_non_definition_parent_redownload_20260706T022731Z/staged_dbn/KE/2021/2021-01-01_2022-01-01.dbn.zst",
+  "file_size_bytes": 1802788,
+  "file_sha256": "4992a79852378c875e3752f61301c02959b88033130b1cf81ae44d6e0ce22418",
+  "job_id": "GLBX-20260706-89GNT7RVAC",
+  "api_client_version": "0.78.0",
+  "request_status": "ok"
+}

@@ -61,7 +61,7 @@ def _args(
         "--raw-root",
         str(tmp_path / "data" / "raw"),
         "--output-root",
-        str(tmp_path / "data" / "causal_base_candidates" / "broad_manifest_527_rebuild_v1"),
+        str(tmp_path / "data" / "causally_gated_normalized"),
         "--reports-root",
         str(tmp_path / "reports" / "data_audit" / "causal_base_rebuild" / "broad_manifest_527_rebuild_v1"),
         "--profile-config",

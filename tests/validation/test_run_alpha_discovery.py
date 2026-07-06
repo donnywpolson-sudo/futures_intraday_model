@@ -300,7 +300,7 @@ def test_review_mode_allows_completed_discovery_evidence(tmp_path: Path) -> None
 def test_project_outline_documents_guarded_batch_runner_without_parallel_phase_catalog() -> None:
     text = Path("PROJECT_OUTLINE.md").read_text(encoding="utf-8")
 
-    assert r"C:\Users\donny\Desktop\RUN_ALPHA_DISCOVERY.bat" in text
+    assert r"C:\Users\donny\Desktop\futures_intraday_model\RUN_ALPHA_DISCOVERY.bat" in text
     assert "launcher, not pipeline authority" in text
     for mode in ("preflight", "source-tests", "discovery-packet", "discovery-run", "review"):
         assert f"`{mode}`" in text

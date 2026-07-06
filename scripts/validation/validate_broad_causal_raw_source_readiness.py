@@ -25,7 +25,7 @@ DEFAULT_MARKDOWN_OUT = REPO_ROOT / REVIEW_ROOT / "broad_manifest_527_rebuild_raw
 
 EXPECTED_STAGE = "broad_causal_rebuild_prebuild_plan"
 OUTPUT_STAGE = "broad_causal_raw_source_readiness"
-FUTURE_ROOT = "data/causal_base_candidates/broad_manifest_527_rebuild_v1"
+FUTURE_ROOT = "data/causally_gated_normalized"
 EXPECTED_ROW_COUNT = 527
 EXPECTED_ACTION_REQUIRED = 461
 EXPECTED_DEFERRED_POLICY_REVIEW = 66

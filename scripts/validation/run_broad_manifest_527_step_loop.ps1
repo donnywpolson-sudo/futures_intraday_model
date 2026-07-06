@@ -20,7 +20,7 @@ if ($Token -ne $ApprovalToken) {
 $LogPath = "reports\data_audit\causal_base_rebuild\broad_manifest_527_rebuild_v1_monitor\step_loop_ps.log"
 $Checkpoint = "reports\data_audit\causal_base_rebuild\broad_manifest_527_rebuild_v1\build_progress.jsonl"
 $Payloads = "reports\data_audit\causal_base_rebuild\broad_manifest_527_rebuild_v1\build_result_payloads.jsonl"
-$OutputRoot = "data\causal_base_candidates\broad_manifest_527_rebuild_v1"
+$OutputRoot = "data\causally_gated_normalized"
 $Manifest = "reports\data_audit\causal_base_rebuild\broad_manifest_527_rebuild_v1\causal_base_manifest.json"
 
 function Write-LoopLog {

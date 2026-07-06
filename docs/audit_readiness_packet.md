@@ -16,7 +16,7 @@ approved for one promoted canonical Phase 2 scope:
   schema/value checks, optional status/statistics raw enrichment posture, and
   raw/source lineage reports.
 - Conditionally in scope: the promoted canonical Phase 2 root
-  `data/causal_base_candidates/broad_manifest_527_rebuild_v1` and paired
+  `data/causally_gated_normalized` and paired
   reports under
   `reports/data_audit/causal_base_rebuild/broad_manifest_527_rebuild_v1`.
 - Out of scope: full 527-row canonical coverage, `6M:2012`, 2025/2026
@@ -62,7 +62,7 @@ Decision: `CONDITIONAL_GO_RAW_SOURCE_AND_CANONICAL_PHASE2_460_ONLY`.
   raw readiness reports, and Phase 2 causal base.
 - Phase 2 candidate verification on 2026-06-30 reported:
   - candidate root exists:
-    `data/causal_base_candidates/broad_manifest_527_rebuild_v1`
+    `data/causally_gated_normalized`
   - paired reports root exists:
     `reports/data_audit/causal_base_rebuild/broad_manifest_527_rebuild_v1`
   - parquet count: `460`
@@ -80,7 +80,7 @@ Decision: `CONDITIONAL_GO_RAW_SOURCE_AND_CANONICAL_PHASE2_460_ONLY`.
   changes.
 - Config promotion was approved and completed on 2026-06-30:
   - `configs/data_manifest.yaml` now points `causal_parquet_pattern` to
-    `data/causal_base_candidates/broad_manifest_527_rebuild_v1/{market}/{year}.parquet`
+    `data/causally_gated_normalized/{market}/{year}.parquet`
   - `reports/data_manifest/master_data_health_summary.md` was refreshed and now
     reports canonical causal coverage `460/527`
   - approved PASS rows with current canonical causal parquet: `11/11`
@@ -148,7 +148,7 @@ state.
 
 - Raw/source formal audit: go from committed documentation baseline.
 - Promoted/canonical Phase 2 formal audit for
-  `data/causal_base_candidates/broad_manifest_527_rebuild_v1`: conditional go
+  `data/causally_gated_normalized`: conditional go
   for exactly 460 rows.
 - Full 527-row promoted/canonical Phase 2 formal audit: no-go.
 - Modeling, WFA, metrics, further promotion, predictions, live/paper execution:

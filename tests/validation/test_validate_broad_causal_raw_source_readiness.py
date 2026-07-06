@@ -80,7 +80,7 @@ def _row(
         "pair": f"{market}:{year}",
         "planned_input_raw_path": f"data/raw/{market}/{year}.parquet",
         "planned_output_causal_path": (
-            f"data/causal_base_candidates/broad_manifest_527_rebuild_v1/{market}/{year}.parquet"
+            f"data/causally_gated_normalized/{market}/{year}.parquet"
         ),
         "prebuild_status": status,
     }

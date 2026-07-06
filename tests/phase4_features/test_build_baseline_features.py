@@ -194,7 +194,7 @@ def test_phase4_coverage_audit_accepts_explicit_output_root_without_config_value
 
 def test_phase4_coverage_audit_accepts_approved_rebuilt_config_root(tmp_path: Path) -> None:
     profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
-    approved_root = Path("data/feature_matrices/baseline_tier1_rebuild_v1")
+    approved_root = Path("data/feature_matrices")
     profile_config.parent.mkdir(parents=True, exist_ok=True)
     profile_config.write_text(
         "\n".join(
@@ -676,6 +676,19 @@ def test_validity_does_not_depend_on_target_valid_but_training_valid_does() -> N
     assert bool(out.loc[2, "feature_input_valid"]) is True
     assert bool(out.loc[2, "training_row_valid"]) is False
     assert bool(out.loc[3, "feature_input_valid"]) is False
+
+
+def test_causal_valid_false_is_hard_training_row_exclusion() -> None:
+    df = _frame(5)
+    df.loc[2, "causal_valid"] = False
+    df.loc[2, "session_data_quality_degraded"] = True
+    df.loc[2, "trainable_data_quality"] = False
+    df.loc[2, "target_valid"] = True
+
+    out = add_base_market_features(df, tick_size=0.25)
+
+    assert bool(out.loc[2, "feature_input_valid"]) is False
+    assert bool(out.loc[2, "training_row_valid"]) is False
 
 
 def test_5m_15m_60m_features_use_completed_rows_only() -> None:

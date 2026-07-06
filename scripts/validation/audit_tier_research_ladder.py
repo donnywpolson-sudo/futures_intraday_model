@@ -34,7 +34,7 @@ DEFAULT_FINAL_READINESS = (
     / REVIEW_ROOT
     / "broad_manifest_527_rebuild_phase2_readiness_460_excluding_6M_2012_sparse_roll_window_policy.json"
 )
-DEFAULT_OUTPUT_ROOT = REPO_ROOT / "data/causal_base_candidates/broad_manifest_527_rebuild_v1"
+DEFAULT_OUTPUT_ROOT = REPO_ROOT / "data/causally_gated_normalized"
 DEFAULT_AUDIT_ROOT = REPO_ROOT / "reports/data_audit/tier_research_ladder_audit"
 DEFAULT_JSON_OUT = DEFAULT_AUDIT_ROOT / "tier_research_ladder_audit.json"
 DEFAULT_MD_OUT = DEFAULT_AUDIT_ROOT / "tier_research_ladder_audit.md"

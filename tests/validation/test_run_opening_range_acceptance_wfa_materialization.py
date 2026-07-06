@@ -109,7 +109,7 @@ def _write_inputs(root: Path) -> None:
 
 def _paths(tmp_path: Path) -> dict[str, Path]:
     return {
-        "input_root": tmp_path / "data" / "feature_matrices" / "baseline_tier1_rebuild_v1",
+        "input_root": tmp_path / "data" / "feature_matrices",
         "output_root": tmp_path
         / "data"
         / "feature_matrices"

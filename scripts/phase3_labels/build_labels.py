@@ -25,7 +25,7 @@ DEFAULT_PROFILE = "all_causal"
 DISCOVERY_PROFILES = {"all_causal", "all_causal_data", "all_raw", "all_raw_data"}
 DEFAULT_PROFILE_CONFIG = Path("configs/alpha_tiered.yaml")
 DEFAULT_CAUSAL_BASE_MANIFEST = Path("reports/causal_base/causal_base_manifest.json")
-APPROVED_TIER1_CANDIDATE_ROOT = Path("data/causal_base_candidates/tier1_rebuild_v1")
+APPROVED_TIER1_CANDIDATE_ROOT = Path("data/causally_gated_normalized")
 APPROVED_TIER1_ACCEPTED_EXCEPTIONS_PATH = Path(
     "reports/data_audit/causal_base_repair_plan/tier1_candidate_v1/"
     "accepted_readiness_exceptions.json"

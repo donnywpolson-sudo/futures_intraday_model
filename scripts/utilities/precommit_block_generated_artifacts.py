@@ -54,6 +54,7 @@ BLOCKED_DIRS = {
     "credentials",
     "data",
     "dist",
+    "live_chart",
     "logs",
     "models",
     "output",

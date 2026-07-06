@@ -32,7 +32,7 @@ PAYLOADS = Path(
     "reports/data_audit/causal_base_rebuild/broad_manifest_527_rebuild_v1/"
     "build_result_payloads.jsonl"
 )
-OUTPUT_ROOT = Path("data/causal_base_candidates/broad_manifest_527_rebuild_v1")
+OUTPUT_ROOT = Path("data/causally_gated_normalized")
 REPORTS_ROOT = Path("reports/data_audit/causal_base_rebuild/broad_manifest_527_rebuild_v1")
 MANIFEST = REPORTS_ROOT / "causal_base_manifest.json"
 DEFAULT_LOG = Path(

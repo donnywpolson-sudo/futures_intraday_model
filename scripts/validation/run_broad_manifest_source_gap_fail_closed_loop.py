@@ -14,7 +14,7 @@ from typing import Any
 
 
 REVIEW_ROOT = Path("reports/data_audit/source_of_truth_lineage/broader_lineage_review_20260628")
-DEFAULT_OUTPUT_ROOT = Path("data/causal_base_candidates/broad_manifest_527_rebuild_v1")
+DEFAULT_OUTPUT_ROOT = Path("data/causally_gated_normalized")
 DEFAULT_REPORTS_ROOT = Path("reports/data_audit/causal_base_rebuild/broad_manifest_527_rebuild_v1")
 DEFAULT_RAW_ALIGNMENT = REVIEW_ROOT / "broad_manifest_527_rebuild_all_raw_alignment.json"
 

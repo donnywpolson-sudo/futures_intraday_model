@@ -40,8 +40,8 @@ REQUIRED_INPUTS = [
     "reports/data_audit/phase4_lineage/medium_blocker_disposition.md",
     "reports/data_audit/phase4_lineage/blockers.csv",
 ]
-APPROVED_TIER1_CAUSAL_BASE = "data/causal_base_candidates/tier1_rebuild_v1"
-LEGACY_CAUSAL_BASE = "data/causally_gated_normalized"
+APPROVED_TIER1_CAUSAL_BASE = "data/causally_gated_normalized"
+LEGACY_CAUSAL_BASE = "data/archive/tier1_rebuild_v1"
 APPROVED_CAUSAL_BASE_POLICY_SOURCE = "2026-06-28 user-approved causal policy decision"
 
 

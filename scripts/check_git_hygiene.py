@@ -64,6 +64,7 @@ FORBIDDEN_DIRS = {
     "data/session_normalized",
     "data/validated",
     "dist",
+    "live_chart",
     "logs",
     "models",
     "output",

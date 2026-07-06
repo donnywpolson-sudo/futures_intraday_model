@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import hashlib
@@ -1060,6 +1060,14 @@ def _degraded_raw_quality_rows() -> list[dict[str, object]]:
         row["data_quality_degraded"] = degraded
         rows.append(row)
     return rows
+
+
+def _degraded_raw_quality_rows_with_year_context() -> list[dict[str, object]]:
+    return [
+        _readiness_raw_row(pd.Timestamp("2023-12-29T15:00:00Z"), close=99.5),
+        *_degraded_raw_quality_rows(),
+        _readiness_raw_row(pd.Timestamp("2025-01-02T15:00:00Z"), close=103.5),
+    ]
 
 
 def _non_monotonic_roll_rows(market: str) -> list[dict[str, object]]:
@@ -2518,6 +2526,64 @@ def test_phase2_readiness_accepts_exact_degraded_raw_quality_exception(
     assert not (output_root / "ES" / "2024.parquet").exists()
 
 
+def test_degraded_raw_quality_exception_does_not_make_output_trainable(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "reports" / "degraded_raw_quality_decision.json"
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text("accepted degraded raw-quality test decision\n", encoding="utf-8")
+    profile_config = tmp_path / "configs" / "alpha_tiered.yaml"
+    _write_degraded_raw_quality_exception_config(
+        profile_config,
+        profile_market="ES",
+        exception_market="ES",
+        evidence_path=evidence_path,
+        warning="degraded threshold breached: rows_pct=40.0 bars=2 sessions=1",
+    )
+    raw_root = tmp_path / "data" / "raw"
+    output_root = tmp_path / "data" / "causally_gated_normalized"
+    raw_path = raw_root / "ES" / "2024.parquet"
+    out_path = output_root / "ES" / "2024.parquet"
+    report_path = tmp_path / "reports" / "raw_ingest" / "raw_dbn_alignment.json"
+    _write_tier0_alignment(report_path, raw_root)
+    _write_raw(raw_path, _degraded_raw_quality_rows_with_year_context())
+
+    report = build_phase2_readiness_report(
+        profile="tier_0",
+        raw_root=raw_root,
+        raw_alignment_report=report_path,
+        output_root=output_root,
+        profile_config_path=profile_config,
+    )
+
+    assert report["status"] == "PASS"
+    assert report["accepted_exception_count"] == 1
+
+    result = process_file(
+        raw_path,
+        out_path,
+        profile="tier_0",
+        profile_config_path=profile_config,
+    )
+
+    output = pd.read_parquet(out_path)
+    raw_rows = output[output["raw_row_present"]]
+    required_columns = {
+        "data_quality_degraded",
+        "session_data_quality_degraded",
+        "trainable_data_quality",
+        "causal_valid",
+        "causal_invalid_reason",
+    }
+    assert required_columns <= set(output.columns)
+    assert result.degraded_bar_rows == 2
+    assert result.degraded_session_rows == 1
+    assert raw_rows["session_data_quality_degraded"].all()
+    assert not raw_rows["trainable_data_quality"].any()
+    assert not raw_rows["causal_valid"].any()
+    assert raw_rows["causal_invalid_reason"].eq("degraded_session").all()
+
+
 def test_phase2_readiness_rejects_degraded_raw_quality_exception_missing_evidence(
     tmp_path: Path,
 ) -> None:
@@ -3405,7 +3471,7 @@ def test_phase2_main_requires_explicit_broad_build_approval(
         [
             "build_causal_base_data.py",
             "--output-root",
-            "data/causal_base_candidates/broad_manifest_527_rebuild_v1",
+            "data/causally_gated_normalized",
         ],
     )
 
@@ -3621,10 +3687,7 @@ def test_process_file_requires_explicit_broad_build_approval(tmp_path: Path) -> 
     with pytest.raises(ValueError, match="exact broad-build approval"):
         process_file(
             tmp_path / "data" / "raw" / "ES" / "2024.parquet",
-            Path(
-                "data/causal_base_candidates/"
-                "broad_manifest_527_rebuild_v1/ES/2024.parquet"
-            ),
+            Path("data/causally_gated_normalized/ES/2024.parquet"),
             profile="tier_0",
         )
 
@@ -3751,7 +3814,7 @@ def test_phase2_main_readiness_only_allows_protected_broad_output_root(
             "--raw-root",
             str(raw_root),
             "--output-root",
-            "data/causal_base_candidates/broad_manifest_527_rebuild_v1",
+            "data/causally_gated_normalized",
             "--reports-root",
             str(reports_root),
             "--profile-config",

@@ -132,7 +132,7 @@ def test_fails_wrong_canonical_config_pattern(tmp_path: Path) -> None:
     report = _evaluate(
         _fixture(
             tmp_path,
-            canonical_pattern="data/causal_base_candidates/tier1_rebuild_v1/{market}/{year}.parquet",
+            canonical_pattern="data/archive/tier1_rebuild_v1/{market}/{year}.parquet",
         )
     )
 

@@ -1,0 +1,48 @@
+{
+  "generated_at": "2026-06-14T15:20:37.343840+00:00",
+  "freeze_id": "tier3_smoke_20260614",
+  "frozen": true,
+  "failure_count": 0,
+  "failures": [],
+  "feature_root": "data/feature_matrices/baseline",
+  "frozen_root": "artifacts/frozen/tier3_smoke_20260614",
+  "copied_artifacts": {
+    "data/feature_matrices/baseline/feature_cols.json": "artifacts/frozen/tier3_smoke_20260614/data/feature_matrices/baseline/feature_cols.json",
+    "data/feature_matrices/baseline/target_cols.json": "artifacts/frozen/tier3_smoke_20260614/data/feature_matrices/baseline/target_cols.json",
+    "data/feature_matrices/baseline/metadata_cols.json": "artifacts/frozen/tier3_smoke_20260614/data/feature_matrices/baseline/metadata_cols.json",
+    "data/feature_matrices/baseline/excluded_cols.json": "artifacts/frozen/tier3_smoke_20260614/data/feature_matrices/baseline/excluded_cols.json",
+    "reports/phase4/feature_coverage_audit.json": "artifacts/frozen/tier3_smoke_20260614/reports/phase4/feature_coverage_audit.json",
+    "reports/wfa_tier3_smoke/split_plan.json": "artifacts/frozen/tier3_smoke_20260614/reports/wfa_tier3_smoke/split_plan.json",
+    "reports/wfa_tier3_smoke/tier3_smoke_predictions_manifest.json": "artifacts/frozen/tier3_smoke_20260614/reports/wfa_tier3_smoke/tier3_smoke_predictions_manifest.json",
+    "reports/phase8/alpha_promotion_decision.json": "artifacts/frozen/tier3_smoke_20260614/reports/phase8/alpha_promotion_decision.json",
+    "configs/models.yaml": "artifacts/frozen/tier3_smoke_20260614/configs/models.yaml",
+    "configs/costs.yaml": "artifacts/frozen/tier3_smoke_20260614/configs/costs.yaml"
+  },
+  "source_hashes": {
+    "data/feature_matrices/baseline/feature_cols.json": "36e6f4972204657727522135df2da55c24e0677db96989903a3d0899cfaeb506",
+    "data/feature_matrices/baseline/target_cols.json": "7fb5dacfe95417f27138e0d4aedae039bd0f52ce1a72eeaff44f949fae2ac2b9",
+    "data/feature_matrices/baseline/metadata_cols.json": "bb82b00ce9af342744c66d6ae058cfd52f18ae75a9080b336582c580e9df4f65",
+    "data/feature_matrices/baseline/excluded_cols.json": "bdfd2f1cc7361f3ace7f063ca890eab05e947a9971e307cfa4af7fe1a49e24f6",
+    "reports/phase4/feature_coverage_audit.json": "ad6e827ca90eee55dd9bafc5c6f232590218ff3b057c4504cb6945c04fc4da8c",
+    "reports/wfa_tier3_smoke/split_plan.json": "65edd1e38698da53bc4b2674c9235fb8a6da1639111502b8c545c06d67c5b93a",
+    "reports/wfa_tier3_smoke/tier3_smoke_predictions_manifest.json": "cbebfedecd042b1f69ae262601ae810d09b74db45e7cae1dd377f8b9022107dd",
+    "reports/phase8/alpha_promotion_decision.json": "79c5ef2f41cbc9b14498254da8b0188fc94e40743c0096dd040b07126d57c802",
+    "configs/models.yaml": "bdcde9246fe39277eeb63df19ea7be101762c3a25319cf57fbe5dbdffce43699",
+    "configs/costs.yaml": "ca3065c219044c3af37cad1241d34612e808b3985f92730ba0c7ae8bad116d45"
+  },
+  "git": {
+    "commit": "94417d74066a1a486c0192264ff7e6dbc718b094",
+    "status_short": "M scripts/phase5_wfa/build_wfa_splits.py\n M scripts/phase7_wfa/run_wfa.py\n M scripts/phase8_model_selection/evaluate_predictions.py\n M tests/phase4_features/test_build_baseline_features.py\n M tests/phase5_wfa/test_build_wfa_splits.py\n M tests/phase7_wfa/test_run_wfa.py\n M tests/phase8_model_selection/test_evaluate_predictions.py\n?? scripts/artifact_freeze/\n?? scripts/execution/\n?? scripts/final_holdout/\n?? scripts/phase4_features/audit_feature_coverage.py\n?? scripts/phase4_features/build_missing_baseline_features.py\n?? tests/artifact_freeze/\n?? tests/execution/\n?? tests/final_holdout/"
+  },
+  "phase8_promoted": false,
+  "phase8_blockers": [
+    "net_return_dollars -13622.879999999906 below minimum 1.0",
+    "net_sharpe_like -7.235972861689631 below minimum 0.0",
+    "cost_drag_to_abs_gross 2.9716851311954153 above maximum 1.0",
+    "nonpositive net_return_dollars for markets: ['CL', 'ES']",
+    "nonpositive net_return_dollars for folds: ['CL_research_0001', 'CL_research_0002', 'ES_research_0001', 'ES_research_0002']"
+  ],
+  "final_holdout_touched": false,
+  "final_holdout_consumes_frozen_only": true,
+  "used_final_holdout_for_tuning": false
+}

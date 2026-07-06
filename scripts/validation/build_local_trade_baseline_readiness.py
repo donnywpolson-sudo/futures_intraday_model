@@ -22,7 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from scripts.validation import build_local_trade_accepted_evidence_ledger as ledger_gate
 from scripts.validation import build_local_trade_model_eligible_scope as scope_gate
-from scripts.pipeline_gates import check_upstream_manifest
+from scripts.pipeline_gates import check_upstream_manifest, file_sha256
 from scripts.profile_scope import load_profile_scope
 
 
@@ -47,6 +47,9 @@ YEAR_PROFILE_COMMANDS = {
 }
 DEFAULT_LABEL_OUTPUT_ROOT = "data/labeled"
 DEFAULT_FEATURE_OUTPUT_ROOT = "data/feature_matrices/baseline"
+LABEL_INPUT_ROOT_BY_EVIDENCE_ROOT = {
+    ledger_gate.CANDIDATE_CAUSAL_ROOT: ledger_gate.TIER1_CAUSAL_ROOT,
+}
 
 FALSE_APPROVAL_FLAGS = (
     "label_build_approved",
@@ -275,6 +278,58 @@ def _manifest_prefilter_passes(
     return expected_paths <= hashed_paths
 
 
+def _label_input_root(causal_root: str) -> str:
+    return LABEL_INPUT_ROOT_BY_EVIDENCE_ROOT.get(causal_root, causal_root)
+
+
+def _manifest_hash_for_path(repo_root: Path, output_hashes: Any, path: Path) -> str | None:
+    if not isinstance(output_hashes, Mapping):
+        return None
+    expected = path.resolve()
+    for raw_path, raw_hash in output_hashes.items():
+        resolved = _resolve_repo_path(repo_root, raw_path)
+        if resolved is not None and resolved.resolve() == expected:
+            return str(raw_hash)
+    return None
+
+
+def _only_output_missing_failures(failures: Iterable[str]) -> bool:
+    failure_list = list(failures)
+    return bool(failure_list) and all(
+        str(failure).startswith("upstream output missing:")
+        for failure in failure_list
+    )
+
+
+def _relocated_output_hash_failures(
+    *,
+    repo_root: Path,
+    manifest: Mapping[str, Any],
+    manifest_output_root: Path,
+    label_input_root: Path,
+    pairs: list[tuple[str, int]],
+) -> list[str]:
+    output_hashes = manifest.get("output_file_hashes")
+    failures: list[str] = []
+    for market, year in pairs:
+        manifest_path = manifest_output_root / market / f"{year}.parquet"
+        label_input_path = label_input_root / market / f"{year}.parquet"
+        if not label_input_path.exists():
+            failures.append(f"relocated output missing: {rel(label_input_path, repo_root)}")
+            continue
+        expected_hash = _manifest_hash_for_path(repo_root, output_hashes, manifest_path)
+        if expected_hash is None:
+            failures.append(f"relocated output hash missing: {rel(manifest_path, repo_root)}")
+            continue
+        if expected_hash in {"", "MISSING", "NOT_WRITTEN"}:
+            failures.append(f"relocated output hash invalid: {rel(manifest_path, repo_root)}")
+            continue
+        actual_hash = file_sha256(label_input_path)
+        if actual_hash != expected_hash:
+            failures.append(f"relocated output hash stale: {rel(label_input_path, repo_root)}")
+    return failures
+
+
 def _phase3_manifest_evidence(
     *,
     repo_root: Path,
@@ -286,6 +341,7 @@ def _phase3_manifest_evidence(
     manifest_paths = sorted((repo_root / "reports").glob("**/causal_base_manifest.json"))
     for group in causal_root_groups:
         causal_root = resolve_path(repo_root, str(group["causal_root"]))
+        label_input_root = resolve_path(repo_root, str(group.get("label_input_root", group["causal_root"])))
         markets = [str(market) for market in group["markets"]]
         years = [int(year) for year in group["years"]]
         for year in years:
@@ -315,6 +371,7 @@ def _phase3_manifest_evidence(
                 )
             ]
             passed_manifest: Path | None = None
+            relocated_from_root: str | None = None
             gate_failures: list[str] = []
             for manifest_path in prefiltered:
                 check = check_upstream_manifest(
@@ -329,11 +386,30 @@ def _phase3_manifest_evidence(
                 if check.passed:
                     passed_manifest = manifest_path
                     break
+                if (
+                    label_input_root.resolve() != causal_root.resolve()
+                    and check.manifest is not None
+                    and _only_output_missing_failures(check.failures)
+                ):
+                    relocation_failures = _relocated_output_hash_failures(
+                        repo_root=repo_root,
+                        manifest=check.manifest,
+                        manifest_output_root=causal_root,
+                        label_input_root=label_input_root,
+                        pairs=pairs,
+                    )
+                    if not relocation_failures:
+                        passed_manifest = manifest_path
+                        relocated_from_root = rel(causal_root, repo_root)
+                        break
+                    gate_failures.extend(relocation_failures[:5])
+                    continue
                 gate_failures.extend(check.failures)
             if passed_manifest is None:
                 failures.append(
                     {
                         "causal_root": rel(causal_root, repo_root),
+                        "label_input_root": rel(label_input_root, repo_root),
                         "profile": profile,
                         "resolved_profile": resolved_profile,
                         "markets": markets,
@@ -347,6 +423,8 @@ def _phase3_manifest_evidence(
                 evidence.append(
                     {
                         "causal_root": rel(causal_root, repo_root),
+                        "label_input_root": rel(label_input_root, repo_root),
+                        "relocated_from_causal_root": relocated_from_root,
                         "profile": profile,
                         "resolved_profile": resolved_profile,
                         "markets": markets,
@@ -374,13 +452,21 @@ def _causal_root_groups(eligible_rows: Iterable[Mapping[str, Any]]) -> tuple[lis
             )
             continue
         root = str(roots[0])
-        entry = grouped.setdefault(root, {"markets": set(), "years": set()})
+        entry = grouped.setdefault(
+            root,
+            {
+                "markets": set(),
+                "years": set(),
+                "label_input_root": _label_input_root(root),
+            },
+        )
         entry["markets"].add(str(market))
         entry["years"].update(int(year) for year in row_years)
 
     groups = [
         {
             "causal_root": root,
+            "label_input_root": str(values["label_input_root"]),
             "markets": sorted(str(market) for market in values["markets"]),
             "years": sorted(int(year) for year in values["years"]),
         }
@@ -403,14 +489,17 @@ def _command_families(
     for group in causal_root_groups:
         group_markets = ",".join(str(market) for market in group["markets"])
         causal_root = str(group["causal_root"])
+        label_input_root = str(group.get("label_input_root", causal_root))
         for year in group["years"]:
             profile = YEAR_PROFILE_COMMANDS.get(int(year))
             if profile is None:
                 continue
-            report_slug = f"{_slug(causal_root)}_{year}"
+            report_slug = f"{_slug(label_input_root)}_{year}"
+            if label_input_root != causal_root:
+                report_slug = f"{_slug(label_input_root)}_{_slug(group_markets)}_{year}"
             label_commands.append(
                 "python -m scripts.phase3_labels.build_labels "
-                f"--profile {profile} --input-root {causal_root} "
+                f"--profile {profile} --input-root {label_input_root} "
                 f"--output-root {DEFAULT_LABEL_OUTPUT_ROOT} "
                 f"--reports-root reports/labels/local_trade_baseline/{report_slug} "
                 f"--markets {group_markets} --years {year}"

@@ -22,7 +22,7 @@ def _row(pair: str) -> dict[str, object]:
         "timestamp_min": f"{year_text}-01-02T00:00:00+00:00",
         "timestamp_max": f"{year_text}-12-31T23:59:00+00:00",
         "source_file": (
-            f"data/dbn_sr_parent_candidate/{market}/{year_text}/"
+            f"data/dbn/ohlcv_1m_parent/{market}/{year_text}/"
             f"{year_text}-01-01_{int(year_text) + 1}-01-01.dbn.zst"
         ),
         "source_file_present": False,

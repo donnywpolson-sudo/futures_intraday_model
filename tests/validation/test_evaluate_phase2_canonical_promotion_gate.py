@@ -33,10 +33,10 @@ def _fixture(
     causal_pattern = (
         gate.TARGET_CANONICAL_PATTERN
         if promoted_config
-        else "data/causal_base_candidates/tier1_rebuild_v1/{market}/{year}.parquet"
+        else "data/archive/tier1_rebuild_v1/{market}/{year}.parquet"
     )
     manifest_path = tmp_path / "configs" / "data_manifest.yaml"
-    candidate_root = tmp_path / "data" / "causal_base_candidates" / "broad_manifest_527_rebuild_v1"
+    candidate_root = tmp_path / "data" / "causally_gated_normalized"
     reports_root = (
         tmp_path
         / "reports"
@@ -59,7 +59,7 @@ def _fixture(
         reports_root / "causal_base_manifest.json",
         {
             "status": "PASS",
-            "output_root": "data/causal_base_candidates/broad_manifest_527_rebuild_v1",
+            "output_root": "data/causally_gated_normalized",
             "outputs": [{"market": market, "year": year} for market, year in pairs],
         },
     )
@@ -67,7 +67,7 @@ def _fixture(
         reports_root / "causal_base_validation.json",
         {
             "status": "PASS",
-            "output_root": "data/causal_base_candidates/broad_manifest_527_rebuild_v1",
+            "output_root": "data/causally_gated_normalized",
             "files": [{"market": market, "year": year} for market, year in pairs],
         },
     )
@@ -77,7 +77,7 @@ def _fixture(
             "summary": {
                 "expected_rows": 527,
                 "current_canonical_causal": {
-                    "pattern": "data/causal_base_candidates/tier1_rebuild_v1/{market}/{year}.parquet",
+                    "pattern": "data/causally_gated_normalized/{market}/{year}.parquet",
                     "present_count": 8,
                     "missing_count": 519,
                 },

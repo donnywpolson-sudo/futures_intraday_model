@@ -42,6 +42,50 @@ This repository is not live-trading or production-ready by default.
 - `configs/*.yaml`: market sessions, costs, data manifest, model settings, and audit configuration.
 - `manifests/**`: small durable metadata such as frozen feature sets and hypothesis registries.
 
+## Data Manifest And Rule Index
+
+Use this section as the first lookup point for data-phase rules, durable manifests,
+and generated evidence locations. It is an index, not a second source of truth.
+
+- Durable data rules live in this file:
+  - `Non-Negotiable Data Rules` defines canonical active roots and source-of-truth
+    handling.
+  - `Detailed Pipeline Runbook` defines Phase 1A, Phase 1B, and Phase 2 command
+    patterns, acceptance checks, stop conditions, and the standard DBN
+    redownload/rebuild policy. The historical Phase 1C validator command is now
+    treated as an internal Phase 1B validation step.
+- Durable coverage and policy manifests:
+  - `configs/data_manifest.yaml`: canonical Phase 1A/1B/2 coverage policy,
+    expected markets/years, allowed missing/extra pairs, duplicate policy, and
+    cleanup exclusions. Update this only when durable expected coverage or policy
+    changes.
+  - `configs/phase1a_required_schema_exceptions.yaml`: explicit required-schema
+    exceptions for DBN coverage gates.
+  - `configs/alpha_tiered.yaml`: profile market/year definitions consumed by
+    data, research, holdout, and forward gates.
+- Current generated data-health evidence:
+  - `reports/data_manifest/`: generated master data health matrix and data
+    manifest coverage reports.
+  - `reports/raw_ingest/` and `reports/raw_readiness/`: Phase 1B raw/DBN
+    alignment, optional-schema, and raw-readiness validation reports.
+  - `reports/data_audit/current_state/`: current-state ledgers, disposition
+    packets, cleanup/archive plans, active-root gates, and exact-scope repair
+    evidence.
+  - `reports/causal_base/**/causal_base_manifest.json`: Phase 2 build manifests
+    for causal/session-normalized parquet outputs.
+- Run-specific repair or redownload plans belong under
+  `reports/data_audit/<topic>_<timestamp>/` or
+  `reports/data_audit/current_state/<topic>_<timestamp>/`. They should record
+  exact scope, commands, guards, artifacts, hashes, approvals, forbidden actions,
+  and stop conditions. Do not encode one-off run packets inside
+  `configs/data_manifest.yaml` unless they change durable coverage policy.
+- Future DBN redownloads must follow the standard redownload/rebuild policy below:
+  Phase 1A request-plan preflight before provider download, staged DBN
+  acquisition only after that preflight passes or an explicit bounded override
+  is approved, post-download DBN file/manifest validation before active
+  replacement, Phase 1B raw parquet build plus immediate raw/DBN validation
+  second, and Phase 2 readiness/staged causal rebuild last.
+
 ## Active Layout
 
 Primary code and metadata areas:
@@ -53,13 +97,13 @@ live_ops/                      live/paper-operation scaffolding; not research pr
 manifests/                     small tracked rebuild/audit metadata
 scripts/phase1A_download/      Databento DBN archive download planning/execution
 scripts/phase1B_convert/       DBN to raw parquet conversion
-scripts/phase1C_validate/      raw DBN/raw parquet readiness checks
+scripts/phase1C_validate/      legacy/internal Phase 1B raw DBN/parquet validators
 scripts/phase2_causal_base/    causal/session-normalized base data builders
 scripts/phase3_labels/         label and target construction
 scripts/phase4_features/       baseline feature matrix builders
 scripts/phase5_wfa/            WFA split builders
-scripts/phase6_wfa/            WFA training and OOS prediction wrappers
-scripts/phase7_wfa/            legacy WFA implementation package used by Phase 6
+scripts/phase6_wfa/            WFA training, shard-combine, and OOS prediction wrappers
+scripts/phase7_wfa/            legacy internal WFA engine; not a runnable workflow phase
 scripts/phase8_model_selection/ prediction evaluation and model-selection audits
 scripts/phase9_research/       bounded research and robustness harnesses
 scripts/validation/            audit, readiness, repair-planning, and proof utilities
@@ -103,32 +147,83 @@ This section is the authoritative workflow map. Detailed phase commands live in 
 
 | Phase | Purpose | Main implementation area | Main output class |
 | --- | --- | --- | --- |
-| 1A | Download immutable Databento DBN/ZST archives | `scripts.phase1A_download.download_databento_raw` | `data/dbn/.../*.dbn.zst` |
-| 1B | Convert DBN archives to raw parquet while preserving raw event semantics | `scripts.phase1B_convert.convert_databento_raw` | `data/raw/{market}/{year}.parquet` |
-| 1C | Audit raw DBN/raw parquet coverage, schema, and alignment | `scripts.phase1C_validate.audit_raw_dbn_alignment` | `reports/raw_ingest/*` |
-| 2 | Build causal base data with session normalization and synthetic/degraded row diagnostics | `scripts.phase2_causal_base.build_causal_base_data` | `data/causally_gated_normalized/{market}/{year}.parquet` |
+| 1A | Preflight planned DBN requests before provider download, then download/stage DBNs and validate files/manifests | `scripts.phase1A_download.download_databento_raw` | `data/dbn/.../*.dbn.zst`, manifests, and validation reports |
+| 1B | Recheck accepted Phase 1A DBN evidence, convert DBNs to raw parquet, then immediately validate raw parquet against DBNs, manifests, source hashes, sidecars, definition joins, and row/schema sanity | `scripts.phase1B_convert.convert_databento_raw`; internal validator `scripts.phase1C_validate.audit_raw_dbn_alignment` | `data/raw/{market}/{year}.parquet` and `reports/raw_ingest/*` |
+| 2 | Run readiness gate, build causal/session-normalized data, then validate causal outputs | `scripts.phase2_causal_base.build_causal_base_data` | `data/causally_gated_normalized/{market}/{year}.parquet` |
 | 3 | Build labels/targets with explicit entry lag and horizon semantics | `scripts.phase3_labels.build_labels` | `data/labeled/{market}/{year}.parquet` |
 | 4 | Build baseline feature matrices from causal inputs only | `scripts.phase4_features.build_baseline_features` | `data/feature_matrices/baseline/{market}/{year}.parquet` |
 | 5 | Build chronological WFA split plans with purge/embargo rules | `scripts.phase5_wfa.build_wfa_splits` | `reports/wfa/split_plan.json` |
-| Support | Maintain legacy WFA implementation package consumed by Phase 6; not a downstream runnable phase | `scripts.phase7_wfa.*` | support code and combined predictions |
-| 6 | Train WFA models and write out-of-sample predictions | `scripts.phase6_wfa.run_wfa` | `data/predictions/{run}/oos_predictions.parquet` |
+| Internal | Legacy internal WFA engine used by Phase 6; not a runnable pipeline phase | `scripts.phase7_wfa.*` | no standalone output; internal implementation only |
+| 6 | Train WFA models and write out-of-sample predictions, then combine prediction shards | `scripts.phase6_wfa.run_wfa`; `scripts.phase6_wfa.combine_wfa_predictions` | `data/predictions/{run}/oos_predictions.parquet` and WFA reports/manifests |
 | 8 | Evaluate predictions, costs, policy alignment, and promotion readiness | `scripts.phase8_model_selection.*` | `reports/phase8/*` |
 | 9 | Run bounded research harnesses and adversarial audits | `scripts.phase9_research.*` | `reports/pipeline_audit/*` or focused reports |
 | 10 | Guard locked holdout/forward evaluation | `scripts.final_holdout.guard_final_holdout` | holdout approval/block evidence |
 | 11 | Freeze approved research artifacts only after explicit approval | `scripts.artifact_freeze.freeze_research_artifacts` | frozen artifact metadata |
 
-`scripts.phase7_wfa` is support code for Phase 6, not a numbered downstream
-pipeline phase. Changes to that package must be validated before Phase 6 runs
-consume it.
+`scripts.phase7_wfa` is the legacy internal WFA engine, not a runnable pipeline
+phase. Run Phase 6 through `scripts.phase6_wfa.*`; changes to the legacy engine
+must be validated as Phase 6 WFA changes before Phase 6 runs consume them.
 
 ## Non-Negotiable Data Rules
 
 - Raw Databento DBN/ZST archives are immutable source artifacts.
+- Active data-root chain: `data/dbn` -> `data/raw` ->
+  `data/causally_gated_normalized` -> `data/labeled` ->
+  `data/feature_matrices` -> `data/predictions`.
+- Each root is the only active/source-of-truth root for its corresponding
+  artifact class in code defaults, manifests, readiness checks, and pipeline
+  decisions:
+  - `data/dbn`: DBN/ZST source archives.
+  - `data/raw`: raw parquet.
+  - `data/causally_gated_normalized`: causal/session-normalized modeling
+    inputs.
+  - `data/labeled`: labels and target-ready datasets.
+  - `data/feature_matrices`: feature matrices and feature-registry outputs.
+  - `data/predictions`: model prediction artifacts.
+- DBN `stype_in` policy is schema-specific:
+  - `definition` DBNs are the current approved exception and may use
+    `stype_in=parent` with `{MARKET}.FUT` symbols. Definition manifests should
+    not be redownloaded only because a parent-stype audit flags them.
+  - Canonical `ohlcv-1m`, `status`, and `statistics` DBNs should use
+    `stype_in=continuous` with `{MARKET}.v.0` symbols unless a separate
+    row-specific exception is explicitly approved.
+  - A parent-stype manifest audit is therefore not one defect class: definition
+    parent rows are accepted by policy, while non-definition parent rows require
+    row-level disposition, redownload, equality proof, or an explicit exception.
+- Candidate, staging, repair, quarantine, and report-provenance roots may be
+  temporary evidence only; they are not active/source-of-truth roots unless a
+  bounded approval explicitly promotes their artifacts into the canonical chain.
+- `data/archive` may contain old copies only as stale/dead archive evidence; it
+  is not an active/source-of-truth root and must not be used for code defaults,
+  manifests, readiness checks, pipeline decisions, or pipeline inputs.
 - Phase 1 preserves raw event timestamp semantics.
 - Phase 2 is the first phase allowed to session-normalize, mark synthetic/degraded rows, and convert into causal modeling inputs.
 - Do not fill missing 1-minute bars before the causal base phase.
 - Sparse trade-derived OHLCV markets require explicit no-trade and roll-window handling.
 - Every research result must be traceable back to source data, config, profile, and report/manifest evidence.
+
+### Degraded Data Policy
+
+Degraded vendor sessions may exist in raw and causal files for auditability, but
+they are not trainable data unless a separate proof shows the degraded flag was
+incorrectly assigned.
+
+- `degraded_raw_quality` readiness exceptions are file-creation exceptions only;
+  they do not approve labels, features, WFA, model training, model selection,
+  paper, or live use of degraded sessions.
+- Phase 2 owns degraded-session gating. Every causal parquet must persist
+  `data_quality_degraded`, `session_data_quality_degraded`,
+  `trainable_data_quality`, `causal_valid`, and `causal_invalid_reason`.
+- Any session containing degraded raw rows must remain
+  `session_data_quality_degraded=true`, `trainable_data_quality=false`, and
+  `causal_valid=false`.
+- Degraded-only rows must have `causal_invalid_reason=degraded_session`;
+  degraded rows with additional invalid gates must include `degraded_session` in
+  the pipe-delimited `causal_invalid_reason`.
+- Downstream phases must treat `causal_valid=false` as a hard exclusion from
+  labels, features, WFA, model training, and model-selection evidence.
+- Do not add global degraded-row threshold waivers. Any future exception must be
+  market/year/profile scoped with evidence paths.
 
 ## Label, Feature, And WFA Rules
 
@@ -162,6 +257,50 @@ Before trusting model or WFA results, verify:
 - result manifests and reports recording config, data scope, validation windows, costs, warnings, and failure modes;
 - no post-test retuning or cherry-picked metric is used as acceptance evidence.
 
+Baseline taxonomy before model trust:
+
+- `flat/no-trade`: confirms evaluation, costs, and reporting do not manufacture
+  PnL when no position is taken.
+- `cost-only sanity`: applies the configured cost model to known turnover or
+  simple activity assumptions before alpha claims.
+- `simple trend`: uses causal price/momentum inputs only and must obey the same
+  splits, costs, and risk rules as complex models.
+- `simple mean-reversion`: uses causal reversal or distance-from-recent-price
+  inputs only and must be evaluated under identical gates.
+- `volatility-regime`: tests whether behavior survives high/low volatility or
+  session/regime partitions without using future information.
+- `order-flow/volume/liquidity-proxy`: allowed only when the underlying fields
+  have passed feature-availability and leakage audits.
+
+Baseline acceptance and reporting criteria:
+
+- `flat/no-trade` must report zero-position PnL, turnover, costs, and metric
+  sanity checks so the evaluation path cannot manufacture alpha from reporting
+  or aggregation errors.
+- `cost-only sanity` must use the same cost, split, session, and position
+  assumptions as the candidate policy and must show the cost drag implied by
+  the tested turnover before any alpha claim is accepted.
+- `simple trend` must predeclare lookback windows, causal price inputs, and
+  signal direction, then report fold/market/year gross and net metrics under
+  the same WFA and risk rules as the candidate model.
+- `simple mean-reversion` must predeclare reversal windows, distance measures,
+  and session/regime handling, then report the same fold/market/year and
+  high/low-volatility breakdowns as the candidate model.
+- `volatility-regime` must use only causal regime labels, report high/low
+  volatility and session/regime partitions, and state whether the candidate
+  edge survives outside a single favorable regime.
+- `order-flow/volume/liquidity-proxy` baselines are accepted only when the
+  fields are available at decision time, pass feature/leakage audits, and use
+  the same fill, cost, split, and risk assumptions as the candidate model.
+- Every baseline report must include scope, causal inputs, feature set, config
+  hash or path, split plan, cost policy, gross/net metrics, fold coverage,
+  warnings, failure modes, and a no-retune statement.
+
+Complex models cannot be trusted unless they beat the simplest relevant
+baseline under the same data scope, split plan, cost model, position policy,
+and risk assumptions. A baseline failure is diagnostic evidence, not a reason to
+retune the complex model after locked OOS review.
+
 ## Mandatory Gates Before Model Trust
 
 The following gates are required before any model, WFA, policy, promotion, or
@@ -170,10 +309,25 @@ successful command exit is not sufficient; each gate must have explicit inputs,
 outputs, acceptance checks, stop conditions, and downstream blockers recorded in
 its manifest or report evidence.
 
+Shared gate evidence format:
+
+- Scope: profile, markets, years, rows/files, configs, source hashes, output
+  roots, report paths, and whether outputs are active, staged, or historical.
+- Acceptance: exact pass/warn/fail criteria, allowed warnings, and required
+  primary evidence paths.
+- Stop conditions: data gaps, stale artifacts, schema/hash mismatches, leakage
+  risks, provisional costs, post-test retuning, or missing provenance that
+  blocks downstream use.
+- Downstream use: which later phases may consume the evidence, which claims are
+  still blocked, and which generated artifacts must remain untracked.
+
+Phase sections below list only phase-specific command patterns and deltas.
+Generic model-trust blockers are governed by the shared gates in this section.
+
 ### Raw Data And Metadata Gate
 
-Placement: after Phase 1A/1B archive and raw-parquet preparation, before Phase 2
-causal/session normalization.
+Placement: after Phase 1A DBN/archive validation and Phase 1B raw parquet
+build plus raw/DBN validation, before Phase 2 causal/session normalization.
 
 Required inputs:
 
@@ -412,6 +566,26 @@ Required inputs:
   handling for research simulation;
 - profile-specific cost policy and any provisional-cost flags.
 
+minimum execution-realism evidence:
+
+- Spread evidence must name the source, timestamp alignment, sampling window,
+  and whether the simulation crosses, joins, or otherwise models the spread.
+- Commission, exchange fee, clearing/NFA fee, and broker-fee evidence must cite
+  the configured source and effective date or explicitly mark costs provisional.
+- Slippage and delay evidence must state the assumed delay from signal to order
+  and order to fill, the price reference used, and why the assumption is not
+  better than signal-time availability permits.
+- Fill, partial-fill, rejection, and queue-position assumptions must be explicit;
+  missing evidence blocks promotion rather than defaulting to perfect fills.
+- Contract multiplier, tick value, point value, and contract-count conversion
+  must reconcile signal units to dollars by market and profile.
+- Liquidity, capacity, and market-impact limits must be reported for every
+  promoted policy; absent evidence blocks promotion for size-sensitive or
+  illiquid-window strategies.
+- Provisional spread, slippage, fill, fee, capacity, or multiplier evidence may
+  support diagnostics only and must be recorded as a downstream blocker before
+  promotion, artifact freeze, paper, or live claims.
+
 Required outputs:
 
 - costed metrics report with gross/net PnL, cost drag, turnover, trade count,
@@ -492,6 +666,27 @@ Required outputs:
 - portfolio/risk decision recording whether sizing and risk limits are approved,
   provisional, or blocked.
 
+Portfolio/risk minimum evidence records:
+
+- capital base, account currency, allocation scope, and whether capital is
+  hypothetical, provisional, or approved for research comparison only;
+- contract multiplier, tick value, contract-count conversion, and margin source
+  used for every market in the evaluated policy;
+- leverage cap, per-trade loss limit, daily loss limit, drawdown limit,
+  position limit, concentration limit, and volatility-targeting or sizing rule;
+- broker, exchange, and account constraints that could reject, reduce, or
+  throttle a proposed position;
+- liquidity, capacity, market-impact, and turnover limits tied to the same
+  spread/slippage/fill evidence used by the Backtest And Cost Gate;
+- stale-data, stale-signal, order-throttle, risk-off, and kill-switch controls
+  required before any portfolio/risk claim is accepted;
+- stress scenarios covering gap moves, volatility shocks, liquidity droughts,
+  correlated market losses, margin increases, and missing or delayed inputs.
+
+Each record must be labeled `PASS`, `WARN`, or `FAIL`. `WARN` and manual-review
+items remain downstream blockers until the report names the accepted exception,
+review owner, evidence path, stale-risk note, and claims still disallowed.
+
 Acceptance checks:
 
 - every portfolio metric is computed from locked OOS rows and the same cost,
@@ -571,6 +766,29 @@ Required outputs:
 - regime breakdown, structural-break, and concept-drift diagnostics;
 - final statistical-validity decision separate from structural pass and alpha
   promotion.
+
+Statistical validity applicability and threshold policy:
+
+- PBO, or an explicitly equivalent overfit diagnostic, is required for any
+  search process that compares multiple targets, feature families, models,
+  thresholds, markets, cost assumptions, sizing policies, or stopped branches.
+- Deflated Sharpe Ratio and Probabilistic Sharpe Ratio are required for any
+  Sharpe-like promotion claim. If the primary metric is not Sharpe-like, the
+  report must mark the item `NOT_APPLICABLE_WITH_REASON` and name the substitute
+  uncertainty and multiple-testing evidence.
+- Bootstrap or walk-forward confidence intervals are required for every primary
+  metric used in a promotion, freeze, or model-trust claim.
+- Multiple-testing adjustment must cover the complete tested search surface,
+  including failed, stopped, and diagnostic-only variants that could otherwise
+  create false confidence.
+- Parameter stability, feature stability, and fold/market/year/regime
+  consistency are required before any stable-edge or robust-alpha claim.
+- Every item must record `PASS`, `FAIL`, or
+  `NOT_APPLICABLE_WITH_REASON`. Missing evidence is `FAIL` for promotion,
+  artifact freeze, and model-trust claims.
+- Numeric thresholds must be predeclared in an approved config, protocol, or
+  report before locked review. If no threshold authority exists, the result is
+  blocked rather than accepted by narrative judgment.
 
 Acceptance checks:
 
@@ -657,17 +875,39 @@ verifies:
   regime-coverage alerts;
 - monitoring, logging, alerting, rollback, and post-trade reconciliation.
 
+Paper/Live Readiness Gate:
+
+- This gate is future and non-authorizing. It must not be used as promotion,
+  paper-trading, live-trading, broker, or production-readiness evidence until a
+  separate approved runbook, validation suite, and evidence manifest exist.
+- Required future evidence includes contract-specific symbol mapping, broker
+  account constraints, margin and buying-power checks, order type semantics,
+  order simulation, fill/partial-fill/rejection handling, latency and delay
+  assumptions, order throttles, market-hours/session guards, stale-data guards,
+  stale-prediction guards, and self-match or duplicate-order prevention.
+- Required future risk controls include position limits, leverage limits,
+  max-loss rules, drawdown response, volatility and liquidity shock handling,
+  kill-switch controls, manual override, rollback, incident logging, and
+  post-trade reconciliation.
+- Required future model/ops controls include frozen production config,
+  model-version mapping, feature generation parity, training-serving skew
+  checks, prediction drift monitoring, calibration monitoring, missing-input
+  handling, alert routing, and operator acceptance criteria.
+- Until those controls have primary evidence, every paper/live readiness item is
+  `manual evidence review only` and remains a blocker for paper/live claims.
+
 Until that gate exists and passes, `live_ops/` content is scaffolding only and
 must not be treated as research proof, production readiness, or permission to
 trade.
 
 ## Detailed Pipeline Runbook
 
-This runbook mixes general phase command patterns with explicitly bounded
-candidate-specific workflow gates, such as ES 2026 notes. Candidate-specific
-notes are scoped workflow state only; they are not general pipeline
-requirements, approvals, or model-trust evidence unless reconciled against
-current primary artifacts, manifests, command output, and a bounded approval.
+This runbook defines reusable phase command patterns and gate requirements.
+Historical/current-state candidate workflow notes live in the Current Status
+Appendix only. Appendix notes are scoped workflow state; they are not general
+pipeline requirements, approvals, or model-trust evidence unless reconciled
+against current primary artifacts, manifests, command output, and a bounded
+approval.
 
 Run commands from the repo root:
 
@@ -675,21 +915,48 @@ Run commands from the repo root:
 cd C:\Users\donny\Desktop\futures_intraday_model
 ```
 
-### 1A. Download DBN Archives
+### 1A. Download Or Stage DBN Archives
 
-Purpose: archive immutable Databento DBN/ZST chunks. This phase downloads
-source archives only; it does not create canonical raw parquet.
+Purpose: download or stage immutable Databento DBN/ZST chunks and validate DBN
+request plans before provider work starts. Phase 1A must first build a
+download plan, validate request parameters, validate output paths and overwrite
+guards, run dry-run/cost gates when applicable, and stop before provider
+download if any severe preflight failure exists. After download, Phase 1A
+validates the actual DBN files and manifests before any active replacement or
+raw parquet conversion is considered. This phase writes source archives only
+into an approved DBN root; normal broad downloads use the active
+source-of-truth DBN root `data/dbn`, while redownload or repair work must stage
+outside active roots until a separate bounded replacement approval exists. This
+phase does not create canonical raw parquet. DBN files under `data/archive` are
+stale/dead archive evidence only, not Phase 1A source inputs.
 
-Command pattern:
+Required pre-download plan command, no provider API calls:
 
 ```powershell
-python -m scripts.phase1A_download.download_databento_raw --universe extended_cme --start-year 2010 --end-year 2026 --end-date 2026-06-10 --schema all --mode download-dbn --raw-format dbn-zstd --chunk year --workers 4 --resume
+python -m scripts.phase1A_download.download_databento_raw --universe extended_cme --start-year 2010 --end-year 2026 --end-date 2026-06-10 --schema all --mode download-dbn --raw-format dbn-zstd --chunk year --workers 4 --resume --dry-run --reports-root reports\raw_ingest
 ```
 
-Smoke pattern before large runs:
+Cost estimate evidence, when provider metadata calls are approved but before
+any download. This estimates cost only; it is not a zero-cost blocking gate by
+itself:
 
 ```powershell
-python -m scripts.phase1A_download.download_databento_raw --symbols ES --start 2026-01-01 --end 2026-01-03 --schema all --mode download-dbn --raw-format dbn-zstd --chunk year --workers 1 --resume --dry-run
+python -m scripts.phase1A_download.download_databento_raw --universe extended_cme --start-year 2010 --end-year 2026 --end-date 2026-06-10 --schema all --mode download-dbn --raw-format dbn-zstd --chunk year --workers 4 --resume --estimate-cost --reports-root reports\raw_ingest
+```
+
+Exact zero-cost blocking gate, when the approved policy requires only exact
+zero-cost downloadable tasks:
+
+```powershell
+python -m scripts.phase1A_download.download_databento_raw --universe extended_cme --start-year 2010 --end-year 2026 --end-date 2026-06-10 --schema all --mode download-dbn --raw-format dbn-zstd --chunk year --workers 4 --resume --estimate-cost --zero-cost-only --reports-root reports\raw_ingest
+```
+
+Provider download command, only after pre-download plan and cost evidence are
+accepted under a bounded approval. If exact zero-cost is required, the
+zero-cost gate above must pass first:
+
+```powershell
+python -m scripts.phase1A_download.download_databento_raw --universe extended_cme --start-year 2010 --end-year 2026 --end-date 2026-06-10 --schema all --mode download-dbn --raw-format dbn-zstd --chunk year --workers 4 --resume --reports-root reports\raw_ingest
 ```
 
 Inputs:
@@ -701,35 +968,107 @@ Outputs:
 
 - OHLCV DBN: `data/dbn/ohlcv_1m/{market}/{year}/{chunk_start}_{chunk_end}.dbn.zst`
 - Definition DBN: `data/dbn/definition/{market}/{year}/{chunk_start}_{chunk_end}.dbn.zst`
+- Optional sidecar DBNs:
+  `data/dbn/status/{market}/{year}/{chunk_start}_{chunk_end}.dbn.zst` and
+  `data/dbn/statistics/{market}/{year}/{chunk_start}_{chunk_end}.dbn.zst`
 - Reports under `reports/raw_ingest/`, including DBN manifests.
 
-Acceptance checks:
+Pre-download request preflight:
 
-- `schema=all` produced both OHLCV and definition outputs.
-- Sidecar manifests exist and match file path, size, hash, dataset, schema, and
-  year range.
+- Exact market/year/schema scope is approved and bounded.
+- Planned `schema` matches the intended folder/task: manifest schema
+  `ohlcv-1m` maps to `data/dbn/ohlcv_1m`; manifest schemas `status`,
+  `statistics`, and `definition` map to matching schema folders.
+- Planned `market`, `start`, and `end` match the intended market-year window.
+- Planned `stype_in` matches policy: normal canonical `ohlcv-1m`, `status`,
+  and `statistics` use `continuous`; current `definition` uses `parent` unless
+  a separate approved downloader policy change says otherwise.
+- Planned `stype_out=instrument_id`.
+- Planned `symbols_requested` matches `stype_in`: normally `{MARKET}.v.0` for
+  `continuous` and `{MARKET}.FUT` for `parent`.
+- Planned `encoding=dbn`, `compression=zstd`, `vendor=databento`, and
+  `dataset=GLBX.MDP3`.
+- Planned output path is under the approved staging or active DBN root, matches
+  the schema/market/year/date-window layout, and does not contain forbidden
+  path patterns for the run.
+- No planned output would overwrite an existing file unless that exact
+  overwrite is separately approved.
+- Dry-run/cost evidence is reviewed when applicable.
+
+Pre-download stop or override policy:
+
+- Default behavior is fail closed: pause or stop before provider download,
+  write a report explaining the failed check, and require an explicit decision.
+- Severe failures must not be overridden in normal runs: wrong schema, wrong
+  `stype_in`, wrong symbol, wrong market/year/date window, wrong output root,
+  active overwrite risk, forbidden path pattern, missing approval, or
+  unapproved cost.
+- Only documented non-severe warnings may be overridden, and only by explicit
+  bounded approval that names the warning code, scope, report path, timeout,
+  forbidden actions, and stop condition. Do not use a generic broad override.
+
+Post-download DBN file/manifest validation:
+
+- Required DBN files and sidecar manifests exist for the exact approved
+  market/year/schema scope.
+- Manifest identity fields match the request and folder/task: `vendor`,
+  `dataset`, `schema`, `market`, `symbols_requested`, `start`, `end`,
+  `stype_in`, `stype_out`, `encoding`, `compression`, `path`,
+  `file_size_bytes`, `file_sha256`, and `request_status`.
+- Normal canonical `ohlcv-1m`, `status`, and `statistics` requests use
+  `stype_in=continuous`, `stype_out=instrument_id`, and
+  `symbols_requested={MARKET}.v.0`; the current repo downloader forces
+  `definition` to `stype_in=parent` with `symbols_requested={MARKET}.FUT`
+  unless a separate policy/code change is explicitly approved.
+- `encoding=dbn`, `compression=zstd`, `vendor=databento`,
+  `dataset=GLBX.MDP3`, and `request_status=ok`.
+- Manifest `path` points to the actual DBN file, `file_size_bytes` is positive,
+  and `file_sha256` equals the actual DBN bytes.
 - No unexpected overwrite occurred.
 
 Stop conditions:
 
 - A market-year is missing from the current coverage audit after a supposedly
   successful run.
+- A pre-download request preflight has any severe failure.
 - A batch times out.
 - A manifest hash/path/schema mismatch appears.
 - The command would require broad `--overwrite` without an explicit audit reason.
 
-### 1B. Convert DBN To Raw Parquet
+### 1B. Build And Validate Raw Parquet
 
-Purpose: validate DBN chunks plus definition metadata and stitch them into one
-OHLCV 1-minute grained raw market-year parquet dataset. Definition, status, and
-statistics records are joined onto OHLCV rows as metadata/enrichment columns;
-Phase 1B does not create separate parquet datasets for each DBN schema.
+Purpose: recheck accepted Phase 1A DBN evidence immediately before conversion,
+then stitch accepted DBN chunks into one OHLCV 1-minute grained raw market-year
+parquet dataset. Definition, status, and statistics records are joined onto
+OHLCV rows as metadata/enrichment columns; Phase 1B does not create separate
+parquet datasets for each DBN schema. Phase 1B also immediately validates the
+converted raw parquet against the DBN files/manifests that produced it:
+`source_file`, `source_sha256`, required sidecars, definition joins, and
+row/schema sanity must pass before Phase 2 can consume the raw data.
 
-Command:
+Required Phase 1B command sequence. Phase 1B is incomplete unless both the
+conversion command and the raw/DBN validation command pass for the same scope.
+The bounded approval must name the scope once, then the conversion and
+validation commands must use that same scope. Do not mix a broad conversion
+with a narrow validation report, or a narrow conversion with a broad validation
+report.
+
+Convert DBNs to raw parquet:
 
 ```powershell
 python -m scripts.phase1B_convert.convert_databento_raw --dbn-root data\dbn\ohlcv_1m --raw-root data\raw
 ```
+
+Validate converted raw parquet against DBNs:
+
+```powershell
+python -m scripts.phase1C_validate.audit_raw_dbn_alignment --config configs/alpha_tiered.yaml --profile tier_3 --dbn-root data\dbn --raw-root data\raw --json-out reports\raw_ingest\raw_dbn_alignment.json --md-out reports\raw_ingest\raw_dbn_alignment.md
+```
+
+For bounded market/year repair work, use matching `--symbols`, date/year bounds,
+profile, or include-list artifacts in both commands. The validation command's
+`--profile` or `--market-year-include-list` must describe exactly the raw files
+converted in the paired conversion command.
 
 Staged optional enrichment candidate:
 
@@ -748,10 +1087,28 @@ Outputs:
 
 - `data/raw/{market}/{year}.parquet`
 - Optional staged candidate only: `data/raw_enriched_candidate/{market}/{year}.parquet`
-- Raw parquet manifests under `reports/raw_ingest/`.
+- Raw parquet manifests and raw/DBN validation reports under `reports/raw_ingest/`.
 
 Acceptance checks:
 
+- Evidence recheck aborts before writing raw parquet if any scoped Phase 1A DBN
+  validation report is missing/stale or any scoped DBN manifest is missing,
+  unreadable, stale, or inconsistent with its file.
+- `schema` matches the folder/task: manifest `ohlcv-1m` under
+  `data/dbn/ohlcv_1m`, or manifest `status`, `statistics`, or `definition`
+  under the matching schema folder.
+- `market` matches the folder market.
+- `start` and `end` match the market-year window.
+- `stype_in` matches policy: normal canonical `ohlcv-1m`, `status`, and
+  `statistics` use `continuous`; current `definition` uses `parent` unless a
+  separate approved downloader policy change says otherwise.
+- `stype_out=instrument_id`.
+- `symbols_requested` matches `stype_in`: normally `{MARKET}.v.0` for
+  `continuous` and `{MARKET}.FUT` for `parent`.
+- `encoding=dbn`, `compression=zstd`, `vendor=databento`,
+  `dataset=GLBX.MDP3`, and `request_status=ok`.
+- Manifest `path` points to the actual DBN file, `file_size_bytes` is positive
+  and matches the file, and `file_sha256` equals the actual DBN bytes.
 - Required OHLCV schema is present.
 - Definition-derived fields are present, including `raw_symbol` and `tick_size`.
 - Raw rows preserve `ts_event`.
@@ -767,17 +1124,23 @@ Acceptance checks:
 
 Stop conditions:
 
+- Any DBN evidence recheck failure before conversion.
 - Missing definition DBN for a market-year.
 - Any null or nonpositive tick-size metadata.
 - Missing manifest, hash mismatch, or raw schema mismatch.
+- Post-conversion raw/DBN validation fails on source file, source hash,
+  required sidecars, definition join, or row/schema sanity.
 
-### 1C. Raw Readiness Gate
+#### Phase 1B Raw/DBN Validation Gate
 
-Purpose: verify that canonical `data/raw` is complete, schema-valid,
-DBN-derived, definition-enriched, and aligned to the current local DBN archive
-before Phase 2 consumes it.
+Purpose: independently validate that converted canonical `data/raw` parquet is
+complete, schema-valid, DBN-derived, definition-enriched, and aligned to the
+current local DBN archive before Phase 2 consumes it. This is now the validation
+gate inside Phase 1B. The script path still contains `phase1C_validate` for
+backward compatibility with existing code, tests, and historical reports, but
+it is no longer a separate public pipeline phase.
 
-Command:
+Internal validator command:
 
 ```powershell
 python -m scripts.phase1C_validate.audit_raw_dbn_alignment --config configs/alpha_tiered.yaml --profile tier_3 --dbn-root data\dbn --raw-root data\raw --json-out reports\raw_ingest\raw_dbn_alignment.json --md-out reports\raw_ingest\raw_dbn_alignment.md
@@ -807,8 +1170,15 @@ python -m scripts.validation.triage_raw_dbn_alignment promotion-manifest --align
 Acceptance checks:
 
 - Raw parquet schema/value checks pass.
-- OHLCV and definition DBN sidecar manifests pass.
+- OHLCV, definition, and required optional DBN sidecar manifests pass for the
+  exact active scope.
 - No raw parquet exists without matching local DBN provenance.
+- Raw parquet `source_file` and `source_sha256` lineage match the actual DBN
+  files and manifests used to build it.
+- Required status/statistics source columns are populated where policy requires
+  them.
+- Definition joins pass for every scoped market-year that is not covered by an
+  explicit accepted exception.
 - Missing canonical raw market-years are reported as Phase 1B conversion
   candidates, not silently ignored.
 - Staged candidates are compared against canonical `data/raw` before any
@@ -820,20 +1190,86 @@ Streamlining policy:
 
 - Keep Phase 1A and Phase 1B separate so immutable DBN provenance remains
   auditable.
-- Do not run Phase 2 before Phase 1B and the raw readiness gate.
-- Use Phase 1C as the single user-facing raw-data readiness check instead of
-  folding causal/session validation into Phase 1B.
+- Phase 1A must fail fast before provider download when the planned request is
+  invalid, unsafe, too expensive, or outside approval bounds.
+- Phase 1B must still recheck accepted DBN evidence before raw parquet
+  conversion because files, manifests, or approvals can drift between phases.
+  Do not spend conversion time on a scope that cannot pass the DBN evidence
+  recheck.
+- Do not run Phase 2 before Phase 1B raw parquet build and Phase 1B raw/DBN
+  validation both pass.
+- Keep the raw/DBN validation command independent inside Phase 1B so conversion
+  output is audited after it is written. Do not fold causal/session validation
+  into Phase 1B.
+
+Standard redownload/rebuild policy:
+
+- Do not hand-edit DBN manifests to change request semantics, such as
+  `stype_in`, symbols, dates, schema, hashes, file sizes, or job metadata.
+- Any replacement DBN download must run Phase 1A request preflight first, with
+  exact market/year/schema scope, expected request parameters, output-root and
+  overwrite guards, cost/dry-run evidence when applicable, and no active
+  `data/dbn` overwrite during acquisition.
+- Before provider download, severe Phase 1A request-preflight failures must
+  stop the run and explain the issue. Only explicit bounded approvals may
+  override documented non-severe warnings.
+- After provider download and before promotion, staged DBNs and manifests must
+  pass file hash, path, schema, date-window, request-parameter, decoded-schema,
+  decoded-row, and record-level comparison checks against the intended policy
+  baseline.
+- Active DBN replacement requires a separate bounded approval and must archive
+  the prior active DBN/manifests; it must not delete provenance evidence.
+- After any active DBN replacement, rebuild affected `data/raw` market-years
+  from canonical `data/dbn` sources. Phase 1B must recheck Phase 1A validation
+  evidence and abort before conversion if any scoped report, manifest, or DBN
+  file fails. Do not treat a DBN replacement alone as a completed downstream
+  repair.
+- Run the Phase 1B raw/DBN validation gate on the exact affected market-years
+  after conversion and require raw/DBN source hashes, schema checks, required
+  DBN coverage, sidecar lineage, row/schema sanity, and definition joins to pass
+  before Phase 2.
+- Run Phase 2 readiness-only first for the exact affected market-years. Only
+  after readiness passes may staged causal parquet be built, validated, and
+  separately approved for active replacement.
+- Keep downstream labels, features, WFA, predictions, model selection, paper,
+  and live workflows out of scope unless separately approved after the causal
+  rebuild evidence is accepted.
 
 ### 2. Build Causal Base
 
-Purpose: re-check raw bar invariants, normalize sessions, identify roll windows, mark
-synthetic rows, and causally gate data.
+Purpose: run a readiness gate against accepted raw parquet evidence, then
+re-check raw bar invariants, normalize sessions, identify roll windows, mark
+synthetic rows, and causally gate data. Phase 2 must validate causal output
+row counts, raw input paths/hashes, manifests, and row/hash evidence before any
+staged causal parquet is promoted to an active root.
 
-Command:
+Required Phase 2 command sequence. Phase 2 is incomplete unless readiness,
+build, and output validation all pass for the same scope. The bounded approval
+must name the scope once, and the readiness/build commands plus generated
+manifest/validation reports must match that scope.
+
+Readiness gate only, no causal parquet build:
 
 ```powershell
-python -m scripts.phase2_causal_base.build_causal_base_data --profile tier_1
+python -m scripts.phase2_causal_base.build_causal_base_data --readiness-only --profile tier_1 --raw-root data\raw --output-root data\causally_gated_normalized --raw-alignment-report reports\raw_ingest\raw_dbn_alignment.json --readiness-json-out reports\causal_base\tier_1_readiness_summary.json --readiness-md-out reports\causal_base\tier_1_readiness_summary.md
 ```
+
+Build causal parquet only after readiness passes:
+
+```powershell
+python -m scripts.phase2_causal_base.build_causal_base_data --profile tier_1 --raw-root data\raw --output-root data\causally_gated_normalized --reports-root reports\causal_base\tier_1 --raw-alignment-report reports\raw_ingest\raw_dbn_alignment.json
+```
+
+Required post-build validation evidence:
+
+- `reports/causal_base/tier_1/causal_base_manifest.json`
+- `reports/causal_base/tier_1/causal_base_validation.json`
+- `reports/causal_base/tier_1/causal_base_validation.csv`
+
+Phase 2 does not pass unless readiness status is `PASS`, the causal manifest is
+`PASS`, causal validation is `PASS`, raw input paths/hashes match the accepted
+Phase 1B raw parquet evidence, and output hashes/row counts match the causal
+validation evidence.
 
 Inputs:
 
@@ -848,10 +1284,721 @@ Inputs:
 Outputs:
 
 - `data/causally_gated_normalized/{market}/{year}.parquet`
-- `reports/causal_base/`
-  - `local_trade_ohlcv_gap_crosscheck_2025_2026.json`
-  - `local_trade_ohlcv_gap_crosscheck_2025_2026.md`
+- `reports/causal_base/{profile}/causal_base_manifest.json`
+- `reports/causal_base/{profile}/causal_base_validation.json`
+- `reports/causal_base/{profile}/causal_base_validation.csv`
+- explicitly scoped readiness JSON/markdown/checkpoint reports under the
+  approved reports root, when a readiness-only run is approved.
 
+Historical/current-state Phase 2 local-trade diagnostic workflow notes live
+under `Historical Local-Trade Phase 2 Diagnostic Workflow State` in the Current
+Status Appendix. Those notes are not reusable Phase 2 runbook authority,
+model-trust evidence, or approval for downstream work unless refreshed against
+current primary artifacts and a bounded approval.
+
+
+Acceptance checks:
+
+- Output market-years match the resolved profile.
+- `ts_event` has been converted to `ts`.
+- Session, synthetic-row, roll-window, and degraded-row warnings are explicit.
+- Staged status/statistics enrichment columns, when present, remain raw
+  metadata/audit fields and are reported with missing/stale counts.
+- For each processed market, synthetic missing OHLCV-1m minutes in
+  `[2025-06-18, 2026-06-13)` are cross-checked against local `trades` DBN
+  archives. A passing market validates older years by Databento no-trade
+  convention evidence only; older years are not independently re-proven.
+- The local trades gate proves no trade rows inside scanned synthetic OHLCV gap
+  windows only; it is not a universal proof that no trades occurred everywhere.
+- Production/research profiles fail when strict raw metadata is missing.
+
+Stop conditions:
+
+- Missing raw inputs for expected profile market-years.
+- Missing or invalid OHLCV, definition, or trades DBN coverage for the
+  `[2025-06-18, 2026-06-13)` local-trades audit window.
+- Trade rows, unresolved adjacent contract context, or unverified coverage
+  appear inside synthetic missing OHLCV-1m minutes.
+- Synthetic/degraded/roll-window thresholds exceed configured limits.
+- Session config is missing or hardcoded calendar fallback is required without
+  an explicit reason.
+
+### 3. Build Labels
+
+Purpose: create future-looking labels and cost-aware target validity flags.
+
+Command:
+
+```powershell
+python -m scripts.phase3_labels.build_labels --profile tier_1 --input-root data\causally_gated_normalized
+```
+
+Bounded market/year filters:
+
+```powershell
+python -m scripts.phase3_labels.build_labels --profile tier_3_holdout --input-root data\causally_gated_normalized --output-root data\labeled --reports-root reports\labels\local_trade_baseline\data_causally_gated_normalized_2025 --markets 6E,CL,ES,ZN --years 2025
+```
+
+Inputs:
+
+- `data/causally_gated_normalized/{market}/{year}.parquet`
+- Optional explicit causal candidate roots, such as
+  `data/causal_proof_candidates/local_trade_2025_2026_v1/{market}/{year}.parquet`
+- `configs/costs.yaml`
+
+Outputs:
+
+- `data/labeled/{market}/{year}.parquet`
+- `reports/labels/`
+
+Acceptance checks:
+
+- Label horizons respect intraday/session validity.
+- Target columns are present and separated from feature columns downstream.
+- Cost-aware validity flags are generated from configured costs, not ad hoc
+  assumptions.
+- `--markets` and `--years` filters select only market-years inside the
+  resolved profile, and label manifests record `input_selection`.
+
+Stop conditions:
+
+- Selected market/year filters resolve to no Phase 3 inputs.
+- Target construction uses future rows beyond the allowed horizon.
+- Session boundary logic permits invalid overnight or cross-session labels.
+- Cost config is missing or provisional where a strict profile requires final
+  costs.
+
+### 4. Build Baseline Feature Matrix
+
+Purpose: build OHLCV-only baseline and L0 regime features plus metadata, target,
+and registry columns.
+
+Command:
+
+```powershell
+python -m scripts.phase4_features.build_baseline_features --profile tier_1
+```
+
+Inputs:
+
+- `data/labeled/{market}/{year}.parquet`
+- `configs/costs.yaml`
+
+Outputs:
+
+- `data/feature_matrices/baseline/{market}/{year}.parquet`
+- `data/feature_matrices/baseline/feature_cols.json`
+- `data/feature_matrices/baseline/target_cols.json`
+- `data/feature_matrices/baseline/metadata_cols.json`
+- `data/feature_matrices/baseline/excluded_cols.json`
+- `reports/features_baseline/`
+
+Feature audit gate:
+
+- Every feature admitted to a registry must have source column/artifact,
+  availability timestamp, update frequency, as-of join behavior, lookback
+  window, NaN/warmup handling, economic rationale, leakage-risk classification,
+  train-only transform status, and drift/decay check status.
+- Optional or staged metadata fields, including status/statistics enrichment,
+  require an explicit feature-hypothesis approval before model use.
+- New Phase 9 feature hypotheses must produce the same audit record before they
+  can advance from feasibility work to WFA or promotion review.
+
+Acceptance checks:
+
+- Feature registry excludes target, leakage, timestamp, and metadata columns.
+- Raw status/statistics enrichment columns are excluded from default features;
+  model use requires a later feature-hypothesis change with leakage checks and
+  registry updates.
+- Feature audit records exist and match `feature_cols.json`.
+- Feature rows line up with label rows.
+- Baseline features are causal and do not use final-holdout full-sample
+  statistics.
+
+Stop conditions:
+
+- Any target/leakage column enters `feature_cols.json`.
+- Any feature lacks source, availability timestamp, update frequency, as-of join
+  behavior, lookback, NaN/warmup handling, economic rationale, leakage-risk
+  classification, train-only transform status, or drift/decay status.
+- Cost config is provisional under strict research settings.
+- Feature matrix row count or market-year scope does not match labels.
+
+Downstream blockers:
+
+- Phase 5/6/8 cannot consume feature matrices with missing audit records,
+  target/leakage columns, stale registries, row mismatches, or provisional-cost
+  blockers.
+- Phase 9 feature hypotheses remain feasibility work until they produce the
+  same audit record required for promoted Phase 4 features.
+
+### 5. Build WFA Splits
+
+Purpose: build deterministic train/test fold definitions with purge and embargo.
+
+Validation design policy:
+
+- Chronological WFA with purge and embargo is the approved validation design for
+  this pipeline unless a separate bounded plan explicitly approves a purged-CV
+  design.
+- Shuffled CV, full-dataset CV, and any CV that lacks documented purge/embargo
+  coverage are blocked before Phase 6.
+
+Validation role definitions:
+
+- Training rows are the only rows used to fit feature transforms, imputers,
+  scalers, models, and any train-fold statistics.
+- Validation rows, when used, must be an inner or nested split inside the
+  training window and are the only rows allowed for model-family,
+  hyperparameter, threshold, feature-family, or policy selection.
+- If no inner validation split is defined, model, threshold, feature, and policy
+  choices must be fixed by predeclared config or hypothesis records before the
+  WFA test fold is scored.
+- Test rows are WFA out-of-sample rows used for fold scoring only; they cannot
+  drive training, feature selection, threshold selection, model selection,
+  cost/sizing changes, or retry decisions.
+- Locked holdout and forward rows are evaluation-only and cannot be used as
+  training or validation evidence unless a separate guarded final-holdout run is
+  explicitly approved.
+
+Command:
+
+```powershell
+python -m scripts.phase5_wfa.build_wfa_splits --profile tier_1
+```
+
+Inputs:
+
+- `data/feature_matrices/baseline/`
+- `configs/alpha_tiered.yaml`
+- `configs/models.yaml`
+
+Outputs:
+
+- `reports/wfa/split_plan.json`
+
+Acceptance checks:
+
+- Every fold has positive train and test rows.
+- Split plan profile, resolved profile, markets, years, config hash, purge, and
+  embargo are recorded.
+- Every split row or window is assigned exactly one role: train, inner
+  validation when used, test/OOS, locked holdout, or locked forward.
+- Model, threshold, feature, and policy selection evidence is limited to
+  training rows and declared inner-validation rows; test, holdout, and forward
+  rows remain selection-free.
+- Final-holdout rows are excluded unless an explicit final-holdout split run is
+  being built with the appropriate guard.
+
+Stop conditions:
+
+- Empty folds.
+- Profile/year/market mismatch.
+- Missing, overlapping, or ambiguous train/validation/test/holdout/forward role
+  assignments after purge and embargo are applied.
+- Any full-dataset feature selection, model selection, threshold tuning, cost
+  tuning, or policy selection uses WFA test rows, locked holdout rows, or locked
+  forward rows.
+- Missing provenance required by downstream WFA.
+
+Downstream blockers:
+
+- Phase 6/8 cannot use missing, stale, mismatched, contaminated, or
+  non-positive-fold split plans.
+- Statistical-validity, promotion, artifact-freeze, final-holdout, and forward
+  claims remain blocked until the split design proves chronological OOS
+  separation, purge/embargo, and the guarded evaluation path.
+
+### 6. Train WFA Models And Save OOS Predictions
+
+Purpose: fit baseline models on train folds and write out-of-sample predictions
+for test folds. Phase 6 also owns combining prediction shards through the
+`scripts.phase6_wfa.combine_wfa_predictions` wrapper.
+
+Prediction-write command template:
+
+```powershell
+python -m scripts.phase6_wfa.run_wfa `
+  --profile tier_1 `
+  --matrix baseline `
+  --run baseline `
+  --input-root data/feature_matrices/baseline `
+  --split-plan reports/wfa/split_plan.json `
+  --predictions-root data/predictions `
+  --reports-root reports/wfa `
+  --models-config configs/models.yaml `
+  --profile-config configs/alpha_tiered.yaml `
+  --feature-set path/to/frozen_feature_set_manifest.json `
+  --data-audit-universe-json path/to/data_audit_universe.json `
+  --write-predictions
+```
+
+A bounded execution plan must replace placeholder paths with accepted current
+artifacts before running Phase 6. Tier 1 WFA requires a frozen feature-set
+manifest and data-audit universe evidence. Prediction parquet is written only
+when `--write-predictions` and `--predictions-root` are both supplied.
+
+Shard pattern for large runs:
+
+```powershell
+python -m scripts.phase6_wfa.run_wfa `
+  --profile tier_1 `
+  --matrix baseline `
+  --run baseline_s1of8 `
+  --input-root data/feature_matrices/baseline `
+  --split-plan reports/wfa/split_plan.json `
+  --predictions-root data/predictions `
+  --reports-root reports/wfa `
+  --models-config configs/models.yaml `
+  --profile-config configs/alpha_tiered.yaml `
+  --feature-set path/to/frozen_feature_set_manifest.json `
+  --data-audit-universe-json path/to/data_audit_universe.json `
+  --fold-shard-count 8 `
+  --fold-shard-index 1 `
+  --write-predictions
+
+python -m scripts.phase6_wfa.run_wfa `
+  --profile tier_1 `
+  --matrix baseline `
+  --run baseline_s2of8 `
+  --input-root data/feature_matrices/baseline `
+  --split-plan reports/wfa/split_plan.json `
+  --predictions-root data/predictions `
+  --reports-root reports/wfa `
+  --models-config configs/models.yaml `
+  --profile-config configs/alpha_tiered.yaml `
+  --feature-set path/to/frozen_feature_set_manifest.json `
+  --data-audit-universe-json path/to/data_audit_universe.json `
+  --fold-shard-count 8 `
+  --fold-shard-index 2 `
+  --write-predictions
+
+python -m scripts.phase6_wfa.combine_wfa_predictions `
+  --manifest-pattern "reports/wfa/baseline_s*of8_predictions_manifest.json" `
+  --run baseline `
+  --predictions-root data/predictions `
+  --reports-root reports/wfa `
+  --split-plan reports/wfa/split_plan.json `
+  --require-all-folds
+```
+
+Repeat the shard run for each 1-based shard index and use a unique shard run
+name, such as `baseline_s1of8` through `baseline_s8of8`, before combining.
+Shard prediction combines are Phase 6 work; do not call `scripts.phase7_wfa`
+directly from runbooks or execution packets.
+
+Inputs:
+
+- `data/feature_matrices/baseline/`
+- frozen feature-set manifest accepted for WFA, or an explicitly scoped
+  non-Tier-1 `feature_cols.json` path when allowed by the bounded plan
+- `reports/wfa/split_plan.json`
+- data-audit universe JSON when required by the profile
+- `configs/models.yaml`
+- `configs/alpha_tiered.yaml`
+
+Outputs:
+
+- `data/predictions/{run}/oos_predictions.parquet`
+- `reports/wfa/{run}_predictions_manifest.json`
+- `reports/wfa/{run}_wfa_report.json`
+- combined prediction parquet and manifest when shard-combine mode is used
+
+Model risk gate:
+
+- Phase 6 results are not trust evidence unless the run records the model family
+  rationale, hyperparameter search budget, deterministic seed policy,
+  regularization settings, class imbalance handling, calibration method/checks,
+  and feature-importance stability checks.
+- Hyperparameter, threshold, target, feature, market, and cost decisions must be
+  made before locked OOS/holdout review and must not be changed to rescue a
+  completed result.
+
+Acceptance checks:
+
+- Imputer/scaler/model fit happens on train fold only.
+- Predictions are test-fold rows only.
+- Model-risk metadata records hyperparameter budget, seeds, calibration, class
+  imbalance handling, regularization, and feature-importance stability.
+- Prediction manifest hash, row count, path, profile, resolved profile, markets,
+  years, and split-plan provenance match actual artifacts.
+- `artifact_evidence_ready=true`.
+
+Stop conditions:
+
+- Any stale output path is detected.
+- Missing model-risk metadata or a model run that exceeds its predeclared
+  hyperparameter budget.
+- Prediction manifest does not match actual parquet.
+- Fold failure count is nonzero.
+- Model collapses to constant or class-prior-only predictions without an
+  explicit diagnostic decision.
+
+Downstream blockers:
+
+- Phase 8 and later gates require matching prediction parquet, manifest, WFA
+  report, split-plan provenance, artifact evidence, and model-risk metadata.
+- Fold failures, stale outputs, unapproved search expansion, post-OOS changes,
+  or collapsed predictions block promotion unless a separate diagnostic decision
+  keeps the run in scope.
+
+### 8. Evaluate Predictions
+
+Purpose: score saved OOS predictions with deterministic policy, costs, model
+selection diagnostics, and promotion gates.
+
+Command:
+
+```powershell
+python -m scripts.phase8_model_selection.evaluate_predictions --run baseline
+```
+
+Locked-run structural check pattern:
+
+```powershell
+python -m scripts.phase8_model_selection.evaluate_predictions --predictions data/predictions/tier1_locked_baseline_20260616/oos_predictions.parquet --predictions-manifest reports/wfa/tier1_locked_baseline_20260616_predictions_manifest.json --run tier1_locked_baseline_20260616 --require-promotion-ready
+```
+
+Inputs:
+
+- `data/predictions/{run}/oos_predictions.parquet`
+- `reports/wfa/{run}_predictions_manifest.json`
+- `configs/costs.yaml`
+- `configs/models.yaml`
+
+Outputs:
+
+- `reports/metrics/{run}_metrics.json`
+- `reports/model_selection/`
+- `reports/phase8/metrics.json`
+- `reports/phase8/alpha_promotion_decision.json`
+
+Statistical validity gate:
+
+- Phase 8 promotion review must report Probability of Backtest Overfitting
+  (PBO) or an explicit no-PBO applicability reason, Deflated Sharpe,
+  Probabilistic Sharpe, bootstrap confidence intervals, multiple-testing
+  adjustment, parameter stability, and regime breakdowns.
+- Gross/net metrics, Sharpe-like summaries, and isolated fold/market wins are
+  diagnostic only until statistical-validity evidence passes.
+- If a test is not applicable to the current run, the report must state the
+  reason and the substitute evidence required before promotion.
+
+Acceptance checks:
+
+- Prediction manifest matches actual prediction parquet.
+- Final holdout is not consumed for selection/calibration.
+- Costs, turnover, active-signal rows, market/fold/year breakdowns, and blocker
+  reasons are reported.
+- Statistical-validity evidence is present, including PBO or applicability
+  decision, Deflated Sharpe, Probabilistic Sharpe, bootstrap confidence
+  intervals, multiple-testing adjustment, parameter stability, and regime
+  breakdowns.
+- Structural pass and alpha promotion are separate decisions.
+
+Stop conditions:
+
+- `final_holdout_touched=true` for research selection.
+- Artifact evidence is stale or mismatched.
+- Gross/net/cost gates fail.
+- Statistical-validity evidence is missing, stale, not run, not applicable
+  without substitute evidence, or fails promotion thresholds.
+- Promotion check fails; this is expected for the locked negative Tier 1
+  baseline and must not be "rescued" with threshold tuning.
+
+### 9. Research Harnesses
+
+Purpose: run bounded feasibility tests for new target/feature hypotheses after
+baseline failure.
+
+Rules:
+
+- Pre-register hypothesis, scope, controls, metrics, and stop rules.
+- Run smoke first.
+- Feature hypotheses require the Phase 4 feature audit gate before WFA or
+  promotion review.
+- Research harnesses that compare variants must define multiple-testing,
+  parameter-stability, and regime-breakdown evidence before promotion.
+- Do not use a stopped branch as a "new" hypothesis.
+- Do not proceed from oracle/feasibility evidence directly to full WFA.
+- Require materially different target or feature work after a stopped branch.
+
+Guarded alpha discovery batch runner:
+
+- `C:\Users\donny\Desktop\futures_intraday_model\RUN_ALPHA_DISCOVERY.bat` is
+  the repo-local user-facing launcher, not pipeline authority. It is the only
+  supported project `.bat` launcher. Static self-check requires that repo-local
+  launcher path before wizard work starts.
+- Default launcher behavior delegates to
+  `python -m scripts.validation.run_alpha_discovery_wizard`. `--self-check`
+  runs the marker check. `--generate-candidates` delegates to
+  `python -m scripts.validation.generate_alpha_discovery_candidates`; without
+  `--spec` it is proposal-only, target-only, horizon-agnostic ideation and
+  writes no files, while `--spec` writes preflight-only candidate configs and
+  one queue JSON under `configs/`. `--config` runs one candidate through
+  `python -m scripts.validation.run_alpha_discovery`; `--queue` runs a serial
+  queue through `python -m scripts.validation.run_alpha_discovery_queue`.
+- `C:\Users\donny\Desktop\futures_intraday_model\RUN_STRATEGY_CANDIDATE_IDEATION.bat`
+  is the double-click proposal-only ideation launcher. With no arguments, it
+  writes up to 10 numbered Markdown/JSON review pairs under ignored
+  `reports/pipeline_audit/strategy_candidate_ideation/` and prompts for an
+  optional implementation shortlist. Candidate Markdown is a short human review
+  card; JSON is a `schema_version: 2` draft-only dossier with
+  `generated_by: strategy_candidate_ideation_v2`, `draft_only: true`,
+  `applied: false`, `conversion_required: true`,
+  `current_wizard_compatible: false`, horizon/exit-rule metadata, and
+  `evidence_status: not_model_trust_evidence`. A selection writes only
+  `implementation_selection.json` with selected JSON paths and SHA-256 hashes.
+  With `--self-check`, it runs the repo-local marker check. It must not mutate
+  registry/status, runnable harness specs, configs, data, logs, models,
+  staging, commits, pushes, WFA, Phase 8, promotion, paper, or live execution.
+- Allowed modes are `preflight`, `source-tests`, `discovery-packet`,
+  `discovery-run`, and `review`; the runner must stop at the current approved
+  discovery boundary.
+- Proposal-only ideation emits review drafts only. Console ideation writes no
+  files; review-packet output is limited to ignored Markdown/JSON candidate
+  files under `reports/pipeline_audit/strategy_candidate_ideation/`. Matching
+  v2-marked generated files may be overwritten on rerun; matching v1 or
+  unmarked current files are moved to `_archive/<timestamp>/` by direct-file
+  pattern only. JSON dossiers use `proposed_implementation_contract`,
+  `registry_patch_draft`, `trial_status_patch_draft`, and
+  `post_registration_config_spec_draft` with `runnable: false`; old
+  `draft_registry_entry` and `draft_trial_status_entry` fields are not emitted.
+  Ideation never registers, implements, runs, stages, commits, pushes, or writes
+  data/logs/models/configs, and `implementation_selection.json` is not approval
+  for implementation, registry/status mutation, or discovery.
+- A selected ideation JSON becomes wizard-consumable only after a later explicit
+  conversion/implementation phase chooses or builds a compatible Phase 9 harness,
+  implements target construction, adds source tests, appends real registry/status
+  rows after approval, generates config/queue artifacts, and stops at
+  `WIZARD_PREFLIGHT_COMPLETE` unless separate bounded discovery approval exists.
+- Spec-driven candidate artifact generation is config-only: explicit candidate
+  list, 100-candidate hard cap, no overwrites, output only under `configs/`,
+  generated configs forced to `preflight`, and no discovery or registry/status,
+  report, data, log, model, staging, commit, or push mutation. Candidate specs
+  must already be clean canonical Phase 9 target-discovery candidates in
+  `manifests/target_hypotheses/registry.json` and
+  `manifests/target_hypotheses/trial_statuses.jsonl`, use canonical
+  registry/status paths, and match the ES 30m target smoke harness `TARGET_SPECS`.
+- Wizard autopsy is separate from generation. Readiness autopsy writes under
+  `reports/pipeline_audit/alpha_discovery_autopsy/<batch>/readiness/`.
+  `discovery-run` additionally requires `--approve-discovery-run`, approval
+  phrase `RUN_PHASE9_DISCOVERY_ONCE`, absent/ignored expected outputs, approved
+  queue entries when used, and one generated JSON/MD review before any next
+  decision. Queue discovery is serial, defaults to at most 10 candidates, has an
+  absolute 100-candidate cap, and stops on infrastructure failure, timeout,
+  missing JSON, nonzero wrapper error, unapproved output path, or malformed
+  candidate decision.
+- A runner-completed status means only that the wrapper finished. Candidate
+  pass/fail must be read from generated JSON, any `STOP_*` decision stops that
+  candidate, and autopsy reports must carry
+  `FEASIBILITY ONLY - NOT MODEL-TRUST EVIDENCE - DO NOT RETUNE FROM THIS AUTOPSY`.
+  The runner cannot approve confirmation smoke, locked smoke, WFA/modeling,
+  Phase 8 diagnostics, tuning, promotion, registry/status mutation, artifact
+  staging, commits, pushes, paper trading, or live trading.
+
+Current implemented harnesses live under `scripts/phase9_research/`.
+
+
+### 10. Guard Locked Holdout/Forward Evaluation
+
+Purpose: guard locked holdout and forward evaluation so final evaluation uses
+only frozen, pre-approved research artifacts and cannot become a new tuning,
+feature-selection, calibration, or policy-selection loop.
+
+Command template:
+
+```powershell
+python -m scripts.final_holdout.guard_final_holdout `
+  --frozen-artifact-id <freeze_id> `
+  --freeze-root artifacts/frozen `
+  --run-id final_holdout_<run_id> `
+  --reports-root reports/final_holdout/<run_id>
+```
+
+Inputs:
+
+- `artifacts/frozen/<freeze_id>/manifest.json`
+- Phase 8 promotion fields copied into the frozen manifest
+- anti-overfit status and failures copied into the frozen manifest
+- frozen run, profile, and resolved-profile identifiers
+
+Outputs:
+
+- `reports/final_holdout/<run_id>/final_metrics.json`
+- console status showing `PASS` or `FAIL` and failure count
+
+Acceptance checks:
+
+- The frozen manifest exists, is marked `frozen=true`, and has
+  `failure_count=0`.
+- The frozen manifest records `final_holdout_consumes_frozen_only=true`.
+- Phase 8 fields in the frozen manifest show `phase8_promoted=true`,
+  `phase8_model_promotion_allowed=true`, and no Phase 8 blockers.
+- Anti-overfit fields in the frozen manifest show `PASS` and no failures.
+- The final-holdout run does not set `--allow-tuning`,
+  `--allow-feature-selection`, `--allow-calibration-change`, or
+  `--allow-policy-change`.
+
+Stop conditions:
+
+- Missing, stale, unfrozen, unpromoted, blocked, or failed frozen manifest.
+- Any requested tuning, feature selection, calibration change, or policy change
+  during final-holdout evaluation.
+- Missing run/profile/resolved-profile identity in the frozen manifest.
+- Anti-overfit evidence missing, failed, or inconsistent with the frozen run.
+
+Downstream blockers:
+
+- Final-holdout results cannot support promotion, paper, live, or artifact
+  claims unless the guard output is `PASS` and consumes frozen artifacts only.
+- Any final-holdout failure keeps the run diagnostic-only and requires a new
+  predeclared research line before further model-selection work.
+
+### 11. Freeze Approved Research Artifacts
+
+Purpose: freeze only approved research artifacts after Phase 8 promotion and
+anti-overfit evidence pass, before any final-holdout evaluation can consume the
+run.
+
+Command template:
+
+```powershell
+python -m scripts.artifact_freeze.freeze_research_artifacts `
+  --freeze-id <freeze_id> `
+  --freeze-root artifacts/frozen `
+  --feature-root <accepted_feature_root> `
+  --phase4-audit reports/phase4/feature_coverage_audit.json `
+  --split-plan reports/wfa/split_plan.json `
+  --predictions-manifest reports/wfa/baseline_predictions_manifest.json `
+  --phase8-decision reports/phase8/alpha_promotion_decision.json `
+  --anti-overfit-audit reports/experiments/anti_overfit_audit.json `
+  --models-config configs/models.yaml `
+  --costs-config configs/costs.yaml `
+  --feature-manifest reports/phase4/baseline_feature_manifest.json
+```
+
+`--feature-root` is required and must name the exact accepted feature matrix
+root. Do not rely on an implicit default.
+
+Inputs:
+
+- Accepted feature root plus `feature_cols.json`, `target_cols.json`,
+  `metadata_cols.json`, and `excluded_cols.json`
+- Phase 4 feature coverage audit and baseline feature manifest
+- WFA split plan and prediction manifest
+- Phase 8 promotion decision
+- anti-overfit audit
+- models and costs configs used by the promoted run
+
+Outputs:
+
+- `artifacts/frozen/<freeze_id>/manifest.json`
+- copied frozen feature registries, configs, split plan, prediction manifest,
+  Phase 8 decision, anti-overfit audit, and feature manifest under the freeze
+  directory
+
+Acceptance checks:
+
+- Phase 4 coverage audit has no missing Tier 3 feature coverage for the freeze
+  scope.
+- Split plan has selectable research folds and no selection-allowed final
+  holdout folds.
+- Prediction manifest has `failure_count=0`, no stale output flag, and
+  `artifact_evidence_ready=true`.
+- Phase 8 decision is promoted, allows model promotion, has no blockers, has no
+  failures, has not touched final holdout, and has not changed trading
+  semantics.
+- Anti-overfit audit is `PASS`, has no failures, and matches the frozen profile
+  when profile is present.
+- Feature registry files exist and match the feature manifest schema.
+
+Stop conditions:
+
+- Missing Phase 4 audit, feature manifest, split plan, prediction manifest,
+  Phase 8 decision, anti-overfit audit, model config, cost config, or feature
+  registry.
+- Phase 8 blockers, non-promotion, final-holdout contamination, trading
+  semantics changes, stale predictions, failed prediction manifest, failed
+  anti-overfit evidence, or schema mismatch.
+- Existing freeze output for the same `freeze_id` unless a separate bounded
+  replacement plan explicitly approves disposition.
+
+Downstream blockers:
+
+- Phase 10 cannot run until Phase 11 writes a frozen manifest with
+  `frozen=true`, `failure_count=0`, and `final_holdout_consumes_frozen_only=true`.
+- Frozen artifacts are research evidence only. They do not approve paper or live
+  trading without the separate production deferral gate.
+
+## Validation Commands
+
+These commands are narrow checks or documentation gates. They do not approve
+provider downloads, broad data builds, WFA/modeling, prediction generation,
+Phase 8 report generation, artifact freeze execution, final-holdout execution,
+paper, live paths, staging, commits, or pushes.
+
+Major trust gate checks:
+
+| Gate | Narrow check or status |
+| --- | --- |
+| Coordination docs | `python -m scripts.validation.check_coordination_docs` |
+| Raw Data And Metadata Gate / Phase 1A | `python -m pytest -q tests/phase1A_download/test_download_databento_raw.py tests/validation/test_check_dbn_archive_coverage.py` |
+| Phase 1B raw/DBN validation | `python -m pytest -q tests/validation/test_audit_raw_dbn_alignment.py tests/validation/test_audit_enriched_raw_optional_schemas.py` |
+| Cleaning And Normalization Gate / Phase 2 | `python -m pytest -q tests/phase2_causal_base/test_build_causal_base_data.py tests/validation/test_audit_phase2_readiness.py tests/validation/test_check_phase2_manifest_trust.py` |
+| Label And Target Gate / Phase 3 | `python -m pytest -q tests/phase3_labels/test_build_labels.py tests/validation/test_target_policy_contract.py` |
+| Feature audit / Phase 4 | `python -m pytest -q tests/phase4_features/test_build_baseline_features.py tests/phase8_model_selection/test_audit_label_feature_sanity.py` |
+| WFA split gate / Phase 5 | `python -m pytest -q tests/phase5_wfa/test_build_wfa_splits.py` |
+| Phase 6 wrapper surface | `python -c "import scripts.phase6_wfa.run_wfa as r; import scripts.phase6_wfa.combine_wfa_predictions as c; assert callable(r.main); assert callable(c.main)"` |
+| Phase 8 / Backtest And Cost Gate | `python -m pytest -q tests/phase8_model_selection/test_evaluate_predictions.py tests/phase8_model_selection/test_audit_return_model_scale.py tests/phase8_model_selection/test_audit_policy_signal_alignment.py` |
+| Portfolio And Risk Gate | `python -m pytest -q tests/phase8_model_selection/test_audit_mr_tail_risk.py tests/phase8_model_selection/test_audit_policy_failure.py`; manual evidence review only for capital, margin, broker, capacity, and portfolio aggregation claims. |
+| Statistical Validity Gate | Manual evidence review only unless the scoped Phase 8 report explicitly records PBO, Deflated Sharpe, Probabilistic Sharpe, bootstrap confidence intervals, multiple-testing adjustment, parameter stability, regime breakdowns, and `PASS` / `FAIL` / `NOT_APPLICABLE_WITH_REASON` status for each item. |
+| Production Deferral Gate | Manual evidence review only; no paper/live command is authorized by this file. |
+| Paper/Live Readiness Gate | Manual evidence review only; future and non-authorizing until a separate runbook, validation suite, and evidence manifest exist. |
+| Phase 10 final holdout guard | `python -m pytest -q tests/final_holdout/test_guard_final_holdout.py` |
+| Phase 11 artifact freeze | `python -m pytest -q tests/artifact_freeze/test_freeze_research_artifacts.py` |
+| Doc hygiene | `rg -n "Historical Local-Trade Phase 2|Statistical validity applicability|Portfolio/risk minimum evidence|Baseline acceptance|Paper/Live Readiness|Verified|Inferred|Assumed|Not established" PROJECT_OUTLINE.md`; `git diff --check`; `git status --short` |
+
+Runbook-focused validation after editing this file:
+
+```powershell
+python -m scripts.validation.check_coordination_docs
+python -m pytest -q tests/validation/test_check_coordination_docs.py tests/final_holdout/test_guard_final_holdout.py tests/artifact_freeze/test_freeze_research_artifacts.py
+rg -n "Historical Local-Trade Phase 2|Statistical validity applicability|Portfolio/risk minimum evidence|Baseline acceptance|Paper/Live Readiness|Verified|Inferred|Assumed|Not established" PROJECT_OUTLINE.md
+git diff --check
+git status --short
+```
+
+Coverage and artifact-readiness check, report-only when scoped by a bounded
+approval:
+
+```powershell
+python -m scripts.validation.check_tier_2_coverage --profile tier_1 --stage all
+```
+
+Focused WFA/Phase 8 tests:
+
+```powershell
+python -m pytest tests/phase7_wfa/test_run_wfa.py tests/phase7_wfa/test_combine_wfa_predictions.py tests/phase8_model_selection/test_evaluate_predictions.py -q
+```
+
+## Current Status Appendix
+
+Status date: June 17, 2026 local project notes.
+
+This appendix is historical context only, not current model-trust evidence or
+approval. Refresh any claim here from primary artifacts, manifests, command
+output, and current repo state before using it for research conclusions,
+promotion, artifact freeze, or follow-on execution.
+
+### Historical Local-Trade Phase 2 Diagnostic Workflow State
+
+This subsection is historical/current-state context only. It is not reusable
+Phase 2 runbook authority, not model-trust evidence, and not approval for
+causal-base repair/build, labels, features, WFA/modeling, metrics, proof
+scans, promotion, artifact freeze, staging, commit, push, paper, or live
+execution unless refreshed against current primary artifacts and a bounded
+approval.
 Bounded split recovery helper:
 
 ```powershell
@@ -1082,7 +2229,8 @@ python -m scripts.validation.audit_raw_dbn_alignment --profile tier_3_forward --
 
 Raw-alignment generation scope and stop conditions:
 
-- Command class: Phase 1C raw DBN alignment audits only.
+- Command class: Phase 1B raw DBN/parquet validation audits only, using the
+  legacy/internal `phase1C_validate` command path.
 - Maximum scope: two expected-only profile audits, one for `tier_3_holdout`
   2025 and one for `tier_3_forward` 2026. Each profile covers configured
   profile market-years for one year; the repaired-root diagnostic still remains
@@ -1147,6 +2295,43 @@ Diagnostic execution scope and stop conditions:
   baseline-readiness/resolver decision recorded. Even if both diagnostics PASS,
   do not run a causal-base repair build or labels/features without separate
   approval.
+
+
+Historical/current-state Phase 2 workflow notes for the ES 2026 P1 path live
+under `Historical ES 2026 P1 Workflow State` in `Current Status Appendix`. Those
+notes are not reusable Phase 2 runbook authority, model-trust evidence, or
+approval for downstream work unless refreshed against current primary artifacts
+and a bounded approval.
+
+
+Candidate-root manifest profile projection gate:
+
+```powershell
+python -m scripts.validation.project_local_trade_candidate_manifest_profile --proposal reports\pipeline_audit\local_trade_proof_status_promotion_proposal_20250618_20260613.json --source-manifest reports\pipeline_audit\causal_proof_candidates\local_trade_2025_2026_v1\causal_base_manifest.json --reports-root reports\pipeline_audit\local_trade_candidate_manifest_profile_projection --approved-markets HO,NG,RB --approved-years 2025,2026
+```
+
+- Projects only approved candidate-root `all_raw` PASS manifest metadata to the
+  Phase 3 target profiles for `HO/NG/RB` 2025/2026.
+- With `--reports-root`, writes one generated `causal_base_manifest.json` and
+  one markdown summary per approved year under `reports/`; without it, remains
+  console-only. The command never mutates parquet data.
+- Fails closed if the candidate scope differs from the approved market-years,
+  the source manifest is not PASS `all_raw`, selected outputs have warnings or
+  failures, selected output hashes are missing/stale, or generated `data/**` or
+  `reports/**` paths are staged.
+- Does not accept repaired-root warnings, create accepted-warning files, run
+  causal-base builds, labels, feature matrices, models, WFA splits, metrics,
+  predictions, proof scans, downloads, or live/paper artifacts.
+
+
+### Historical ES 2026 P1 Workflow State
+
+This subsection is historical/current-state context only. It is not reusable
+Phase 2 runbook authority, not model-trust evidence, and not approval for
+causal-base repair/build, labels, features, WFA/modeling, metrics, proof
+scans, promotion, artifact freeze, staging, commit, push, paper, or live
+execution unless refreshed against current primary artifacts and a bounded
+approval.
 
 Current diagnostic result: the v2 guarded wrapper was approved and executed on
 2026-07-02. It returned
@@ -2171,569 +3356,32 @@ python -m scripts.validation.build_local_trade_es2026_p1_downstream_metrics_revi
 - Does not approve model promotion, artifact freeze, proof scans, provider
   actions, staging, commit, push, or live/paper execution.
 
-Candidate-root manifest profile projection gate:
-
-```powershell
-python -m scripts.validation.project_local_trade_candidate_manifest_profile --proposal reports\pipeline_audit\local_trade_proof_status_promotion_proposal_20250618_20260613.json --source-manifest reports\pipeline_audit\causal_proof_candidates\local_trade_2025_2026_v1\causal_base_manifest.json --reports-root reports\pipeline_audit\local_trade_candidate_manifest_profile_projection --approved-markets HO,NG,RB --approved-years 2025,2026
-```
-
-- Projects only approved candidate-root `all_raw` PASS manifest metadata to the
-  Phase 3 target profiles for `HO/NG/RB` 2025/2026.
-- With `--reports-root`, writes one generated `causal_base_manifest.json` and
-  one markdown summary per approved year under `reports/`; without it, remains
-  console-only. The command never mutates parquet data.
-- Fails closed if the candidate scope differs from the approved market-years,
-  the source manifest is not PASS `all_raw`, selected outputs have warnings or
-  failures, selected output hashes are missing/stale, or generated `data/**` or
-  `reports/**` paths are staged.
-- Does not accept repaired-root warnings, create accepted-warning files, run
-  causal-base builds, labels, feature matrices, models, WFA splits, metrics,
-  predictions, proof scans, downloads, or live/paper artifacts.
-
-Acceptance checks:
-
-- Output market-years match the resolved profile.
-- `ts_event` has been converted to `ts`.
-- Session, synthetic-row, roll-window, and degraded-row warnings are explicit.
-- Staged status/statistics enrichment columns, when present, remain raw
-  metadata/audit fields and are reported with missing/stale counts.
-- For each processed market, synthetic missing OHLCV-1m minutes in
-  `[2025-06-18, 2026-06-13)` are cross-checked against local `trades` DBN
-  archives. A passing market validates older years by Databento no-trade
-  convention evidence only; older years are not independently re-proven.
-- The local trades gate proves no trade rows inside scanned synthetic OHLCV gap
-  windows only; it is not a universal proof that no trades occurred everywhere.
-- Production/research profiles fail when strict raw metadata is missing.
-
-Stop conditions:
-
-- Missing raw inputs for expected profile market-years.
-- Missing or invalid OHLCV, definition, or trades DBN coverage for the
-  `[2025-06-18, 2026-06-13)` local-trades audit window.
-- Trade rows, unresolved adjacent contract context, or unverified coverage
-  appear inside synthetic missing OHLCV-1m minutes.
-- Synthetic/degraded/roll-window thresholds exceed configured limits.
-- Session config is missing or hardcoded calendar fallback is required without
-  an explicit reason.
-
-### 3. Build Labels
-
-Purpose: create future-looking labels and cost-aware target validity flags.
-
-Command:
-
-```powershell
-python -m scripts.phase3_labels.build_labels --profile tier_1 --input-root data\causally_gated_normalized
-```
-
-Bounded market/year filters:
-
-```powershell
-python -m scripts.phase3_labels.build_labels --profile tier_3_holdout --input-root data\causally_gated_normalized --output-root data\labeled --reports-root reports\labels\local_trade_baseline\data_causally_gated_normalized_2025 --markets 6E,CL,ES,ZN --years 2025
-```
-
-Inputs:
-
-- `data/causally_gated_normalized/{market}/{year}.parquet`
-- Optional explicit causal candidate roots, such as
-  `data/causal_proof_candidates/local_trade_2025_2026_v1/{market}/{year}.parquet`
-- `configs/costs.yaml`
-
-Outputs:
-
-- `data/labeled/{market}/{year}.parquet`
-- `reports/labels/`
-
-Acceptance checks:
-
-- Label horizons respect intraday/session validity.
-- Target columns are present and separated from feature columns downstream.
-- Cost-aware validity flags are generated from configured costs, not ad hoc
-  assumptions.
-- `--markets` and `--years` filters select only market-years inside the
-  resolved profile, and label manifests record `input_selection`.
-
-Stop conditions:
-
-- Selected market/year filters resolve to no Phase 3 inputs.
-- Target construction uses future rows beyond the allowed horizon.
-- Session boundary logic permits invalid overnight or cross-session labels.
-- Cost config is missing or provisional where a strict profile requires final
-  costs.
-
-### 4. Build Baseline Feature Matrix
-
-Purpose: build OHLCV-only baseline and L0 regime features plus metadata, target,
-and registry columns.
-
-Command:
-
-```powershell
-python -m scripts.phase4_features.build_baseline_features --profile tier_1
-```
-
-Inputs:
-
-- `data/labeled/{market}/{year}.parquet`
-- `configs/costs.yaml`
-
-Outputs:
-
-- `data/feature_matrices/baseline/{market}/{year}.parquet`
-- `data/feature_matrices/baseline/feature_cols.json`
-- `data/feature_matrices/baseline/target_cols.json`
-- `data/feature_matrices/baseline/metadata_cols.json`
-- `data/feature_matrices/baseline/excluded_cols.json`
-- `reports/features_baseline/`
-
-Feature audit gate:
-
-- Every feature admitted to a registry must have source column/artifact,
-  availability timestamp, update frequency, as-of join behavior, lookback
-  window, NaN/warmup handling, economic rationale, leakage-risk classification,
-  train-only transform status, and drift/decay check status.
-- Optional or staged metadata fields, including status/statistics enrichment,
-  require an explicit feature-hypothesis approval before model use.
-- New Phase 9 feature hypotheses must produce the same audit record before they
-  can advance from feasibility work to WFA or promotion review.
-
-Acceptance checks:
-
-- Feature registry excludes target, leakage, timestamp, and metadata columns.
-- Raw status/statistics enrichment columns are excluded from default features;
-  model use requires a later feature-hypothesis change with leakage checks and
-  registry updates.
-- Feature audit records exist and match `feature_cols.json`.
-- Feature rows line up with label rows.
-- Baseline features are causal and do not use final-holdout full-sample
-  statistics.
-
-Stop conditions:
-
-- Any target/leakage column enters `feature_cols.json`.
-- Any feature lacks source, availability timestamp, update frequency, as-of join
-  behavior, lookback, NaN/warmup handling, economic rationale, leakage-risk
-  classification, train-only transform status, or drift/decay status.
-- Cost config is provisional under strict research settings.
-- Feature matrix row count or market-year scope does not match labels.
-
-Downstream blockers:
-
-- Phase 5 cannot build split plans from feature matrices with missing audit
-  records, target/leakage columns, stale registries, or label row mismatches.
-- Phase 6 cannot train from unaudited features, provisional-cost feature
-  matrices, or feature registries that do not exactly match the matrix columns.
-- Phase 8, promotion review, and artifact freeze cannot cite feature-derived
-  evidence unless Phase 4 feature audit, registry, row-alignment, and
-  generated-artifact hygiene evidence passes.
-- Phase 9 feature hypotheses remain feasibility work only until they produce
-  the same audit record required for promoted Phase 4 features.
-
-### 5. Build WFA Splits
-
-Purpose: build deterministic train/test fold definitions with purge and embargo.
-
-Validation design policy:
-
-- Chronological WFA with purge and embargo is the approved validation design for
-  this pipeline unless a separate bounded plan explicitly approves a purged-CV
-  design.
-- Shuffled CV, full-dataset CV, and any CV that lacks documented purge/embargo
-  coverage are blocked before Phase 6.
-
-Validation role definitions:
-
-- Training rows are the only rows used to fit feature transforms, imputers,
-  scalers, models, and any train-fold statistics.
-- Validation rows, when used, must be an inner or nested split inside the
-  training window and are the only rows allowed for model-family,
-  hyperparameter, threshold, feature-family, or policy selection.
-- If no inner validation split is defined, model, threshold, feature, and policy
-  choices must be fixed by predeclared config or hypothesis records before the
-  WFA test fold is scored.
-- Test rows are WFA out-of-sample rows used for fold scoring only; they cannot
-  drive training, feature selection, threshold selection, model selection,
-  cost/sizing changes, or retry decisions.
-- Locked holdout and forward rows are evaluation-only and cannot be used as
-  training or validation evidence unless a separate guarded final-holdout run is
-  explicitly approved.
-
-Command:
-
-```powershell
-python -m scripts.phase5_wfa.build_wfa_splits --profile tier_1
-```
-
-Inputs:
-
-- `data/feature_matrices/baseline/`
-- `configs/alpha_tiered.yaml`
-- `configs/models.yaml`
-
-Outputs:
-
-- `reports/wfa/split_plan.json`
-
-Acceptance checks:
-
-- Every fold has positive train and test rows.
-- Split plan profile, resolved profile, markets, years, config hash, purge, and
-  embargo are recorded.
-- Every split row or window is assigned exactly one role: train, inner
-  validation when used, test/OOS, locked holdout, or locked forward.
-- Model, threshold, feature, and policy selection evidence is limited to
-  training rows and declared inner-validation rows; test, holdout, and forward
-  rows remain selection-free.
-- Final-holdout rows are excluded unless an explicit final-holdout split run is
-  being built with the appropriate guard.
-
-Stop conditions:
-
-- Empty folds.
-- Profile/year/market mismatch.
-- Missing, overlapping, or ambiguous train/validation/test/holdout/forward role
-  assignments after purge and embargo are applied.
-- Any full-dataset feature selection, model selection, threshold tuning, cost
-  tuning, or policy selection uses WFA test rows, locked holdout rows, or locked
-  forward rows.
-- Missing provenance required by downstream WFA.
-
-Downstream blockers:
-
-- Phase 6 cannot train until the split plan records exact scope, positive folds,
-  train/validation/test/holdout role assignments, purge/embargo, and provenance.
-- Phase 8 cannot evaluate predictions from runs whose split plan is missing,
-  stale, mismatched to the feature matrix, or contaminated by selection on test,
-  locked holdout, or forward rows.
-- Statistical-validity, promotion, and artifact-freeze claims cannot cite WFA
-  results unless the split design proves chronological OOS separation and
-  horizon-overlap controls.
-- Final-holdout or forward-validation use remains blocked unless the appropriate
-  guarded evaluation path is separately approved.
-
-### 6. Train WFA Models And Save OOS Predictions
-
-Purpose: fit baseline models on train folds and write out-of-sample predictions
-for test folds.
-
-Command:
-
-```powershell
-python -m scripts.phase6_wfa.run_wfa --profile tier_1 --matrix baseline --run baseline
-```
-
-Shard pattern for large runs:
-
-```powershell
-python -m scripts.phase6_wfa.run_wfa --profile tier_1 --matrix baseline --run baseline_s1of8 --fold-shard-count 8 --fold-shard-index 1
-python -m scripts.phase6_wfa.run_wfa --profile tier_1 --matrix baseline --run baseline_s2of8 --fold-shard-count 8 --fold-shard-index 2
-python -m scripts.phase6_wfa.combine_wfa_predictions --manifest-pattern "reports/wfa/baseline_s*of8_predictions_manifest.json" --run baseline --split-plan reports/wfa/split_plan.json --require-all-folds
-```
-
-Repeat the shard run for each 1-based shard index and use a unique shard run
-name, such as `baseline_s1of8` through `baseline_s8of8`, before combining.
-
-Inputs:
-
-- `data/feature_matrices/baseline/`
-- `data/feature_matrices/baseline/feature_cols.json`
-- `reports/wfa/split_plan.json`
-- `configs/models.yaml`
-
-Outputs:
-
-- `data/predictions/{run}/oos_predictions.parquet`
-- `reports/wfa/{run}_predictions_manifest.json`
-- `reports/wfa/{run}_wfa_report.json`
-
-Model risk gate:
-
-- Phase 6 results are not trust evidence unless the run records the model family
-  rationale, hyperparameter search budget, deterministic seed policy,
-  regularization settings, class imbalance handling, calibration method/checks,
-  and feature-importance stability checks.
-- Hyperparameter, threshold, target, feature, market, and cost decisions must be
-  made before locked OOS/holdout review and must not be changed to rescue a
-  completed result.
-
-Acceptance checks:
-
-- Imputer/scaler/model fit happens on train fold only.
-- Predictions are test-fold rows only.
-- Model-risk metadata records hyperparameter budget, seeds, calibration, class
-  imbalance handling, regularization, and feature-importance stability.
-- Prediction manifest hash, row count, path, profile, resolved profile, markets,
-  years, and split-plan provenance match actual artifacts.
-- `artifact_evidence_ready=true`.
-
-Stop conditions:
-
-- Any stale output path is detected.
-- Missing model-risk metadata or a model run that exceeds its predeclared
-  hyperparameter budget.
-- Prediction manifest does not match actual parquet.
-- Fold failure count is nonzero.
-- Model collapses to constant or class-prior-only predictions without an
-  explicit diagnostic decision.
-
-Downstream blockers:
-
-- Phase 8 cannot evaluate a run unless prediction parquet, prediction manifest,
-  WFA report, split-plan provenance, and artifact evidence match exactly.
-- Costed metrics, statistical-validity checks, promotion review, and artifact
-  freeze cannot cite model outputs with missing model-risk metadata, fold
-  failures, stale outputs, or unapproved hyperparameter/search expansion.
-- Model-selection, threshold, feature, target, market, or cost changes after
-  locked OOS review block promotion and require a new predeclared research line.
-- Constant, class-prior-only, or collapsed predictions remain diagnostic only
-  unless an explicit approved diagnostic decision keeps the run in scope.
-
-### 8. Evaluate Predictions
-
-Purpose: score saved OOS predictions with deterministic policy, costs, model
-selection diagnostics, and promotion gates.
-
-Command:
-
-```powershell
-python -m scripts.phase8_model_selection.evaluate_predictions --run baseline
-```
-
-Locked-run structural check pattern:
-
-```powershell
-python -m scripts.phase8_model_selection.evaluate_predictions --predictions data/predictions/tier1_locked_baseline_20260616/oos_predictions.parquet --predictions-manifest reports/wfa/tier1_locked_baseline_20260616_predictions_manifest.json --run tier1_locked_baseline_20260616 --require-promotion-ready
-```
-
-Inputs:
-
-- `data/predictions/{run}/oos_predictions.parquet`
-- `reports/wfa/{run}_predictions_manifest.json`
-- `configs/costs.yaml`
-- `configs/models.yaml`
-
-Outputs:
-
-- `reports/metrics/{run}_metrics.json`
-- `reports/model_selection/`
-- `reports/phase8/metrics.json`
-- `reports/phase8/alpha_promotion_decision.json`
-
-Statistical validity gate:
-
-- Phase 8 promotion review must report Probability of Backtest Overfitting
-  (PBO) or an explicit no-PBO applicability reason, Deflated Sharpe,
-  Probabilistic Sharpe, bootstrap confidence intervals, multiple-testing
-  adjustment, parameter stability, and regime breakdowns.
-- Gross/net metrics, Sharpe-like summaries, and isolated fold/market wins are
-  diagnostic only until statistical-validity evidence passes.
-- If a test is not applicable to the current run, the report must state the
-  reason and the substitute evidence required before promotion.
-
-Acceptance checks:
-
-- Prediction manifest matches actual prediction parquet.
-- Final holdout is not consumed for selection/calibration.
-- Costs, turnover, active-signal rows, market/fold/year breakdowns, and blocker
-  reasons are reported.
-- Statistical-validity evidence is present, including PBO or applicability
-  decision, Deflated Sharpe, Probabilistic Sharpe, bootstrap confidence
-  intervals, multiple-testing adjustment, parameter stability, and regime
-  breakdowns.
-- Structural pass and alpha promotion are separate decisions.
-
-Stop conditions:
-
-- `final_holdout_touched=true` for research selection.
-- Artifact evidence is stale or mismatched.
-- Gross/net/cost gates fail.
-- Statistical-validity evidence is missing, stale, not run, not applicable
-  without substitute evidence, or fails promotion thresholds.
-- Promotion check fails; this is expected for the locked negative Tier 1
-  baseline and must not be "rescued" with threshold tuning.
-
-### 9. Research Harnesses
-
-Purpose: run bounded feasibility tests for new target/feature hypotheses after
-baseline failure.
-
-Rules:
-
-- Pre-register hypothesis, scope, controls, metrics, and stop rules.
-- Run smoke first.
-- Feature hypotheses require the Phase 4 feature audit gate before WFA or
-  promotion review.
-- Research harnesses that compare variants must define multiple-testing,
-  parameter-stability, and regime-breakdown evidence before promotion.
-- Do not use a stopped branch as a "new" hypothesis.
-- Do not proceed from oracle/feasibility evidence directly to full WFA.
-- Require materially different target or feature work after a stopped branch.
-
-Guarded alpha discovery batch runner:
-
-- `C:\Users\donny\Desktop\RUN_ALPHA_DISCOVERY.bat` is the user-facing
-  launcher, not pipeline authority. The repo-owned launcher template is
-  `RUN_ALPHA_DISCOVERY.bat`; the Desktop copy must match it by static
-  self-check before wizard work starts. With no arguments, the launcher
-  delegates to `python -m scripts.validation.run_alpha_discovery_wizard`.
-  With `--self-check`, it runs a non-interactive launcher hash/template check.
-  With `--generate-candidates`, it delegates to
-  `python -m scripts.validation.generate_alpha_discovery_candidates` to write
-  copied preflight-only candidate configs and one queue JSON under `configs/`.
-  With `--config`, it delegates to
-  `python -m scripts.validation.run_alpha_discovery` for one candidate and
-  writes ignored logs under `logs/alpha_discovery/`. With `--queue`, it
-  delegates to `python -m scripts.validation.run_alpha_discovery_queue` for a
-  serial queue of candidate-specific configs and writes ignored logs under
-  `logs/alpha_discovery_queue/`.
-- Allowed modes are `preflight`, `source-tests`, `discovery-packet`,
-  `discovery-run`, and `review`; the runner must stop at the current approved
-  discovery boundary.
-- Candidate generation is config-only: it uses an explicit candidate list,
-  enforces a hard 100-candidate cap, refuses overwrites, writes only under
-  `configs/`, forces generated configs to `preflight`, and does not run
-  discovery or mutate registry/status, reports, data, logs, models, staging,
-  commits, or pushes.
-- Wizard autopsy is separate from generation. After generation/preflight, the
-  wizard writes an ignored readiness autopsy under
-  `reports/pipeline_audit/alpha_discovery_autopsy/<batch>/readiness/`. If the
-  user explicitly approves optional discovery-run, the wizard first prints the
-  exact Desktop-launcher queue command, requires the fixed acknowledgement and
-  approval phrase, writes a separate approved queue copy under `configs/`, runs
-  the bounded queue, and writes an ignored discovery autopsy under
-  `reports/pipeline_audit/alpha_discovery_autopsy/<batch>/discovery/`.
-  Discovery-run may write ignored logs under `logs/alpha_discovery_queue/<batch>/`
-  and ignored discovery reports under `reports/pipeline_audit/alpha_discovery/<batch>/`.
-- Candidate generation also enforces canonical Phase 9 target-discovery scope:
-  each candidate must already be a clean `CANDIDATE` in
-  `manifests/target_hypotheses/registry.json` and latest
-  `register_candidate` row in `manifests/target_hypotheses/trial_statuses.jsonl`,
-  must use canonical registry/status paths, and must match the ES 30m target
-  smoke harness `TARGET_SPECS`.
-- Queue mode consumes already-created candidate-specific configs only; it does
-  not register, mutate, stage, commit, or promote hypotheses.
-- `discovery-run` requires `--approve-discovery-run`, the non-secret approval
-  phrase `RUN_PHASE9_DISCOVERY_ONCE`, absent/ignored expected outputs, approved
-  queue entries when `--queue` is used, and one generated JSON/MD review before
-  any next decision. Queue discovery defaults to at most 10 candidates per
-  invocation, has an absolute 100-candidate cap, runs serially, and stops on
-  infrastructure failure, timeout, missing JSON, nonzero wrapper error,
-  unapproved output path, or malformed candidate decision.
-- A runner-completed status means the wrapper finished its bounded job, not
-  that the candidate passed. Candidate pass/fail must be read from the
-  generated JSON decision, and any `STOP_*` decision stops that candidate
-  boundary even if the subprocess exit code is zero.
-- Autopsy reports must carry the stamp
-  `FEASIBILITY ONLY - NOT MODEL-TRUST EVIDENCE - DO NOT RETUNE FROM THIS AUTOPSY`.
-  Failed or stopped candidates must not be ranked as follow-up targets; aggregate
-  failure patterns are diagnostic only and require separate pre-registration
-  with materially different rationale before any new candidate work.
-- The runner cannot approve confirmation smoke, locked smoke, WFA/modeling,
-  Phase 8 diagnostics, tuning, promotion, registry/status mutation, artifact
-  staging, commits, pushes, paper trading, or live trading.
-
-Current implemented harnesses live under `scripts/phase9_research/`.
-
-## Validation Commands
-
-Coverage and artifact-readiness check:
-
-```powershell
-python -m scripts.validation.check_tier_2_coverage --profile tier_1 --stage all
-```
-
-Focused WFA/Phase 8 tests:
-
-```powershell
-python -m pytest tests\phase7_wfa\test_run_wfa.py tests\phase8_model_selection\test_evaluate_predictions.py -q
-```
-
-Common smoke checks:
-
-```powershell
-python -m pytest -q tests\phase1A_download\test_download_databento_raw.py tests\validation\test_model_registry.py
-python -m py_compile scripts\phase1A_download\download_databento_raw.py scripts\phase1B_convert\convert_databento_raw.py scripts\phase2_causal_base\build_causal_base_data.py scripts\phase3_labels\build_labels.py scripts\phase4_features\build_baseline_features.py scripts\phase5_wfa\build_wfa_splits.py scripts\phase6_wfa\run_wfa.py scripts\phase8_model_selection\evaluate_predictions.py
-```
-
-Doc-only validation after editing this file:
-
-```powershell
-rg -n "scripts\.(buil[d]_|run_execution_cost[s]|run_gat[e])|Phase (7[A]|8[A]|2[2])" PROJECT_OUTLINE.md README.md docs
-git diff --check
-git status --short
-```
-
-## Current Status Appendix
-
-Status date: June 17, 2026 local project notes.
-
-Historical/non-authoritative note: this appendix is dated local status context,
-not current model-trust evidence or approval. Refresh any claim here from
-primary artifacts, manifests, command output, and current repo state before
-using it for research conclusions, promotion, artifact freeze, or follow-on
-execution.
-
-Locked Tier 1 baseline:
-
-- Run: `tier1_locked_baseline_20260616`.
-- Scope: `tier_1 -> tier_1_research`, markets `ES`, `CL`, `ZN`, `6E`,
-  years 2023-2024.
-- Predictions:
-  `data/predictions/tier1_locked_baseline_20260616/oos_predictions.parquet`.
-- Manifest:
-  `reports/wfa/tier1_locked_baseline_20260616_predictions_manifest.json`.
-- Metrics: `reports/metrics/tier1_locked_baseline_20260616_metrics.json`.
-- Promotion decision: `reports/phase8/alpha_promotion_decision.json`.
-- Phase 2 causal data: `WARN`, full Tier 1 scope, `authoritative=true`,
-  failures `0`, warnings `4`.
-- Phase 3 labels: `PASS`, full Tier 1 scope, failures `0`.
-- Phase 4 baseline features: `WARN`, full Tier 1 scope, failures `0`.
-- Phase 5 split plan: `PASS`, folds `48`, markets `4`, failures `0`.
-- Phase 6 WFA: shard-combined, predictions `4,616,712`, folds `48`,
-  failures `0`, `artifact_evidence_ready=true`.
-- Phase 8: structural evaluation passed, promotion failed.
-
-Costed OOS policy result:
-
-- Policy rows: `1,154,178`.
-- Trades/active signal rows: `780`.
-- Gross dollars: `-20,287.50`.
-- Costs: `22,357.88`.
-- Net dollars: `-42,645.38`.
-- Net Sharpe-like: `-5.1086`.
-- Cost drag to absolute gross: `1.1021`.
-- `research_alpha_ready=false`.
-- `model_promotion_allowed=false`.
-- `promoted=false`.
-
-Current decision:
-
-- Decision: `TIER1_LOCKED_BASELINE_NO_GO`.
-- Do not promote this model or policy.
-- Do not tune thresholds against this locked run.
-- Do not rerun near-neighbor policy variants to rescue this baseline.
-- Do not run full-market/full-fold WFA again for this same baseline line.
-- Do not treat small positive threshold pockets as alpha.
-
-Stopped research branches:
-
-- Tier 1 cost-clearability feasibility:
-  `STOP_BRANCH_PERMANENTLY`.
-- Market-balanced cost-clearability follow-up:
-  `STOP_BRANCH_PERMANENTLY`.
-- Both are oracle/feasibility evidence only, not executable PnL or strategy PnL.
-- Do not proceed from either branch to direction modeling, policy work, or full
-  Tier 1 WFA.
-
-Next valid work:
-
-- A separate research direction with a new hypothesis and pre-registered stop
-  rules.
-- Acceptable categories: new target-construction research, new feature-generation
-  research, or a genuinely new ES-only custom hypothesis on unused folds from
-  `reports/wfa_phase9_es_tier2_refresh/split_plan.json`.
-- Do not reuse the failed built-in ES feature-family sweep, the stopped Phase 9
-  hypotheses, or cost-clearability rescue variants as "new" work.
+- Locked Tier 1 baseline run: `tier1_locked_baseline_20260616`, scope
+  `tier_1 -> tier_1_research`, markets `ES`, `CL`, `ZN`, `6E`, years
+  2023-2024.
+- Key artifacts: predictions
+  `data/predictions/tier1_locked_baseline_20260616/oos_predictions.parquet`,
+  WFA manifest `reports/wfa/tier1_locked_baseline_20260616_predictions_manifest.json`,
+  metrics `reports/metrics/tier1_locked_baseline_20260616_metrics.json`, and
+  promotion decision `reports/phase8/alpha_promotion_decision.json`.
+- Phase posture at the time: Phase 2 `WARN`, Phase 3 `PASS`, Phase 4 `WARN`,
+  Phase 5 `PASS`, Phase 6 shard-combined with `artifact_evidence_ready=true`,
+  and Phase 8 structurally evaluated but not promoted.
+- Costed OOS result was negative: gross dollars `-20,287.50`, costs
+  `22,357.88`, net dollars `-42,645.38`, net Sharpe-like `-5.1086`,
+  `research_alpha_ready=false`, `model_promotion_allowed=false`, and
+  `promoted=false`.
+- Decision: `TIER1_LOCKED_BASELINE_NO_GO`. Do not promote, threshold-tune,
+  rerun near-neighbor rescue variants, rerun full-market/full-fold WFA for the
+  same baseline line, or treat small positive threshold pockets as alpha.
+- Stopped branches: Tier 1 cost-clearability feasibility and market-balanced
+  cost-clearability follow-up are both `STOP_BRANCH_PERMANENTLY`;
+  oracle/feasibility evidence from those branches is not executable PnL or a
+  route to direction modeling, policy work, or full Tier 1 WFA.
+- Next valid research must be a separate pre-registered target-construction,
+  feature-generation, or genuinely new ES-only custom hypothesis. Do not reuse
+  the failed built-in ES feature-family sweep, stopped Phase 9 hypotheses, or
+  cost-clearability rescue variants as "new" work.
 
 ## Known Limitations
 
@@ -2754,14 +3402,31 @@ Next valid work:
 
 Reports should be concise, evidence-oriented, and reproducible.
 
+Every material research, model-trust, execution, promotion, artifact-freeze,
+paper, or live-readiness claim must be labeled:
+
+- `Verified`: directly supported by primary evidence such as repo files,
+  manifests, command output, raw data, or reproducible local checks.
+- `Inferred`: reasoned from primary evidence, but not directly proven by the
+  cited artifact.
+- `Assumed`: required for interpretation, but not established by current
+  evidence.
+- `Not established`: absent, stale, contradicted, or not reviewed enough to
+  support the claim.
+
 Prefer:
 
 - finding;
-- evidence path or metric;
-- interpretation;
+- claim label;
+- evidence path, command, or metric;
+- interpretation and stale-risk note;
 - blocker or next gate.
 
-Do not present gross-only results as tradable evidence. Do not present failed or warning-status outputs as promotion-ready.
+Do not present gross-only results as tradable evidence. Do not present failed
+or warning-status outputs as promotion-ready. Do not present `Inferred`,
+`Assumed`, or `Not established` claims as model-trust, promotion,
+artifact-freeze, paper, or live-readiness evidence without naming the downstream
+blocker and independent verification needed.
 
 ## Final Research Posture
 

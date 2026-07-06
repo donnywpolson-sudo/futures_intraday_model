@@ -75,7 +75,7 @@ def _row(market: str, year: int, status: str) -> dict[str, object]:
         "pair": f"{market}:{year}",
         "planned_input_raw_path": f"data/raw/{market}/{year}.parquet",
         "planned_output_causal_path": (
-            f"data/causal_base_candidates/broad_manifest_527_rebuild_v1/{market}/{year}.parquet"
+            f"data/causally_gated_normalized/{market}/{year}.parquet"
         ),
         "prebuild_status": status,
     }
@@ -135,7 +135,7 @@ def _write_inputs(tmp_path: Path) -> dict[str, Path]:
         "raw": tmp_path / "reports" / "raw.json",
         "include": tmp_path / "reports" / "include.json",
         "readiness": tmp_path / "reports" / "readiness.json",
-        "output_root": tmp_path / "data" / "causal_base_candidates" / "broad_manifest_527_rebuild_v1",
+        "output_root": tmp_path / "data" / "causally_gated_normalized",
     }
     _write_yaml(paths["alpha"], _alpha_config())
     _write_yaml(paths["manifest"], {"source_profile": "configs/alpha_tiered.yaml::profiles.tier_3_research"})

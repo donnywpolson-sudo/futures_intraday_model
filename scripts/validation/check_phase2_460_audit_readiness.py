@@ -22,9 +22,9 @@ if str(REPO_ROOT) not in sys.path:
 from scripts.validation.feature_leakage_guard import forbidden_feature_columns
 
 TARGET_CANONICAL_PATTERN = (
-    "data/causal_base_candidates/broad_manifest_527_rebuild_v1/{market}/{year}.parquet"
+    "data/causally_gated_normalized/{market}/{year}.parquet"
 )
-CANONICAL_ROOT_REL = "data/causal_base_candidates/broad_manifest_527_rebuild_v1"
+CANONICAL_ROOT_REL = "data/causally_gated_normalized"
 REPORTS_ROOT_REL = "reports/data_audit/causal_base_rebuild/broad_manifest_527_rebuild_v1"
 DEFAULT_DATA_MANIFEST = REPO_ROOT / "configs/data_manifest.yaml"
 DEFAULT_CANONICAL_ROOT = REPO_ROOT / CANONICAL_ROOT_REL

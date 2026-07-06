@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import sys
@@ -444,7 +444,7 @@ def test_phase3_main_requires_explicit_input_root(
 
 
 def test_phase3_cli_accepts_explicit_causal_roots(tmp_path: Path) -> None:
-    approved_root = Path("data/causal_base_candidates/tier1_rebuild_v1")
+    approved_root = Path("data/causally_gated_normalized")
     report_root = tmp_path / "reports" / "phase3" / "causal_base_fixture"
 
     approved_args = labels_mod.build_arg_parser().parse_args(
@@ -640,7 +640,7 @@ def test_phase3_main_without_exception_flag_rejects_candidate_warnings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    input_root = tmp_path / "data" / "causal_base_candidates" / "tier1_rebuild_v1"
+    input_root = tmp_path / "data" / "causally_gated_normalized"
     manifest = tmp_path / "reports" / "candidate" / "causal_base_manifest.json"
     exceptions = tmp_path / "reports" / "candidate" / "accepted_readiness_exceptions.json"
     _write_tier1_candidate_inputs(input_root)
@@ -666,7 +666,7 @@ def test_phase3_main_accepts_exact_tier1_candidate_exceptions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    input_root = tmp_path / "data" / "causal_base_candidates" / "tier1_rebuild_v1"
+    input_root = tmp_path / "data" / "causally_gated_normalized"
     manifest = tmp_path / "reports" / "candidate" / "causal_base_manifest.json"
     exceptions = tmp_path / "reports" / "candidate" / "accepted_readiness_exceptions.json"
     _write_tier1_candidate_inputs(input_root)
@@ -758,7 +758,7 @@ def test_phase3_main_rejects_wrong_exception_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    input_root = tmp_path / "data" / "causal_base_candidates" / "tier1_rebuild_v1"
+    input_root = tmp_path / "data" / "causally_gated_normalized"
     manifest = tmp_path / "reports" / "candidate" / "causal_base_manifest.json"
     approved_exceptions = tmp_path / "reports" / "candidate" / "approved.json"
     wrong_exceptions = tmp_path / "reports" / "candidate" / "wrong.json"
@@ -799,7 +799,7 @@ def test_phase3_main_rejects_mutated_exception_row(
     bad_value: object,
     match: str,
 ) -> None:
-    input_root = tmp_path / "data" / "causal_base_candidates" / "tier1_rebuild_v1"
+    input_root = tmp_path / "data" / "causally_gated_normalized"
     manifest = tmp_path / "reports" / "candidate" / "causal_base_manifest.json"
     exceptions = tmp_path / "reports" / "candidate" / "accepted_readiness_exceptions.json"
     rows = _approved_exception_rows()
@@ -827,7 +827,7 @@ def test_phase3_main_rejects_new_candidate_warning(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    input_root = tmp_path / "data" / "causal_base_candidates" / "tier1_rebuild_v1"
+    input_root = tmp_path / "data" / "causally_gated_normalized"
     manifest = tmp_path / "reports" / "candidate" / "causal_base_manifest.json"
     exceptions = tmp_path / "reports" / "candidate" / "accepted_readiness_exceptions.json"
     _write_tier1_candidate_inputs(input_root)
@@ -857,7 +857,7 @@ def test_phase3_main_rejects_candidate_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    input_root = tmp_path / "data" / "causal_base_candidates" / "tier1_rebuild_v1"
+    input_root = tmp_path / "data" / "causally_gated_normalized"
     manifest = tmp_path / "reports" / "candidate" / "causal_base_manifest.json"
     exceptions = tmp_path / "reports" / "candidate" / "accepted_readiness_exceptions.json"
     _write_tier1_candidate_inputs(input_root)
@@ -883,8 +883,8 @@ def test_phase3_main_rejects_stale_input_root_with_exceptions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    approved_root = tmp_path / "data" / "causal_base_candidates" / "tier1_rebuild_v1"
-    stale_root = tmp_path / "data" / "causally_gated_normalized"
+    approved_root = tmp_path / "data" / "causally_gated_normalized"
+    stale_root = tmp_path / "data" / "archive" / "tier1_rebuild_v1"
     manifest = tmp_path / "reports" / "candidate" / "causal_base_manifest.json"
     exceptions = tmp_path / "reports" / "candidate" / "accepted_readiness_exceptions.json"
     _write_tier1_candidate_inputs(stale_root)
@@ -910,7 +910,7 @@ def test_phase3_main_rejects_changed_global_threshold(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    input_root = tmp_path / "data" / "causal_base_candidates" / "tier1_rebuild_v1"
+    input_root = tmp_path / "data" / "causally_gated_normalized"
     manifest = tmp_path / "reports" / "candidate" / "causal_base_manifest.json"
     exceptions = tmp_path / "reports" / "candidate" / "accepted_readiness_exceptions.json"
     _write_tier1_candidate_inputs(input_root)
@@ -1141,6 +1141,16 @@ def test_invalid_reasons_for_current_and_future_path_flags(tmp_path: Path) -> No
 
         assert labeled.loc[0, "target_valid"] == False
         assert labeled.loc[0, "target_invalid_reason"] == reason
+
+
+def test_causal_valid_false_is_hard_label_exclusion(tmp_path: Path) -> None:
+    rows = _base_rows()
+    rows[0]["causal_valid"] = False
+
+    labeled = add_labels(pd.DataFrame(rows), load_market_config("ES", tmp_path / "missing.yaml"))
+
+    assert labeled.loc[0, "target_valid"] == False
+    assert labeled.loc[0, "target_invalid_reason"] == "current_causal_valid_false"
 
 
 def test_tick_dollar_cost_and_deadzone_conversion() -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -20,6 +21,14 @@ from scripts.validation.data_audit_universe_guard import load_data_audit_univers
 def run_wfa(**kwargs: object) -> dict[str, object]:
     kwargs.setdefault("write_predictions", True)
     return _run_wfa(**kwargs)  # type: ignore[arg-type]
+
+
+def test_phase6_wrappers_expose_main_callables() -> None:
+    run_module = importlib.import_module("scripts.phase6_wfa.run_wfa")
+    combine_module = importlib.import_module("scripts.phase6_wfa.combine_wfa_predictions")
+
+    assert callable(run_module.main)
+    assert callable(combine_module.main)
 
 
 def _write_models_config(path: Path) -> Path:
@@ -104,6 +113,38 @@ def _write_feature_matrix(root: Path, *, market: str = "ES", year: int = 2024) -
         }
     ).to_parquet(path, index=False)
     return path
+
+
+def test_fold_masks_exclude_causal_valid_false_rows_from_train_and_test() -> None:
+    frame = pd.DataFrame(
+        {
+            "ts": pd.to_datetime(
+                [
+                    "2024-01-01T01:00:00Z",
+                    "2024-01-01T02:00:00Z",
+                    "2024-01-03T01:00:00Z",
+                    "2024-01-03T02:00:00Z",
+                ],
+                utc=True,
+            ),
+            "training_row_valid": [True, True, True, True],
+            "feature_input_valid": [True, True, True, True],
+            "causal_valid": [True, False, True, False],
+            "target_valid": [True, True, True, True],
+        }
+    )
+    target = pd.Series([1.0, 1.0, 1.0, 1.0])
+    fold = {
+        "train_start": "2024-01-01T00:00:00Z",
+        "purged_train_end": "2024-01-01T23:00:00Z",
+        "test_start": "2024-01-03T00:00:00Z",
+        "test_end": "2024-01-03T23:00:00Z",
+    }
+
+    train_mask, test_mask = wfa._fold_masks(frame, fold, target)
+
+    assert train_mask.tolist() == [True, False, False, False]
+    assert test_mask.tolist() == [False, False, True, False]
 
 
 def _write_feature_set(
@@ -448,7 +489,7 @@ def test_prediction_cli_defaults_are_report_only_and_explicit_write_opt_in(
     assert default_args.predictions_root is None
     assert parser.parse_args(["--no-predictions"]).write_predictions is False
     assert parser.parse_args(["--report-only"]).write_predictions is False
-    rebuilt_root = Path("data") / "feature_matrices" / "baseline_tier1_rebuild_v1"
+    rebuilt_root = Path("data") / "feature_matrices"
     report_root = Path("reports") / "wfa_research" / "tier1_rebuild_v1" / "features"
     assert (
         parser.parse_args(["--input-root", rebuilt_root.as_posix()]).input_root
@@ -504,7 +545,7 @@ def test_main_write_predictions_requires_explicit_predictions_root(
 
 
 def test_run_wfa_report_only_writes_reports_without_prediction_file(tmp_path: Path) -> None:
-    input_root = tmp_path / "data" / "feature_matrices" / "baseline_tier1_rebuild_v1"
+    input_root = tmp_path / "data" / "feature_matrices"
     predictions_root = tmp_path / "data" / "predictions"
     reports_root = tmp_path / "reports" / "wfa"
     models_config = _write_models_config(tmp_path / "configs" / "models.yaml")

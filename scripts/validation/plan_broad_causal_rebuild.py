@@ -25,7 +25,7 @@ DEFAULT_MARKDOWN_OUT = REPO_ROOT / REVIEW_ROOT / "broad_manifest_527_rebuild_pre
 
 EXPECTED_DECISION = "rebuild_new_broad_root"
 EXPECTED_ROW_COUNT = 527
-FUTURE_ROOT = "data/causal_base_candidates/broad_manifest_527_rebuild_v1"
+FUTURE_ROOT = "data/causally_gated_normalized"
 FUTURE_PATTERN = f"{FUTURE_ROOT}/{{market}}/{{year}}.parquet"
 
 ROOT_MANIFEST_FIELDS = [
@@ -260,7 +260,7 @@ def build_plan(
             "policy artifact selects rebuild_new_broad_root",
             "raw/source/hash/readiness validation is complete for every ready row",
             "2025 holdout and 2026 forward rows remain non-research unless separately approved",
-            "legacy data/causally_gated_normalized roots are not used as canonical inputs",
+            "legacy candidate roots are not used as canonical inputs",
             "git diff --name-only -- data returns no paths before report-only steps",
         ],
         "proposed_build_command": {

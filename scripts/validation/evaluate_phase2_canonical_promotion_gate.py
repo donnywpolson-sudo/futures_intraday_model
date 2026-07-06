@@ -15,7 +15,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST = REPO_ROOT / "configs/data_manifest.yaml"
-DEFAULT_CANDIDATE_ROOT = REPO_ROOT / "data/causal_base_candidates/broad_manifest_527_rebuild_v1"
+DEFAULT_CANDIDATE_ROOT = REPO_ROOT / "data/causally_gated_normalized"
 DEFAULT_REPORTS_ROOT = REPO_ROOT / "reports/data_audit/causal_base_rebuild/broad_manifest_527_rebuild_v1"
 DEFAULT_CANDIDATE_MANIFEST = DEFAULT_REPORTS_ROOT / "causal_base_manifest.json"
 DEFAULT_CANDIDATE_VALIDATION = DEFAULT_REPORTS_ROOT / "causal_base_validation.json"
@@ -33,7 +33,7 @@ PROMOTED_GO = "CONDITIONAL_GO_CANONICAL_PHASE2_460_ONLY"
 NO_GO = "NO_GO_CANONICAL_PROMOTION"
 EXPECTED_CANDIDATE_COUNT = 460
 TARGET_CANONICAL_PATTERN = (
-    "data/causal_base_candidates/broad_manifest_527_rebuild_v1/{market}/{year}.parquet"
+    "data/causally_gated_normalized/{market}/{year}.parquet"
 )
 FORBIDDEN_PAIR = ("6M", 2012)
 FORBIDDEN_YEARS = (2025, 2026)

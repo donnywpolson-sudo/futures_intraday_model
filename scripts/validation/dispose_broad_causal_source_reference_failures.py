@@ -195,7 +195,7 @@ def disposition_for_row(
     source_file = str(reference.get("source_file") or "")
     expected_sha256 = str(reference.get("expected_sha256") or "")
     source_path = resolve_path(repo_root, source_file)
-    source_root = repo_root / "data" / "dbn_sr_parent_candidate"
+    source_root = repo_root / "data" / "dbn" / "ohlcv_1m_parent"
     source_parent = source_path.parent
     source_file_present = source_path.is_file()
     actual_sha256 = sha256_file(source_path) if source_file_present else None

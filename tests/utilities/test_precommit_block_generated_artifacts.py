@@ -5,7 +5,10 @@ from scripts.utilities import precommit_block_generated_artifacts as blocker
 
 def test_blocks_generated_report_and_build_paths() -> None:
     assert blocker.is_blocked("reports/visualizations/dashboard.html")
-    assert blocker.is_blocked("build/LiveChartFeed/PYZ-00.pyz")
+    assert blocker.is_blocked("live_chart/PYZ-00.pyz")
+    assert blocker.is_blocked("live_chart/warn-LiveChartFeed.txt")
+    assert blocker.is_blocked("live_chart/xref-LiveChartFeed.html")
+    assert blocker.is_blocked("live_chart/localpycs/struct.pyc")
     assert blocker.is_blocked("dist/LiveChartFeed.exe")
 
 

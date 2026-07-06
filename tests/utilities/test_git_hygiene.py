@@ -45,13 +45,13 @@ def test_blocks_staged_reports(tmp_path: Path) -> None:
 def test_blocks_staged_build_outputs(tmp_path: Path) -> None:
     _, forbidden_files = collect(
         tmp_path,
-        staged={"build/LiveChartFeed/PYZ-00.pyz"},
+        staged={"live_chart/xref-LiveChartFeed.html"},
     )
 
     assert forbidden_files == [
         (
-            "build/LiveChartFeed/PYZ-00.pyz",
-            "forbidden directory build, staged",
+            "live_chart/xref-LiveChartFeed.html",
+            "forbidden directory live_chart, staged",
         )
     ]
 

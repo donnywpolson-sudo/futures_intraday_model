@@ -131,7 +131,7 @@ def validate_disposition(
         source_file = str(row.get("source_file") or "")
         if not source_file:
             failures.append(f"{pair}.source_file missing")
-        if not source_file.startswith("data/dbn_sr_parent_candidate/"):
+        if not source_file.startswith("data/dbn/ohlcv_1m_parent/"):
             failures.append(f"{pair}.source_file={source_file!r} outside expected source root")
 
     if failures:

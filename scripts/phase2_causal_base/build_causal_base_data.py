@@ -261,7 +261,7 @@ DEFAULT_MAX_SYNTHETIC_ROWS_PCT = 2.0
 DEFAULT_MAX_DEGRADED_ROWS_PCT = 1.0
 DEFAULT_MAX_ROLL_WINDOW_ROWS_PCT = 1.0
 BROAD_MANIFEST_527_REBUILD_OUTPUT_ROOT = Path(
-    "data/causal_base_candidates/broad_manifest_527_rebuild_v1"
+    "data/causally_gated_normalized"
 )
 BROAD_MANIFEST_527_REBUILD_REPORTS_ROOT = Path(
     "reports/data_audit/causal_base_rebuild/broad_manifest_527_rebuild_v1"

@@ -250,26 +250,34 @@ def _selected_hashes_and_failures(
     pairs: Iterable[tuple[str, int]],
 ) -> tuple[dict[str, str], list[str]]:
     hash_map = source_manifest.get("output_file_hashes")
-    output_root = resolve_path(repo_root, str(source_manifest.get("output_root")))
+    source_output_root = resolve_path(repo_root, str(source_manifest.get("output_root")))
+    projected_output_root = resolve_path(
+        repo_root,
+        readiness_gate.LABEL_INPUT_ROOT_BY_EVIDENCE_ROOT.get(
+            ledger_gate.CANDIDATE_CAUSAL_ROOT,
+            ledger_gate.CANDIDATE_CAUSAL_ROOT,
+        ),
+    )
     selected: dict[str, str] = {}
     failures: list[str] = []
     for market, year in sorted({(str(market), int(year)) for market, year in pairs}):
-        output_path = output_root / market / f"{year}.parquet"
-        raw_path, expected_hash = _matching_hash(repo_root, hash_map, output_path)
+        source_output_path = source_output_root / market / f"{year}.parquet"
+        projected_output_path = projected_output_root / market / f"{year}.parquet"
+        raw_path, expected_hash = _matching_hash(repo_root, hash_map, source_output_path)
         if raw_path is None or expected_hash is None:
-            failures.append(f"output hash reference missing: {rel(output_path, repo_root)}")
+            failures.append(f"output hash reference missing: {rel(source_output_path, repo_root)}")
             continue
         if expected_hash in {"", "MISSING", "NOT_WRITTEN"}:
-            failures.append(f"output hash reference invalid: {rel(output_path, repo_root)}")
+            failures.append(f"output hash reference invalid: {rel(source_output_path, repo_root)}")
             continue
-        if not output_path.exists():
-            failures.append(f"projected output missing: {rel(output_path, repo_root)}")
+        if not projected_output_path.exists():
+            failures.append(f"projected output missing: {rel(projected_output_path, repo_root)}")
             continue
-        actual_hash = file_sha256(output_path)
+        actual_hash = file_sha256(projected_output_path)
         if actual_hash != expected_hash:
-            failures.append(f"projected output hash stale: {rel(output_path, repo_root)}")
+            failures.append(f"projected output hash stale: {rel(projected_output_path, repo_root)}")
             continue
-        selected[raw_path] = expected_hash
+        selected[projected_output_path.as_posix()] = expected_hash
     return selected, failures
 
 
@@ -325,11 +333,15 @@ def _projected_manifest(
     target_profile: str,
     target_resolved_profile: str | None,
     reports_root: Path | None,
+    projected_output_root: Path,
     generated_at_utc: str,
 ) -> dict[str, Any]:
-    pairs = [{"market": row["market"], "year": int(row["year"])} for row in selected_rows]
+    projected_rows = copy.deepcopy(selected_rows)
+    for row in projected_rows:
+        row["output_path"] = (projected_output_root / str(row["market"]) / f"{int(row['year'])}.parquet").as_posix()
+    pairs = [{"market": row["market"], "year": int(row["year"])} for row in projected_rows]
     year = int(selected_rows[0]["year"])
-    markets = sorted(str(row["market"]) for row in selected_rows)
+    markets = sorted(str(row["market"]) for row in projected_rows)
     projected = copy.deepcopy(dict(source_manifest))
     projected.update(
         {
@@ -338,6 +350,7 @@ def _projected_manifest(
             "status": "PASS",
             "profile": target_profile,
             "resolved_profile": target_resolved_profile,
+            "output_root": projected_output_root.as_posix(),
             "reports_root": rel(_projection_dir(reports_root, target_profile, year), repo_root)
             if reports_root is not None
             else None,
@@ -350,7 +363,7 @@ def _projected_manifest(
             "processed_market_year_count": len(pairs),
             "market_year_include_count": len(pairs),
             "selected_expected_market_year_count": len(pairs),
-            "outputs": selected_rows,
+            "outputs": projected_rows,
             "input_file_hashes": _selected_input_hashes(source_manifest, selected_rows),
             "output_file_hashes": selected_hashes,
             "warning_count": 0,
@@ -415,6 +428,13 @@ def build_report(
     source_manifest = read_json(source_manifest_path)
     source_manifest_sha256 = ledger_gate.sha256_file(source_manifest_path) if source_manifest_path.exists() else ""
     source_output_root = resolve_path(repo_root, ledger_gate.CANDIDATE_CAUSAL_ROOT)
+    projected_output_root = resolve_path(
+        repo_root,
+        readiness_gate.LABEL_INPUT_ROOT_BY_EVIDENCE_ROOT.get(
+            ledger_gate.CANDIDATE_CAUSAL_ROOT,
+            ledger_gate.CANDIDATE_CAUSAL_ROOT,
+        ),
+    )
     source_rows = _output_rows(source_manifest)
     selected_rows: dict[tuple[str, int], dict[str, Any]] = {}
     selected_row_failures: list[str] = []
@@ -549,6 +569,7 @@ def build_report(
                 target_profile=target_profile,
                 target_resolved_profile=target_resolved_profile,
                 reports_root=reports_root,
+                projected_output_root=projected_output_root,
                 generated_at_utc=generated_at,
             )
             projected_manifests.append(

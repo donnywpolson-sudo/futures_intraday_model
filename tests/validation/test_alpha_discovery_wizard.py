@@ -14,7 +14,7 @@ def _write_launcher(path: Path) -> None:
         "\n".join(
             [
                 "@echo off",
-                "python -m scripts.validation.run_alpha_discovery_wizard --launcher-path \"%~f0\"",
+                "python -m scripts.validation.run_alpha_discovery_wizard --skip-initial-ack --launcher-path \"%~f0\"",
                 "python -m scripts.validation.run_alpha_discovery_wizard --self-check --launcher-path \"%~f0\"",
                 "if /I \"%~1\"==\"--generate-candidates\" python -m scripts.validation.generate_alpha_discovery_candidates %*",
                 "python -m scripts.validation.run_alpha_discovery_queue %*",
@@ -28,31 +28,27 @@ def _write_launcher(path: Path) -> None:
 
 def test_launcher_self_check_passes_for_matching_template(tmp_path: Path) -> None:
     template = tmp_path / "RUN_ALPHA_DISCOVERY.bat"
-    desktop = tmp_path.parent / "RUN_ALPHA_DISCOVERY.bat"
     _write_launcher(template)
-    desktop.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
 
-    result = wizard.launcher_self_check(root=tmp_path, launcher_path=desktop)
+    result = wizard.launcher_self_check(root=tmp_path, launcher_path=template)
 
     assert result["status"] == "LAUNCHER_SELF_CHECK_PASS"
     assert result["static_check_only"] is True
     assert result["no_arg_route"] == "scripts.validation.run_alpha_discovery_wizard"
 
 
-def test_launcher_self_check_hash_mismatch_prints_review_first_remediation(tmp_path: Path) -> None:
+def test_launcher_self_check_rejects_non_repo_launcher(tmp_path: Path) -> None:
     template = tmp_path / "RUN_ALPHA_DISCOVERY.bat"
-    desktop = tmp_path.parent / "RUN_ALPHA_DISCOVERY.bat"
+    outside_launcher = tmp_path.parent / "RUN_ALPHA_DISCOVERY.bat"
     _write_launcher(template)
-    desktop.write_text("different\n", encoding="utf-8")
+    outside_launcher.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
 
     with pytest.raises(wizard.WizardError) as exc_info:
-        wizard.launcher_self_check(root=tmp_path, launcher_path=desktop)
+        wizard.launcher_self_check(root=tmp_path, launcher_path=outside_launcher)
 
     message = str(exc_info.value)
-    assert "content hash mismatch" in message
-    assert "review_command=" in message
-    assert "OVERWRITES DESKTOP LAUNCHER - run only after review" in message
-    assert "replacement_command=" in message
+    assert "only the repo-local launcher is supported" in message
+    assert "expected_launcher_path=" in message
 
 
 def test_spec_for_batch_writes_configs_only_paths() -> None:
@@ -103,7 +99,7 @@ def test_approved_queue_copy_marks_candidates_and_refuses_overwrite(tmp_path: Pa
         wizard._approved_queue_copy(root=tmp_path, queue_path=queue_path, batch_id="batch_a")
 
 
-def test_discovery_prompt_prints_bounds_and_exact_desktop_command(
+def test_discovery_prompt_prints_bounds_and_exact_repo_local_command(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -122,10 +118,25 @@ def test_discovery_prompt_prints_bounds_and_exact_desktop_command(
     assert f"Default discovery candidate bound: {wizard.DEFAULT_DISCOVERY_MAX_CANDIDATES}" in output
     assert f"Timeout cap seconds: {wizard.DISCOVERY_TIMEOUT_SECONDS}" in output
     assert "Exact command:" in output
-    assert str(wizard.default_desktop_launcher_path(tmp_path)) in output
-    assert command[0] == str(wizard.default_desktop_launcher_path(tmp_path))
+    assert str(wizard.default_launcher_path(tmp_path)) in output
+    assert command[0] == str(wizard.default_launcher_path(tmp_path))
     assert "--approve-discovery-run" in command
     assert wizard.APPROVAL_PHRASE in command
+
+
+def test_human_summary_for_no_candidates_is_plain_english(capsys: pytest.CaptureFixture[str]) -> None:
+    wizard._print_human_summary(
+        {
+            "status": "NO_CANONICAL_CANDIDATES",
+            "message": "Separate candidate registration is required first.",
+        }
+    )
+
+    output = capsys.readouterr().out
+    assert "Nothing ran." in output
+    assert "no alpha-discovery candidates are registered and ready" in output
+    assert "RUN_ALPHA_DISCOVERY.bat" in output
+    assert "{" not in output
 
 
 def test_wizard_skips_discovery_without_approved_queue(
@@ -168,10 +179,14 @@ def test_wizard_skips_discovery_without_approved_queue(
             "md_path": wizard._relative(tmp_path, kwargs["report_root"] / "autopsy.md"),
         },
     )
-    inputs = iter(["ACK", "all", "batch_a", "skip"])
+    inputs = iter(["all", "batch_a", "skip"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
 
-    result = wizard.run_wizard(root=tmp_path, launcher_path=tmp_path / "RUN_ALPHA_DISCOVERY.bat")
+    result = wizard.run_wizard(
+        root=tmp_path,
+        launcher_path=tmp_path / "RUN_ALPHA_DISCOVERY.bat",
+        skip_initial_ack=True,
+    )
 
     assert result["status"] == "WIZARD_PREFLIGHT_COMPLETE"
     assert result["discovery"] is None

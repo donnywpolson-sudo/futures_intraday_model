@@ -1,4 +1,4 @@
-# Canonical data manifest draft for Phase 1A/1B/1C/2 lineage.
+# Canonical data manifest draft for Phase 1A/1B/2 lineage.
 # This file is policy, not cleanup approval. Data mutation stays disabled until
 # UNKNOWN and policy-deferred items are reviewed.
 
@@ -8,7 +8,7 @@ source_profile: configs/alpha_tiered.yaml::profiles.tier_3_research
 canonical_paths:
   dbn_root: data/dbn
   raw_parquet_pattern: data/raw/{market}/{year}.parquet
-  causal_parquet_pattern: data/causal_base_candidates/broad_manifest_527_rebuild_v1/{market}/{year}.parquet
+  causal_parquet_pattern: data/causally_gated_normalized/{market}/{year}.parquet
 
 expected_markets:
   - ES
@@ -88,8 +88,9 @@ coverage_policy:
     allowed_missing_pairs:
       data/dbn/status:
         # Approved status DBN optional-enrichment deferral. Phase 1B treats
-        # status as optional enrichment; Phase 1C/2 restart smoke does not
-        # require these status DBN pairs for raw/causal path validation.
+        # status as optional enrichment; Phase 1B raw/DBN validation and Phase 2
+        # restart smoke do not require these status DBN pairs for raw/causal
+        # path validation.
         - 6A:2014
         - 6B:2014
         - 6C:2010

@@ -19,7 +19,7 @@ from scripts.validation import validate_broad_causal_raw_source_readiness as raw
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ALPHA_CONFIG = REPO_ROOT / "configs/alpha_tiered.yaml"
 DEFAULT_INPUT_ROOT = REPO_ROOT / "data/raw"
-DEFAULT_OUTPUT_ROOT = REPO_ROOT / "data/causal_base_candidates/broad_manifest_527_rebuild_v1"
+DEFAULT_OUTPUT_ROOT = REPO_ROOT / "data/causally_gated_normalized"
 DEFAULT_REPORT_ROOT = (
     REPO_ROOT / "reports/data_audit/holdout_forward_evidence/broad_manifest_527_rebuild_v1"
 )

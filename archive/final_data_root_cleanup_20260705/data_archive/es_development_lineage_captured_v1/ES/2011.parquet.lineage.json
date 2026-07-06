@@ -1,0 +1,41 @@
+{
+  "build_id": "phase2_causal_base_es_development_v1",
+  "build_name": "Phase 2 causal base ES development-window candidate rebuild",
+  "market": "ES",
+  "output": {
+    "candidate_path": "data/causal_base_candidates/es_development_lineage_captured_v1/ES/2011.parquet"
+  },
+  "raw_inputs": {
+    "definition_manifest_path": "data/dbn/definition/ES/2011/2011-01-01_2012-01-01.dbn.zst.manifest.json",
+    "ohlcv_manifest_path": "data/dbn/ohlcv_1m/ES/2011/2011-01-01_2012-01-01.dbn.zst.manifest.json"
+  },
+  "schema_version": "v1_candidate_lineage_sidecar_1",
+  "transform_identity": {
+    "code_ref": "scripts/phase2_causal_base/build_causal_base_data.py::process_file",
+    "command_ref": "D0053_lineage_captured_es_development_rebuild",
+    "config_ref": "configs/alpha_tiered.yaml#tier_3"
+  },
+  "validation": {
+    "data_values_in_sidecar": false,
+    "holdout_scope_excluded": true,
+    "market_is_es_only": true,
+    "non_es_scope_excluded": true,
+    "output_candidate_path_present": true,
+    "parquet_content_read_for_lineage": false,
+    "parquet_schema_read_for_lineage": false,
+    "raw_definition_manifest_path_present": true,
+    "raw_ohlcv_manifest_path_present": true,
+    "row_counts_in_sidecar": false,
+    "same_year_inputs_and_output": true,
+    "secrets_in_sidecar": false,
+    "timestamps_in_sidecar": false,
+    "year_is_in_development_window": true
+  },
+  "window": {
+    "end": "2020-12-31",
+    "holdout_excluded": true,
+    "name": "D0003_development",
+    "start": "2010-01-01"
+  },
+  "year": 2011
+}

@@ -36,7 +36,7 @@ STATUS_DRY_RUN_READY = "DRY_RUN_READY_OPENING_RANGE_ACCEPTANCE_WFA_MATERIALIZATI
 STATUS_EXECUTED = "EXECUTED_OPENING_RANGE_ACCEPTANCE_WFA_MATERIALIZATION"
 STATUS_NO_GO = "NO_GO_OPENING_RANGE_ACCEPTANCE_WFA_MATERIALIZATION"
 
-DEFAULT_INPUT_ROOT = Path("data/feature_matrices/baseline_tier1_rebuild_v1")
+DEFAULT_INPUT_ROOT = Path("data/feature_matrices")
 DEFAULT_OUTPUT_ROOT = Path("data/feature_matrices/opening_range_acceptance_continuation_30m_v1_wfa_smoke")
 DEFAULT_REPORTS_ROOT = Path("reports/pipeline_audit")
 DEFAULT_COSTS_CONFIG = Path("configs/costs.yaml")

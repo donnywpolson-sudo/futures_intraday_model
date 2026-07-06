@@ -16,8 +16,8 @@ def _policy_text() -> str:
     return "\n".join(
         [
             "Human policy decision: `rebuild_new_broad_root`.",
-            "data/causal_base_candidates/broad_manifest_527_rebuild_v1",
-            "data/causal_base_candidates/broad_manifest_527_rebuild_v1/{market}/{year}.parquet",
+            "data/causally_gated_normalized",
+            "data/causally_gated_normalized/{market}/{year}.parquet",
             "legacy roots are evidence only",
             "does not approve broader modeling",
         ]
@@ -28,7 +28,7 @@ def _manifest() -> dict[str, object]:
     return {
         "canonical_paths": {
             "raw_parquet_pattern": "data/raw/{market}/{year}.parquet",
-            "causal_parquet_pattern": "data/causal_base_candidates/tier1_rebuild_v1/{market}/{year}.parquet",
+            "causal_parquet_pattern": "data/causally_gated_normalized/{market}/{year}.parquet",
         },
         "expected_markets": ["ES", "KE"],
         "expected_years": {
@@ -86,7 +86,7 @@ def test_build_plan_writes_paths_statuses_required_fields_and_non_approval(tmp_p
     }
     assert rows["ES:2024"]["planned_input_raw_path"] == "data/raw/ES/2024.parquet"
     assert rows["ES:2024"]["planned_output_causal_path"] == (
-        "data/causal_base_candidates/broad_manifest_527_rebuild_v1/ES/2024.parquet"
+        "data/causally_gated_normalized/ES/2024.parquet"
     )
     assert rows["ES:2024"]["prebuild_status"] == "action_required"
     assert rows["ES:2025"]["non_research_until_separately_approved"] is True
@@ -117,7 +117,7 @@ def test_write_plan_outputs_json_and_markdown_with_required_text(tmp_path: Path)
     payload = json.loads(json_out.read_text(encoding="utf-8"))
     markdown = md_out.read_text(encoding="utf-8")
     assert payload["summary"]["expected_rows"] == 5
-    assert "broad_manifest_527_rebuild_v1" in markdown
+    assert "data/causally_gated_normalized" in markdown
     assert "does not approve broader modeling" in markdown
     assert "config promotion" in markdown
 

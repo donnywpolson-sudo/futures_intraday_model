@@ -14,7 +14,7 @@ def _row(pair: str) -> dict[str, object]:
         "pair": pair,
         "market": market,
         "year": int(year_text),
-        "source_file": f"data/dbn_sr_parent_candidate/{market}/{year_text}/source.dbn.zst",
+        "source_file": f"data/dbn/ohlcv_1m_parent/{market}/{year_text}/source.dbn.zst",
         "planned_input_raw_path": f"data/raw/{market}/{year_text}.parquet",
         "raw_parquet_sha256": f"raw-{pair}",
         "raw_parquet_row_count": 10,

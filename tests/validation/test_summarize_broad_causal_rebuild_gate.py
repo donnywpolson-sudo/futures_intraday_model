@@ -55,7 +55,7 @@ def _prebuild_row(market: str, year: int, status: str) -> dict[str, object]:
 
 
 def _ready_row(market: str, year: int) -> dict[str, object]:
-    source_root = "data/dbn_sr_parent_candidate" if market in {"SR1", "SR3"} else "data/dbn/ohlcv_1m"
+    source_root = gate.SR_PARENT_SOURCE_ROOT if market in {"SR1", "SR3"} else "data/dbn/ohlcv_1m"
     return {
         **_prebuild_row(market, year, "action_required"),
         "raw_read_performed": True,
@@ -89,14 +89,14 @@ def _blocked_readiness_row(pair: str) -> dict[str, object]:
         "source_reference_count": 1,
         "source_references": [
             {
-                "source_file": f"data/dbn_sr_parent_candidate/{market}/{year}/source.dbn.zst",
+                "source_file": f"{gate.SR_PARENT_SOURCE_ROOT}/{market}/{year}/source.dbn.zst",
                 "expected_sha256": "b" * 64,
                 "actual_sha256": None,
                 "hash_matches": False,
                 "source_present": False,
             }
         ],
-        "blockers": [f"source file missing: data/dbn_sr_parent_candidate/{market}/{year}/source.dbn.zst"],
+        "blockers": [f"source file missing: {gate.SR_PARENT_SOURCE_ROOT}/{market}/{year}/source.dbn.zst"],
         "readiness_status": gate.READINESS_SOURCE_FAILURE,
     }
 
@@ -162,8 +162,8 @@ def _source_resolution() -> dict[str, object]:
                 "data/raw/SR3/2020.parquet",
             ],
             "source_files": [
-                "data/dbn_sr_parent_candidate/SR1/2020/2020-01-01_2021-01-01.dbn.zst",
-                "data/dbn_sr_parent_candidate/SR3/2020/2020-01-01_2021-01-01.dbn.zst",
+                f"{gate.SR_PARENT_SOURCE_ROOT}/SR1/2020/2020-01-01_2021-01-01.dbn.zst",
+                f"{gate.SR_PARENT_SOURCE_ROOT}/SR3/2020/2020-01-01_2021-01-01.dbn.zst",
             ],
         },
         "repairs": repairs,
@@ -191,7 +191,7 @@ def _repair_row(pair: str) -> dict[str, object]:
     return {
         "pair": pair,
         "raw_path": f"data/raw/{market}/{year_text}.parquet",
-        "source_file": f"data/dbn_sr_parent_candidate/{market}/{year_text}/source.dbn.zst",
+        "source_file": f"{gate.SR_PARENT_SOURCE_ROOT}/{market}/{year_text}/source.dbn.zst",
         "old_source_sha256": "b" * 64,
         "new_source_sha256": "a" * 64,
         "new_raw_parquet_sha256": "c" * 64,
@@ -206,7 +206,7 @@ def _policy_row(pair: str) -> dict[str, object]:
         "pair": pair,
         "market": market,
         "year": int(year_text),
-        "source_file": f"data/dbn_sr_parent_candidate/{market}/{year_text}/source.dbn.zst",
+        "source_file": f"{gate.SR_PARENT_SOURCE_ROOT}/{market}/{year_text}/source.dbn.zst",
         "planned_input_raw_path": f"data/raw/{market}/{year_text}.parquet",
         "raw_parquet_sha256": f"raw-{pair}",
         "raw_parquet_row_count": 10,

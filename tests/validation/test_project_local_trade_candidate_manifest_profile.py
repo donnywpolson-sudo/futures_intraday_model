@@ -116,14 +116,16 @@ profiles:
 
 
 def _output_row(tmp_path: Path, market: str, year: int) -> dict[str, object]:
-    output_path = tmp_path / ledger_gate.CANDIDATE_CAUSAL_ROOT / market / f"{year}.parquet"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_bytes(f"{market} {year}".encode("utf-8"))
+    source_output_path = tmp_path / ledger_gate.CANDIDATE_CAUSAL_ROOT / market / f"{year}.parquet"
+    actual_output_path = tmp_path / ledger_gate.TIER1_CAUSAL_ROOT / market / f"{year}.parquet"
+    actual_output_path.parent.mkdir(parents=True, exist_ok=True)
+    actual_output_path.write_bytes(f"{market} {year}".encode("utf-8"))
     return {
         "market": market,
         "year": year,
         "input_path": f"data/raw/{market}/{year}.parquet",
-        "output_path": output_path.as_posix(),
+        "output_path": source_output_path.as_posix(),
+        "actual_output_path": actual_output_path.as_posix(),
         "raw_rows": 10,
         "output_rows": 12,
         "synthetic_rows": 2,
@@ -145,9 +147,14 @@ def _write_source_manifest(tmp_path: Path, *, markets: list[str] | None = None) 
     source_markets = markets or ["NG"]
     outputs = [_output_row(tmp_path, market, year) for market in source_markets for year in [2025, 2026]]
     output_hashes = {
-        str(row["output_path"]): file_sha256(Path(str(row["output_path"])))
+        str(row["output_path"]): file_sha256(Path(str(row["actual_output_path"])))
         for row in outputs
     }
+    manifest_outputs = []
+    for row in outputs:
+        clean_row = dict(row)
+        clean_row.pop("actual_output_path")
+        manifest_outputs.append(clean_row)
     manifest = {
         "stage": "causal_base",
         "status": "PASS",
@@ -162,10 +169,10 @@ def _write_source_manifest(tmp_path: Path, *, markets: list[str] | None = None) 
         "failure_count": 0,
         "warnings": [],
         "failures": [],
-        "summary": {"file_count": len(outputs), "pass_count": len(outputs), "warn_count": 0, "fail_count": 0},
+        "summary": {"file_count": len(manifest_outputs), "pass_count": len(manifest_outputs), "warn_count": 0, "fail_count": 0},
         "input_file_hashes": {},
         "output_file_hashes": output_hashes,
-        "outputs": outputs,
+        "outputs": manifest_outputs,
     }
     path = (
         tmp_path
@@ -232,7 +239,7 @@ def test_writes_per_year_causal_base_manifests_that_pass_upstream_gate(tmp_path:
         expected_stage="causal_base",
         expected_profile="tier_3_holdout",
         expected_resolved_profile="tier_3_holdout",
-        expected_output_root=tmp_path / ledger_gate.CANDIDATE_CAUSAL_ROOT,
+        expected_output_root=tmp_path / ledger_gate.TIER1_CAUSAL_ROOT,
         expected_market_years=[("NG", 2025)],
         gate_name="test_projection_holdout",
     )
@@ -241,7 +248,7 @@ def test_writes_per_year_causal_base_manifests_that_pass_upstream_gate(tmp_path:
         expected_stage="causal_base",
         expected_profile="tier_3_forward",
         expected_resolved_profile="tier_3_forward",
-        expected_output_root=tmp_path / ledger_gate.CANDIDATE_CAUSAL_ROOT,
+        expected_output_root=tmp_path / ledger_gate.TIER1_CAUSAL_ROOT,
         expected_market_years=[("NG", 2026)],
         gate_name="test_projection_forward",
     )

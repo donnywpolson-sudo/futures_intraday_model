@@ -362,7 +362,7 @@ def test_label_feature_sanity_cli_accepts_explicit_report_scoped_predictions(tmp
 
 
 def test_label_feature_sanity_cli_accepts_explicit_approved_rebuilt_feature_root() -> None:
-    feature_root = Path("data/feature_matrices/baseline_tier1_rebuild_v1")
+    feature_root = Path("data/feature_matrices")
 
     args = build_arg_parser().parse_args(["--feature-root", feature_root.as_posix()])
 

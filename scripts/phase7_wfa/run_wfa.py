@@ -39,7 +39,7 @@ from scripts.profile_scope import (
 DEFAULT_PROFILE = "tier_1"
 DEFAULT_MATRIX = "baseline"
 DEFAULT_RUN = "baseline"
-DEFAULT_INPUT_ROOT = Path("data") / "feature_matrices" / "baseline_tier1_rebuild_v1"
+DEFAULT_INPUT_ROOT = Path("data") / "feature_matrices"
 DEFAULT_SPLIT_PLAN = Path("reports/wfa/split_plan.json")
 DEFAULT_REPORTS_ROOT = Path("reports/wfa")
 DEFAULT_MODELS_CONFIG = Path("configs/models.yaml")

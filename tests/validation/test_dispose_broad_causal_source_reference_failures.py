@@ -80,8 +80,8 @@ def _historical_files(tmp_path: Path, source_paths: list[str]) -> list[Path]:
 
 def _two_missing_rows() -> tuple[list[dict[str, object]], list[str]]:
     source_paths = [
-        "data/dbn_sr_parent_candidate/SR3/2020/2020-01-01_2021-01-01.dbn.zst",
-        "data/dbn_sr_parent_candidate/SR1/2020/2020-01-01_2021-01-01.dbn.zst",
+        "data/dbn/ohlcv_1m_parent/SR3/2020/2020-01-01_2021-01-01.dbn.zst",
+        "data/dbn/ohlcv_1m_parent/SR1/2020/2020-01-01_2021-01-01.dbn.zst",
     ]
     rows = [
         _failed_row("SR3:2020", source_paths[0], "1" * 64),
@@ -118,7 +118,7 @@ def test_missing_current_sources_are_blocked_and_historical_only(tmp_path: Path)
 
 
 def test_matching_recovered_source_requires_readiness_rerun(tmp_path: Path) -> None:
-    source_file = "data/dbn_sr_parent_candidate/SR3/2020/source.dbn.zst"
+    source_file = "data/dbn/ohlcv_1m_parent/SR3/2020/source.dbn.zst"
     source_hash = _write_source(tmp_path / source_file)
     rows = [_failed_row("SR3:2020", source_file, source_hash)]
     readiness_path = tmp_path / "readiness.json"
@@ -143,7 +143,7 @@ def test_matching_recovered_source_requires_readiness_rerun(tmp_path: Path) -> N
 
 
 def test_hash_mismatch_blocks_current_source(tmp_path: Path) -> None:
-    source_file = "data/dbn_sr_parent_candidate/SR1/2020/source.dbn.zst"
+    source_file = "data/dbn/ohlcv_1m_parent/SR1/2020/source.dbn.zst"
     _write_source(tmp_path / source_file, b"actual")
     rows = [_failed_row("SR1:2020", source_file, "0" * 64)]
     readiness_path = tmp_path / "readiness.json"
@@ -185,7 +185,7 @@ def test_invalid_readiness_counts_fail_closed(tmp_path: Path) -> None:
 
 
 def test_unexpected_failed_pair_fails_closed(tmp_path: Path) -> None:
-    rows = [_failed_row("ES:2020", "data/dbn_sr_parent_candidate/ES/2020/source.dbn.zst", "0" * 64)]
+    rows = [_failed_row("ES:2020", "data/dbn/ohlcv_1m_parent/ES/2020/source.dbn.zst", "0" * 64)]
     readiness_path = tmp_path / "readiness.json"
     _write_json(readiness_path, _readiness(rows))
 

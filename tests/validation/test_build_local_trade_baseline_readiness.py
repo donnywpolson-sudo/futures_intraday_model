@@ -155,6 +155,7 @@ def _write_phase3_manifest(
     *,
     profile: str,
     root: Path,
+    actual_root: Path | None = None,
     markets: list[str],
     year: int,
     name: str,
@@ -162,10 +163,11 @@ def _write_phase3_manifest(
     output_hashes = {}
     outputs = []
     for market in markets:
-        output_path = tmp_path / root / market / f"{year}.parquet"
+        output_path = tmp_path / (actual_root or root) / market / f"{year}.parquet"
+        manifest_output_path = tmp_path / root / market / f"{year}.parquet"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(f"{market} {year}".encode("utf-8"))
-        output_hashes[output_path.as_posix()] = file_sha256(output_path)
+        output_hashes[manifest_output_path.as_posix()] = file_sha256(output_path)
         outputs.append(
             {
                 "market": market,
@@ -199,6 +201,7 @@ def _write_phase3_manifest_set(tmp_path: Path) -> None:
         tmp_path,
         profile="tier_3_holdout",
         root=candidate_root,
+        actual_root=tier1_root,
         markets=["NG"],
         year=2025,
         name="candidate_2025",
@@ -207,6 +210,7 @@ def _write_phase3_manifest_set(tmp_path: Path) -> None:
         tmp_path,
         profile="tier_3_forward",
         root=candidate_root,
+        actual_root=tier1_root,
         markets=["NG"],
         year=2026,
         name="candidate_2026",
@@ -293,7 +297,7 @@ def test_ready_when_phase3_and_phase4_have_bounded_filters(tmp_path: Path) -> No
         for command in label_commands
     )
     assert any(
-        "scripts.phase3_labels.build_labels --profile tier_3_forward --input-root data/causal_proof_candidates/local_trade_2025_2026_v1 --output-root data/labeled --reports-root reports/labels/local_trade_baseline/data_causal_proof_candidates_local_trade_2025_2026_v1_2026 --markets NG --years 2026"
+        "scripts.phase3_labels.build_labels --profile tier_3_forward --input-root data/causally_gated_normalized --output-root data/labeled --reports-root reports/labels/local_trade_baseline/data_causally_gated_normalized_ng_2026 --markets NG --years 2026"
         in command
         for command in label_commands
     )

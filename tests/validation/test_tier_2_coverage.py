@@ -88,7 +88,9 @@ def _touch_complete_tree(
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("placeholder", encoding="utf-8")
 
-    feature_root = tmp_path / "data" / "feature_matrices" / feature_root_name
+    feature_root = tmp_path / "data" / "feature_matrices"
+    if feature_root_name:
+        feature_root = feature_root / feature_root_name
     for market in markets:
         for year in years:
             path = feature_root / market / f"{year}.parquet"
@@ -103,7 +105,7 @@ def test_cli_canonical_feature_root_has_no_implicit_default() -> None:
 
     assert args.canonical_feature_root is None
     assert args.causal_root is None
-    rebuilt_root = Path("data") / "feature_matrices" / "baseline_tier1_rebuild_v1"
+    rebuilt_root = Path("data") / "feature_matrices"
     rebuilt_args = parser.parse_args(["--canonical-feature-root", rebuilt_root.as_posix()])
     assert Path(rebuilt_args.canonical_feature_root).as_posix() == rebuilt_root.as_posix()
     causal_root = Path("data") / "causally_gated_normalized"
@@ -139,7 +141,7 @@ def test_main_missing_causal_root_fails_for_causal_stages(
             "--stage",
             "all",
             "--canonical-feature-root",
-            "data/feature_matrices/baseline_tier1_rebuild_v1",
+            "data/feature_matrices",
         ],
     )
 
@@ -158,12 +160,12 @@ def test_coverage_gate_accepts_explicit_approved_rebuilt_feature_root(
 ) -> None:
     config = ROOT / "configs" / "alpha_tiered.yaml"
     canonical_root = (
-        tmp_path / "data" / "feature_matrices" / "baseline_tier1_rebuild_v1"
+        tmp_path / "data" / "feature_matrices"
     )
     _touch_complete_tree(
         tmp_path,
         list(range(2010, 2025)),
-        feature_root_name="baseline_tier1_rebuild_v1",
+        feature_root_name="",
     )
 
     report = build_report(

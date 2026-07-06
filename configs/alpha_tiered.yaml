@@ -289,6 +289,11 @@ profiles:
     requires_all_market_configs: true
     requires_cost_configs: true
     market_families: *full_market_families
+    # accepted_readiness_exceptions are exact market/year readiness exceptions
+    # for Phase 2 file creation only. degraded_raw_quality does not mean
+    # trainable: degraded sessions must still persist as
+    # session_data_quality_degraded=true, trainable_data_quality=false, and
+    # causal_valid=false downstream.
     accepted_readiness_exceptions:
       - category: status_sparse
         market: 6M
@@ -632,16 +637,244 @@ profiles:
     requires_all_market_configs: true
     requires_cost_configs: true
     market_families: *full_market_families
+    # accepted_readiness_exceptions may permit exact forward causal file
+    # creation, but they never make degraded or otherwise invalid sessions
+    # trainable and must not be used as a global threshold waiver.
     accepted_readiness_exceptions:
-      - category: statistics_enrichment_sparse
+      - category: degraded_raw_quality
         market: ES
         year: 2026
-        reason: bounded_es2026_statistics_enrichment_sparse_accepted_warning_packet_20260703
-        evidence_paths:
-          - reports/pipeline_audit/local_trade_es2026_p1_repair_plan_v2/readiness_warning_evidence/ES_2026_readiness_warning_evidence.json
-          - reports/pipeline_audit/local_trade_es2026_p1_repair_plan_v2/readiness_warning_evidence/ES_2026_readiness_warning_evidence.md
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: &tier3_forward_2026_degraded_evidence
+          - reports/data_audit/current_state/degraded_data_semantics_20260706.json
+          - reports/data_audit/current_state/databento_2026_dataset_condition_verification_20260706.json
+          - reports/data_audit/current_state/databento_condition_status_semantics_note_20260706.json
         warning_prefixes:
-          - 'statistics enrichment sparse: missing_rows=6 stale_rows=6'
+          - 'degraded threshold breached: rows_pct=1.74227 bars=2760 sessions=3'
+      - category: degraded_raw_quality
+        market: NQ
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.73952 bars=2755 sessions=3'
+      - category: degraded_raw_quality
+        market: RTY
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.673243 bars=2612 sessions=3'
+      - category: degraded_raw_quality
+        market: YM
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.681144 bars=2634 sessions=3'
+      - category: degraded_raw_quality
+        market: CL
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.76108 bars=2760 sessions=3'
+      - category: degraded_raw_quality
+        market: NG
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.792951 bars=2628 sessions=3'
+      - category: degraded_raw_quality
+        market: RB
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.786521 bars=2253 sessions=3'
+      - category: degraded_raw_quality
+        market: HO
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.621517 bars=2007 sessions=3'
+      - category: degraded_raw_quality
+        market: GC
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.765867 bars=2755 sessions=3'
+      - category: degraded_raw_quality
+        market: SI
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.735913 bars=2618 sessions=3'
+      - category: degraded_raw_quality
+        market: HG
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.754081 bars=2620 sessions=3'
+      - category: degraded_raw_quality
+        market: SR3
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.728136 bars=1565 sessions=3'
+      - category: degraded_raw_quality
+        market: SR1
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=2.444149 bars=698 sessions=3'
+      - category: degraded_raw_quality
+        market: TN
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.724714 bars=2271 sessions=3'
+      - category: degraded_raw_quality
+        market: ZT
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.767402 bars=2337 sessions=3'
+      - category: degraded_raw_quality
+        market: ZF
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.77585 bars=2485 sessions=3'
+      - category: degraded_raw_quality
+        market: ZN
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.739648 bars=2545 sessions=3'
+      - category: degraded_raw_quality
+        market: ZB
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.754905 bars=2315 sessions=3'
+      - category: degraded_raw_quality
+        market: UB
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.776328 bars=2423 sessions=3'
+      - category: degraded_raw_quality
+        market: 6A
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.718148 bars=2651 sessions=4'
+      - category: degraded_raw_quality
+        market: 6B
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.671827 bars=2435 sessions=4'
+      - category: degraded_raw_quality
+        market: 6C
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.684336 bars=2337 sessions=4'
+      - category: degraded_raw_quality
+        market: 6E
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.712254 bars=2668 sessions=4'
+      - category: degraded_raw_quality
+        market: 6J
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.697318 bars=2598 sessions=4'
+      - category: degraded_raw_quality
+        market: 6M
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.749903 bars=2109 sessions=3'
+      - category: degraded_raw_quality
+        market: ZC
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.853539 bars=1709 sessions=2'
+      - category: degraded_raw_quality
+        market: ZS
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.813549 bars=1872 sessions=2'
+      - category: degraded_raw_quality
+        market: ZL
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.803204 bars=1946 sessions=2'
+      - category: degraded_raw_quality
+        market: ZM
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.883617 bars=1757 sessions=2'
+      - category: degraded_raw_quality
+        market: ZW
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.836368 bars=1790 sessions=2'
+      - category: degraded_raw_quality
+        market: KE
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.815777 bars=1510 sessions=2'
+      - category: degraded_raw_quality
+        market: LE
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.787513 bars=550 sessions=2'
+      - category: degraded_raw_quality
+        market: HE
+        year: 2026
+        reason: tier3_forward_2026_degraded_file_creation_only_approved_20260706
+        evidence_paths: *tier3_forward_2026_degraded_evidence
+        warning_prefixes:
+          - 'degraded threshold breached: rows_pct=1.797466 bars=549 sessions=2'
 
   local_trade_es2026_p1_research_smoke:
     description: "Candidate research smoke: exact ES 2026 only; not promotion, holdout, forward-validation, paper, or live evidence."

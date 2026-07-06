@@ -45,7 +45,7 @@
     "--folds",
     "ES_research_0001,ES_research_0002,ES_research_0003,ES_research_0004",
     "--input-root",
-    "data/feature_matrices/baseline_tier1_rebuild_v1",
+    "data/feature_matrices",
     "--split-plan",
     "reports/wfa/split_plan.json",
     "--reports-root",
