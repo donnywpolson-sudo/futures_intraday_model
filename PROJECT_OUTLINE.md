@@ -103,7 +103,8 @@ scripts/phase3_labels/         label and target construction
 scripts/phase4_features/       baseline feature matrix builders
 scripts/phase5_wfa/            WFA split builders
 scripts/phase6_wfa/            WFA training, shard-combine, and OOS prediction wrappers
-scripts/phase7_wfa/            legacy internal WFA engine; not a runnable workflow phase
+scripts/phase7_prediction_audit/ public prediction artifact audit gate
+scripts/phase7_wfa/            legacy internal WFA engine used by Phase 6
 scripts/phase8_model_selection/ prediction evaluation and model-selection audits
 scripts/phase9_research/       bounded research and robustness harnesses
 scripts/validation/            audit, readiness, repair-planning, and proof utilities
@@ -151,18 +152,27 @@ This section is the authoritative workflow map. Detailed phase commands live in 
 | 1B | Recheck accepted Phase 1A DBN evidence, convert DBNs to raw parquet, then immediately validate raw parquet against DBNs, manifests, source hashes, sidecars, definition joins, and row/schema sanity | `scripts.phase1B_convert.convert_databento_raw`; internal validator `scripts.phase1C_validate.audit_raw_dbn_alignment` | `data/raw/{market}/{year}.parquet` and `reports/raw_ingest/*` |
 | 2 | Run readiness gate, build causal/session-normalized data, then validate causal outputs | `scripts.phase2_causal_base.build_causal_base_data` | `data/causally_gated_normalized/{market}/{year}.parquet` |
 | 3 | Build labels/targets with explicit entry lag and horizon semantics | `scripts.phase3_labels.build_labels` | `data/labeled/{market}/{year}.parquet` |
-| 4 | Build baseline feature matrices from causal inputs only | `scripts.phase4_features.build_baseline_features` | `data/feature_matrices/baseline/{market}/{year}.parquet` |
+| 4 | Build baseline feature matrices from Phase 3 labeled rows while admitting only causal, leakage-audited features | `scripts.phase4_features.build_baseline_features` | `data/feature_matrices/baseline/{market}/{year}.parquet` |
 | 5 | Build chronological WFA split plans with purge/embargo rules | `scripts.phase5_wfa.build_wfa_splits` | `reports/wfa/split_plan.json` |
+| 6 | Train WFA models and write out-of-sample predictions, then combine prediction shards; model-trust use requires a pre-modeling hypothesis/trial ledger and baseline-suite comparability | `scripts.phase6_wfa.run_wfa`; `scripts.phase6_wfa.combine_wfa_predictions` | `data/predictions/{run}/oos_predictions.parquet` and WFA reports/manifests |
+| 7 | Audit saved Phase 6 prediction artifacts and signal quality before trading evaluation | `scripts.phase7_prediction_audit.audit_predictions` | `reports/prediction_audit/{run}/prediction_audit_summary.json` |
 | Internal | Legacy internal WFA engine used by Phase 6; not a runnable pipeline phase | `scripts.phase7_wfa.*` | no standalone output; internal implementation only |
-| 6 | Train WFA models and write out-of-sample predictions, then combine prediction shards | `scripts.phase6_wfa.run_wfa`; `scripts.phase6_wfa.combine_wfa_predictions` | `data/predictions/{run}/oos_predictions.parquet` and WFA reports/manifests |
-| 8 | Evaluate predictions, costs, policy alignment, and promotion readiness | `scripts.phase8_model_selection.*` | `reports/phase8/*` |
-| 9 | Run bounded research harnesses and adversarial audits | `scripts.phase9_research.*` | `reports/pipeline_audit/*` or focused reports |
-| 10 | Guard locked holdout/forward evaluation | `scripts.final_holdout.guard_final_holdout` | holdout approval/block evidence |
-| 11 | Freeze approved research artifacts only after explicit approval | `scripts.artifact_freeze.freeze_research_artifacts` | frozen artifact metadata |
+| 8 | Evaluate predictions, costs, baseline-suite comparisons, portfolio/risk subgate, statistical-validity inputs, policy alignment, and promotion readiness | `scripts.phase8_model_selection.*` | `reports/phase8/*` |
+| 8 subgate | Review portfolio/risk evidence over locked costed OOS policy rows before promotion readiness or artifact freeze | `Portfolio And Risk Gate`; `scripts.phase8_model_selection.*` | portfolio/risk decision reports and blockers |
+| 9 | Run bounded research harnesses and adversarial/statistical-validity diagnostics; statistical-validity reports may be pre-promotion inputs consumed by Phase 8 | `scripts.phase9_research.*` | `reports/pipeline_audit/*` or focused reports |
+| 10 | Freeze approved research artifacts only after explicit approval | `scripts.artifact_freeze.freeze_research_artifacts` | frozen artifact metadata |
+| 11 | Guard locked holdout/forward evaluation using frozen artifacts only | `scripts.final_holdout.guard_final_holdout` | holdout approval/block evidence |
 
-`scripts.phase7_wfa` is the legacy internal WFA engine, not a runnable pipeline
-phase. Run Phase 6 through `scripts.phase6_wfa.*`; changes to the legacy engine
-must be validated as Phase 6 WFA changes before Phase 6 runs consume them.
+`scripts.phase7_prediction_audit` is the public Phase 7 gate. `scripts.phase7_wfa`
+is the legacy internal WFA engine, not a runnable pipeline phase. Run Phase 6
+through `scripts.phase6_wfa.*`; changes to the legacy engine must be validated
+as Phase 6 WFA changes before Phase 6 runs consume them.
+
+Phase 8/9 ordering rule: Phase 9 statistical-validity diagnostics may be
+generated before a Phase 8 promotion decision and must be consumed by Phase 8
+when model-trust, promotion, freeze, or holdout-readiness claims are evaluated.
+Phase 9 harness wins remain feasibility evidence only until Phase 8 reviews the
+complete evidence set and all downstream blockers.
 
 ## Non-Negotiable Data Rules
 
@@ -295,11 +305,100 @@ Baseline acceptance and reporting criteria:
 - Every baseline report must include scope, causal inputs, feature set, config
   hash or path, split plan, cost policy, gross/net metrics, fold coverage,
   warnings, failure modes, and a no-retune statement.
+- Candidate and baseline suites must use the same WFA split plan, cost model,
+  position/policy rules, execution assumptions, and risk gates. Differences must
+  be predeclared and reported as blockers rather than interpreted as model edge.
 
 Complex models cannot be trusted unless they beat the simplest relevant
 baseline under the same data scope, split plan, cost model, position policy,
 and risk assumptions. A baseline failure is diagnostic evidence, not a reason to
 retune the complex model after locked OOS review.
+
+Pre-modeling hypothesis and trial ledger:
+
+- Before Phase 6 training can support model-trust or promotion claims, a trial
+  ledger must record tested or planned targets, feature families, model families,
+  thresholds, market scopes, cost assumptions, sizing/policy variants, stopped
+  branches, seeds, hyperparameter budgets, primary and secondary metrics, stop
+  rules, and evidence paths.
+- Phase 8/9 statistical-validity evidence depends on this ledger for PBO,
+  Deflated Sharpe, multiple-testing, and stopped-branch accounting. Missing or
+  incomplete trial accounting blocks promotion, artifact freeze, and holdout
+  claims. Pure smoke or infrastructure runs may omit the ledger only if they
+  remain diagnostic-only.
+
+## Model Failure Diagnostic Tooling
+
+The following report-only tools make the highest-yield model-failure questions
+phase-correct. They do not train, tune, change labels/features, rewrite WFA
+splits, alter saved predictions, promote artifacts, paper trade, or live trade.
+
+Phase 7 prediction artifact audit:
+
+```powershell
+python -m scripts.phase7_prediction_audit.audit_predictions --predictions <prediction_parquet> --predictions-manifest <prediction_manifest> --run <run> --output-root reports/prediction_audit/<run>
+```
+
+- Scope: saved OOS prediction parquet plus its exact manifest.
+- Outputs: `prediction_audit_summary.json`, compatibility
+  `prediction_diagnostics_summary.json`, target/fold/market quality CSVs,
+  prediction deciles, and calibration bins.
+- Purpose: separate weak signal, unstable folds/markets, miscalibration, and
+  prediction-scale failures from trading-policy or execution failures.
+- Promotion impact: missing or failing Phase 7 prediction audit evidence blocks
+  Phase 8 promotion readiness. `scripts.phase6_wfa.prediction_diagnostics`
+  remains a backward-compatible diagnostic entrypoint only.
+
+Phase 8 failure-analysis workbench:
+
+```powershell
+python -m scripts.phase8_model_selection.build_failure_analysis --predictions <prediction_parquet> --predictions-manifest <prediction_manifest> --costs-config configs/costs.yaml --models-config configs/models.yaml --run <run> --output-root reports/failure_analysis/<run>
+```
+
+- Scope: saved OOS predictions, matching manifest, cost config, and model
+  policy config.
+- Outputs: `failure_analysis_summary.json`, `failure_analysis.md`,
+  `pnl_attribution.csv`, `gross_net_cost_decomposition.csv`,
+  `trade_distribution.csv`, `regime_session_breakdown.csv`,
+  `baseline_comparison.csv`, `stress_tests.csv`, and
+  `failure_classifications.csv`.
+- Purpose: decompose PnL by market/year/fold/side/session/regime/confidence,
+  compare no-trade/random/simple baselines, stress costs, inspect trade
+  concentration, and classify failure modes.
+- Promotion impact: baseline, cost-stress, capacity/liquidity, and failure
+  evidence from this report may be consumed by Phase 8, but failing evidence
+  remains a blocker.
+
+Phase 9 statistical-validity diagnostics, as pre-promotion input to Phase 8:
+
+```powershell
+python -m scripts.phase9_research.statistical_validity --predictions <prediction_parquet> --predictions-manifest <prediction_manifest> --costs-config configs/costs.yaml --models-config configs/models.yaml --run <run> --output-root reports/statistical_validity/<run>
+```
+
+- Scope: saved OOS predictions and Phase 8-equivalent policy rows.
+- Outputs: `statistical_validity_summary.json`, bootstrap confidence intervals,
+  fold/market/year stability matrix, adversarial-test summary, and Markdown
+  readme.
+- Purpose: report PSR, DSR/PBO/multiple-testing readiness, bootstrap
+  uncertainty, stability, and adversarial checks without inferring missing
+  trial/search evidence.
+- Ordering: run this before any Phase 8 promotion decision that needs
+  statistical credibility. Phase 8 validates and consumes the report; absent,
+  stale, mismatched, or failing evidence fails closed.
+- Promotion impact: missing trial/search logs, missing PBO/DSR evidence, weak
+  PSR, unstable folds, or missing regime evidence fail closed.
+
+Phase 8 can consume these evidence reports with:
+
+```powershell
+python -m scripts.phase8_model_selection.evaluate_predictions --predictions <prediction_parquet> --predictions-manifest <prediction_manifest> --phase7-prediction-audit reports/prediction_audit/<run>/prediction_audit_summary.json --failure-analysis-report reports/failure_analysis/<run>/failure_analysis_summary.json --statistical-validity-report reports/statistical_validity/<run>/statistical_validity_summary.json --run <run>
+```
+
+When optional evidence paths are supplied, Phase 8 validates run id, prediction
+path, prediction-manifest path, and input hashes before using them. Evidence
+paths that are absent keep the existing fail-closed blockers. Evidence paths
+that are present but stale, mismatched, or hash-invalid are structural Phase 8
+failures. `--prediction-diagnostics` remains a legacy alias for older reports.
 
 ## Mandatory Gates Before Model Trust
 
@@ -736,14 +835,17 @@ Downstream blockers:
 
 ### Statistical Validity Gate
 
-Placement: after costed OOS evaluation and before promotion readiness,
+Placement: after costed OOS evaluation and before Phase 8 promotion readiness,
 artifact freeze, or any claim that model results are statistically credible.
+Phase 9 statistical-validity tooling may produce this evidence before Phase 8
+consumes it for promotion or model-trust review.
 
 Required inputs:
 
 - locked OOS predictions and costed metrics by fold, market, year, and regime;
-- complete list of tested targets, feature families, model families,
-  thresholds, cost assumptions, market scopes, and stopped branches;
+- trial ledger with the complete list of tested targets, feature families, model
+  families, thresholds, cost assumptions, market scopes, policy variants, and
+  stopped branches;
 - predeclared primary metrics, secondary diagnostics, stop rules, and promotion
   thresholds;
 - random seed policy, hyperparameter budget, and parameter/search space records;
@@ -1594,6 +1696,8 @@ Inputs:
   non-Tier-1 `feature_cols.json` path when allowed by the bounded plan
 - `reports/wfa/split_plan.json`
 - data-audit universe JSON when required by the profile
+- pre-modeling hypothesis/trial ledger for any run that may support model-trust
+  or promotion claims
 - `configs/models.yaml`
 - `configs/alpha_tiered.yaml`
 
@@ -1610,9 +1714,15 @@ Model risk gate:
   rationale, hyperparameter search budget, deterministic seed policy,
   regularization settings, class imbalance handling, calibration method/checks,
   and feature-importance stability checks.
+- Phase 6 results are not trust evidence unless the pre-modeling trial ledger
+  records the tested target, feature, model, threshold, market, cost, sizing, and
+  stopped-branch search surface before locked OOS review.
 - Hyperparameter, threshold, target, feature, market, and cost decisions must be
   made before locked OOS/holdout review and must not be changed to rescue a
   completed result.
+- Complex-model Phase 6 outputs remain diagnostic until the required baseline
+  suite is evaluated under the same WFA split plan, cost model, and policy
+  assumptions or Phase 8 records the missing comparability as a blocker.
 
 Acceptance checks:
 
@@ -1620,6 +1730,8 @@ Acceptance checks:
 - Predictions are test-fold rows only.
 - Model-risk metadata records hyperparameter budget, seeds, calibration, class
   imbalance handling, regularization, and feature-importance stability.
+- Trial-ledger evidence records the pre-OOS search surface, stopped branches,
+  seeds, and hyperparameter budget when the run is intended for model trust.
 - Prediction manifest hash, row count, path, profile, resolved profile, markets,
   years, and split-plan provenance match actual artifacts.
 - `artifact_evidence_ready=true`.
@@ -1629,6 +1741,8 @@ Stop conditions:
 - Any stale output path is detected.
 - Missing model-risk metadata or a model run that exceeds its predeclared
   hyperparameter budget.
+- Missing or incomplete trial ledger for any run presented as model-trust,
+  promotion, freeze, or holdout evidence.
 - Prediction manifest does not match actual parquet.
 - Fold failure count is nonzero.
 - Model collapses to constant or class-prior-only predictions without an
@@ -1637,15 +1751,20 @@ Stop conditions:
 Downstream blockers:
 
 - Phase 8 and later gates require matching prediction parquet, manifest, WFA
-  report, split-plan provenance, artifact evidence, and model-risk metadata.
+  report, split-plan provenance, artifact evidence, model-risk metadata, and
+  trial-ledger evidence for trust claims.
+- Phase 8 promotion readiness must fail closed if the required baseline suite is
+  missing or was not evaluated under the same WFA split, cost, and policy
+  evidence as the candidate.
 - Fold failures, stale outputs, unapproved search expansion, post-OOS changes,
   or collapsed predictions block promotion unless a separate diagnostic decision
   keeps the run in scope.
 
 ### 8. Evaluate Predictions
 
-Purpose: score saved OOS predictions with deterministic policy, costs, model
-selection diagnostics, and promotion gates.
+Purpose: score saved OOS predictions with deterministic policy, costs,
+baseline-suite comparisons, portfolio/risk evidence, statistical-validity
+inputs, model-selection diagnostics, and promotion gates.
 
 Command:
 
@@ -1665,6 +1784,13 @@ Inputs:
 - `reports/wfa/{run}_predictions_manifest.json`
 - `configs/costs.yaml`
 - `configs/models.yaml`
+- Phase 7 prediction audit evidence when promotion readiness is evaluated
+- baseline-suite and failure-analysis evidence using the same WFA split, cost,
+  execution, and policy assumptions as the candidate
+- portfolio/risk gate decision evidence for sizing, exposure, drawdown,
+  concentration, capacity, stale-data, and risk-limit claims
+- statistical-validity evidence and the trial ledger needed for overfit,
+  multiple-testing, and stopped-branch accounting
 
 Outputs:
 
@@ -1672,13 +1798,26 @@ Outputs:
 - `reports/model_selection/`
 - `reports/phase8/metrics.json`
 - `reports/phase8/alpha_promotion_decision.json`
+- promotion blockers for missing or failing baseline-suite, portfolio/risk,
+  statistical-validity, trial-ledger, cost, or policy evidence
+
+Baseline and portfolio/risk promotion inputs:
+
+- Phase 8 promotion review must consume baseline-suite evidence evaluated under
+  the same WFA split plan, cost model, execution assumptions, and policy rules
+  as the candidate. Missing or non-comparable baselines block promotion.
+- Phase 8 promotion review must consume the Portfolio And Risk Gate decision for
+  sizing, exposure, drawdown, capacity, concentration, stale-data, and risk-limit
+  evidence. Missing or failing portfolio/risk evidence blocks promotion and
+  artifact freeze.
 
 Statistical validity gate:
 
-- Phase 8 promotion review must report Probability of Backtest Overfitting
-  (PBO) or an explicit no-PBO applicability reason, Deflated Sharpe,
-  Probabilistic Sharpe, bootstrap confidence intervals, multiple-testing
-  adjustment, parameter stability, and regime breakdowns.
+- Phase 8 promotion review must consume pre-promotion statistical-validity
+  diagnostics, from Phase 9 tooling when applicable, and report Probability of
+  Backtest Overfitting (PBO) or an explicit no-PBO applicability reason,
+  Deflated Sharpe, Probabilistic Sharpe, bootstrap confidence intervals,
+  multiple-testing adjustment, parameter stability, and regime breakdowns.
 - Gross/net metrics, Sharpe-like summaries, and isolated fold/market wins are
   diagnostic only until statistical-validity evidence passes.
 - If a test is not applicable to the current run, the report must state the
@@ -1690,6 +1829,12 @@ Acceptance checks:
 - Final holdout is not consumed for selection/calibration.
 - Costs, turnover, active-signal rows, market/fold/year breakdowns, and blocker
   reasons are reported.
+- Baseline-suite evidence is present, comparable, and uses the same WFA split,
+  cost, execution, and policy assumptions as the candidate.
+- Portfolio/risk gate evidence is present for every promoted sizing, exposure,
+  drawdown, capacity, concentration, stale-data, or risk-limit claim.
+- Trial-ledger evidence covers tested variants, stopped branches, seeds, and
+  search budgets required by statistical-validity checks.
 - Statistical-validity evidence is present, including PBO or applicability
   decision, Deflated Sharpe, Probabilistic Sharpe, bootstrap confidence
   intervals, multiple-testing adjustment, parameter stability, and regime
@@ -1701,6 +1846,12 @@ Stop conditions:
 - `final_holdout_touched=true` for research selection.
 - Artifact evidence is stale or mismatched.
 - Gross/net/cost gates fail.
+- Baseline suite is missing, stale, not comparable, or contradicts the promotion
+  claim under the same WFA split, cost, and policy evidence.
+- Portfolio/risk evidence is missing, stale, failing, or not tied to the locked
+  costed OOS policy rows.
+- Trial ledger is missing or incomplete for overfit, multiple-testing, or
+  stopped-branch accounting.
 - Statistical-validity evidence is missing, stale, not run, not applicable
   without substitute evidence, or fails promotion thresholds.
 - Promotion check fails; this is expected for the locked negative Tier 1
@@ -1714,11 +1865,18 @@ baseline failure.
 Rules:
 
 - Pre-register hypothesis, scope, controls, metrics, and stop rules.
+- Record every implemented candidate, target, feature family, model family,
+  threshold, market scope, cost assumption, sizing/policy variant, stopped branch,
+  seed policy, and hyperparameter budget in the trial ledger before locked OOS
+  or promotion review.
 - Run smoke first.
 - Feature hypotheses require the Phase 4 feature audit gate before WFA or
   promotion review.
 - Research harnesses that compare variants must define multiple-testing,
   parameter-stability, and regime-breakdown evidence before promotion.
+- Statistical-validity diagnostic reports generated by Phase 9 are
+  pre-promotion inputs to Phase 8; they are not a later shortcut around Phase 8
+  baseline, cost, portfolio/risk, or promotion gates.
 - Do not use a stopped branch as a "new" hypothesis.
 - Do not proceed from oracle/feasibility evidence directly to full WFA.
 - Require materially different target or feature work after a stopped branch.
@@ -1800,62 +1958,7 @@ Guarded alpha discovery batch runner:
 Current implemented harnesses live under `scripts/phase9_research/`.
 
 
-### 10. Guard Locked Holdout/Forward Evaluation
-
-Purpose: guard locked holdout and forward evaluation so final evaluation uses
-only frozen, pre-approved research artifacts and cannot become a new tuning,
-feature-selection, calibration, or policy-selection loop.
-
-Command template:
-
-```powershell
-python -m scripts.final_holdout.guard_final_holdout `
-  --frozen-artifact-id <freeze_id> `
-  --freeze-root artifacts/frozen `
-  --run-id final_holdout_<run_id> `
-  --reports-root reports/final_holdout/<run_id>
-```
-
-Inputs:
-
-- `artifacts/frozen/<freeze_id>/manifest.json`
-- Phase 8 promotion fields copied into the frozen manifest
-- anti-overfit status and failures copied into the frozen manifest
-- frozen run, profile, and resolved-profile identifiers
-
-Outputs:
-
-- `reports/final_holdout/<run_id>/final_metrics.json`
-- console status showing `PASS` or `FAIL` and failure count
-
-Acceptance checks:
-
-- The frozen manifest exists, is marked `frozen=true`, and has
-  `failure_count=0`.
-- The frozen manifest records `final_holdout_consumes_frozen_only=true`.
-- Phase 8 fields in the frozen manifest show `phase8_promoted=true`,
-  `phase8_model_promotion_allowed=true`, and no Phase 8 blockers.
-- Anti-overfit fields in the frozen manifest show `PASS` and no failures.
-- The final-holdout run does not set `--allow-tuning`,
-  `--allow-feature-selection`, `--allow-calibration-change`, or
-  `--allow-policy-change`.
-
-Stop conditions:
-
-- Missing, stale, unfrozen, unpromoted, blocked, or failed frozen manifest.
-- Any requested tuning, feature selection, calibration change, or policy change
-  during final-holdout evaluation.
-- Missing run/profile/resolved-profile identity in the frozen manifest.
-- Anti-overfit evidence missing, failed, or inconsistent with the frozen run.
-
-Downstream blockers:
-
-- Final-holdout results cannot support promotion, paper, live, or artifact
-  claims unless the guard output is `PASS` and consumes frozen artifacts only.
-- Any final-holdout failure keeps the run diagnostic-only and requires a new
-  predeclared research line before further model-selection work.
-
-### 11. Freeze Approved Research Artifacts
+### 10. Freeze Approved Research Artifacts
 
 Purpose: freeze only approved research artifacts after Phase 8 promotion and
 anti-overfit evidence pass, before any final-holdout evaluation can consume the
@@ -1926,10 +2029,65 @@ Stop conditions:
 
 Downstream blockers:
 
-- Phase 10 cannot run until Phase 11 writes a frozen manifest with
+- Phase 11 cannot run until Phase 10 writes a frozen manifest with
   `frozen=true`, `failure_count=0`, and `final_holdout_consumes_frozen_only=true`.
 - Frozen artifacts are research evidence only. They do not approve paper or live
   trading without the separate production deferral gate.
+
+### 11. Guard Locked Holdout/Forward Evaluation
+
+Purpose: guard locked holdout and forward evaluation so final evaluation uses
+only frozen, pre-approved research artifacts and cannot become a new tuning,
+feature-selection, calibration, or policy-selection loop.
+
+Command template:
+
+```powershell
+python -m scripts.final_holdout.guard_final_holdout `
+  --frozen-artifact-id <freeze_id> `
+  --freeze-root artifacts/frozen `
+  --run-id final_holdout_<run_id> `
+  --reports-root reports/final_holdout/<run_id>
+```
+
+Inputs:
+
+- `artifacts/frozen/<freeze_id>/manifest.json`
+- Phase 8 promotion fields copied into the frozen manifest
+- anti-overfit status and failures copied into the frozen manifest
+- frozen run, profile, and resolved-profile identifiers
+
+Outputs:
+
+- `reports/final_holdout/<run_id>/final_metrics.json`
+- console status showing `PASS` or `FAIL` and failure count
+
+Acceptance checks:
+
+- The frozen manifest exists, is marked `frozen=true`, and has
+  `failure_count=0`.
+- The frozen manifest records `final_holdout_consumes_frozen_only=true`.
+- Phase 8 fields in the frozen manifest show `phase8_promoted=true`,
+  `phase8_model_promotion_allowed=true`, and no Phase 8 blockers.
+- Anti-overfit fields in the frozen manifest show `PASS` and no failures.
+- The final-holdout run does not set `--allow-tuning`,
+  `--allow-feature-selection`, `--allow-calibration-change`, or
+  `--allow-policy-change`.
+
+Stop conditions:
+
+- Missing, stale, unfrozen, unpromoted, blocked, or failed frozen manifest.
+- Any requested tuning, feature selection, calibration change, or policy change
+  during final-holdout evaluation.
+- Missing run/profile/resolved-profile identity in the frozen manifest.
+- Anti-overfit evidence missing, failed, or inconsistent with the frozen run.
+
+Downstream blockers:
+
+- Final-holdout results cannot support promotion, paper, live, or artifact
+  claims unless the guard output is `PASS` and consumes frozen artifacts only.
+- Any final-holdout failure keeps the run diagnostic-only and requires a new
+  predeclared research line before further model-selection work.
 
 ## Validation Commands
 
@@ -1950,13 +2108,14 @@ Major trust gate checks:
 | Feature audit / Phase 4 | `python -m pytest -q tests/phase4_features/test_build_baseline_features.py tests/phase8_model_selection/test_audit_label_feature_sanity.py` |
 | WFA split gate / Phase 5 | `python -m pytest -q tests/phase5_wfa/test_build_wfa_splits.py` |
 | Phase 6 wrapper surface | `python -c "import scripts.phase6_wfa.run_wfa as r; import scripts.phase6_wfa.combine_wfa_predictions as c; assert callable(r.main); assert callable(c.main)"` |
+| Phase 7 prediction audit | `python -m pytest -q tests/phase7_prediction_audit/test_audit_predictions.py tests/phase6_wfa/test_prediction_diagnostics.py` |
 | Phase 8 / Backtest And Cost Gate | `python -m pytest -q tests/phase8_model_selection/test_evaluate_predictions.py tests/phase8_model_selection/test_audit_return_model_scale.py tests/phase8_model_selection/test_audit_policy_signal_alignment.py` |
 | Portfolio And Risk Gate | `python -m pytest -q tests/phase8_model_selection/test_audit_mr_tail_risk.py tests/phase8_model_selection/test_audit_policy_failure.py`; manual evidence review only for capital, margin, broker, capacity, and portfolio aggregation claims. |
 | Statistical Validity Gate | Manual evidence review only unless the scoped Phase 8 report explicitly records PBO, Deflated Sharpe, Probabilistic Sharpe, bootstrap confidence intervals, multiple-testing adjustment, parameter stability, regime breakdowns, and `PASS` / `FAIL` / `NOT_APPLICABLE_WITH_REASON` status for each item. |
 | Production Deferral Gate | Manual evidence review only; no paper/live command is authorized by this file. |
 | Paper/Live Readiness Gate | Manual evidence review only; future and non-authorizing until a separate runbook, validation suite, and evidence manifest exist. |
-| Phase 10 final holdout guard | `python -m pytest -q tests/final_holdout/test_guard_final_holdout.py` |
-| Phase 11 artifact freeze | `python -m pytest -q tests/artifact_freeze/test_freeze_research_artifacts.py` |
+| Phase 10 artifact freeze | `python -m pytest -q tests/artifact_freeze/test_freeze_research_artifacts.py` |
+| Phase 11 final holdout guard | `python -m pytest -q tests/final_holdout/test_guard_final_holdout.py` |
 | Doc hygiene | `rg -n "Historical Local-Trade Phase 2|Statistical validity applicability|Portfolio/risk minimum evidence|Baseline acceptance|Paper/Live Readiness|Verified|Inferred|Assumed|Not established" PROJECT_OUTLINE.md`; `git diff --check`; `git status --short` |
 
 Runbook-focused validation after editing this file:
@@ -2333,7 +2492,7 @@ scans, promotion, artifact freeze, staging, commit, push, paper, or live
 execution unless refreshed against current primary artifacts and a bounded
 approval.
 
-Current diagnostic result: the v2 guarded wrapper was approved and executed on
+Historical diagnostic result: the v2 guarded wrapper was approved and executed on
 2026-07-02. It returned
 `NO_GO_REPAIRED_ROOT_READINESS_DIAGNOSTIC_EXECUTION` after generating the
 expected eight ignored local reports. `tier_3_holdout_2025` passed 4/4 selected
@@ -2386,7 +2545,7 @@ Focused validation:
 python -m pytest tests\validation\test_build_local_trade_es2026_p1_repair_proposal.py
 ```
 
-Current status: implemented and review-ready. The console-only gate reads the
+Historical status: implemented and review-ready. The console-only gate reads the
 generated ES 2026 work-order and drilldown reports, verifies exact scope
 `ES 2026`, and proposes three non-executed repair-direction items: repair or
 refresh statistics-enrichment evidence, review degraded raw-quality evidence,
@@ -2418,7 +2577,7 @@ Focused validation:
 python -m pytest tests\validation\test_build_local_trade_es2026_p1_repair_plan.py
 ```
 
-Current status: implemented and review-ready. The console-only gate reads the
+Historical status: implemented and review-ready. The console-only gate reads the
 approved ES 2026 P1 repair proposal evidence, verifies exact ES 2026 scope, and
 returns a bounded plan with 3 plan items and 7 approval-required command
 families. It returns `REVIEW_READY_ES2026_P1_REPAIR_PLAN` with 0 generated
@@ -2443,7 +2602,7 @@ Focused validation:
 python -m pytest -q tests\validation\test_run_local_trade_es2026_p1_repair_diagnostic.py
 ```
 
-Current status: implemented and run under bounded diagnostic-only approval. The
+Historical status: implemented and run under bounded diagnostic-only approval. The
 runner reads the existing ES 2026 work order, candidate raw-quality drilldown,
 candidate conversion evidence, optional status/statistics audit, and candidate
 raw parquet. It writes ignored review reports only under
@@ -2471,7 +2630,7 @@ Focused validation:
 python -m pytest -q tests\validation\test_run_local_trade_es2026_p1_accepted_warning_review.py
 ```
 
-Current status: implemented and run under bounded criteria-review-only
+Historical status: implemented and run under bounded criteria-review-only
 approval. The runner reads the repair-path diagnostic, validates exact
 `ES 2026` / `tier_3_forward` scope, requires the review to be limited to the 6
 statistics enrichment rows, verifies output reports are ignored under
@@ -2504,7 +2663,7 @@ Focused validation:
 python -m pytest -q tests\validation\test_run_local_trade_es2026_p1_readiness_warning_evidence.py
 ```
 
-Current status: implemented and run under bounded readiness-warning-evidence
+Historical status: implemented and run under bounded readiness-warning-evidence
 approval. The runner reads the repair-path diagnostic and candidate raw parquet,
 validates exact `ES 2026` / `tier_3_forward` scope, calls Phase 2
 `process_file` in memory with `write_output=False`, and writes ignored evidence
@@ -2524,7 +2683,7 @@ WFA/modeling, proof scan, stage, commit, push, or run live/paper execution.
 
 ES 2026 P1 accepted-warning packet:
 
-Current status: prepared in `configs/alpha_tiered.yaml` under
+Historical status: prepared in `configs/alpha_tiered.yaml` under
 `tier_3_forward` as one source-level `accepted_readiness_exceptions` entry
 scoped exactly to `ES 2026`, category `statistics_enrichment_sparse`, and
 warning string `statistics enrichment sparse: missing_rows=6 stale_rows=6`.
@@ -2557,7 +2716,7 @@ Focused validation:
 python -m pytest tests\validation\test_build_local_trade_es2026_p1_repair_plan.py tests\validation\test_run_local_trade_es2026_p1_dry_run_diagnostics.py
 ```
 
-Current status: implemented and approval-bound for corrected v2 scope. The
+Historical status: implemented and approval-bound for corrected v2 scope. The
 guarded wrapper builds the repair plan, extracts only the status/statistics
 Phase 1A `--dry-run` command families, verifies exact `ES 2026` scope through
 `2026-06-13`, verifies the planned v2 outputs are ignored by git before
@@ -2582,7 +2741,7 @@ Focused validation:
 python -m pytest tests\validation\test_build_local_trade_es2026_p1_dry_run_review.py
 ```
 
-Current status: implemented and fail-closed until the corrected v2 dry-run
+Historical status: implemented and fail-closed until the corrected v2 dry-run
 plans are generated. The console-only gate reads only
 `databento_download_plan_dry_run.json` for status/statistics under the ES 2026
 repair reports root, validates exact `ES 2026` one-task scope through
@@ -2603,7 +2762,7 @@ Focused validation:
 python -m pytest tests\validation\test_build_local_trade_es2026_p1_optional_archive_availability.py
 ```
 
-Current status: implemented and review-ready. The console-only gate reloads the
+Historical status: implemented and review-ready. The console-only gate reloads the
 corrected v2 `ES 2026` status/statistics dry-run plans, inspects only their
 planned optional DBN `output_path` archives and manifests under `data/`,
 verifies those planned archive artifacts are ignored by git, accepts
@@ -2626,7 +2785,7 @@ Focused validation:
 python -m pytest tests\validation\test_build_local_trade_optional_archive_inventory.py
 ```
 
-Current status: implemented and review-ready as console-only local evidence. The
+Historical status: implemented and review-ready as console-only local evidence. The
 gate inventories local optional `statistics,status` DBN archives under
 `data\dbn\`, defaults to `2026-01-01` through `2026-06-13`, validates archive
 manifests, confirms expected 33-market coverage, checks no generated
@@ -2648,7 +2807,7 @@ Focused validation:
 python -m pytest tests\validation\test_build_local_trade_es2026_p1_candidate_conversion_plan.py
 ```
 
-Current status: implemented and review-ready for a separate human approval
+Historical status: implemented and review-ready for a separate human approval
 decision. The console-only gate preserves the repair-plan candidate raw
 conversion and optional schema audit command families as approval-required,
 verifies the six planned candidate conversion outputs are ignored generated
@@ -2670,7 +2829,7 @@ Focused validation:
 python -m pytest tests\validation\test_run_local_trade_es2026_p1_candidate_conversion.py
 ```
 
-Current status: implemented. The wrapper defaults to no execution, requires
+Historical status: implemented. The wrapper defaults to no execution, requires
 `--execute --approval-token APPROVE_ES2026_P1_CANDIDATE_CONVERSION_V1` before
 candidate raw writes, validates the generated candidate parquet plus optional
 schema audit reports after execution, verifies planned candidate outputs are
@@ -2694,7 +2853,7 @@ Focused validation:
 python -m pytest tests\validation\test_build_local_trade_es2026_p1_candidate_conversion_review.py
 ```
 
-Current status: implemented and review-ready after the guarded candidate
+Historical status: implemented and review-ready after the guarded candidate
 conversion runner produced the expected candidate raw parquet and optional
 schema audit outputs. The console-only gate verifies the candidate ES 2026
 parquet, conversion reports, PASS optional schema audit, exact candidate output
@@ -2718,7 +2877,7 @@ Focused validation:
 python -m pytest tests\validation\test_build_local_trade_es2026_p1_candidate_readiness_plan.py
 ```
 
-Current status: implemented and review-ready. The console-only gate plans the candidate raw-quality
+Historical status: implemented and review-ready. The console-only gate plans the candidate raw-quality
 drilldown, an exact `ES 2026` candidate raw-alignment audit with an explicit
 include-list artifact, and the bounded readiness-only rerun with the candidate
 raw-alignment report wired in. It verifies planned readiness outputs are ignored
@@ -2741,7 +2900,7 @@ Focused validation:
 python -m pytest tests\validation\test_run_local_trade_es2026_p1_candidate_readiness.py
 ```
 
-Current status: implemented and fail-closed after the approved bounded
+Historical status: implemented and fail-closed after the approved bounded
 diagnostic execution. The wrapper defaults to no execution, requires
 `--execute --approval-token APPROVE_ES2026_P1_CANDIDATE_READINESS_V1` before
 writing include lists or running diagnostics, validates the raw-quality
@@ -2772,7 +2931,7 @@ Focused validation:
 python -m pytest tests\validation\test_build_local_trade_es2026_p1_candidate_readiness_review.py
 ```
 
-Current status: implemented and fail-closed until the guarded candidate
+Historical status: implemented and fail-closed until the guarded candidate
 readiness runner produces the expected raw-quality, raw-alignment, and
 readiness-only outputs. The console-only gate verifies exact ES 2026 candidate
 diagnostics, PASS readiness evidence, ignored generated-artifact status, and
@@ -2801,7 +2960,7 @@ Focused validation:
 python -m pytest tests\validation\test_build_local_trade_es2026_p1_workflow_status.py
 ```
 
-Current status: implemented and console-only. The gate summarizes the ES 2026
+Historical status: implemented and console-only. The gate summarizes the ES 2026
 P1 repair-plan, dry-run, archive-availability, candidate-conversion, and
 candidate-readiness gates, reports the current gate, writes no reports, and
 fails closed if the current approval-boundary expected generated outputs are
@@ -2834,7 +2993,7 @@ ready markets, 0 optional-inventory invalid archives, 0 expected generated
 outputs, 0 ignored expected generated outputs, 0 unignored expected generated
 outputs, 0 generated outputs, 0 staged generated paths, and 1 failure. With
 `--print-boundary-json`, it prints no approval token and no recommended
-execution command. The current blocker is that the ES 2026 candidate
+execution command. The blocker at that time was that the ES 2026 candidate
 causal-base manifest carries one accepted upstream warning, but Phase 3 label
 execution is not yet wired to consume the approved ES 2026 accepted-warning
 evidence. After accepted-warning handling is wired and a separately approved
@@ -2857,7 +3016,7 @@ artifact freeze, proof scans, staging, commit, push, or live/paper execution,
 and the boundary packet keeps explicit downstream `non_approval` flags.
 Workflow status summaries and boundary packets distinguish human review from
 execution approval with `execution_approval_required`.
-None of these future boundaries changes the current repo boundary.
+None of these historical future-boundary notes changes the current repo boundary recorded in `CODEX_HANDOFF.md`.
 
 ES 2026 P1 blocker proposal gate:
 
@@ -2871,7 +3030,7 @@ Focused validation:
 python -m pytest -q tests\validation\test_build_local_trade_es2026_p1_blocker_proposal.py
 ```
 
-Current status: implemented and console-only. The gate is for the earlier
+Historical status: implemented and console-only. The gate is for the earlier
 candidate-readiness no-go boundary; the current workflow has advanced to the
 downstream label wrapper repair boundary. Against the current repo it returns
 `NO_GO_ES2026_P1_BLOCKER_PROPOSAL` with current gate
@@ -2899,7 +3058,7 @@ Focused validation:
 python -m pytest -q tests\validation\test_build_local_trade_es2026_p1_disposition_plan.py
 ```
 
-Current status: implemented and console-only. The gate is for the earlier
+Historical status: implemented and console-only. The gate is for the earlier
 candidate-readiness no-go boundary; the current workflow has advanced to the
 downstream label wrapper repair boundary. Against the current repo it returns
 `NO_GO_ES2026_P1_DISPOSITION_PLAN` with current gate
@@ -2926,14 +3085,14 @@ exact current Phase 2 warning string
 degraded, synthetic, or roll warning contamination. The accepted-warning packet
 is prepared in `configs/alpha_tiered.yaml`.
 
-Current status: the approved bounded ES 2026 packet-aware readiness rerun passed
+Historical status: the approved bounded ES 2026 packet-aware readiness rerun passed
 against candidate raw root `data/raw_es2026_p1_repair_candidate`. Candidate raw
 alignment is PASS for exactly `ES 2026`; Phase 2 readiness is PASS with one
 accepted `statistics_enrichment_sparse` exception, original status `WARN`,
 blockers 0, failures 0, and accepted exception failures 0. Workflow status is
 now `ACTION_REQUIRED_ES2026_P1_WORKFLOW_STATUS` at current gate
 `downstream_label_build_execution` because the separate bounded causal-base
-build was approved, completed, and reviewed. The active next human decision is
+build was approved, completed, and reviewed. At that historical boundary, the next human decision was
 whether to approve the guarded Phase 3 label wrapper. Do not rerun causal-base
 builds, exclude ES 2026, build labels/features, run WFA/modeling, proof scan,
 stage, commit, push, or run live/paper paths without a separate bounded
@@ -2951,7 +3110,7 @@ Focused validation:
 python -m pytest tests\validation\test_build_local_trade_es2026_p1_causal_base_build_proposal.py
 ```
 
-Current status: implemented, previously approved, and now superseded by the
+Historical status: implemented, previously approved, and now superseded by the
 completed build evidence. Against the current repo the console-only proposal
 gate returns `NO_GO_ES2026_P1_CAUSAL_BASE_BUILD_PROPOSAL` because the workflow
 has advanced to `downstream_label_build_execution` and the six expected
@@ -3118,7 +3277,7 @@ python -m scripts.validation.build_local_trade_es2026_p1_downstream_feature_gate
   be dry-run ready without an upstream accepted-warning blocker; after a
   separately approved label build, exact completed label artifacts are accepted
   only when they are the planned wrapper outputs, generated-artifact hygiene is
-  clean, and the label manifest is exact-scope `PASS`. Current repo state has
+  clean, and the label manifest is exact-scope `PASS`. Historical repo state at that boundary had
   completed ignored Phase 4 feature artifacts, so this pre-execution gate now
   fail-closes with 10 expected ignored feature artifacts, 10 existing expected
   feature artifacts, 0 generated outputs, 0 staged generated paths, and
@@ -3159,7 +3318,7 @@ python -m scripts.validation.run_local_trade_es2026_p1_downstream_feature_build
   unless the feature gate is ready and
   `--execute --approval-token APPROVE_ES2026_P1_PHASE4_FEATURE_BUILD_V1` is
   supplied.
-- Current repo state returns
+- Historical repo state at that boundary returned
   `NO_GO_ES2026_P1_DOWNSTREAM_FEATURE_BUILD_EXECUTION` on a default dry run
   because completed Phase 4 candidate artifacts already exist and the upstream
   pre-execution feature gate fail-closes to avoid overwriting them.
@@ -3341,11 +3500,11 @@ python -m scripts.validation.build_local_trade_es2026_p1_downstream_metrics_revi
   and command execution.
 - Starts from exact ES 2026 model-smoke prediction evidence plus the full
   expected Phase 8 metrics/model-selection artifact set.
-- Current repo state returns
+- Historical repo state at that boundary returned
   `REVIEW_READY_ES2026_P1_DOWNSTREAM_METRICS_REVIEW` with model output `PASS`,
   metrics output `PASS`, 8 expected ignored existing reports, 0 generated
   outputs, 0 staged generated paths, and 0 failures.
-- Current result decision: kill/revise this exact ES 2026 P1 baseline/model-smoke
+- Historical result decision: kill/revise this exact ES 2026 P1 baseline/model-smoke
   candidate rather than continue it as alpha evidence. The diagnostics report
   `research_alpha_ready=false`, `model_promotion_allowed=false`,
   `alpha_promoted=false`, negative gross return, negative net return, high cost
