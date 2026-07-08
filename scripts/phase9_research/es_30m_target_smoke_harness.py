@@ -72,6 +72,10 @@ SESSION_COMPRESSION_BOX_BARS = 30
 SESSION_COMPRESSION_PRIOR_WINDOWS = 120
 SESSION_COMPRESSION_MIN_PRIOR_WINDOWS = 60
 SESSION_COMPRESSION_BREAKOUT_BUFFER_TICKS = 1.0
+VOLUME_PACE_RANGE_BARS = 60
+VOLUME_PACE_MIN_BASELINE_SESSIONS = 20
+VOLUME_PACE_BREAKOUT_BUFFER_TICKS = 1.0
+VOLUME_PACE_RATIO_MIN = 1.5
 LATE_SESSION_RANGE_START_MINUTE = 14 * 60
 LATE_SESSION_RANGE_END_MINUTE = 15 * 60
 LATE_SESSION_CLOSE_MINUTE = 16 * 60
@@ -767,6 +771,173 @@ def apply_session_compression_breakout_30m_target(
     return out
 
 
+def _volume_pace_breakout_columns(slug: str) -> dict[str, str]:
+    return {
+        "range_high": f"target_range_high_{slug}",
+        "range_low": f"target_range_low_{slug}",
+        "range_ticks": f"target_range_ticks_{slug}",
+        "volume_pace": f"target_volume_pace_{slug}",
+        "volume_pace_baseline": f"target_volume_pace_baseline_{slug}",
+        "volume_pace_ratio": f"target_volume_pace_ratio_{slug}",
+        "event_direction": f"target_event_direction_{slug}",
+        "breakout_ticks": f"target_breakout_ticks_{slug}",
+        "timeout_exit_ticks": f"target_timeout_exit_ticks_{slug}",
+    }
+
+
+def _prior_session_volume_pace_baseline(
+    frame: pd.DataFrame,
+    volume_pace: pd.Series,
+    session_bar_index: pd.Series,
+) -> tuple[pd.Series, pd.Series]:
+    ts = pd.to_datetime(frame["ts"], utc=True, errors="coerce")
+    keys = [frame["market"], frame["year"], frame["session_segment_id"]]
+    session_start = ts.groupby(keys, dropna=False, sort=False).transform("min")
+    baseline_frame = pd.DataFrame(
+        {
+            "market": frame["market"],
+            "year": frame["year"],
+            "session_bar_index": session_bar_index,
+            "session_start": session_start,
+            "volume_pace": volume_pace,
+        },
+        index=frame.index,
+    ).sort_values(
+        ["market", "year", "session_bar_index", "session_start"],
+        kind="mergesort",
+    )
+    grouped = baseline_frame.groupby(
+        ["market", "year", "session_bar_index"],
+        dropna=False,
+        sort=False,
+    )
+    baseline_frame["prior_session_count"] = grouped.cumcount()
+    baseline_frame["volume_pace_baseline"] = grouped["volume_pace"].transform(
+        lambda values: values.shift(1)
+        .rolling(
+            VOLUME_PACE_MIN_BASELINE_SESSIONS,
+            min_periods=VOLUME_PACE_MIN_BASELINE_SESSIONS,
+        )
+        .median()
+    )
+    baseline_frame = baseline_frame.sort_index()
+    return baseline_frame["volume_pace_baseline"], baseline_frame["prior_session_count"]
+
+
+def apply_volume_pace_breakout_continuation_30m_target(
+    frame: pd.DataFrame,
+    cost_config: Mapping[str, float],
+    spec: TargetSpec,
+) -> pd.DataFrame:
+    out = frame.sort_values("ts", kind="mergesort").reset_index(drop=True).copy()
+    ts = pd.to_datetime(out["ts"], utc=True, errors="coerce")
+    keys = [out["market"], out["year"], out["session_segment_id"]]
+    row_valid = _row_valid_mask(out)
+
+    tick_size = float(cost_config["tick_size"])
+    tick_value = float(cost_config["tick_value"])
+    cost_dollars = float(cost_config["round_turn_cost_dollars"])
+
+    open_ = _numeric(out, "open")
+    high = _numeric(out, "high")
+    low = _numeric(out, "low")
+    close = _numeric(out, "close")
+    volume = _numeric(out, "volume").clip(lower=0)
+    valid_bar_count = row_valid.astype("int64").groupby(keys, dropna=False, sort=False).transform(
+        lambda values: values.rolling(
+            VOLUME_PACE_RANGE_BARS,
+            min_periods=VOLUME_PACE_RANGE_BARS,
+        )
+        .sum()
+        .shift(1)
+    )
+    range_high = high.where(row_valid).groupby(keys, dropna=False, sort=False).transform(
+        lambda values: values.rolling(
+            VOLUME_PACE_RANGE_BARS,
+            min_periods=VOLUME_PACE_RANGE_BARS,
+        )
+        .max()
+        .shift(1)
+    )
+    range_low = low.where(row_valid).groupby(keys, dropna=False, sort=False).transform(
+        lambda values: values.rolling(
+            VOLUME_PACE_RANGE_BARS,
+            min_periods=VOLUME_PACE_RANGE_BARS,
+        )
+        .min()
+        .shift(1)
+    )
+    range_ticks = (range_high - range_low) / tick_size
+    valid_bar_count_so_far = row_valid.astype("int64").groupby(keys, dropna=False, sort=False).cumsum()
+    cumulative_volume = volume.where(row_valid, 0.0).groupby(keys, dropna=False, sort=False).cumsum()
+    volume_pace = cumulative_volume / valid_bar_count_so_far.where(valid_bar_count_so_far > 0)
+    session_bar_index = valid_bar_count_so_far.where(row_valid)
+    volume_pace_baseline, prior_session_count = _prior_session_volume_pace_baseline(
+        out,
+        volume_pace.where(row_valid),
+        session_bar_index,
+    )
+    volume_pace_ratio = volume_pace / volume_pace_baseline.where(volume_pace_baseline > 0)
+
+    range_ready = valid_bar_count.ge(VOLUME_PACE_RANGE_BARS) & range_high.notna() & range_low.notna()
+    volume_ready = (
+        volume_pace_baseline.gt(0)
+        & prior_session_count.ge(VOLUME_PACE_MIN_BASELINE_SESSIONS)
+        & volume_pace_ratio.ge(VOLUME_PACE_RATIO_MIN)
+    )
+    breakout_buffer = VOLUME_PACE_BREAKOUT_BUFFER_TICKS * tick_size
+    long_breakout = range_ready & volume_ready & close.ge(range_high + breakout_buffer)
+    short_breakout = range_ready & volume_ready & close.le(range_low - breakout_buffer)
+    event_direction = pd.Series(0, index=out.index, dtype="int64")
+    event_direction = event_direction.mask(long_breakout, 1)
+    event_direction = event_direction.mask(short_breakout, -1)
+    breakout_ticks = pd.Series(np.nan, index=out.index, dtype="float64")
+    breakout_ticks = breakout_ticks.mask(long_breakout, (close - range_high) / tick_size)
+    breakout_ticks = breakout_ticks.mask(short_breakout, (range_low - close) / tick_size)
+
+    entry_price = open_.shift(-ENTRY_OFFSET_BARS)
+    exit_price = open_.shift(-EXIT_OFFSET_BARS)
+    entry_ts = ts.shift(-ENTRY_OFFSET_BARS)
+    exit_ts = ts.shift(-EXIT_OFFSET_BARS)
+    threshold_ticks = _threshold_ticks(out, cost_config, horizon_bars=HORIZON_BARS)
+    signed_exit_ticks = event_direction.astype(float) * ((exit_price - entry_price) / tick_size)
+    valid = (
+        _path_valid_mask(out)
+        & event_direction.ne(0)
+        & entry_price.notna()
+        & exit_price.notna()
+        & threshold_ticks.notna()
+        & np.isfinite(threshold_ticks)
+        & np.isfinite(signed_exit_ticks)
+    )
+    direction = pd.Series(0, index=out.index, dtype="int64")
+    direction = direction.mask(valid & (signed_exit_ticks > threshold_ticks), event_direction)
+    nonflat = direction.ne(0) & valid
+    gross_dollars = signed_exit_ticks * tick_value
+    net_dollars = gross_dollars - cost_dollars
+    cols = _volume_pace_breakout_columns(spec.slug)
+
+    out[spec.valid_column] = valid.astype(bool)
+    out[spec.direction_column] = direction
+    out[spec.nonflat_column] = nonflat.astype(bool)
+    out[spec.gross_column] = gross_dollars.where(valid)
+    out[spec.cost_column] = pd.Series(cost_dollars, index=out.index).where(valid)
+    out[spec.net_column] = net_dollars.where(valid)
+    out[spec.entry_ts_column] = entry_ts.where(valid)
+    out[spec.exit_ts_column] = exit_ts.where(valid)
+    out[spec.threshold_ticks_column] = threshold_ticks.where(valid)
+    out[cols["range_high"]] = range_high.where(range_ready)
+    out[cols["range_low"]] = range_low.where(range_ready)
+    out[cols["range_ticks"]] = range_ticks.where(range_ready)
+    out[cols["volume_pace"]] = volume_pace.where(row_valid)
+    out[cols["volume_pace_baseline"]] = volume_pace_baseline.where(volume_pace_baseline.notna())
+    out[cols["volume_pace_ratio"]] = volume_pace_ratio.where(volume_pace_baseline.gt(0))
+    out[cols["event_direction"]] = event_direction.where(range_ready & volume_pace_baseline.gt(0), 0)
+    out[cols["breakout_ticks"]] = breakout_ticks.where(event_direction.ne(0))
+    out[cols["timeout_exit_ticks"]] = signed_exit_ticks.where(valid)
+    return out
+
+
 def _late_session_range_resolve_columns(slug: str) -> dict[str, str]:
     return {
         "range_high": f"target_range_high_{slug}",
@@ -1439,6 +1610,27 @@ TARGET_SPECS: dict[str, TargetSpec] = {
             "30-bar compression box range <= causal rolling 25th percentile "
             "of prior 120 boxes with minimum 60 boxes, then a one-tick break "
             "outside the box, next-open entry, and fixed 30-minute timeout exit"
+        ),
+    ),
+    "volume_pace_breakout_continuation_30m_v1": TargetSpec(
+        hypothesis_id="volume_pace_breakout_continuation_30m_v1",
+        target_family="es_volume_pace_breakout_continuation_30m",
+        slug="volume_pace_breakout_continuation_30m",
+        description=(
+            "ES-only 30-minute continuation target conditioned on a completed "
+            "causal prior 60-bar same-session range break confirmed by elevated "
+            "causal volume pace."
+        ),
+        apply=apply_volume_pace_breakout_continuation_30m_target,
+        auxiliary_columns=tuple(
+            _volume_pace_breakout_columns("volume_pace_breakout_continuation_30m").values()
+        ),
+        threshold_description=(
+            "max(round-turn cost ticks + min_profit_ticks, prior 60-bar 1m "
+            "close-diff std * sqrt(30)); event requires a completed prior "
+            "60-bar same-session range, one-tick close break, same-session-bar "
+            "volume pace ratio >= 1.5 versus median of at least 20 prior "
+            "sessions, next-open entry, and fixed 30-minute timeout exit"
         ),
     ),
     "late_session_range_resolve_session_close_v1": TargetSpec(

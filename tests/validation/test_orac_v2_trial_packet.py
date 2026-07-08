@@ -9,6 +9,7 @@ from scripts.phase9_research.es_30m_target_smoke_harness import TARGET_SPECS
 HYPOTHESIS_ID = "opening_range_acceptance_continuation_event_capture_30m_v2"
 VWAP_RECLAIM_ID = "vwap_reclaim_continuation_15m_v1"
 OPENING_DRIVE_ID = "opening_drive_failed_followthrough_15m_v1"
+VOLUME_PACE_ID = "volume_pace_breakout_continuation_30m_v1"
 REGISTRY = Path("manifests/target_hypotheses/registry.json")
 TRIAL_STATUSES = Path("manifests/target_hypotheses/trial_statuses.jsonl")
 PACKET = Path("docs/opening_range_acceptance_continuation_event_capture_30m_v2_trial_packet.md")
@@ -49,6 +50,16 @@ OPENING_DRIVE_DISCOVERY_JSON = (
     "reports/pipeline_audit/"
     "opening_drive_failed_followthrough_source_packet_20260707_"
     "opening_drive_failed_followthrough_15m_v1_discovery_smoke.json"
+)
+VOLUME_PACE_DISCOVERY_MD = (
+    "reports/pipeline_audit/"
+    "volume_pace_source_packet_20260708_"
+    "volume_pace_breakout_continuation_30m_v1_discovery_smoke.md"
+)
+VOLUME_PACE_DISCOVERY_JSON = (
+    "reports/pipeline_audit/"
+    "volume_pace_source_packet_20260708_"
+    "volume_pace_breakout_continuation_30m_v1_discovery_smoke.json"
 )
 
 
@@ -347,3 +358,83 @@ def test_opening_drive_failed_followthrough_target_source_and_config_are_registe
     assert config["expected_outputs"] == [OPENING_DRIVE_DISCOVERY_JSON, OPENING_DRIVE_DISCOVERY_MD]
     assert "discovery-run" in config["forbidden_actions"]
     assert "WFA/modeling" in config["forbidden_actions"]
+
+
+def test_volume_pace_breakout_registry_is_rejected_after_discovery_stop() -> None:
+    entry = _registry_entry(VOLUME_PACE_ID)
+
+    assert entry["status"] == "REJECTED"
+    assert entry["wfa_allowed"] is False
+    assert entry["target_family"] == "es_volume_pace_breakout_continuation_30m"
+    assert entry["scope"] == {
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": ["ES"],
+        "years": [2023, 2024],
+    }
+    assert entry["source_reports"] == [VOLUME_PACE_DISCOVERY_MD, VOLUME_PACE_DISCOVERY_JSON]
+    assert entry["next_allowed_actions"] == []
+    assert "STOP_CLASS_COLLAPSE" in entry["status_reason"]
+    assert "98/106/1100" in entry["status_reason"]
+    assert "0.8186274509803921" in entry["status_reason"]
+    assert "729.0" in entry["status_reason"]
+    assert "2 of 4" in entry["status_reason"]
+    assert "Do not rerun discovery" in entry["status_reason"]
+
+
+def test_volume_pace_breakout_registry_predeclares_rules() -> None:
+    entry = _registry_entry(VOLUME_PACE_ID)
+    pre_registration = entry["pre_registration"]
+
+    assert "prior 60 valid same-session bar range" in pre_registration["entry_condition"]
+    assert "at least one ES tick outside that range" in pre_registration["entry_condition"]
+    assert "volume pace ratio >= 1.5" in pre_registration["volume_pace_rule"]
+    assert "positive baseline" in pre_registration["volume_pace_rule"]
+    assert "at least 20 prior sessions" in pre_registration["volume_pace_rule"]
+    assert "next-open entry" in pre_registration["target_definition"]
+    assert "fixed same-session 30-minute" in pre_registration["target_definition"]
+    assert "configured ES costs" in pre_registration["target_definition"]
+    assert "not session-compression" in pre_registration["material_difference_from_stopped_branches"]
+    assert "not ORAC" in pre_registration["material_difference_from_stopped_branches"]
+    assert "no discovery-run without separate bounded approval" in pre_registration["forbidden_actions"]
+    assert any("STOP_CLASS_COLLAPSE" in item for item in pre_registration["stop_rules"])
+    assert "STOP_CLASS_COLLAPSE" in pre_registration["implementation_status"]
+
+
+def test_volume_pace_breakout_trial_ledger_records_rejected_discovery() -> None:
+    events = _trial_events(VOLUME_PACE_ID)
+
+    assert len(events) == 2
+    candidate = events[0]
+    assert candidate["trial_id"] == f"{VOLUME_PACE_ID}_candidate"
+    assert candidate["stage"] == "register_candidate"
+    assert candidate["status"] == "CANDIDATE"
+    assert candidate["evidence"] == []
+    assert "source/tests-only implementation approved" in candidate["notes"].lower()
+    assert "No discovery-run" in candidate["notes"]
+    assert "WFA/modeling" in candidate["notes"]
+
+    rejected = events[1]
+    assert rejected["trial_id"] == f"{VOLUME_PACE_ID}_discovery_smoke_rejected_20260708t204156z"
+    assert rejected["stage"] == "phase9_discovery_smoke"
+    assert rejected["status"] == "REJECTED"
+    assert rejected["evidence"] == [VOLUME_PACE_DISCOVERY_MD, VOLUME_PACE_DISCOVERY_JSON]
+    assert "STOP_CLASS_COLLAPSE" in rejected["notes"]
+    assert "98/106/1100" in rejected["notes"]
+    assert "0.8186274509803921" in rejected["notes"]
+    assert "729.0" in rejected["notes"]
+    assert "2 of 4" in rejected["notes"]
+    assert "target_smoke_is_tradability_proof=false" in rejected["notes"]
+    assert "Do not rerun discovery" in rejected["notes"]
+
+
+def test_volume_pace_breakout_target_source_is_registered_but_not_advanced() -> None:
+    spec = TARGET_SPECS[VOLUME_PACE_ID]
+    entry = _registry_entry(VOLUME_PACE_ID)
+
+    assert spec.target_family == entry["target_family"]
+    assert spec.horizon_bars == 30
+    assert entry["status"] == "REJECTED"
+    assert entry["wfa_allowed"] is False
+    assert entry["source_reports"] == [VOLUME_PACE_DISCOVERY_MD, VOLUME_PACE_DISCOVERY_JSON]
+    assert entry["next_allowed_actions"] == []

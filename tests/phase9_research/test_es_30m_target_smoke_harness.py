@@ -20,6 +20,7 @@ from scripts.phase9_research.es_30m_target_smoke_harness import (
     apply_prior_extreme_failure_30m_target,
     apply_session_compression_breakout_30m_target,
     apply_triple_barrier_30m_target,
+    apply_volume_pace_breakout_continuation_30m_target,
     apply_vol_scaled_terminal_30m_target,
     apply_vwap_reclaim_continuation_15m_target,
     apply_vwap_reversion_30m_target,
@@ -402,6 +403,90 @@ def _session_compression_breakout_frame() -> pd.DataFrame:
             "feature_signal": range(periods),
         }
     )
+
+
+def _volume_pace_breakout_frame(
+    *,
+    prior_sessions: int = 20,
+    event_volume: float = 10_000.0,
+) -> pd.DataFrame:
+    session_periods = 130
+    event_idx = 70
+    exit_idx = event_idx + 31
+    sessions: list[pd.DataFrame] = []
+    base_ts = pd.Timestamp("2024-01-02T14:30:00Z")
+
+    def build_session(session_idx: int, event_kind: str) -> pd.DataFrame:
+        ts = pd.date_range(base_ts + pd.Timedelta(days=session_idx), periods=session_periods, freq="min")
+        open_ = [100.0] * session_periods
+        high = [100.25] * session_periods
+        low = [99.75] * session_periods
+        close = [100.0] * session_periods
+        volume = [100.0] * session_periods
+
+        if event_kind == "long":
+            close[event_idx] = 100.50
+            high[event_idx] = 100.75
+            low[event_idx] = 100.25
+            volume[event_idx] = event_volume
+            open_[event_idx + 1] = 100.50
+            open_[exit_idx] = 102.00
+            close[exit_idx] = 102.00
+            high[exit_idx] = 102.25
+            low[exit_idx] = 101.75
+        elif event_kind == "short":
+            close[event_idx] = 99.50
+            high[event_idx] = 99.75
+            low[event_idx] = 99.25
+            volume[event_idx] = event_volume
+            open_[event_idx + 1] = 99.50
+            open_[exit_idx] = 98.00
+            close[exit_idx] = 98.00
+            high[exit_idx] = 98.25
+            low[exit_idx] = 97.75
+        elif event_kind == "flat":
+            close[event_idx] = 100.50
+            high[event_idx] = 100.75
+            low[event_idx] = 100.25
+            volume[event_idx] = event_volume
+            open_[event_idx + 1] = 100.50
+            open_[exit_idx] = 100.75
+            close[exit_idx] = 100.75
+            high[exit_idx] = 101.00
+            low[exit_idx] = 100.50
+
+        return pd.DataFrame(
+            {
+                "ts": ts,
+                "market": "ES",
+                "year": 2024,
+                "session_segment_id": f"ES_2024_VOLUME_PACE_{session_idx:04d}",
+                "open": open_,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": volume,
+                "causal_valid": True,
+                "valid_ohlcv": True,
+                "inside_session": True,
+                "feature_input_valid": True,
+                "feature_row_valid": True,
+                "training_row_valid": True,
+                "target_valid": True,
+                "target_sign_with_deadzone": [1 if idx % 3 == 0 else 0 for idx in range(session_periods)],
+                "is_synthetic": False,
+                "roll_window_flag": False,
+                "boundary_session_flag": False,
+                "feature_signal": range(session_periods),
+            }
+        )
+
+    for session_idx in range(prior_sessions):
+        sessions.append(build_session(session_idx, "none"))
+    sessions.append(build_session(prior_sessions, "long"))
+    sessions.append(build_session(prior_sessions + 1, "short"))
+    sessions.append(build_session(prior_sessions + 2, "flat"))
+    return pd.concat(sessions, ignore_index=True)
 
 
 def _late_session_range_resolve_frame() -> pd.DataFrame:
@@ -1033,6 +1118,155 @@ def test_session_compression_breakout_distribution_has_long_short_and_flat() -> 
     spec = TARGET_SPECS["session_compression_breakout_30m_v1"]
     labeled = apply_session_compression_breakout_30m_target(
         _session_compression_breakout_frame(),
+        _cost_config(),
+        spec,
+    )
+    events, skipped = non_overlapping_events(labeled, spec)
+    balance = class_balance(events, spec)
+    distribution = target_distribution_summary(events, spec)
+
+    assert skipped >= 0
+    assert events[spec.entry_ts_column].iloc[1:].gt(events[spec.exit_ts_column].shift(1).iloc[1:]).all()
+    assert balance["event_count"] == len(events)
+    assert balance["counts"]["long"] >= 1
+    assert balance["counts"]["short"] >= 1
+    assert balance["counts"]["flat"] >= 1
+    assert spec.net_column in distribution
+
+
+def test_volume_pace_breakout_continuation_30m_target_spec_is_distinct() -> None:
+    spec = TARGET_SPECS["volume_pace_breakout_continuation_30m_v1"]
+
+    assert spec.target_family == "es_volume_pace_breakout_continuation_30m"
+    assert spec.slug == "volume_pace_breakout_continuation_30m"
+    assert spec.horizon_bars == 30
+    assert "volume pace ratio >= 1.5" in spec.threshold_description
+    assert "target_range_high_volume_pace_breakout_continuation_30m" in spec.target_columns
+    assert "target_volume_pace_ratio_volume_pace_breakout_continuation_30m" in spec.target_columns
+    assert "target_timeout_exit_ticks_volume_pace_breakout_continuation_30m" in spec.target_columns
+
+
+def test_volume_pace_breakout_continuation_30m_label_math() -> None:
+    spec = TARGET_SPECS["volume_pace_breakout_continuation_30m_v1"]
+    labeled = apply_volume_pace_breakout_continuation_30m_target(
+        _volume_pace_breakout_frame(),
+        _cost_config(),
+        spec,
+    )
+    range_high = "target_range_high_volume_pace_breakout_continuation_30m"
+    range_low = "target_range_low_volume_pace_breakout_continuation_30m"
+    range_ticks = "target_range_ticks_volume_pace_breakout_continuation_30m"
+    volume_pace = "target_volume_pace_volume_pace_breakout_continuation_30m"
+    volume_baseline = "target_volume_pace_baseline_volume_pace_breakout_continuation_30m"
+    volume_ratio = "target_volume_pace_ratio_volume_pace_breakout_continuation_30m"
+    event_direction = "target_event_direction_volume_pace_breakout_continuation_30m"
+    breakout_ticks = "target_breakout_ticks_volume_pace_breakout_continuation_30m"
+    timeout_ticks = "target_timeout_exit_ticks_volume_pace_breakout_continuation_30m"
+
+    session_periods = 130
+    event_idx = 70
+    long_idx = 20 * session_periods + event_idx
+    short_idx = 21 * session_periods + event_idx
+    flat_idx = 22 * session_periods + event_idx
+    assert labeled.loc[19 * session_periods + event_idx, spec.valid_column] == False
+
+    assert labeled.loc[long_idx, spec.valid_column] == True
+    assert labeled.loc[long_idx, range_high] == 100.25
+    assert labeled.loc[long_idx, range_low] == 99.75
+    assert labeled.loc[long_idx, range_ticks] == 2.0
+    assert labeled.loc[long_idx, volume_pace] > 150.0
+    assert labeled.loc[long_idx, volume_baseline] == 100.0
+    assert labeled.loc[long_idx, volume_ratio] >= 1.5
+    assert labeled.loc[long_idx, event_direction] == 1
+    assert labeled.loc[long_idx, breakout_ticks] == 1.0
+    assert labeled.loc[long_idx, spec.direction_column] == 1
+    assert labeled.loc[long_idx, spec.nonflat_column] == True
+    assert labeled.loc[long_idx, timeout_ticks] == 6.0
+    assert labeled.loc[long_idx, spec.gross_column] == 75.0
+    assert labeled.loc[long_idx, spec.net_column] == 50.0
+
+    assert labeled.loc[short_idx, spec.valid_column] == True
+    assert labeled.loc[short_idx, event_direction] == -1
+    assert labeled.loc[short_idx, breakout_ticks] == 1.0
+    assert labeled.loc[short_idx, spec.direction_column] == -1
+    assert labeled.loc[short_idx, spec.nonflat_column] == True
+    assert labeled.loc[short_idx, timeout_ticks] == 6.0
+    assert labeled.loc[short_idx, spec.gross_column] == 75.0
+    assert labeled.loc[short_idx, spec.net_column] == 50.0
+
+    assert labeled.loc[flat_idx, spec.valid_column] == True
+    assert labeled.loc[flat_idx, event_direction] == 1
+    assert labeled.loc[flat_idx, spec.direction_column] == 0
+    assert labeled.loc[flat_idx, spec.nonflat_column] == False
+    assert labeled.loc[flat_idx, timeout_ticks] == 1.0
+    assert labeled.loc[flat_idx, spec.gross_column] == 12.5
+    assert labeled.loc[flat_idx, spec.net_column] == -12.5
+
+
+def test_volume_pace_breakout_event_side_does_not_use_future_path() -> None:
+    spec = TARGET_SPECS["volume_pace_breakout_continuation_30m_v1"]
+    event_direction = "target_event_direction_volume_pace_breakout_continuation_30m"
+    session_periods = 130
+    event_idx = 20 * session_periods + 70
+    base = apply_volume_pace_breakout_continuation_30m_target(
+        _volume_pace_breakout_frame(),
+        _cost_config(),
+        spec,
+    )
+    mutated_frame = _volume_pace_breakout_frame()
+    mutated_frame.loc[event_idx + 10, ["high", "low", "close"]] = [120.0, 119.5, 120.0]
+    mutated = apply_volume_pace_breakout_continuation_30m_target(mutated_frame, _cost_config(), spec)
+
+    assert base.loc[event_idx, spec.valid_column] == mutated.loc[event_idx, spec.valid_column]
+    assert base.loc[event_idx, event_direction] == mutated.loc[event_idx, event_direction]
+    assert base.loc[event_idx, spec.gross_column] == mutated.loc[event_idx, spec.gross_column]
+    assert base.loc[event_idx, spec.net_column] == mutated.loc[event_idx, spec.net_column]
+
+
+def test_volume_pace_breakout_rejects_cross_session_30m_horizon() -> None:
+    spec = TARGET_SPECS["volume_pace_breakout_continuation_30m_v1"]
+    session_periods = 130
+    event_idx = 20 * session_periods + 70
+    frame = _volume_pace_breakout_frame()
+    frame.loc[event_idx + 20 :, "session_segment_id"] = "ES_2024_VOLUME_PACE_BROKEN_PATH"
+    labeled = apply_volume_pace_breakout_continuation_30m_target(frame, _cost_config(), spec)
+
+    assert labeled.loc[event_idx, spec.valid_column] == False
+
+
+def test_volume_pace_breakout_requires_prior_session_volume_baseline() -> None:
+    spec = TARGET_SPECS["volume_pace_breakout_continuation_30m_v1"]
+    session_periods = 130
+    event_idx = 19 * session_periods + 70
+    labeled = apply_volume_pace_breakout_continuation_30m_target(
+        _volume_pace_breakout_frame(prior_sessions=19),
+        _cost_config(),
+        spec,
+    )
+
+    assert labeled.loc[event_idx, spec.valid_column] == False
+    assert labeled.loc[event_idx, "target_event_direction_volume_pace_breakout_continuation_30m"] == 0
+
+
+def test_volume_pace_breakout_rejects_low_volume_pace() -> None:
+    spec = TARGET_SPECS["volume_pace_breakout_continuation_30m_v1"]
+    session_periods = 130
+    event_idx = 20 * session_periods + 70
+    labeled = apply_volume_pace_breakout_continuation_30m_target(
+        _volume_pace_breakout_frame(event_volume=100.0),
+        _cost_config(),
+        spec,
+    )
+
+    assert labeled.loc[event_idx, spec.valid_column] == False
+    assert labeled.loc[event_idx, "target_volume_pace_ratio_volume_pace_breakout_continuation_30m"] == 1.0
+    assert labeled.loc[event_idx, "target_event_direction_volume_pace_breakout_continuation_30m"] == 0
+
+
+def test_volume_pace_breakout_distribution_has_long_short_and_flat() -> None:
+    spec = TARGET_SPECS["volume_pace_breakout_continuation_30m_v1"]
+    labeled = apply_volume_pace_breakout_continuation_30m_target(
+        _volume_pace_breakout_frame(),
         _cost_config(),
         spec,
     )
