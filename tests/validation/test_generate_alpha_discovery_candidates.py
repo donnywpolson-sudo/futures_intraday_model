@@ -17,6 +17,8 @@ from scripts.phase9_research.es_30m_target_smoke_harness import TARGET_SPECS
 
 CANDIDATE_A = "vol_scaled_terminal_30m_v1"
 CANDIDATE_B = "triple_barrier_30m_v1"
+ORAC_V2 = "opening_range_acceptance_continuation_event_capture_30m_v2"
+LATE_SESSION = "late_session_range_resolve_session_close_v1"
 
 
 def _write_json(path: Path, payload: object) -> Path:
@@ -297,6 +299,74 @@ def test_generates_preflight_configs_and_queue(tmp_path: Path) -> None:
             approval_token=None,
         )
         assert preflight["status"] == "PREFLIGHT_PASS"
+
+
+def test_generates_orac_v2_fixed_horizon_preflight_config(tmp_path: Path) -> None:
+    template = _template_config()
+    template["target_policy_contract"] = {
+        "payoff_basis": "fixed_horizon_exit",
+        "entry_rule": "next_bar_open",
+        "exit_or_capture_rule": "fixed_30m_timeout_exit",
+        "horizon_bars": 30,
+        "cost_threshold_source": "configs/costs.yaml",
+        "required_compatible_policy": "fixed_horizon_exit",
+        "compatible_policy_evaluation_basis": ["fixed_horizon_exit"],
+        "incompatible_policy_evaluation_basis": ["first_touch_path_capture"],
+    }
+    candidates = [{"id": ORAC_V2, "run": "orac_v2_batch"}]
+    _prepare_inputs(tmp_path, [ORAC_V2], template=template)
+    spec_path = _write_spec(tmp_path, candidates)
+
+    result = generator.generate_from_spec(spec_path=spec_path, root=tmp_path)
+
+    assert result["status"] == "GENERATOR_COMPLETED"
+    config = json.loads((tmp_path / result["config_paths"][0]).read_text(encoding="utf-8"))
+    assert config["hypothesis_id"] == ORAC_V2
+    assert config["runner_mode"] == "preflight"
+    assert config["target_policy_contract"]["payoff_basis"] == "fixed_horizon_exit"
+    assert config["target_policy_contract"]["required_compatible_policy"] == "fixed_horizon_exit"
+    assert config["discovery_command"][config["discovery_command"].index("--hypothesis-id") + 1] == ORAC_V2
+    preflight = single_runner.run_mode(
+        config,
+        root=tmp_path,
+        mode="preflight",
+        approval_token=None,
+    )
+    assert preflight["status"] == "PREFLIGHT_PASS"
+
+
+def test_generates_late_session_close_exit_preflight_config(tmp_path: Path) -> None:
+    template = _template_config()
+    template["target_policy_contract"] = {
+        "payoff_basis": "session_close_exit",
+        "entry_rule": "next_bar_open",
+        "exit_or_capture_rule": "configured_same_session_regular_close",
+        "horizon_bars": 60,
+        "cost_threshold_source": "configs/costs.yaml",
+        "required_compatible_policy": "session_close_exit",
+        "compatible_policy_evaluation_basis": ["session_close_exit"],
+        "incompatible_policy_evaluation_basis": ["first_touch_path_capture", "fixed_horizon_exit"],
+    }
+    candidates = [{"id": LATE_SESSION, "run": "late_session_batch"}]
+    _prepare_inputs(tmp_path, [LATE_SESSION], template=template)
+    spec_path = _write_spec(tmp_path, candidates)
+
+    result = generator.generate_from_spec(spec_path=spec_path, root=tmp_path)
+
+    assert result["status"] == "GENERATOR_COMPLETED"
+    config = json.loads((tmp_path / result["config_paths"][0]).read_text(encoding="utf-8"))
+    assert config["hypothesis_id"] == LATE_SESSION
+    assert config["runner_mode"] == "preflight"
+    assert config["target_policy_contract"]["payoff_basis"] == "session_close_exit"
+    assert config["target_policy_contract"]["required_compatible_policy"] == "session_close_exit"
+    assert config["discovery_command"][config["discovery_command"].index("--hypothesis-id") + 1] == LATE_SESSION
+    preflight = single_runner.run_mode(
+        config,
+        root=tmp_path,
+        mode="preflight",
+        approval_token=None,
+    )
+    assert preflight["status"] == "PREFLIGHT_PASS"
 
 
 def test_duplicate_candidate_ids_fail_closed(tmp_path: Path) -> None:

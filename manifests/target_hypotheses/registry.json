@@ -216,6 +216,77 @@
       "next_allowed_actions": []
     },
     {
+      "target_hypothesis_id": "vwap_reclaim_continuation_15m_v1",
+      "status": "REJECTED",
+      "wfa_allowed": false,
+      "target_family": "es_vwap_reclaim_continuation_15m",
+      "scope": {
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": [
+          "ES"
+        ],
+        "years": [
+          2023,
+          2024
+        ]
+      },
+      "description": "Predeclared ES-only replacement hypothesis testing whether a causal same-session VWAP excursion followed by VWAP reclaim predicts 15-minute continuation after realistic round-turn costs. This is materially different from ORAC/opening-range event capture and from the stopped direct VWAP reversion branch.",
+      "status_reason": "Rejected by bounded ES-only VWAP reclaim discovery smoke: STOP_CLASS_COLLAPSE. Long/short/flat event counts were 429/528/5806, duplicate overlap with the current 15m deadzone target was 1.0 versus cap 0.8, discovery top total net was 1775.5, and 2 of 4 discovery folds had positive top net. Do not rerun discovery, tune thresholds/features/costs/folds, run WFA/modeling, Phase 8, promotion, artifact freeze, paper, or live execution from this branch.",
+      "pre_registration": {
+        "research_question": "After ES moves away from causal same-session VWAP and then reclaims VWAP, does the reclaim side identify cost-clearing 15-minute continuation on ES 2023/2024 research folds?",
+        "entry_condition": "Candidate rows require a prior same-session causal VWAP excursion at least the predeclared threshold followed by a current-bar reclaim through VWAP. Long events reclaim upward after a below-VWAP excursion; short events reclaim downward after an above-VWAP excursion. The event filter must use only bars available at the event timestamp.",
+        "target_definition": "Use next-open entry, 15-minute same-session fixed-horizon exit, existing path-validity filters, non-overlapping events, configured ES costs, and a continuation label that requires terminal movement in the reclaim direction to exceed round-turn cost ticks plus min_profit_ticks.",
+        "threshold_rule": "max(round-turn cost ticks + min_profit_ticks, prior 60-bar 1m close-diff std * sqrt(15)); no threshold change after source tests or discovery output.",
+        "material_difference_from_stopped_branches": "This branch is not ORAC or opening-range acceptance: it does not use opening-range highs/lows, first post-opening-range acceptance, ORAC v1 hour/take-profit/stop-loss policy, or opening-range event capture. It is also not vwap_reversion_30m_v1: it requires reclaim through VWAP first and tests 15-minute continuation after reclaim rather than 30-minute direct mean reversion from a VWAP stretch. It does not reuse opening_range_acceptance_continuation_event_capture_30m_v2 as a new hypothesis.",
+        "controls": [
+          "compare duplicate overlap with current 15m deadzone target",
+          "require class-balance and event-count gates",
+          "require fold-stability gates on ES_research_0001 through ES_research_0004",
+          "do not tune thresholds, features, costs, folds, markets, or years after seeing discovery output"
+        ],
+        "discovery_success_rule": "Discovery can advance only if a separately approved bounded smoke reports DISCOVERY_PASS with positive stage net, at least half of discovery folds positive, nonconstant predictions, sufficient event/class balance, and duplicate overlap at or below the registered cap.",
+        "stop_rules": [
+          "STOP_INPUT_FAILURE on stale/missing registry, split, feature, cost, or matrix evidence",
+          "STOP_CLASS_COLLAPSE if long, short, or flat events fail minimum count or rate gates",
+          "STOP_DUPLICATE_TARGET if overlap with the current 15m deadzone target exceeds the registered cap",
+          "STOP_UNSTABLE_FOLDS if fewer than half of discovery folds have positive top net",
+          "STOP_DISCOVERY_NEGATIVE_NET if discovery top net is nonpositive"
+        ],
+        "required_baselines": [
+          "no-trade",
+          "random-entry matched by session, count, and direction",
+          "simple trend",
+          "simple mean-reversion",
+          "intraday seasonality",
+          "carry or term-structure where data supports it"
+        ],
+        "statistical_validity_requirements": [
+          "full trial log with run id, hypothesis id, data hashes, cost config hash, model, label, and policy parameters",
+          "PBO below 0.20",
+          "Probabilistic Sharpe probability at least 0.95",
+          "Deflated Sharpe probability at least 0.95",
+          "multiple-testing family recorded before execution",
+          "regime breakdowns recorded before any pass decision"
+        ],
+        "forbidden_actions": [
+          "no ORAC v2 discovery rerun",
+          "no discovery-run without separate bounded approval",
+          "no WFA/modeling, Phase 8, promotion, artifact freeze, paper, or live execution without separate bounded approval",
+          "no provider downloads or cost-config mutation from this candidate registration",
+          "no threshold, feature, cost, fold, market, or year retuning after discovery output",
+          "no use of holdout or forward rows for selection",
+          "no reuse as a new hypothesis if stopped"
+        ],
+        "implementation_status": "Source/tests-only target construction is implemented in the Phase 9 ES target smoke harness. Discovery, WFA/modeling, Phase 8, promotion, artifact freeze, paper, and live execution remain unapproved."
+      },
+      "source_reports": [
+        "reports/pipeline_audit/vwap_reclaim_source_packet_20260707_vwap_reclaim_continuation_15m_v1_discovery_smoke.md",
+        "reports/pipeline_audit/vwap_reclaim_source_packet_20260707_vwap_reclaim_continuation_15m_v1_discovery_smoke.json"
+      ],
+      "next_allowed_actions": []
+    },
+    {
       "target_hypothesis_id": "opportunity_risk_asymmetry_30m_v1",
       "status": "REJECTED",
       "wfa_allowed": false,
@@ -318,6 +389,322 @@
       "next_allowed_actions": [
         "PREPARE_BOUNDED_NEXT_PHASE_PLAN"
       ]
+    },
+    {
+      "target_hypothesis_id": "opening_range_acceptance_continuation_event_capture_30m_v2",
+      "status": "REJECTED",
+      "wfa_allowed": false,
+      "target_family": "es_opening_range_acceptance_continuation_event_capture_30m",
+      "scope": {
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": [
+          "ES"
+        ],
+        "years": [
+          2023,
+          2024
+        ]
+      },
+      "description": "Predeclared ORAC v2 candidate: ES-only event-sparse opening-range acceptance continuation using at most one first qualifying post-open acceptance event per session, next-bar-open entry, and fixed 30-minute timeout exit for pass/fail economics. This candidate exists to test a materially new executable-event hypothesis after ORAC v1 target-smoke evidence failed executable policy economics.",
+      "status_reason": "Rejected by bounded ES-only ORAC v2 discovery smoke: STOP_CLASS_COLLAPSE. Long/short/flat event counts were 237/225/0, flat class rate was 0.0, discovery top total net was -52.0, and only 2 of 4 discovery folds had positive top net. Do not rerun discovery, tune thresholds/features/costs/folds, run WFA/modeling, Phase 8, promotion, artifact freeze, paper, or live execution from this branch.",
+      "pre_registration": {
+        "market": "ES only",
+        "session": "RTH opening-range setup only, using the completed first 30 session bars as the opening range.",
+        "behavior": "First causal acceptance outside the completed 30-minute opening range; do not select post-hoc winning UTC hour buckets from ORAC v1 reports.",
+        "entry_timing": "Enter at the next bar open after the first qualifying acceptance event; allow at most one event per session.",
+        "exit_horizon": "Fixed 30-minute timeout exit is the pass/fail economic policy. First-touch and stop-first diagnostics may be reported, but they must not select take-profit or stop-loss parameters for v2.",
+        "expected_edge_source": "A sparse first acceptance event after the opening range may capture continuation large enough to overcome realistic round-turn costs and 2x cost stress, unlike the high-turnover ORAC v1 executable policy.",
+        "features_allowed": [
+          "causal pre-entry opening-range state",
+          "causal pre-entry session timing fields",
+          "causal pre-entry volatility fields",
+          "causal pre-entry volume and liquidity fields if already available",
+          "causal pre-entry term-structure or carry fields where data supports them"
+        ],
+        "features_forbidden": [
+          "post-entry values",
+          "target-derived columns",
+          "future path data",
+          "post-hoc UTC hour filters selected from ORAC v1 diagnostics",
+          "features, thresholds, costs, folds, markets, or years changed after seeing v2 results"
+        ],
+        "costs": {
+          "base_cost_requirement": "Refresh round-turn commission, exchange, clearing, and fee assumptions from primary IBKR and CME sources before any rerun.",
+          "stress_requirement": "Candidate must pass with base costs and 2x round-turn cost stress.",
+          "stale_cost_policy": "If primary-source cost refresh is unavailable, block reruns rather than reuse stale costs."
+        },
+        "required_baselines": [
+          "no-trade",
+          "random-entry matched by session, count, and direction",
+          "simple trend",
+          "simple mean-reversion",
+          "intraday seasonality",
+          "carry or term-structure where data supports it"
+        ],
+        "statistical_validity_requirements": [
+          "full trial log with run id, hypothesis id, data hashes, cost config hash, model, label, and policy parameters",
+          "PBO below 0.20",
+          "Probabilistic Sharpe probability at least 0.95",
+          "Deflated Sharpe probability at least 0.95",
+          "multiple-testing family recorded before execution",
+          "regime breakdowns recorded before any pass decision"
+        ],
+        "kill_criteria": [
+          "net dollars are nonpositive under base costs or 2x costs",
+          "any locked fold is net negative",
+          "average net dollars per trade is nonpositive",
+          "best simple baseline beats the candidate",
+          "PBO is at least 0.20",
+          "Probabilistic Sharpe or Deflated Sharpe probability is below 0.95",
+          "regime results depend on one narrow pocket",
+          "execution realism evidence is unavailable before any trading conclusion"
+        ],
+        "execution_realism_gate": [
+          "actual contract mapping",
+          "roll handling",
+          "spread and depth assumptions",
+          "latency assumptions",
+          "partial fill and reject assumptions",
+          "capacity",
+          "margin",
+          "position sizing",
+          "loss limits",
+          "kill switch"
+        ],
+        "forbidden_actions": [
+          "no rescue-tuning of ORAC v1 or the failed Tier 1 result",
+          "no discovery, WFA, Phase 8, promotion, artifact freeze, paper, or live execution without separate bounded approval",
+          "no provider downloads or cost-config overwrite from this candidate registration",
+          "no use of holdout or forward rows for selection"
+        ],
+        "implementation_status": "Source/tests-only target construction is implemented in the Phase 9 ES 30m target smoke harness. Discovery, WFA/modeling, Phase 8, promotion, artifact freeze, paper, and live execution remain unapproved."
+      },
+      "source_reports": [
+        "reports/pipeline_audit/orac_v2_source_packet_20260707_opening_range_acceptance_continuation_event_capture_30m_v2_discovery_smoke.md",
+        "reports/pipeline_audit/orac_v2_source_packet_20260707_opening_range_acceptance_continuation_event_capture_30m_v2_discovery_smoke.json"
+      ],
+      "next_allowed_actions": []
+    },
+    {
+      "target_hypothesis_id": "opening_drive_failed_followthrough_15m_v1",
+      "status": "REJECTED",
+      "wfa_allowed": false,
+      "target_family": "es_opening_drive_failed_followthrough_15m",
+      "scope": {
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": [
+          "ES"
+        ],
+        "years": [
+          2023,
+          2024
+        ]
+      },
+      "description": "Predeclared ES-only materially new opening-drive failed-followthrough candidate testing whether a completed same-session opening drive, later failed continuation attempt, and reversal direction identify cost-clearing 15-minute movement. This candidate does not use VWAP reclaim, ORAC/opening-range acceptance, or first-touch path-capture logic.",
+      "status_reason": "Rejected by bounded ES-only opening-drive failed-followthrough discovery smoke: STOP_CLASS_COLLAPSE. Long/short/flat event counts were 445/283/4574, duplicate overlap with the current 15m deadzone target was 1.0 versus cap 0.8, discovery top total net was 2519.0, and 3 of 4 discovery folds had positive top net. Do not rerun discovery, tune thresholds/features/costs/folds, run WFA/modeling, Phase 8, promotion, artifact freeze, paper, or live execution from this branch.",
+      "pre_registration": {
+        "research_question": "After a strong causal ES opening drive fails to follow through, does reversal away from the failed drive side identify cost-clearing 15-minute movement on ES 2023/2024 research folds?",
+        "entry_condition": "Candidate rows require a completed same-session opening-drive state from the first 15 session bars, a later prior same-session continuation attempt in the drive direction, and a current-bar failure back through the completed opening-drive close. The event filter must use only bars available at the event timestamp.",
+        "direction": "Reversal direction opposite the failed opening-drive continuation side: failed long-drive continuation maps to short; failed short-drive continuation maps to long.",
+        "target_definition": "Use next-open entry, 15-minute same-session fixed-horizon exit, existing path-validity filters, non-overlapping events, configured ES costs, and a reversal label that requires terminal movement in the reversal direction to exceed the predeclared threshold.",
+        "threshold_rule": "max(round-turn cost ticks + min_profit_ticks, prior 60-bar 1m close-diff std * sqrt(15)); no threshold change after source tests, preflight, packet, or discovery output.",
+        "material_difference_from_stopped_branches": "This branch is not VWAP reclaim because it does not use VWAP distance, VWAP excursion, or VWAP reclaim logic. It is not ORAC v2 because it does not use opening-range highs/lows, first post-opening-range acceptance, or opening-range acceptance event capture. It must not reuse rejected VWAP reclaim or ORAC v2 code paths as a renamed hypothesis.",
+        "controls": [
+          "compare duplicate overlap with current 15m deadzone target",
+          "require class-balance and event-count gates",
+          "require fold-stability gates on ES_research_0001 through ES_research_0004",
+          "do not tune thresholds, features, costs, folds, markets, or years after seeing discovery output"
+        ],
+        "discovery_success_rule": "Discovery can advance only if a separately approved bounded smoke reports DISCOVERY_PASS with positive stage net, at least half of discovery folds positive, nonconstant predictions, sufficient event/class balance, and duplicate overlap at or below the registered cap.",
+        "stop_rules": [
+          "STOP_INPUT_FAILURE on stale/missing registry, split, feature, cost, or matrix evidence",
+          "STOP_CLASS_COLLAPSE if long, short, or flat events fail minimum count or rate gates",
+          "STOP_DUPLICATE_TARGET if overlap with the current 15m deadzone target exceeds the registered cap",
+          "STOP_UNSTABLE_FOLDS if fewer than half of discovery folds have positive top net",
+          "STOP_DISCOVERY_NEGATIVE_NET if discovery top net is nonpositive"
+        ],
+        "required_baselines": [
+          "no-trade",
+          "random-entry matched by session, count, and direction",
+          "simple trend",
+          "simple mean-reversion",
+          "intraday seasonality",
+          "carry or term-structure where data supports it"
+        ],
+        "statistical_validity_requirements": [
+          "full trial log with run id, hypothesis id, data hashes, cost config hash, model, label, and policy parameters",
+          "PBO below 0.20",
+          "Probabilistic Sharpe probability at least 0.95",
+          "Deflated Sharpe probability at least 0.95",
+          "multiple-testing family recorded before execution",
+          "regime breakdowns recorded before any pass decision"
+        ],
+        "forbidden_actions": [
+          "no VWAP reclaim discovery rerun",
+          "no ORAC v2 discovery rerun",
+          "no discovery-run without separate bounded approval",
+          "no WFA/modeling, Phase 8, promotion, artifact freeze, paper, or live execution without separate bounded approval",
+          "no provider downloads or cost-config mutation from this candidate registration",
+          "no threshold, feature, cost, fold, market, or year retuning after discovery output",
+          "no use of holdout or forward rows for selection",
+          "no reuse as a new hypothesis if stopped"
+        ],
+        "implementation_status": "Source/tests-only target construction is implemented in the Phase 9 ES target smoke harness. The single approved discovery smoke stopped with STOP_CLASS_COLLAPSE; WFA/modeling, Phase 8, promotion, artifact freeze, paper, and live execution remain unapproved."
+      },
+      "source_reports": [
+        "reports/pipeline_audit/opening_drive_failed_followthrough_source_packet_20260707_opening_drive_failed_followthrough_15m_v1_discovery_smoke.md",
+        "reports/pipeline_audit/opening_drive_failed_followthrough_source_packet_20260707_opening_drive_failed_followthrough_15m_v1_discovery_smoke.json"
+      ],
+      "next_allowed_actions": []
+    },
+    {
+      "target_hypothesis_id": "session_compression_breakout_30m_v1",
+      "status": "REJECTED",
+      "wfa_allowed": false,
+      "target_family": "es_session_compression_breakout_30m",
+      "scope": {
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": [
+          "ES"
+        ],
+        "years": [
+          2023,
+          2024
+        ]
+      },
+      "description": "Predeclared ES-only materially new session-compression breakout candidate testing whether a completed causal same-session low-range compression box and subsequent breakout identify cost-clearing 30-minute continuation. This candidate does not use opening-drive failed-followthrough, VWAP reclaim, ORAC/opening-range acceptance, or first-touch path-capture logic.",
+      "status_reason": "Rejected by bounded ES-only session-compression breakout discovery smoke: STOP_CLASS_COLLAPSE. Long/short/flat event counts were 514/505/5985, duplicate overlap with the current 15m deadzone target was 0.7723258096172718 <= 0.8 cap, discovery top total net was -1540.5, 3 of 4 discovery folds had positive top net, and target_smoke_is_tradability_proof=false. Do not rerun discovery, tune thresholds/features/costs/folds, run WFA/modeling, Phase 8, promotion, artifact freeze, paper, or live execution from this branch.",
+      "pre_registration": {
+        "research_question": "After a causal same-session ES compression regime, does a break from the completed compression range identify cost-clearing 30-minute continuation on ES 2023/2024 research folds?",
+        "entry_condition": "Candidate rows require a completed prior 30-bar same-session compression box, a causal rolling 25th percentile compression threshold from prior box ranges over 120 completed boxes with at least 60 prior boxes, and a current close that breaks outside the completed box by at least one tick. The event filter must use only bars available at the event timestamp.",
+        "direction": "Continuation direction from the compression-break side: close above prior box high maps to long; close below prior box low maps to short.",
+        "target_definition": "Use next-open entry, 30-minute same-session fixed-horizon open-to-open exit, existing path-validity filters, non-overlapping events, configured ES costs, and a continuation label that requires terminal movement in the breakout direction to exceed the predeclared threshold.",
+        "threshold_rule": "max(round-turn cost ticks + min_profit_ticks, prior 60-bar 1m close-diff std * sqrt(30)); no threshold change after source tests, preflight, packet, or discovery output.",
+        "material_difference_from_stopped_branches": "This branch is not opening-drive failed-followthrough because it does not use opening-drive state, failed continuation attempts, or reversal away from the opening-drive side. It is not VWAP reclaim because it does not use VWAP distance, VWAP excursion, or reclaim-through-VWAP logic. It is not ORAC v2 because it does not use opening-range highs/lows, first post-opening-range acceptance, or opening-range acceptance event capture. It must not reuse stopped branch code paths as a renamed hypothesis.",
+        "controls": [
+          "compare duplicate overlap with current 15m deadzone target",
+          "require class-balance and event-count gates",
+          "require fold-stability gates on ES_research_0001 through ES_research_0004",
+          "do not tune thresholds, features, costs, folds, markets, or years after seeing discovery output"
+        ],
+        "discovery_success_rule": "Discovery can advance only if a separately approved bounded smoke reports DISCOVERY_PASS with positive stage net, at least half of discovery folds positive, nonconstant predictions, sufficient event/class balance, and duplicate overlap at or below the registered cap.",
+        "stop_rules": [
+          "STOP_INPUT_FAILURE on stale/missing registry, split, feature, cost, or matrix evidence",
+          "STOP_CLASS_COLLAPSE if long, short, or flat events fail minimum count or rate gates",
+          "STOP_DUPLICATE_TARGET if overlap with the current 15m deadzone target exceeds the registered cap",
+          "STOP_UNSTABLE_FOLDS if fewer than half of discovery folds have positive top net",
+          "STOP_DISCOVERY_NEGATIVE_NET if discovery top net is nonpositive"
+        ],
+        "required_baselines": [
+          "no-trade",
+          "random-entry matched by session, count, and direction",
+          "simple trend",
+          "simple mean-reversion",
+          "intraday seasonality",
+          "carry or term-structure where data supports it"
+        ],
+        "statistical_validity_requirements": [
+          "full trial log with run id, hypothesis id, data hashes, cost config hash, model, label, and policy parameters",
+          "PBO below 0.20",
+          "Probabilistic Sharpe probability at least 0.95",
+          "Deflated Sharpe probability at least 0.95",
+          "multiple-testing family recorded before execution",
+          "regime breakdowns recorded before any pass decision"
+        ],
+        "forbidden_actions": [
+          "no opening-drive failed-followthrough discovery rerun",
+          "no VWAP reclaim discovery rerun",
+          "no ORAC v2 discovery rerun",
+          "no discovery-run without separate bounded approval",
+          "no WFA/modeling, Phase 8, promotion, artifact freeze, paper, or live execution without separate bounded approval",
+          "no provider downloads or cost-config mutation from this candidate registration",
+          "no threshold, feature, cost, fold, market, or year retuning after discovery output",
+          "no use of holdout or forward rows for selection",
+          "no reuse as a new hypothesis if stopped"
+        ],
+        "implementation_status": "Source/tests-only target construction is implemented in the Phase 9 ES target smoke harness. The single approved discovery smoke stopped with STOP_CLASS_COLLAPSE; WFA/modeling, Phase 8, promotion, artifact freeze, paper, and live execution remain unapproved."
+      },
+      "source_reports": [
+        "reports/pipeline_audit/session_compression_source_packet_20260707_session_compression_breakout_30m_v1_discovery_smoke.md",
+        "reports/pipeline_audit/session_compression_source_packet_20260707_session_compression_breakout_30m_v1_discovery_smoke.json"
+      ],
+      "next_allowed_actions": []
+    },
+    {
+      "target_hypothesis_id": "late_session_range_resolve_session_close_v1",
+      "status": "REJECTED",
+      "wfa_allowed": false,
+      "target_family": "es_late_session_range_resolve_session_close",
+      "scope": {
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": [
+          "ES"
+        ],
+        "years": [
+          2023,
+          2024
+        ]
+      },
+      "description": "Predeclared ES-only materially new late-session range-resolution candidate testing whether a post-15:00 America/Chicago break from the completed 14:00-15:00 range identifies cost-clearing continuation into the configured same-session regular close. This candidate does not use stopped session-compression, opening-drive failed-followthrough, VWAP reclaim, or ORAC/opening-range acceptance logic.",
+      "status_reason": "Rejected by bounded ES-only late-session range-resolution discovery smoke: STOP_CLASS_COLLAPSE. Event count was 0, no folds were scored, discovery top total net was 0.0, positive top net fold count was 0, and target_smoke_is_tradability_proof=false. Do not rerun discovery, tune thresholds/features/costs/folds/session windows, run WFA/modeling, Phase 8, promotion, artifact freeze, paper, or live execution from this branch.",
+      "pre_registration": {
+        "evidence_packet": "docs/late_session_range_resolve_session_close_v1_primary_evidence_predecl_packet_20260707.md",
+        "research_question": "After ES forms a completed 14:00-15:00 America/Chicago same-session range, does a break from that range after 15:00 and before the configured regular close identify cost-clearing continuation into the session close on ES 2023/2024 research folds?",
+        "entry_condition": "Candidate rows require a completed same-session late-session range from 14:00 inclusive through before 15:00 America/Chicago, full range-bar availability, and a post-15:00 pre-close current close at least one ES tick outside the completed range.",
+        "direction": "Continuation direction from the range-break side: close at least one tick above the completed range high maps to long; close at least one tick below the completed range low maps to short.",
+        "target_definition": "Use next-open entry after the qualifying range break, configured same-session regular-close exit, existing causal/session/synthetic/boundary/roll/feature/target validity filters, non-overlapping events, unchanged configured ES costs, and terminal close-exit movement in the event direction.",
+        "threshold_rule": "max(round-turn cost ticks + min_profit_ticks, prior 60-bar 1m close-diff std scaled by sqrt(minutes_until_close)); no threshold change after source tests, preflight, discovery packet, or discovery output.",
+        "material_difference_from_stopped_branches": "This branch is not session-compression because it does not use rolling compression boxes, compression percentiles, or fixed 30-minute timeout exit. It is not opening-drive failed-followthrough because it does not use opening-drive state or failed continuation attempts. It is not VWAP reclaim because it does not use VWAP distance or reclaim logic. It is not ORAC v2 because it does not use opening-range highs/lows, first post-opening-range acceptance, or opening-range event capture.",
+        "controls": [
+          "compare duplicate overlap with current 15m deadzone target",
+          "require class-balance and event-count gates",
+          "require fold-stability gates on ES_research_0001 through ES_research_0004",
+          "do not tune thresholds, features, costs, folds, markets, years, session windows, or close rules after seeing source-test, preflight, packet, or discovery output"
+        ],
+        "discovery_success_rule": "Discovery can advance only if separately approved later and a bounded smoke reports DISCOVERY_PASS with positive stage net, at least half of discovery folds positive, nonconstant predictions, sufficient event/class balance, and duplicate overlap at or below the registered cap.",
+        "stop_rules": [
+          "STOP_INPUT_FAILURE on stale/missing registry, split, feature, cost, or matrix evidence",
+          "STOP_CLASS_COLLAPSE if long, short, or flat events fail minimum count or rate gates",
+          "STOP_DUPLICATE_TARGET if overlap with the current 15m deadzone target exceeds the registered cap",
+          "STOP_UNSTABLE_FOLDS if fewer than half of discovery folds have positive top net",
+          "STOP_DISCOVERY_NEGATIVE_NET if discovery top net is nonpositive"
+        ],
+        "required_baselines": [
+          "no-trade",
+          "random-entry matched by session, count, and direction",
+          "simple trend",
+          "simple mean-reversion",
+          "intraday seasonality",
+          "carry or term-structure where data supports it"
+        ],
+        "statistical_validity_requirements": [
+          "full trial log with run id, hypothesis id, data hashes, cost config hash, model, label, and policy parameters",
+          "PBO below 0.20",
+          "Probabilistic Sharpe probability at least 0.95",
+          "Deflated Sharpe probability at least 0.95",
+          "multiple-testing family recorded before execution",
+          "regime breakdowns recorded before any pass decision"
+        ],
+        "forbidden_actions": [
+          "no stopped-target discovery reruns",
+          "no discovery-run without separate bounded approval",
+          "no WFA/modeling, Phase 8, promotion, artifact freeze, paper, or live execution without separate bounded approval",
+          "no provider downloads or cost-config mutation from this candidate registration",
+          "no threshold, feature, cost, fold, market, year, session-window, or close-rule tuning after source-test, preflight, packet, or discovery output",
+          "no use of holdout or forward rows for selection",
+          "no reuse as a new hypothesis if stopped"
+        ],
+        "implementation_status": "Source/tests-only target construction is implemented in the Phase 9 ES target smoke harness. The single approved discovery smoke stopped with STOP_CLASS_COLLAPSE; WFA/modeling, Phase 8, promotion, artifact freeze, paper, and live execution remain unapproved."
+      },
+      "source_reports": [
+        "reports/pipeline_audit/late_session_source_packet_20260707_late_session_range_resolve_session_close_v1_discovery_smoke.md",
+        "reports/pipeline_audit/late_session_source_packet_20260707_late_session_range_resolve_session_close_v1_discovery_smoke.json"
+      ],
+      "next_allowed_actions": []
     }
   ]
 }

@@ -143,6 +143,42 @@ def _write_feature_manifest(
     return path
 
 
+def _write_active_placement_feature_manifest(
+    path: Path,
+    *,
+    profile: str,
+    resolved_profile: str,
+    output_root: Path,
+    output_path: Path,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "status": "PASS",
+        "profile": f"{profile}_self_reference_cleanup_active_placement",
+        "resolved_profile": resolved_profile,
+        "output_root": output_root.as_posix(),
+        "warning_count": 0,
+        "failure_count": 0,
+        "warnings": [],
+        "failures": [],
+        "summary": {"fail_count": 0, "warn_count": 0},
+        "output_hashes": {output_path.as_posix(): file_sha256(output_path)},
+        "outputs": [
+            {
+                "market": "ES",
+                "year": 2024,
+                "status": "PASS",
+                "warning_count": 0,
+                "failure_count": 0,
+                "warnings": [],
+                "failures": [],
+            }
+        ],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
 def _feature_root(tmp_path: Path) -> Path:
     return tmp_path / "data" / "feature_matrices" / "baseline"
 
@@ -482,6 +518,35 @@ def test_build_split_plan_records_data_audit_universe_evidence(tmp_path: Path) -
     assert manifest["failure_count"] == 0
     assert manifest["data_audit_universe"]["status_counts"] == {"usable": 1}
     assert manifest["data_audit_universe"]["file_hash"]
+
+
+def test_build_split_plan_accepts_active_placement_manifest_with_output_hashes(
+    tmp_path: Path,
+) -> None:
+    root = _feature_root(tmp_path)
+    matrix = _write_matrix(root, year=2024, start="2024-01-01")
+    profile_config = _write_profile_config(tmp_path / "configs" / "alpha_tiered.yaml")
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    feature_manifest = _write_active_placement_feature_manifest(
+        tmp_path / "reports" / "feature_manifest.json",
+        profile="selected",
+        resolved_profile="research",
+        output_root=root,
+        output_path=matrix,
+    )
+
+    manifest = build_split_plan(
+        profile="selected",
+        input_root=root,
+        reports_root=tmp_path / "reports" / "wfa",
+        profile_config=profile_config,
+        models_config=models_config,
+        feature_manifest=feature_manifest,
+    )
+
+    assert manifest["failure_count"] == 0
+    assert manifest["feature_manifest_gate"]["status"] == "PASS"
+    assert manifest["feature_manifest_gate"]["manifest_path"].endswith("feature_manifest.json")
 
 
 def test_build_split_plan_accepts_wfa_usable_caveat_data_audit_universe(

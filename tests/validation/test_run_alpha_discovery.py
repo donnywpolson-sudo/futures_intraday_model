@@ -136,6 +136,38 @@ def test_target_policy_contract_required_and_path_target_cannot_use_fixed_exit()
         runner.validate_runner_config(config, mode="preflight")
 
 
+def test_fixed_horizon_policy_contract_is_allowed_for_timeout_targets() -> None:
+    config = _config()
+    config["target_policy_contract"] = {
+        "payoff_basis": "fixed_horizon_exit",
+        "entry_rule": "next_bar_open",
+        "exit_or_capture_rule": "fixed_30m_timeout_exit",
+        "horizon_bars": 30,
+        "cost_threshold_source": "configs/costs.yaml",
+        "required_compatible_policy": "fixed_horizon_exit",
+        "compatible_policy_evaluation_basis": ["fixed_horizon_exit"],
+        "incompatible_policy_evaluation_basis": ["first_touch_path_capture"],
+    }
+
+    runner.validate_runner_config(config, mode="preflight")
+
+
+def test_session_close_policy_contract_is_allowed_for_close_exit_targets() -> None:
+    config = _config()
+    config["target_policy_contract"] = {
+        "payoff_basis": "session_close_exit",
+        "entry_rule": "next_bar_open",
+        "exit_or_capture_rule": "configured_same_session_regular_close",
+        "horizon_bars": 60,
+        "cost_threshold_source": "configs/costs.yaml",
+        "required_compatible_policy": "session_close_exit",
+        "compatible_policy_evaluation_basis": ["session_close_exit"],
+        "incompatible_policy_evaluation_basis": ["first_touch_path_capture", "fixed_horizon_exit"],
+    }
+
+    runner.validate_runner_config(config, mode="preflight")
+
+
 def test_discovery_command_must_match_hypothesis_and_bounded_stage() -> None:
     config = _config()
     command = list(config["discovery_command"])  # type: ignore[arg-type]

@@ -61,6 +61,23 @@ MARKET = "ES"
 ENTRY_OFFSET_BARS = 1
 EXIT_OFFSET_BARS = 31
 HORIZON_BARS = EXIT_OFFSET_BARS - ENTRY_OFFSET_BARS
+VWAP_RECLAIM_EXIT_OFFSET_BARS = ENTRY_OFFSET_BARS + 15
+VWAP_RECLAIM_HORIZON_BARS = VWAP_RECLAIM_EXIT_OFFSET_BARS - ENTRY_OFFSET_BARS
+OPENING_DRIVE_BARS = 15
+OPENING_DRIVE_FAILED_FOLLOWTHROUGH_EXIT_OFFSET_BARS = ENTRY_OFFSET_BARS + 15
+OPENING_DRIVE_FAILED_FOLLOWTHROUGH_HORIZON_BARS = (
+    OPENING_DRIVE_FAILED_FOLLOWTHROUGH_EXIT_OFFSET_BARS - ENTRY_OFFSET_BARS
+)
+SESSION_COMPRESSION_BOX_BARS = 30
+SESSION_COMPRESSION_PRIOR_WINDOWS = 120
+SESSION_COMPRESSION_MIN_PRIOR_WINDOWS = 60
+SESSION_COMPRESSION_BREAKOUT_BUFFER_TICKS = 1.0
+LATE_SESSION_RANGE_START_MINUTE = 14 * 60
+LATE_SESSION_RANGE_END_MINUTE = 15 * 60
+LATE_SESSION_CLOSE_MINUTE = 16 * 60
+LATE_SESSION_RANGE_REQUIRED_BARS = 60
+LATE_SESSION_THRESHOLD_HORIZON_BARS = 60
+LATE_SESSION_BREAKOUT_BUFFER_TICKS = 1.0
 VOL_LOOKBACK_BARS = 60
 VOL_MIN_PERIODS = 20
 VOL_MULTIPLIER = 1.0
@@ -104,6 +121,7 @@ class TargetSpec:
     component_model_columns: tuple[str, ...] = ()
     rank_score_column: str | None = None
     evaluation_mode: str = EVALUATION_DIRECTIONAL_NET
+    horizon_bars: int = HORIZON_BARS
     threshold_description: str = (
         "max(round-turn cost ticks + min_profit_ticks, prior 60-bar 1m close-diff std * sqrt(30))"
     )
@@ -186,31 +204,36 @@ def _row_valid_mask(frame: pd.DataFrame) -> pd.Series:
     )
 
 
-def _path_valid_mask(frame: pd.DataFrame) -> pd.Series:
+def _path_valid_mask(frame: pd.DataFrame, *, exit_offset_bars: int = EXIT_OFFSET_BARS) -> pd.Series:
     valid = _row_valid_mask(frame)
     session = frame["session_segment_id"].astype("string")
     same_session = pd.Series(True, index=frame.index, dtype=bool)
     full_path_valid = pd.Series(True, index=frame.index, dtype=bool)
-    for offset in range(0, EXIT_OFFSET_BARS + 1):
+    for offset in range(0, exit_offset_bars + 1):
         same_session &= session.shift(-offset).eq(session).fillna(False)
         full_path_valid &= valid.shift(-offset).fillna(False)
     return same_session & full_path_valid
 
 
-def _prior_horizon_vol_ticks(frame: pd.DataFrame, tick_size: float) -> pd.Series:
+def _prior_horizon_vol_ticks(frame: pd.DataFrame, tick_size: float, *, horizon_bars: int = HORIZON_BARS) -> pd.Series:
     session = frame["session_segment_id"].astype("string")
     close = _numeric(frame, "close")
     one_min_ticks = close.groupby(session, sort=False).diff() / tick_size
     prior_sigma = one_min_ticks.groupby(session, sort=False).transform(
         lambda values: values.rolling(VOL_LOOKBACK_BARS, min_periods=VOL_MIN_PERIODS).std().shift(1)
     )
-    return prior_sigma * math.sqrt(HORIZON_BARS)
+    return prior_sigma * math.sqrt(horizon_bars)
 
 
-def _threshold_ticks(frame: pd.DataFrame, cost_config: Mapping[str, float]) -> pd.Series:
+def _threshold_ticks(
+    frame: pd.DataFrame,
+    cost_config: Mapping[str, float],
+    *,
+    horizon_bars: int = HORIZON_BARS,
+) -> pd.Series:
     tick_size = float(cost_config["tick_size"])
     floor_ticks = float(cost_config["cost_ticks"]) + float(cost_config["min_profit_ticks"])
-    vol_ticks = _prior_horizon_vol_ticks(frame, tick_size) * VOL_MULTIPLIER
+    vol_ticks = _prior_horizon_vol_ticks(frame, tick_size, horizon_bars=horizon_bars) * VOL_MULTIPLIER
     return pd.Series(np.maximum(vol_ticks, floor_ticks), index=frame.index, dtype="float64")
 
 
@@ -395,6 +418,494 @@ def apply_vwap_reversion_30m_target(
     return out
 
 
+def _vwap_reclaim_columns(slug: str) -> dict[str, str]:
+    return {
+        "session_vwap": f"target_session_vwap_{slug}",
+        "event_direction": f"target_event_direction_{slug}",
+        "vwap_distance_ticks": f"target_vwap_distance_ticks_{slug}",
+        "prior_excursion_side": f"target_prior_excursion_side_{slug}",
+        "timeout_exit_ticks": f"target_timeout_exit_ticks_{slug}",
+    }
+
+
+def _prior_session_seen(mask: pd.Series, session: pd.Series) -> pd.Series:
+    return mask.groupby(session, sort=False).transform(
+        lambda values: values.fillna(False).astype(bool).shift(1, fill_value=False).cummax()
+    )
+
+
+def apply_vwap_reclaim_continuation_15m_target(
+    frame: pd.DataFrame,
+    cost_config: Mapping[str, float],
+    spec: TargetSpec,
+) -> pd.DataFrame:
+    out = frame.sort_values("ts", kind="mergesort").reset_index(drop=True).copy()
+    ts = pd.to_datetime(out["ts"], utc=True, errors="coerce")
+    session = out["session_segment_id"].astype("string")
+    entry_price = _numeric(out, "open").shift(-ENTRY_OFFSET_BARS)
+    exit_price = _numeric(out, "open").shift(-VWAP_RECLAIM_EXIT_OFFSET_BARS)
+    entry_ts = ts.shift(-ENTRY_OFFSET_BARS)
+    exit_ts = ts.shift(-VWAP_RECLAIM_EXIT_OFFSET_BARS)
+    session_vwap = _causal_session_vwap(out)
+    threshold_ticks = _threshold_ticks(
+        out,
+        cost_config,
+        horizon_bars=VWAP_RECLAIM_HORIZON_BARS,
+    )
+
+    tick_size = float(cost_config["tick_size"])
+    tick_value = float(cost_config["tick_value"])
+    cost_dollars = float(cost_config["round_turn_cost_dollars"])
+
+    close = _numeric(out, "close")
+    distance_ticks = (close - session_vwap) / tick_size
+    prior_distance_ticks = distance_ticks.groupby(session, sort=False).shift(1)
+    had_prior_below_excursion = _prior_session_seen(distance_ticks <= -threshold_ticks, session)
+    had_prior_above_excursion = _prior_session_seen(distance_ticks >= threshold_ticks, session)
+
+    long_reclaim = had_prior_below_excursion & prior_distance_ticks.lt(0.0) & distance_ticks.ge(0.0)
+    short_reclaim = had_prior_above_excursion & prior_distance_ticks.gt(0.0) & distance_ticks.le(0.0)
+    event_direction = pd.Series(0, index=out.index, dtype="int64")
+    event_direction = event_direction.mask(long_reclaim, 1)
+    event_direction = event_direction.mask(short_reclaim, -1)
+    prior_excursion_side = pd.Series(0, index=out.index, dtype="int64")
+    prior_excursion_side = prior_excursion_side.mask(long_reclaim, -1)
+    prior_excursion_side = prior_excursion_side.mask(short_reclaim, 1)
+
+    signed_exit_ticks = event_direction.astype(float) * ((exit_price - entry_price) / tick_size)
+    valid = (
+        _path_valid_mask(out, exit_offset_bars=VWAP_RECLAIM_EXIT_OFFSET_BARS)
+        & event_direction.ne(0)
+        & entry_price.notna()
+        & exit_price.notna()
+        & session_vwap.notna()
+        & threshold_ticks.notna()
+        & np.isfinite(threshold_ticks)
+        & np.isfinite(signed_exit_ticks)
+    )
+    direction = pd.Series(0, index=out.index, dtype="int64")
+    direction = direction.mask(valid & (signed_exit_ticks > threshold_ticks), event_direction)
+    nonflat = direction.ne(0) & valid
+    gross_dollars = signed_exit_ticks * tick_value
+    net_dollars = gross_dollars - cost_dollars
+    cols = _vwap_reclaim_columns(spec.slug)
+
+    out[spec.valid_column] = valid.astype(bool)
+    out[spec.direction_column] = direction
+    out[spec.nonflat_column] = nonflat.astype(bool)
+    out[spec.gross_column] = gross_dollars.where(valid)
+    out[spec.cost_column] = pd.Series(cost_dollars, index=out.index).where(valid)
+    out[spec.net_column] = net_dollars.where(valid)
+    out[spec.entry_ts_column] = entry_ts.where(valid)
+    out[spec.exit_ts_column] = exit_ts.where(valid)
+    out[spec.threshold_ticks_column] = threshold_ticks.where(valid)
+    out[cols["session_vwap"]] = session_vwap
+    out[cols["event_direction"]] = event_direction.where(session_vwap.notna(), 0)
+    out[cols["vwap_distance_ticks"]] = distance_ticks.where(session_vwap.notna())
+    out[cols["prior_excursion_side"]] = prior_excursion_side.where(event_direction.ne(0), 0)
+    out[cols["timeout_exit_ticks"]] = signed_exit_ticks.where(valid)
+    return out
+
+
+def _opening_drive_failed_followthrough_columns(slug: str) -> dict[str, str]:
+    return {
+        "opening_drive_direction": f"target_opening_drive_direction_{slug}",
+        "opening_drive_move_ticks": f"target_opening_drive_move_ticks_{slug}",
+        "event_direction": f"target_event_direction_{slug}",
+        "failed_followthrough_ticks": f"target_failed_followthrough_ticks_{slug}",
+        "timeout_exit_ticks": f"target_timeout_exit_ticks_{slug}",
+    }
+
+
+def apply_opening_drive_failed_followthrough_15m_target(
+    frame: pd.DataFrame,
+    cost_config: Mapping[str, float],
+    spec: TargetSpec,
+) -> pd.DataFrame:
+    out = frame.sort_values("ts", kind="mergesort").reset_index(drop=True).copy()
+    ts = pd.to_datetime(out["ts"], utc=True, errors="coerce")
+    keys = [out["market"], out["year"], out["session_segment_id"]]
+    session_bar = out.groupby(keys, dropna=False, sort=False).cumcount()
+    row_valid = _row_valid_mask(out)
+
+    tick_size = float(cost_config["tick_size"])
+    tick_value = float(cost_config["tick_value"])
+    cost_dollars = float(cost_config["round_turn_cost_dollars"])
+
+    open_ = _numeric(out, "open")
+    high = _numeric(out, "high")
+    low = _numeric(out, "low")
+    close = _numeric(out, "close")
+
+    opening_drive_bar = session_bar < OPENING_DRIVE_BARS
+    opening_drive_valid_bar = opening_drive_bar & row_valid
+    opening_valid_count = opening_drive_valid_bar.astype("int64").groupby(
+        keys,
+        dropna=False,
+        sort=False,
+    ).transform("sum")
+    opening_drive_open = open_.where(session_bar.eq(0)).groupby(keys, dropna=False, sort=False).transform("first")
+    opening_drive_close = close.where(session_bar.eq(OPENING_DRIVE_BARS - 1)).groupby(
+        keys,
+        dropna=False,
+        sort=False,
+    ).transform("first")
+    opening_drive_ready = (
+        (session_bar >= OPENING_DRIVE_BARS)
+        & (opening_valid_count >= OPENING_DRIVE_BARS)
+        & opening_drive_open.notna()
+        & opening_drive_close.notna()
+    )
+
+    entry_price = open_.shift(-ENTRY_OFFSET_BARS)
+    exit_price = open_.shift(-OPENING_DRIVE_FAILED_FOLLOWTHROUGH_EXIT_OFFSET_BARS)
+    entry_ts = ts.shift(-ENTRY_OFFSET_BARS)
+    exit_ts = ts.shift(-OPENING_DRIVE_FAILED_FOLLOWTHROUGH_EXIT_OFFSET_BARS)
+    threshold_ticks = _threshold_ticks(
+        out,
+        cost_config,
+        horizon_bars=OPENING_DRIVE_FAILED_FOLLOWTHROUGH_HORIZON_BARS,
+    )
+
+    opening_drive_move_ticks = (opening_drive_close - opening_drive_open) / tick_size
+    drive_direction = pd.Series(0, index=out.index, dtype="int64")
+    drive_direction = drive_direction.mask(
+        opening_drive_ready & opening_drive_move_ticks.ge(threshold_ticks),
+        1,
+    )
+    drive_direction = drive_direction.mask(
+        opening_drive_ready & opening_drive_move_ticks.le(-threshold_ticks),
+        -1,
+    )
+
+    post_drive_bar = session_bar >= OPENING_DRIVE_BARS
+    prior_post_drive_high = high.where(post_drive_bar).groupby(
+        keys,
+        dropna=False,
+        sort=False,
+    ).transform(lambda values: values.cummax().shift(1))
+    prior_post_drive_low = low.where(post_drive_bar).groupby(
+        keys,
+        dropna=False,
+        sort=False,
+    ).transform(lambda values: values.cummin().shift(1))
+    long_failed_ticks = (prior_post_drive_high - opening_drive_close) / tick_size
+    short_failed_ticks = (opening_drive_close - prior_post_drive_low) / tick_size
+    failed_followthrough_ticks = pd.Series(np.nan, index=out.index, dtype="float64")
+    failed_followthrough_ticks = failed_followthrough_ticks.mask(drive_direction.eq(1), long_failed_ticks)
+    failed_followthrough_ticks = failed_followthrough_ticks.mask(drive_direction.eq(-1), short_failed_ticks)
+
+    long_drive_failed = (
+        drive_direction.eq(1)
+        & failed_followthrough_ticks.ge(threshold_ticks)
+        & close.le(opening_drive_close)
+    )
+    short_drive_failed = (
+        drive_direction.eq(-1)
+        & failed_followthrough_ticks.ge(threshold_ticks)
+        & close.ge(opening_drive_close)
+    )
+    event_direction = pd.Series(0, index=out.index, dtype="int64")
+    event_direction = event_direction.mask(long_drive_failed, -1)
+    event_direction = event_direction.mask(short_drive_failed, 1)
+
+    signed_exit_ticks = event_direction.astype(float) * ((exit_price - entry_price) / tick_size)
+    valid = (
+        _path_valid_mask(out, exit_offset_bars=OPENING_DRIVE_FAILED_FOLLOWTHROUGH_EXIT_OFFSET_BARS)
+        & event_direction.ne(0)
+        & entry_price.notna()
+        & exit_price.notna()
+        & threshold_ticks.notna()
+        & np.isfinite(threshold_ticks)
+        & np.isfinite(signed_exit_ticks)
+    )
+    direction = pd.Series(0, index=out.index, dtype="int64")
+    direction = direction.mask(valid & (signed_exit_ticks > threshold_ticks), event_direction)
+    nonflat = direction.ne(0) & valid
+    gross_dollars = signed_exit_ticks * tick_value
+    net_dollars = gross_dollars - cost_dollars
+    cols = _opening_drive_failed_followthrough_columns(spec.slug)
+
+    out[spec.valid_column] = valid.astype(bool)
+    out[spec.direction_column] = direction
+    out[spec.nonflat_column] = nonflat.astype(bool)
+    out[spec.gross_column] = gross_dollars.where(valid)
+    out[spec.cost_column] = pd.Series(cost_dollars, index=out.index).where(valid)
+    out[spec.net_column] = net_dollars.where(valid)
+    out[spec.entry_ts_column] = entry_ts.where(valid)
+    out[spec.exit_ts_column] = exit_ts.where(valid)
+    out[spec.threshold_ticks_column] = threshold_ticks.where(valid)
+    out[cols["opening_drive_direction"]] = drive_direction.where(opening_drive_ready, 0)
+    out[cols["opening_drive_move_ticks"]] = opening_drive_move_ticks.where(opening_drive_ready)
+    out[cols["event_direction"]] = event_direction.where(opening_drive_ready, 0)
+    out[cols["failed_followthrough_ticks"]] = failed_followthrough_ticks.where(event_direction.ne(0))
+    out[cols["timeout_exit_ticks"]] = signed_exit_ticks.where(valid)
+    return out
+
+
+def _session_compression_breakout_columns(slug: str) -> dict[str, str]:
+    return {
+        "box_high": f"target_box_high_{slug}",
+        "box_low": f"target_box_low_{slug}",
+        "box_range_ticks": f"target_box_range_ticks_{slug}",
+        "compression_threshold_ticks": f"target_compression_threshold_ticks_{slug}",
+        "event_direction": f"target_event_direction_{slug}",
+        "breakout_ticks": f"target_breakout_ticks_{slug}",
+        "timeout_exit_ticks": f"target_timeout_exit_ticks_{slug}",
+    }
+
+
+def _rolling_prior_quantile(values: pd.Series, *, window: int, min_periods: int, quantile: float) -> pd.Series:
+    return values.shift(1).rolling(window, min_periods=min_periods).quantile(quantile)
+
+
+def apply_session_compression_breakout_30m_target(
+    frame: pd.DataFrame,
+    cost_config: Mapping[str, float],
+    spec: TargetSpec,
+) -> pd.DataFrame:
+    out = frame.sort_values("ts", kind="mergesort").reset_index(drop=True).copy()
+    ts = pd.to_datetime(out["ts"], utc=True, errors="coerce")
+    keys = [out["market"], out["year"], out["session_segment_id"]]
+    row_valid = _row_valid_mask(out)
+
+    tick_size = float(cost_config["tick_size"])
+    tick_value = float(cost_config["tick_value"])
+    cost_dollars = float(cost_config["round_turn_cost_dollars"])
+
+    open_ = _numeric(out, "open")
+    high = _numeric(out, "high")
+    low = _numeric(out, "low")
+    close = _numeric(out, "close")
+    valid_bar_count = row_valid.astype("int64").groupby(keys, dropna=False, sort=False).transform(
+        lambda values: values.rolling(
+            SESSION_COMPRESSION_BOX_BARS,
+            min_periods=SESSION_COMPRESSION_BOX_BARS,
+        )
+        .sum()
+        .shift(1)
+    )
+    box_high = high.where(row_valid).groupby(keys, dropna=False, sort=False).transform(
+        lambda values: values.rolling(
+            SESSION_COMPRESSION_BOX_BARS,
+            min_periods=SESSION_COMPRESSION_BOX_BARS,
+        )
+        .max()
+        .shift(1)
+    )
+    box_low = low.where(row_valid).groupby(keys, dropna=False, sort=False).transform(
+        lambda values: values.rolling(
+            SESSION_COMPRESSION_BOX_BARS,
+            min_periods=SESSION_COMPRESSION_BOX_BARS,
+        )
+        .min()
+        .shift(1)
+    )
+    box_range_ticks = (box_high - box_low) / tick_size
+    compression_threshold_ticks = box_range_ticks.groupby(keys, dropna=False, sort=False).transform(
+        lambda values: _rolling_prior_quantile(
+            values,
+            window=SESSION_COMPRESSION_PRIOR_WINDOWS,
+            min_periods=SESSION_COMPRESSION_MIN_PRIOR_WINDOWS,
+            quantile=0.25,
+        )
+    )
+    compression_ready = (
+        valid_bar_count.ge(SESSION_COMPRESSION_BOX_BARS)
+        & box_range_ticks.notna()
+        & compression_threshold_ticks.notna()
+        & box_range_ticks.le(compression_threshold_ticks)
+    )
+    breakout_buffer = SESSION_COMPRESSION_BREAKOUT_BUFFER_TICKS * tick_size
+    long_breakout = compression_ready & close.ge(box_high + breakout_buffer)
+    short_breakout = compression_ready & close.le(box_low - breakout_buffer)
+    event_direction = pd.Series(0, index=out.index, dtype="int64")
+    event_direction = event_direction.mask(long_breakout, 1)
+    event_direction = event_direction.mask(short_breakout, -1)
+    breakout_ticks = pd.Series(np.nan, index=out.index, dtype="float64")
+    breakout_ticks = breakout_ticks.mask(long_breakout, (close - box_high) / tick_size)
+    breakout_ticks = breakout_ticks.mask(short_breakout, (box_low - close) / tick_size)
+
+    entry_price = open_.shift(-ENTRY_OFFSET_BARS)
+    exit_price = open_.shift(-EXIT_OFFSET_BARS)
+    entry_ts = ts.shift(-ENTRY_OFFSET_BARS)
+    exit_ts = ts.shift(-EXIT_OFFSET_BARS)
+    threshold_ticks = _threshold_ticks(out, cost_config, horizon_bars=HORIZON_BARS)
+    signed_exit_ticks = event_direction.astype(float) * ((exit_price - entry_price) / tick_size)
+    valid = (
+        _path_valid_mask(out)
+        & event_direction.ne(0)
+        & entry_price.notna()
+        & exit_price.notna()
+        & threshold_ticks.notna()
+        & np.isfinite(threshold_ticks)
+        & np.isfinite(signed_exit_ticks)
+    )
+    direction = pd.Series(0, index=out.index, dtype="int64")
+    direction = direction.mask(valid & (signed_exit_ticks > threshold_ticks), event_direction)
+    nonflat = direction.ne(0) & valid
+    gross_dollars = signed_exit_ticks * tick_value
+    net_dollars = gross_dollars - cost_dollars
+    cols = _session_compression_breakout_columns(spec.slug)
+
+    out[spec.valid_column] = valid.astype(bool)
+    out[spec.direction_column] = direction
+    out[spec.nonflat_column] = nonflat.astype(bool)
+    out[spec.gross_column] = gross_dollars.where(valid)
+    out[spec.cost_column] = pd.Series(cost_dollars, index=out.index).where(valid)
+    out[spec.net_column] = net_dollars.where(valid)
+    out[spec.entry_ts_column] = entry_ts.where(valid)
+    out[spec.exit_ts_column] = exit_ts.where(valid)
+    out[spec.threshold_ticks_column] = threshold_ticks.where(valid)
+    out[cols["box_high"]] = box_high.where(compression_ready)
+    out[cols["box_low"]] = box_low.where(compression_ready)
+    out[cols["box_range_ticks"]] = box_range_ticks.where(compression_ready)
+    out[cols["compression_threshold_ticks"]] = compression_threshold_ticks.where(compression_ready)
+    out[cols["event_direction"]] = event_direction.where(compression_ready, 0)
+    out[cols["breakout_ticks"]] = breakout_ticks.where(event_direction.ne(0))
+    out[cols["timeout_exit_ticks"]] = signed_exit_ticks.where(valid)
+    return out
+
+
+def _late_session_range_resolve_columns(slug: str) -> dict[str, str]:
+    return {
+        "range_high": f"target_range_high_{slug}",
+        "range_low": f"target_range_low_{slug}",
+        "range_ticks": f"target_range_ticks_{slug}",
+        "event_direction": f"target_event_direction_{slug}",
+        "breakout_ticks": f"target_breakout_ticks_{slug}",
+        "minutes_to_close": f"target_minutes_to_close_{slug}",
+        "close_exit_ticks": f"target_close_exit_ticks_{slug}",
+    }
+
+
+def _minute_of_day_chicago(ts: pd.Series) -> pd.Series:
+    local_ts = ts.dt.tz_convert("America/Chicago")
+    return local_ts.dt.hour * 60 + local_ts.dt.minute
+
+
+def _remaining_minutes_threshold_ticks(
+    frame: pd.DataFrame,
+    cost_config: Mapping[str, float],
+    minutes_to_close: pd.Series,
+) -> pd.Series:
+    tick_size = float(cost_config["tick_size"])
+    floor_ticks = float(cost_config["cost_ticks"]) + float(cost_config["min_profit_ticks"])
+    keys = [frame["market"], frame["year"], frame["session_segment_id"]]
+    close = _numeric(frame, "close")
+    one_min_ticks = close.groupby(keys, dropna=False, sort=False).diff() / tick_size
+    prior_sigma = one_min_ticks.groupby(keys, dropna=False, sort=False).transform(
+        lambda values: values.rolling(VOL_LOOKBACK_BARS, min_periods=VOL_MIN_PERIODS).std().shift(1)
+    )
+    horizon = minutes_to_close.clip(lower=1.0)
+    vol_ticks = prior_sigma * np.sqrt(horizon) * VOL_MULTIPLIER
+    return pd.Series(np.maximum(vol_ticks, floor_ticks), index=frame.index, dtype="float64")
+
+
+def apply_late_session_range_resolve_session_close_target(
+    frame: pd.DataFrame,
+    cost_config: Mapping[str, float],
+    spec: TargetSpec,
+) -> pd.DataFrame:
+    out = frame.sort_values("ts", kind="mergesort").reset_index(drop=True).copy()
+    ts = pd.to_datetime(out["ts"], utc=True, errors="coerce")
+    minute_of_day = _minute_of_day_chicago(ts)
+    keys = [out["market"], out["year"], out["session_segment_id"]]
+    row_valid = _row_valid_mask(out)
+
+    tick_size = float(cost_config["tick_size"])
+    tick_value = float(cost_config["tick_value"])
+    cost_dollars = float(cost_config["round_turn_cost_dollars"])
+
+    open_ = _numeric(out, "open")
+    high = _numeric(out, "high")
+    low = _numeric(out, "low")
+    close = _numeric(out, "close")
+    range_window = (
+        row_valid
+        & minute_of_day.ge(LATE_SESSION_RANGE_START_MINUTE)
+        & minute_of_day.lt(LATE_SESSION_RANGE_END_MINUTE)
+    )
+    range_count = range_window.astype("int64").groupby(keys, dropna=False, sort=False).transform("sum")
+    range_high = high.where(range_window).groupby(keys, dropna=False, sort=False).transform("max")
+    range_low = low.where(range_window).groupby(keys, dropna=False, sort=False).transform("min")
+    range_ticks = (range_high - range_low) / tick_size
+    range_ready = (
+        range_count.eq(LATE_SESSION_RANGE_REQUIRED_BARS)
+        & range_high.notna()
+        & range_low.notna()
+        & range_ticks.notna()
+        & range_ticks.gt(0.0)
+    )
+
+    candidate_window = (
+        row_valid
+        & minute_of_day.ge(LATE_SESSION_RANGE_END_MINUTE)
+        & minute_of_day.lt(LATE_SESSION_CLOSE_MINUTE)
+    )
+    breakout_buffer = LATE_SESSION_BREAKOUT_BUFFER_TICKS * tick_size
+    long_breakout = range_ready & candidate_window & close.ge(range_high + breakout_buffer)
+    short_breakout = range_ready & candidate_window & close.le(range_low - breakout_buffer)
+    event_direction = pd.Series(0, index=out.index, dtype="int64")
+    event_direction = event_direction.mask(long_breakout, 1)
+    event_direction = event_direction.mask(short_breakout, -1)
+    breakout_ticks = pd.Series(np.nan, index=out.index, dtype="float64")
+    breakout_ticks = breakout_ticks.mask(long_breakout, (close - range_high) / tick_size)
+    breakout_ticks = breakout_ticks.mask(short_breakout, (range_low - close) / tick_size)
+
+    session = out["session_segment_id"].astype("string")
+    entry_price = open_.shift(-ENTRY_OFFSET_BARS)
+    entry_ts = ts.shift(-ENTRY_OFFSET_BARS)
+    entry_same_session = session.shift(-ENTRY_OFFSET_BARS).eq(session).fillna(False)
+    entry_row_valid = row_valid.shift(-ENTRY_OFFSET_BARS).fillna(False)
+    close_exit_window = row_valid & minute_of_day.eq(LATE_SESSION_CLOSE_MINUTE)
+    exit_price = open_.where(close_exit_window).groupby(keys, dropna=False, sort=False).transform("last")
+    exit_ts = ts.where(close_exit_window).groupby(keys, dropna=False, sort=False).transform("last")
+    minutes_to_close = (exit_ts - entry_ts).dt.total_seconds() / 60.0
+    threshold_ticks = _remaining_minutes_threshold_ticks(out, cost_config, minutes_to_close)
+    signed_exit_ticks = event_direction.astype(float) * ((exit_price - entry_price) / tick_size)
+    valid = (
+        row_valid
+        & range_ready
+        & event_direction.ne(0)
+        & entry_same_session
+        & entry_row_valid
+        & entry_price.notna()
+        & exit_price.notna()
+        & entry_ts.notna()
+        & exit_ts.notna()
+        & exit_ts.gt(entry_ts)
+        & minutes_to_close.gt(0.0)
+        & threshold_ticks.notna()
+        & np.isfinite(threshold_ticks)
+        & np.isfinite(signed_exit_ticks)
+    )
+    direction = pd.Series(0, index=out.index, dtype="int64")
+    direction = direction.mask(valid & (signed_exit_ticks > threshold_ticks), event_direction)
+    nonflat = direction.ne(0) & valid
+    gross_dollars = signed_exit_ticks * tick_value
+    net_dollars = gross_dollars - cost_dollars
+    cols = _late_session_range_resolve_columns(spec.slug)
+
+    out[spec.valid_column] = valid.astype(bool)
+    out[spec.direction_column] = direction
+    out[spec.nonflat_column] = nonflat.astype(bool)
+    out[spec.gross_column] = gross_dollars.where(valid)
+    out[spec.cost_column] = pd.Series(cost_dollars, index=out.index).where(valid)
+    out[spec.net_column] = net_dollars.where(valid)
+    out[spec.entry_ts_column] = entry_ts.where(valid)
+    out[spec.exit_ts_column] = exit_ts.where(valid)
+    out[spec.threshold_ticks_column] = threshold_ticks.where(valid)
+    out[cols["range_high"]] = range_high.where(range_ready)
+    out[cols["range_low"]] = range_low.where(range_ready)
+    out[cols["range_ticks"]] = range_ticks.where(range_ready)
+    out[cols["event_direction"]] = event_direction.where(range_ready, 0)
+    out[cols["breakout_ticks"]] = breakout_ticks.where(event_direction.ne(0))
+    out[cols["minutes_to_close"]] = minutes_to_close.where(valid)
+    out[cols["close_exit_ticks"]] = signed_exit_ticks.where(valid)
+    return out
+
+
 def apply_prior_extreme_failure_30m_target(
     frame: pd.DataFrame,
     cost_config: Mapping[str, float],
@@ -477,6 +988,13 @@ def _opening_range_columns(slug: str) -> dict[str, str]:
         "favorable_excursion_ticks": f"target_favorable_excursion_ticks_{slug}",
         "adverse_excursion_ticks": f"target_adverse_excursion_ticks_{slug}",
     }
+
+
+def _opening_range_event_capture_columns(slug: str) -> dict[str, str]:
+    columns = _opening_range_columns(slug)
+    columns["timeout_exit_ticks"] = f"target_timeout_exit_ticks_{slug}"
+    columns["session_event_number"] = f"target_session_event_number_{slug}"
+    return columns
 
 
 def apply_opening_range_acceptance_continuation_30m_target(
@@ -566,6 +1084,99 @@ def apply_opening_range_acceptance_continuation_30m_target(
     out[cols["acceptance_distance_ticks"]] = acceptance_distance.where(opening_range_ready)
     out[cols["favorable_excursion_ticks"]] = favorable_ticks.where(valid)
     out[cols["adverse_excursion_ticks"]] = adverse_ticks.where(valid)
+    return out
+
+
+def apply_opening_range_acceptance_event_capture_30m_target(
+    frame: pd.DataFrame,
+    cost_config: Mapping[str, float],
+    spec: TargetSpec,
+) -> pd.DataFrame:
+    out = frame.sort_values("ts", kind="mergesort").reset_index(drop=True).copy()
+    ts = pd.to_datetime(out["ts"], utc=True, errors="coerce")
+    keys = [out["market"], out["year"], out["session_segment_id"]]
+    session_bar = out.groupby(keys, dropna=False, sort=False).cumcount()
+    row_valid = _row_valid_mask(out)
+    opening_range_bar = session_bar < OPENING_RANGE_BARS
+    opening_range_valid_bar = opening_range_bar & row_valid
+    opening_valid_count = opening_range_valid_bar.astype("int64").groupby(keys, dropna=False, sort=False).transform("sum")
+    opening_high = _numeric(out, "high").where(opening_range_valid_bar).groupby(keys, dropna=False, sort=False).transform("max")
+    opening_low = _numeric(out, "low").where(opening_range_valid_bar).groupby(keys, dropna=False, sort=False).transform("min")
+    opening_range_ready = (
+        (session_bar >= OPENING_RANGE_BARS)
+        & (opening_valid_count >= OPENING_RANGE_BARS)
+        & opening_high.notna()
+        & opening_low.notna()
+    )
+
+    entry_price = _numeric(out, "open").shift(-ENTRY_OFFSET_BARS)
+    exit_price = _numeric(out, "open").shift(-EXIT_OFFSET_BARS)
+    entry_ts = ts.shift(-ENTRY_OFFSET_BARS)
+    exit_ts = ts.shift(-EXIT_OFFSET_BARS)
+    future_high = _forward_path_extreme(out, "high", "max")
+    future_low = _forward_path_extreme(out, "low", "min")
+
+    tick_size = float(cost_config["tick_size"])
+    tick_value = float(cost_config["tick_value"])
+    cost_dollars = float(cost_config["round_turn_cost_dollars"])
+    cost_ticks = float(cost_config["cost_ticks"])
+
+    close = _numeric(out, "close")
+    long_acceptance = opening_range_ready & (close > opening_high)
+    short_acceptance = opening_range_ready & (close < opening_low)
+    event_direction = pd.Series(0, index=out.index, dtype="int64")
+    event_direction = event_direction.mask(long_acceptance, 1)
+    event_direction = event_direction.mask(short_acceptance, -1)
+    raw_event = event_direction.ne(0)
+    session_event_number = raw_event.astype("int64").groupby(keys, dropna=False, sort=False).cumsum()
+    first_session_event = raw_event & session_event_number.eq(1)
+
+    acceptance_distance = pd.Series(0.0, index=out.index, dtype="float64")
+    acceptance_distance = acceptance_distance.mask(long_acceptance, (close - opening_high) / tick_size)
+    acceptance_distance = acceptance_distance.mask(short_acceptance, (opening_low - close) / tick_size)
+
+    long_favorable_ticks = (future_high - entry_price) / tick_size
+    short_favorable_ticks = (entry_price - future_low) / tick_size
+    long_adverse_ticks = (entry_price - future_low) / tick_size
+    short_adverse_ticks = (future_high - entry_price) / tick_size
+    favorable_ticks = pd.Series(np.nan, index=out.index, dtype="float64")
+    favorable_ticks = favorable_ticks.mask(event_direction.gt(0), long_favorable_ticks)
+    favorable_ticks = favorable_ticks.mask(event_direction.lt(0), short_favorable_ticks)
+    adverse_ticks = pd.Series(np.nan, index=out.index, dtype="float64")
+    adverse_ticks = adverse_ticks.mask(event_direction.gt(0), long_adverse_ticks)
+    adverse_ticks = adverse_ticks.mask(event_direction.lt(0), short_adverse_ticks)
+
+    valid = (
+        _path_valid_mask(out)
+        & first_session_event
+        & entry_price.notna()
+        & exit_price.notna()
+        & favorable_ticks.notna()
+        & adverse_ticks.notna()
+    )
+    signed_gross_ticks = event_direction.astype(float) * (exit_price - entry_price) / tick_size
+    gross_dollars = signed_gross_ticks * tick_value
+    net_dollars = gross_dollars - cost_dollars
+    direction = pd.Series(0, index=out.index, dtype="int64").mask(valid, event_direction)
+    cols = _opening_range_event_capture_columns(spec.slug)
+
+    out[spec.valid_column] = valid.astype(bool)
+    out[spec.direction_column] = direction
+    out[spec.nonflat_column] = valid.astype(bool)
+    out[spec.gross_column] = gross_dollars.where(valid)
+    out[spec.cost_column] = pd.Series(cost_dollars, index=out.index).where(valid)
+    out[spec.net_column] = net_dollars.where(valid)
+    out[spec.entry_ts_column] = entry_ts.where(valid)
+    out[spec.exit_ts_column] = exit_ts.where(valid)
+    out[spec.threshold_ticks_column] = pd.Series(cost_ticks, index=out.index).where(valid)
+    out[cols["opening_range_high"]] = opening_high.where(opening_range_ready)
+    out[cols["opening_range_low"]] = opening_low.where(opening_range_ready)
+    out[cols["event_direction"]] = event_direction.where(opening_range_ready, 0)
+    out[cols["acceptance_distance_ticks"]] = acceptance_distance.where(opening_range_ready)
+    out[cols["favorable_excursion_ticks"]] = favorable_ticks.where(valid)
+    out[cols["adverse_excursion_ticks"]] = adverse_ticks.where(valid)
+    out[cols["timeout_exit_ticks"]] = signed_gross_ticks.where(valid)
+    out[cols["session_event_number"]] = session_event_number.where(raw_event)
     return out
 
 
@@ -773,6 +1384,85 @@ TARGET_SPECS: dict[str, TargetSpec] = {
         ),
         apply=apply_vwap_reversion_30m_target,
     ),
+    "vwap_reclaim_continuation_15m_v1": TargetSpec(
+        hypothesis_id="vwap_reclaim_continuation_15m_v1",
+        target_family="es_vwap_reclaim_continuation_15m",
+        slug="vwap_reclaim_continuation_15m",
+        description=(
+            "ES-only 15-minute continuation target conditioned on a causal excursion "
+            "away from same-session VWAP followed by a reclaim through VWAP."
+        ),
+        apply=apply_vwap_reclaim_continuation_15m_target,
+        auxiliary_columns=tuple(_vwap_reclaim_columns("vwap_reclaim_continuation_15m").values()),
+        horizon_bars=VWAP_RECLAIM_HORIZON_BARS,
+        threshold_description=(
+            "max(round-turn cost ticks + min_profit_ticks, prior 60-bar 1m "
+            "close-diff std * sqrt(15)); event requires causal VWAP excursion "
+            "and reclaim before next-open entry"
+        ),
+    ),
+    "opening_drive_failed_followthrough_15m_v1": TargetSpec(
+        hypothesis_id="opening_drive_failed_followthrough_15m_v1",
+        target_family="es_opening_drive_failed_followthrough_15m",
+        slug="opening_drive_failed_followthrough_15m",
+        description=(
+            "ES-only 15-minute reversal target conditioned on a completed causal "
+            "same-session opening drive followed by a failed continuation attempt "
+            "in the drive direction."
+        ),
+        apply=apply_opening_drive_failed_followthrough_15m_target,
+        auxiliary_columns=tuple(
+            _opening_drive_failed_followthrough_columns("opening_drive_failed_followthrough_15m").values()
+        ),
+        horizon_bars=OPENING_DRIVE_FAILED_FOLLOWTHROUGH_HORIZON_BARS,
+        threshold_description=(
+            "max(round-turn cost ticks + min_profit_ticks, prior 60-bar 1m "
+            "close-diff std * sqrt(15)); event requires completed first 15 "
+            "session bars, prior continuation attempt, failed followthrough, "
+            "next-open entry, and fixed 15-minute timeout exit"
+        ),
+    ),
+    "session_compression_breakout_30m_v1": TargetSpec(
+        hypothesis_id="session_compression_breakout_30m_v1",
+        target_family="es_session_compression_breakout_30m",
+        slug="session_compression_breakout_30m",
+        description=(
+            "ES-only 30-minute continuation target conditioned on a completed "
+            "causal same-session compression box followed by a breakout from "
+            "that box."
+        ),
+        apply=apply_session_compression_breakout_30m_target,
+        auxiliary_columns=tuple(_session_compression_breakout_columns("session_compression_breakout_30m").values()),
+        threshold_description=(
+            "max(round-turn cost ticks + min_profit_ticks, prior 60-bar 1m "
+            "close-diff std * sqrt(30)); event requires prior completed "
+            "30-bar compression box range <= causal rolling 25th percentile "
+            "of prior 120 boxes with minimum 60 boxes, then a one-tick break "
+            "outside the box, next-open entry, and fixed 30-minute timeout exit"
+        ),
+    ),
+    "late_session_range_resolve_session_close_v1": TargetSpec(
+        hypothesis_id="late_session_range_resolve_session_close_v1",
+        target_family="es_late_session_range_resolve_session_close",
+        slug="late_session_range_resolve_session_close",
+        description=(
+            "ES-only session-close continuation target conditioned on a completed "
+            "14:00-15:00 America/Chicago late-session range and a post-15:00 "
+            "break from that range."
+        ),
+        apply=apply_late_session_range_resolve_session_close_target,
+        auxiliary_columns=tuple(
+            _late_session_range_resolve_columns("late_session_range_resolve_session_close").values()
+        ),
+        horizon_bars=LATE_SESSION_THRESHOLD_HORIZON_BARS,
+        threshold_description=(
+            "session-close exit; completed 14:00-15:00 America/Chicago same-session "
+            "range; event requires one-tick close break after 15:00 and before "
+            "the configured regular close; next-open entry; configured same-session "
+            "regular-close exit; max(round-turn cost ticks + min_profit_ticks, "
+            "prior 60-bar 1m close-diff std * sqrt(minutes_until_close))"
+        ),
+    ),
     "opportunity_risk_asymmetry_30m_v1": TargetSpec(
         hypothesis_id="opportunity_risk_asymmetry_30m_v1",
         target_family="es_opportunity_risk_asymmetry_30m",
@@ -841,6 +1531,23 @@ TARGET_SPECS: dict[str, TargetSpec] = {
         threshold_description=(
             "completed first 30 session bars; event close outside opening range; "
             "future favorable path excursion must exceed round-turn cost ticks + min_profit_ticks"
+        ),
+    ),
+    "opening_range_acceptance_continuation_event_capture_30m_v2": TargetSpec(
+        hypothesis_id="opening_range_acceptance_continuation_event_capture_30m_v2",
+        target_family="es_opening_range_acceptance_continuation_event_capture_30m",
+        slug="opening_range_acceptance_event_capture_30m",
+        description=(
+            "ES-only 30-minute fixed-timeout event-capture target using the first "
+            "post-opening-range acceptance event per session."
+        ),
+        apply=apply_opening_range_acceptance_event_capture_30m_target,
+        auxiliary_columns=tuple(
+            _opening_range_event_capture_columns("opening_range_acceptance_event_capture_30m").values()
+        ),
+        threshold_description=(
+            "completed first 30 session bars; first event close outside opening range; "
+            "next-open entry; fixed 30-minute timeout exit; net dollars subtract round-turn cost"
         ),
     ),
 }
@@ -1854,7 +2561,7 @@ def run_harness(
         "label_definition": {
             "description": spec.description,
             "entry": "next 1-minute open",
-            "horizon_minutes": HORIZON_BARS,
+            "horizon_minutes": spec.horizon_bars,
             "threshold": spec.threshold_description,
             "validity": "same session segment, no synthetic/invalid/boundary/roll path, existing target/feature validity true",
         },

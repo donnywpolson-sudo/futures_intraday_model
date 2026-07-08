@@ -11,12 +11,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.phase9_research.es_30m_target_smoke_harness import (
     EVALUATION_COMPONENT_RANK,
     TARGET_SPECS,
+    apply_late_session_range_resolve_session_close_target,
+    apply_opening_drive_failed_followthrough_15m_target,
+    apply_opening_range_acceptance_event_capture_30m_target,
     apply_opening_range_acceptance_continuation_30m_target,
     apply_opportunity_risk_component_rank_30m_target,
     apply_opportunity_risk_asymmetry_30m_target,
     apply_prior_extreme_failure_30m_target,
+    apply_session_compression_breakout_30m_target,
     apply_triple_barrier_30m_target,
     apply_vol_scaled_terminal_30m_target,
+    apply_vwap_reclaim_continuation_15m_target,
     apply_vwap_reversion_30m_target,
     class_balance,
     duplicate_target_overlap,
@@ -186,6 +191,288 @@ def _vwap_reversion_frame() -> pd.DataFrame:
             "feature_signal": range(periods),
         }
     )
+
+
+def _vwap_reclaim_frame() -> pd.DataFrame:
+    periods = 140
+    ts = pd.date_range("2024-01-02T14:30:00Z", periods=periods, freq="min")
+    open_ = [100.0] * periods
+    high = [100.25] * periods
+    low = [99.75] * periods
+    close = [100.0] * periods
+    volume = [100.0] * periods
+
+    for idx in range(20, 25):
+        open_[idx] = 98.0
+        high[idx] = 98.25
+        low[idx] = 97.75
+        close[idx] = 98.0
+    long_idx = 25
+    open_[long_idx] = 100.5
+    high[long_idx] = 100.75
+    low[long_idx] = 100.25
+    close[long_idx] = 100.5
+    open_[long_idx + 1] = 100.5
+    open_[long_idx + 16] = 110.0
+
+    for idx in range(75, 80):
+        open_[idx] = 102.5
+        high[idx] = 102.75
+        low[idx] = 102.25
+        close[idx] = 102.5
+    short_idx = 80
+    open_[short_idx] = 99.5
+    high[short_idx] = 99.75
+    low[short_idx] = 99.25
+    close[short_idx] = 99.5
+    open_[short_idx + 1] = 99.5
+    open_[short_idx + 16] = 90.0
+
+    for idx in range(108, 113):
+        open_[idx] = 98.0
+        high[idx] = 98.25
+        low[idx] = 97.75
+        close[idx] = 98.0
+    flat_idx = 113
+    open_[flat_idx] = 100.5
+    high[flat_idx] = 100.75
+    low[flat_idx] = 100.25
+    close[flat_idx] = 100.5
+    open_[flat_idx + 1] = 100.5
+    open_[flat_idx + 16] = 100.75
+
+    return pd.DataFrame(
+        {
+            "ts": ts,
+            "market": "ES",
+            "year": 2024,
+            "session_segment_id": "ES_2024_01_02",
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+            "causal_valid": True,
+            "valid_ohlcv": True,
+            "inside_session": True,
+            "feature_input_valid": True,
+            "feature_row_valid": True,
+            "training_row_valid": True,
+            "target_valid": True,
+            "target_sign_with_deadzone": [1 if idx % 3 == 0 else 0 for idx in range(periods)],
+            "is_synthetic": False,
+            "roll_window_flag": False,
+            "boundary_session_flag": False,
+            "feature_signal": range(periods),
+        }
+    )
+
+
+def _opening_drive_failed_followthrough_frame() -> pd.DataFrame:
+    session_periods = 60
+    periods = session_periods * 3
+    ts = pd.date_range("2024-01-02T14:30:00Z", periods=periods, freq="min")
+    sessions = (
+        ["ES_2024_01_02"] * session_periods
+        + ["ES_2024_01_03"] * session_periods
+        + ["ES_2024_01_04"] * session_periods
+    )
+    open_ = [100.0] * periods
+    high = [100.25] * periods
+    low = [99.75] * periods
+    close = [100.0] * periods
+    volume = [100.0] * periods
+
+    def set_bar(session_idx: int, local_idx: int, price: float) -> int:
+        idx = session_idx * session_periods + local_idx
+        open_[idx] = price
+        high[idx] = price + 0.25
+        low[idx] = price - 0.25
+        close[idx] = price
+        return idx
+
+    def set_open(session_idx: int, local_idx: int, price: float) -> int:
+        idx = session_idx * session_periods + local_idx
+        open_[idx] = price
+        close[idx] = price
+        high[idx] = price + 0.25
+        low[idx] = price - 0.25
+        return idx
+
+    for session_idx in (0, 2):
+        for local_idx in range(15):
+            set_bar(session_idx, local_idx, 100.0 + (6.0 * local_idx / 14.0))
+        for local_idx in range(15, 25):
+            set_bar(session_idx, local_idx, 107.0)
+        attempt_idx = set_bar(session_idx, 20, 107.0)
+        high[attempt_idx] = 110.0
+        event_idx = set_bar(session_idx, 25, 105.75)
+        set_open(session_idx, 26, 106.0)
+        set_open(session_idx, 41, 96.0 if session_idx == 0 else 105.75)
+        assert event_idx == session_idx * session_periods + 25
+
+    for local_idx in range(15):
+        set_bar(1, local_idx, 100.0 - (6.0 * local_idx / 14.0))
+    for local_idx in range(15, 25):
+        set_bar(1, local_idx, 93.0)
+    attempt_idx = set_bar(1, 20, 93.0)
+    low[attempt_idx] = 90.0
+    set_bar(1, 25, 94.25)
+    set_open(1, 26, 94.0)
+    set_open(1, 41, 104.0)
+
+    return pd.DataFrame(
+        {
+            "ts": ts,
+            "market": "ES",
+            "year": 2024,
+            "session_segment_id": sessions,
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+            "causal_valid": True,
+            "valid_ohlcv": True,
+            "inside_session": True,
+            "feature_input_valid": True,
+            "feature_row_valid": True,
+            "training_row_valid": True,
+            "target_valid": True,
+            "target_sign_with_deadzone": [1 if idx % 3 == 0 else 0 for idx in range(periods)],
+            "is_synthetic": False,
+            "roll_window_flag": False,
+            "boundary_session_flag": False,
+            "feature_signal": range(periods),
+        }
+    )
+
+
+def _session_compression_breakout_frame() -> pd.DataFrame:
+    periods = 275
+    ts = pd.date_range("2024-01-02T14:30:00Z", periods=periods, freq="min")
+    open_ = [100.0] * periods
+    high = [100.25] * periods
+    low = [99.75] * periods
+    close = [100.0] * periods
+
+    long_idx = 100
+    close[long_idx] = 100.50
+    high[long_idx] = 100.75
+    low[long_idx] = 100.25
+    open_[long_idx + 1] = 100.50
+    open_[long_idx + 31] = 102.00
+
+    short_idx = 170
+    close[short_idx] = 99.50
+    high[short_idx] = 99.75
+    low[short_idx] = 99.25
+    open_[short_idx + 1] = 99.50
+    open_[short_idx + 31] = 98.00
+
+    flat_idx = 235
+    close[flat_idx] = 100.50
+    high[flat_idx] = 100.75
+    low[flat_idx] = 100.25
+    open_[flat_idx + 1] = 100.50
+    open_[flat_idx + 31] = 100.75
+
+    return pd.DataFrame(
+        {
+            "ts": ts,
+            "market": "ES",
+            "year": 2024,
+            "session_segment_id": "ES_2024_01_02",
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": 100,
+            "causal_valid": True,
+            "valid_ohlcv": True,
+            "inside_session": True,
+            "feature_input_valid": True,
+            "feature_row_valid": True,
+            "training_row_valid": True,
+            "target_valid": True,
+            "target_sign_with_deadzone": [1 if idx % 3 == 0 else 0 for idx in range(periods)],
+            "is_synthetic": False,
+            "roll_window_flag": False,
+            "boundary_session_flag": False,
+            "feature_signal": range(periods),
+        }
+    )
+
+
+def _late_session_range_resolve_frame() -> pd.DataFrame:
+    session_periods = 121
+    sessions: list[pd.DataFrame] = []
+
+    def build_session(date_text: str, session_id: str, event_direction: int) -> pd.DataFrame:
+        ts = pd.date_range(f"{date_text}T20:00:00Z", periods=session_periods, freq="min")
+        open_ = [100.0] * session_periods
+        high = [100.25] * session_periods
+        low = [99.75] * session_periods
+        close = [100.0] * session_periods
+        event_idx = 70
+        close_idx = 120
+        if event_direction == 1:
+            close[event_idx] = 100.50
+            high[event_idx] = 100.75
+            low[event_idx] = 100.25
+            open_[event_idx + 1] = 100.50
+            open_[close_idx] = 102.00
+            close[close_idx] = 102.00
+            high[close_idx] = 102.25
+            low[close_idx] = 101.75
+        elif event_direction == -1:
+            close[event_idx] = 99.50
+            high[event_idx] = 99.75
+            low[event_idx] = 99.25
+            open_[event_idx + 1] = 99.50
+            open_[close_idx] = 98.00
+            close[close_idx] = 98.00
+            high[close_idx] = 98.25
+            low[close_idx] = 97.75
+        else:
+            close[event_idx] = 100.50
+            high[event_idx] = 100.75
+            low[event_idx] = 100.25
+            open_[event_idx + 1] = 100.50
+            open_[close_idx] = 100.75
+            close[close_idx] = 100.75
+            high[close_idx] = 101.00
+            low[close_idx] = 100.50
+        return pd.DataFrame(
+            {
+                "ts": ts,
+                "market": "ES",
+                "year": 2024,
+                "session_segment_id": session_id,
+                "open": open_,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": 100,
+                "causal_valid": True,
+                "valid_ohlcv": True,
+                "inside_session": True,
+                "feature_input_valid": True,
+                "feature_row_valid": True,
+                "training_row_valid": True,
+                "target_valid": True,
+                "target_sign_with_deadzone": [1 if idx % 3 == 0 else 0 for idx in range(session_periods)],
+                "is_synthetic": False,
+                "roll_window_flag": False,
+                "boundary_session_flag": False,
+                "feature_signal": range(session_periods),
+            }
+        )
+
+    sessions.append(build_session("2024-01-02", "ES_2024_01_02", 1))
+    sessions.append(build_session("2024-01-03", "ES_2024_01_03", -1))
+    sessions.append(build_session("2024-01-04", "ES_2024_01_04", 0))
+    return pd.concat(sessions, ignore_index=True)
 
 
 def _opportunity_risk_frame() -> pd.DataFrame:
@@ -463,6 +750,305 @@ def test_vwap_reversion_30m_label_math() -> None:
     assert labeled.loc[0, spec.valid_column] == False
 
 
+def test_vwap_reclaim_continuation_15m_target_spec_is_distinct() -> None:
+    spec = TARGET_SPECS["vwap_reclaim_continuation_15m_v1"]
+
+    assert spec.target_family == "es_vwap_reclaim_continuation_15m"
+    assert spec.slug == "vwap_reclaim_continuation_15m"
+    assert spec.horizon_bars == 15
+    assert "sqrt(15)" in spec.threshold_description
+    assert "target_event_direction_vwap_reclaim_continuation_15m" in spec.target_columns
+    assert "target_timeout_exit_ticks_vwap_reclaim_continuation_15m" in spec.target_columns
+
+
+def test_vwap_reclaim_continuation_15m_label_math() -> None:
+    spec = TARGET_SPECS["vwap_reclaim_continuation_15m_v1"]
+    labeled = apply_vwap_reclaim_continuation_15m_target(_vwap_reclaim_frame(), _cost_config(), spec)
+    event_direction = "target_event_direction_vwap_reclaim_continuation_15m"
+    prior_side = "target_prior_excursion_side_vwap_reclaim_continuation_15m"
+    timeout_ticks = "target_timeout_exit_ticks_vwap_reclaim_continuation_15m"
+
+    long_idx = 25
+    short_idx = 80
+    flat_idx = 113
+    assert labeled.loc[long_idx, spec.valid_column] == True
+    assert labeled.loc[long_idx, event_direction] == 1
+    assert labeled.loc[long_idx, prior_side] == -1
+    assert labeled.loc[long_idx, spec.direction_column] == 1
+    assert labeled.loc[long_idx, spec.nonflat_column] == True
+    assert labeled.loc[long_idx, timeout_ticks] == 38.0
+    assert labeled.loc[long_idx, spec.gross_column] == 475.0
+    assert labeled.loc[long_idx, spec.net_column] == 450.0
+
+    assert labeled.loc[short_idx, spec.valid_column] == True
+    assert labeled.loc[short_idx, event_direction] == -1
+    assert labeled.loc[short_idx, prior_side] == 1
+    assert labeled.loc[short_idx, spec.direction_column] == -1
+    assert labeled.loc[short_idx, spec.nonflat_column] == True
+    assert labeled.loc[short_idx, timeout_ticks] == 38.0
+    assert labeled.loc[short_idx, spec.gross_column] == 475.0
+    assert labeled.loc[short_idx, spec.net_column] == 450.0
+
+    assert labeled.loc[flat_idx, spec.valid_column] == True
+    assert labeled.loc[flat_idx, event_direction] == 1
+    assert labeled.loc[flat_idx, spec.direction_column] == 0
+    assert labeled.loc[flat_idx, spec.nonflat_column] == False
+    assert labeled.loc[flat_idx, timeout_ticks] == 1.0
+    assert labeled.loc[flat_idx, spec.gross_column] == 12.5
+    assert labeled.loc[flat_idx, spec.net_column] == -12.5
+
+
+def test_vwap_reclaim_event_side_does_not_use_future_path() -> None:
+    spec = TARGET_SPECS["vwap_reclaim_continuation_15m_v1"]
+    event_direction = "target_event_direction_vwap_reclaim_continuation_15m"
+    base = apply_vwap_reclaim_continuation_15m_target(_vwap_reclaim_frame(), _cost_config(), spec)
+    mutated_frame = _vwap_reclaim_frame()
+    mutated_frame.loc[30, ["high", "low", "close"]] = [120.0, 119.5, 120.0]
+    mutated = apply_vwap_reclaim_continuation_15m_target(mutated_frame, _cost_config(), spec)
+
+    assert base.loc[25, spec.valid_column] == mutated.loc[25, spec.valid_column]
+    assert base.loc[25, event_direction] == mutated.loc[25, event_direction]
+    assert base.loc[25, spec.gross_column] == mutated.loc[25, spec.gross_column]
+    assert base.loc[25, spec.net_column] == mutated.loc[25, spec.net_column]
+
+
+def test_vwap_reclaim_rejects_cross_session_15m_horizon() -> None:
+    spec = TARGET_SPECS["vwap_reclaim_continuation_15m_v1"]
+    frame = _vwap_reclaim_frame()
+    frame.loc[35:, "session_segment_id"] = "ES_2024_01_03"
+    labeled = apply_vwap_reclaim_continuation_15m_target(frame, _cost_config(), spec)
+
+    assert labeled.loc[25, spec.valid_column] == False
+
+
+def test_vwap_reclaim_distribution_has_long_short_and_flat() -> None:
+    spec = TARGET_SPECS["vwap_reclaim_continuation_15m_v1"]
+    labeled = apply_vwap_reclaim_continuation_15m_target(_vwap_reclaim_frame(), _cost_config(), spec)
+    events, skipped = non_overlapping_events(labeled, spec)
+    balance = class_balance(events, spec)
+    distribution = target_distribution_summary(events, spec)
+
+    assert skipped == 0
+    assert balance["event_count"] == len(events)
+    assert balance["counts"]["long"] >= 1
+    assert balance["counts"]["short"] >= 1
+    assert balance["counts"]["flat"] >= 1
+    assert spec.net_column in distribution
+
+
+def test_opening_drive_failed_followthrough_15m_target_spec_is_distinct() -> None:
+    spec = TARGET_SPECS["opening_drive_failed_followthrough_15m_v1"]
+
+    assert spec.target_family == "es_opening_drive_failed_followthrough_15m"
+    assert spec.slug == "opening_drive_failed_followthrough_15m"
+    assert spec.horizon_bars == 15
+    assert "sqrt(15)" in spec.threshold_description
+    assert "target_event_direction_opening_drive_failed_followthrough_15m" in spec.target_columns
+    assert "target_timeout_exit_ticks_opening_drive_failed_followthrough_15m" in spec.target_columns
+
+
+def test_opening_drive_failed_followthrough_15m_label_math() -> None:
+    spec = TARGET_SPECS["opening_drive_failed_followthrough_15m_v1"]
+    labeled = apply_opening_drive_failed_followthrough_15m_target(
+        _opening_drive_failed_followthrough_frame(),
+        _cost_config(),
+        spec,
+    )
+    drive_direction = "target_opening_drive_direction_opening_drive_failed_followthrough_15m"
+    event_direction = "target_event_direction_opening_drive_failed_followthrough_15m"
+    failed_ticks = "target_failed_followthrough_ticks_opening_drive_failed_followthrough_15m"
+    timeout_ticks = "target_timeout_exit_ticks_opening_drive_failed_followthrough_15m"
+
+    short_reversal_idx = 25
+    long_reversal_idx = 85
+    flat_idx = 145
+    assert labeled.loc[14, spec.valid_column] == False
+
+    assert labeled.loc[short_reversal_idx, spec.valid_column] == True
+    assert labeled.loc[short_reversal_idx, drive_direction] == 1
+    assert labeled.loc[short_reversal_idx, event_direction] == -1
+    assert labeled.loc[short_reversal_idx, failed_ticks] == 16.0
+    assert labeled.loc[short_reversal_idx, spec.direction_column] == -1
+    assert labeled.loc[short_reversal_idx, spec.nonflat_column] == True
+    assert labeled.loc[short_reversal_idx, timeout_ticks] == 40.0
+    assert labeled.loc[short_reversal_idx, spec.gross_column] == 500.0
+    assert labeled.loc[short_reversal_idx, spec.net_column] == 475.0
+
+    assert labeled.loc[long_reversal_idx, spec.valid_column] == True
+    assert labeled.loc[long_reversal_idx, drive_direction] == -1
+    assert labeled.loc[long_reversal_idx, event_direction] == 1
+    assert labeled.loc[long_reversal_idx, failed_ticks] == 16.0
+    assert labeled.loc[long_reversal_idx, spec.direction_column] == 1
+    assert labeled.loc[long_reversal_idx, spec.nonflat_column] == True
+    assert labeled.loc[long_reversal_idx, timeout_ticks] == 40.0
+    assert labeled.loc[long_reversal_idx, spec.gross_column] == 500.0
+    assert labeled.loc[long_reversal_idx, spec.net_column] == 475.0
+
+    assert labeled.loc[flat_idx, spec.valid_column] == True
+    assert labeled.loc[flat_idx, drive_direction] == 1
+    assert labeled.loc[flat_idx, event_direction] == -1
+    assert labeled.loc[flat_idx, spec.direction_column] == 0
+    assert labeled.loc[flat_idx, spec.nonflat_column] == False
+    assert labeled.loc[flat_idx, timeout_ticks] == 1.0
+    assert labeled.loc[flat_idx, spec.gross_column] == 12.5
+    assert labeled.loc[flat_idx, spec.net_column] == -12.5
+
+
+def test_opening_drive_failed_followthrough_event_side_does_not_use_future_path() -> None:
+    spec = TARGET_SPECS["opening_drive_failed_followthrough_15m_v1"]
+    event_direction = "target_event_direction_opening_drive_failed_followthrough_15m"
+    base = apply_opening_drive_failed_followthrough_15m_target(
+        _opening_drive_failed_followthrough_frame(),
+        _cost_config(),
+        spec,
+    )
+    mutated_frame = _opening_drive_failed_followthrough_frame()
+    mutated_frame.loc[30, ["high", "low", "close"]] = [120.0, 119.5, 120.0]
+    mutated = apply_opening_drive_failed_followthrough_15m_target(mutated_frame, _cost_config(), spec)
+
+    assert base.loc[25, spec.valid_column] == mutated.loc[25, spec.valid_column]
+    assert base.loc[25, event_direction] == mutated.loc[25, event_direction]
+    assert base.loc[25, spec.gross_column] == mutated.loc[25, spec.gross_column]
+    assert base.loc[25, spec.net_column] == mutated.loc[25, spec.net_column]
+
+
+def test_opening_drive_failed_followthrough_rejects_cross_session_15m_horizon() -> None:
+    spec = TARGET_SPECS["opening_drive_failed_followthrough_15m_v1"]
+    frame = _opening_drive_failed_followthrough_frame()
+    frame.loc[35:, "session_segment_id"] = "ES_2024_01_99"
+    labeled = apply_opening_drive_failed_followthrough_15m_target(frame, _cost_config(), spec)
+
+    assert labeled.loc[25, spec.valid_column] == False
+
+
+def test_opening_drive_failed_followthrough_distribution_has_long_short_and_flat() -> None:
+    spec = TARGET_SPECS["opening_drive_failed_followthrough_15m_v1"]
+    labeled = apply_opening_drive_failed_followthrough_15m_target(
+        _opening_drive_failed_followthrough_frame(),
+        _cost_config(),
+        spec,
+    )
+    events, skipped = non_overlapping_events(labeled, spec)
+    balance = class_balance(events, spec)
+    distribution = target_distribution_summary(events, spec)
+
+    assert skipped > 0
+    assert balance["event_count"] == len(events)
+    assert balance["counts"]["long"] >= 1
+    assert balance["counts"]["short"] >= 1
+    assert balance["counts"]["flat"] >= 1
+    assert spec.net_column in distribution
+
+
+def test_session_compression_breakout_30m_target_spec_is_distinct() -> None:
+    spec = TARGET_SPECS["session_compression_breakout_30m_v1"]
+
+    assert spec.target_family == "es_session_compression_breakout_30m"
+    assert spec.slug == "session_compression_breakout_30m"
+    assert spec.horizon_bars == 30
+    assert "25th percentile" in spec.threshold_description
+    assert "target_box_high_session_compression_breakout_30m" in spec.target_columns
+    assert "target_timeout_exit_ticks_session_compression_breakout_30m" in spec.target_columns
+
+
+def test_session_compression_breakout_30m_label_math() -> None:
+    spec = TARGET_SPECS["session_compression_breakout_30m_v1"]
+    labeled = apply_session_compression_breakout_30m_target(
+        _session_compression_breakout_frame(),
+        _cost_config(),
+        spec,
+    )
+    box_high = "target_box_high_session_compression_breakout_30m"
+    box_low = "target_box_low_session_compression_breakout_30m"
+    box_range = "target_box_range_ticks_session_compression_breakout_30m"
+    compression_threshold = "target_compression_threshold_ticks_session_compression_breakout_30m"
+    event_direction = "target_event_direction_session_compression_breakout_30m"
+    breakout_ticks = "target_breakout_ticks_session_compression_breakout_30m"
+    timeout_ticks = "target_timeout_exit_ticks_session_compression_breakout_30m"
+
+    long_idx = 100
+    short_idx = 170
+    flat_idx = 235
+    assert labeled.loc[89, spec.valid_column] == False
+
+    assert labeled.loc[long_idx, spec.valid_column] == True
+    assert labeled.loc[long_idx, box_high] == 100.25
+    assert labeled.loc[long_idx, box_low] == 99.75
+    assert labeled.loc[long_idx, box_range] == 2.0
+    assert labeled.loc[long_idx, compression_threshold] == 2.0
+    assert labeled.loc[long_idx, event_direction] == 1
+    assert labeled.loc[long_idx, breakout_ticks] == 1.0
+    assert labeled.loc[long_idx, spec.direction_column] == 1
+    assert labeled.loc[long_idx, spec.nonflat_column] == True
+    assert labeled.loc[long_idx, timeout_ticks] == 6.0
+    assert labeled.loc[long_idx, spec.gross_column] == 75.0
+    assert labeled.loc[long_idx, spec.net_column] == 50.0
+
+    assert labeled.loc[short_idx, spec.valid_column] == True
+    assert labeled.loc[short_idx, event_direction] == -1
+    assert labeled.loc[short_idx, breakout_ticks] == 1.0
+    assert labeled.loc[short_idx, spec.direction_column] == -1
+    assert labeled.loc[short_idx, spec.nonflat_column] == True
+    assert labeled.loc[short_idx, timeout_ticks] == 6.0
+    assert labeled.loc[short_idx, spec.gross_column] == 75.0
+    assert labeled.loc[short_idx, spec.net_column] == 50.0
+
+    assert labeled.loc[flat_idx, spec.valid_column] == True
+    assert labeled.loc[flat_idx, event_direction] == 1
+    assert labeled.loc[flat_idx, spec.direction_column] == 0
+    assert labeled.loc[flat_idx, spec.nonflat_column] == False
+    assert labeled.loc[flat_idx, timeout_ticks] == 1.0
+    assert labeled.loc[flat_idx, spec.gross_column] == 12.5
+    assert labeled.loc[flat_idx, spec.net_column] == -12.5
+
+
+def test_session_compression_breakout_event_side_does_not_use_future_path() -> None:
+    spec = TARGET_SPECS["session_compression_breakout_30m_v1"]
+    event_direction = "target_event_direction_session_compression_breakout_30m"
+    base = apply_session_compression_breakout_30m_target(
+        _session_compression_breakout_frame(),
+        _cost_config(),
+        spec,
+    )
+    mutated_frame = _session_compression_breakout_frame()
+    mutated_frame.loc[110, ["high", "low", "close"]] = [120.0, 119.5, 120.0]
+    mutated = apply_session_compression_breakout_30m_target(mutated_frame, _cost_config(), spec)
+
+    assert base.loc[100, spec.valid_column] == mutated.loc[100, spec.valid_column]
+    assert base.loc[100, event_direction] == mutated.loc[100, event_direction]
+    assert base.loc[100, spec.gross_column] == mutated.loc[100, spec.gross_column]
+    assert base.loc[100, spec.net_column] == mutated.loc[100, spec.net_column]
+
+
+def test_session_compression_breakout_rejects_cross_session_30m_horizon() -> None:
+    spec = TARGET_SPECS["session_compression_breakout_30m_v1"]
+    frame = _session_compression_breakout_frame()
+    frame.loc[120:, "session_segment_id"] = "ES_2024_01_99"
+    labeled = apply_session_compression_breakout_30m_target(frame, _cost_config(), spec)
+
+    assert labeled.loc[100, spec.valid_column] == False
+
+
+def test_session_compression_breakout_distribution_has_long_short_and_flat() -> None:
+    spec = TARGET_SPECS["session_compression_breakout_30m_v1"]
+    labeled = apply_session_compression_breakout_30m_target(
+        _session_compression_breakout_frame(),
+        _cost_config(),
+        spec,
+    )
+    events, skipped = non_overlapping_events(labeled, spec)
+    balance = class_balance(events, spec)
+    distribution = target_distribution_summary(events, spec)
+
+    assert skipped >= 0
+    assert events[spec.entry_ts_column].iloc[1:].gt(events[spec.exit_ts_column].shift(1).iloc[1:]).all()
+    assert balance["event_count"] == len(events)
+    assert balance["counts"]["long"] >= 1
+    assert balance["counts"]["short"] >= 1
+    assert balance["counts"]["flat"] >= 1
+    assert spec.net_column in distribution
+
+
 def test_opportunity_risk_asymmetry_30m_label_math() -> None:
     spec = TARGET_SPECS["opportunity_risk_asymmetry_30m_v1"]
     labeled = apply_opportunity_risk_asymmetry_30m_target(_opportunity_risk_frame(), _cost_config(), spec)
@@ -603,6 +1189,204 @@ def test_opening_range_distribution_non_overlap_and_duplicate_overlap() -> None:
     assert overlap["available"] is True
     assert overlap["overlap_with_current_15m_deadzone"] is not None
     assert spec.net_column in distribution
+
+
+def test_late_session_range_resolve_session_close_target_spec_is_distinct() -> None:
+    spec = TARGET_SPECS["late_session_range_resolve_session_close_v1"]
+
+    assert spec.target_family == "es_late_session_range_resolve_session_close"
+    assert spec.slug == "late_session_range_resolve_session_close"
+    assert spec.horizon_bars == 60
+    assert "session-close exit" in spec.threshold_description
+    assert "target_range_high_late_session_range_resolve_session_close" in spec.target_columns
+    assert "target_close_exit_ticks_late_session_range_resolve_session_close" in spec.target_columns
+
+
+def test_late_session_range_resolve_session_close_label_math() -> None:
+    spec = TARGET_SPECS["late_session_range_resolve_session_close_v1"]
+    labeled = apply_late_session_range_resolve_session_close_target(
+        _late_session_range_resolve_frame(),
+        _cost_config(),
+        spec,
+    )
+    range_high = "target_range_high_late_session_range_resolve_session_close"
+    range_low = "target_range_low_late_session_range_resolve_session_close"
+    range_ticks = "target_range_ticks_late_session_range_resolve_session_close"
+    event_direction = "target_event_direction_late_session_range_resolve_session_close"
+    breakout_ticks = "target_breakout_ticks_late_session_range_resolve_session_close"
+    minutes_to_close = "target_minutes_to_close_late_session_range_resolve_session_close"
+    close_exit_ticks = "target_close_exit_ticks_late_session_range_resolve_session_close"
+
+    long_idx = 70
+    short_idx = 191
+    flat_idx = 312
+    assert labeled.loc[59, spec.valid_column] == False
+
+    assert labeled.loc[long_idx, spec.valid_column] == True
+    assert labeled.loc[long_idx, range_high] == 100.25
+    assert labeled.loc[long_idx, range_low] == 99.75
+    assert labeled.loc[long_idx, range_ticks] == 2.0
+    assert labeled.loc[long_idx, event_direction] == 1
+    assert labeled.loc[long_idx, breakout_ticks] == 1.0
+    assert labeled.loc[long_idx, minutes_to_close] == 49.0
+    assert labeled.loc[long_idx, spec.direction_column] == 1
+    assert labeled.loc[long_idx, spec.nonflat_column] == True
+    assert labeled.loc[long_idx, close_exit_ticks] == 6.0
+    assert labeled.loc[long_idx, spec.gross_column] == 75.0
+    assert labeled.loc[long_idx, spec.net_column] == 50.0
+
+    assert labeled.loc[short_idx, spec.valid_column] == True
+    assert labeled.loc[short_idx, event_direction] == -1
+    assert labeled.loc[short_idx, breakout_ticks] == 1.0
+    assert labeled.loc[short_idx, spec.direction_column] == -1
+    assert labeled.loc[short_idx, spec.nonflat_column] == True
+    assert labeled.loc[short_idx, close_exit_ticks] == 6.0
+    assert labeled.loc[short_idx, spec.gross_column] == 75.0
+    assert labeled.loc[short_idx, spec.net_column] == 50.0
+
+    assert labeled.loc[flat_idx, spec.valid_column] == True
+    assert labeled.loc[flat_idx, event_direction] == 1
+    assert labeled.loc[flat_idx, spec.direction_column] == 0
+    assert labeled.loc[flat_idx, spec.nonflat_column] == False
+    assert labeled.loc[flat_idx, close_exit_ticks] == 1.0
+    assert labeled.loc[flat_idx, spec.gross_column] == 12.5
+    assert labeled.loc[flat_idx, spec.net_column] == -12.5
+
+
+def test_late_session_event_side_does_not_use_future_exit_path() -> None:
+    spec = TARGET_SPECS["late_session_range_resolve_session_close_v1"]
+    event_direction = "target_event_direction_late_session_range_resolve_session_close"
+    base = apply_late_session_range_resolve_session_close_target(
+        _late_session_range_resolve_frame(),
+        _cost_config(),
+        spec,
+    )
+    mutated_frame = _late_session_range_resolve_frame()
+    mutated_frame.loc[80, ["high", "low", "close"]] = [120.0, 119.5, 120.0]
+    mutated = apply_late_session_range_resolve_session_close_target(mutated_frame, _cost_config(), spec)
+
+    assert base.loc[70, spec.valid_column] == mutated.loc[70, spec.valid_column]
+    assert base.loc[70, event_direction] == mutated.loc[70, event_direction]
+    assert base.loc[70, spec.gross_column] == mutated.loc[70, spec.gross_column]
+    assert base.loc[70, spec.net_column] == mutated.loc[70, spec.net_column]
+
+
+def test_late_session_missing_completed_range_invalidates_event() -> None:
+    spec = TARGET_SPECS["late_session_range_resolve_session_close_v1"]
+    frame = _late_session_range_resolve_frame()
+    frame.loc[10, "target_valid"] = False
+    labeled = apply_late_session_range_resolve_session_close_target(frame, _cost_config(), spec)
+
+    assert labeled.loc[70, spec.valid_column] == False
+
+
+def test_late_session_cross_session_or_missing_close_invalidates_event() -> None:
+    spec = TARGET_SPECS["late_session_range_resolve_session_close_v1"]
+    cross_session = _late_session_range_resolve_frame()
+    cross_session.loc[120, "session_segment_id"] = "ES_2024_01_99"
+    cross_labeled = apply_late_session_range_resolve_session_close_target(cross_session, _cost_config(), spec)
+
+    missing_close = _late_session_range_resolve_frame()
+    missing_close.loc[120, "target_valid"] = False
+    missing_labeled = apply_late_session_range_resolve_session_close_target(missing_close, _cost_config(), spec)
+
+    assert cross_labeled.loc[70, spec.valid_column] == False
+    assert missing_labeled.loc[70, spec.valid_column] == False
+
+
+def test_late_session_distribution_non_overlap_and_duplicate_overlap() -> None:
+    spec = TARGET_SPECS["late_session_range_resolve_session_close_v1"]
+    labeled = apply_late_session_range_resolve_session_close_target(
+        _late_session_range_resolve_frame(),
+        _cost_config(),
+        spec,
+    )
+    events, skipped = non_overlapping_events(labeled, spec)
+    balance = class_balance(events, spec)
+    overlap = duplicate_target_overlap(events, spec)
+    distribution = target_distribution_summary(events, spec)
+
+    assert skipped == 0
+    assert balance["event_count"] == len(events)
+    assert balance["counts"]["long"] >= 1
+    assert balance["counts"]["short"] >= 1
+    assert balance["counts"]["flat"] >= 1
+    assert overlap["available"] is True
+    assert overlap["overlap_with_current_15m_deadzone"] is not None
+    assert spec.net_column in distribution
+
+
+def test_opening_range_event_capture_v2_target_spec_is_distinct() -> None:
+    spec = TARGET_SPECS["opening_range_acceptance_continuation_event_capture_30m_v2"]
+
+    assert spec.target_family == "es_opening_range_acceptance_continuation_event_capture_30m"
+    assert spec.slug == "opening_range_acceptance_event_capture_30m"
+    assert spec.valid_column == "target_valid_opening_range_acceptance_event_capture_30m"
+    assert "target_timeout_exit_ticks_opening_range_acceptance_event_capture_30m" in spec.target_columns
+
+
+def test_opening_range_event_capture_v2_fixed_timeout_math_and_first_event() -> None:
+    spec = TARGET_SPECS["opening_range_acceptance_continuation_event_capture_30m_v2"]
+    labeled = apply_opening_range_acceptance_event_capture_30m_target(
+        _opening_range_frame(overlapping_long_rows=True),
+        _cost_config(),
+        spec,
+    )
+    event_direction = "target_event_direction_opening_range_acceptance_event_capture_30m"
+    timeout_ticks = "target_timeout_exit_ticks_opening_range_acceptance_event_capture_30m"
+    event_number = "target_session_event_number_opening_range_acceptance_event_capture_30m"
+
+    assert labeled.loc[29, spec.valid_column] == False
+    assert labeled.loc[30, spec.valid_column] == True
+    assert labeled.loc[30, event_direction] == 1
+    assert labeled.loc[30, event_number] == 1
+    assert labeled.loc[30, spec.direction_column] == 1
+    assert labeled.loc[30, spec.nonflat_column] == True
+    assert labeled.loc[30, timeout_ticks] == -8.0
+    assert labeled.loc[30, spec.gross_column] == -100.0
+    assert labeled.loc[30, spec.net_column] == -125.0
+    assert labeled.loc[31, event_direction] == 1
+    assert labeled.loc[31, event_number] == 2
+    assert labeled.loc[31, spec.valid_column] == False
+    assert labeled.loc[70, event_direction] == -1
+    assert labeled.loc[70, spec.valid_column] == False
+
+
+def test_opening_range_event_capture_v2_uses_timeout_not_future_touch() -> None:
+    spec = TARGET_SPECS["opening_range_acceptance_continuation_event_capture_30m_v2"]
+    favorable = "target_favorable_excursion_ticks_opening_range_acceptance_event_capture_30m"
+    base = apply_opening_range_acceptance_event_capture_30m_target(_opening_range_frame(), _cost_config(), spec)
+    mutated_frame = _opening_range_frame()
+    mutated_frame.loc[40, "high"] = 105.0
+    mutated = apply_opening_range_acceptance_event_capture_30m_target(mutated_frame, _cost_config(), spec)
+
+    assert base.loc[30, spec.valid_column] == mutated.loc[30, spec.valid_column]
+    assert base.loc[30, favorable] != mutated.loc[30, favorable]
+    assert base.loc[30, spec.gross_column] == mutated.loc[30, spec.gross_column]
+    assert base.loc[30, spec.net_column] == mutated.loc[30, spec.net_column]
+    assert base.loc[30, spec.direction_column] == mutated.loc[30, spec.direction_column]
+
+
+def test_opening_range_event_capture_v2_rejects_cross_session_timeout() -> None:
+    spec = TARGET_SPECS["opening_range_acceptance_continuation_event_capture_30m_v2"]
+    frame = _opening_range_frame()
+    frame.loc[55:, "session_segment_id"] = "ES_2024_01_03"
+    labeled = apply_opening_range_acceptance_event_capture_30m_target(frame, _cost_config(), spec)
+
+    assert labeled.loc[30, spec.valid_column] == False
+
+
+def test_opening_range_event_capture_v2_can_score_first_short_session_event() -> None:
+    spec = TARGET_SPECS["opening_range_acceptance_continuation_event_capture_30m_v2"]
+    frame = _opening_range_frame()
+    frame.loc[30, ["open", "high", "low", "close"]] = [100.0, 100.25, 99.75, 100.0]
+    frame.loc[110, ["open", "high", "low", "close"]] = [100.0, 100.25, 99.75, 100.0]
+    labeled = apply_opening_range_acceptance_event_capture_30m_target(frame, _cost_config(), spec)
+
+    assert labeled.loc[70, spec.valid_column] == True
+    assert labeled.loc[70, spec.direction_column] == -1
+    assert labeled.loc[70, spec.gross_column] == -100.0
+    assert labeled.loc[70, spec.net_column] == -125.0
 
 
 def test_non_overlap_balance_and_duplicate_overlap_are_reported() -> None:
