@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "runner_mode": "preflight",
+  "hypothesis_id": "late_session_range_resolve_session_close_v1",
+  "market": "ES",
+  "profile": "tier_1",
+  "stage": "discovery",
+  "scope": {
+    "markets": [
+      "ES"
+    ],
+    "years": [
+      2023,
+      2024
+    ]
+  },
+  "target_registry": "manifests/target_hypotheses/registry.json",
+  "target_trial_statuses": "manifests/target_hypotheses/trial_statuses.jsonl",
+  "target_policy_contract": {
+    "payoff_basis": "session_close_exit",
+    "entry_rule": "next_bar_open",
+    "exit_or_capture_rule": "configured_same_session_regular_close",
+    "horizon_bars": 60,
+    "cost_threshold_source": "configs/costs.yaml",
+    "required_compatible_policy": "session_close_exit",
+    "compatible_policy_evaluation_basis": [
+      "session_close_exit"
+    ],
+    "incompatible_policy_evaluation_basis": [
+      "first_touch_path_capture",
+      "fixed_horizon_exit"
+    ]
+  },
+  "source_test_commands": [
+    [
+      "python",
+      "-m",
+      "pytest",
+      "-q",
+      "-p",
+      "no:cacheprovider",
+      "tests/phase9_research/test_es_30m_target_smoke_harness.py",
+      "tests/validation/test_orac_v2_trial_packet.py",
+      "tests/validation/test_generate_alpha_discovery_candidates.py",
+      "tests/validation/test_run_alpha_discovery.py"
+    ]
+  ],
+  "discovery_command": [
+    "python",
+    "-m",
+    "scripts.phase9_research.es_30m_target_smoke_harness",
+    "--hypothesis-id",
+    "late_session_range_resolve_session_close_v1",
+    "--run",
+    "late_session_source_packet_20260707",
+    "--stage",
+    "discovery",
+    "--folds",
+    "ES_research_0001,ES_research_0002,ES_research_0003,ES_research_0004",
+    "--input-root",
+    "data/feature_matrices",
+    "--split-plan",
+    "reports/wfa/split_plan.json",
+    "--reports-root",
+    "reports/pipeline_audit",
+    "--costs-config",
+    "configs/costs.yaml",
+    "--target-registry",
+    "manifests/target_hypotheses/registry.json",
+    "--target-trial-statuses",
+    "manifests/target_hypotheses/trial_statuses.jsonl",
+    "--top-fraction",
+    "0.05"
+  ],
+  "timeout_seconds": 300,
+  "approval_token": "RUN_PHASE9_DISCOVERY_ONCE",
+  "expected_outputs": [
+    "reports/pipeline_audit/late_session_source_packet_20260707_late_session_range_resolve_session_close_v1_discovery_smoke.json",
+    "reports/pipeline_audit/late_session_source_packet_20260707_late_session_range_resolve_session_close_v1_discovery_smoke.md"
+  ],
+  "forbidden_actions": [
+    "discovery-run",
+    "stopped-target discovery reruns",
+    "WFA/modeling",
+    "Phase 8 diagnostics",
+    "provider calls",
+    "cost-config mutation",
+    "tuning",
+    "promotion",
+    "artifact freeze",
+    "registry/status mutation beyond this source-test registration phase",
+    "staging",
+    "commit",
+    "push",
+    "paper trading",
+    "live trading"
+  ],
+  "stop_conditions": [
+    "stale expected outputs",
+    "non-ignored expected outputs",
+    "failed source tests",
+    "failed preflight",
+    "discovery-run requires separate explicit approval"
+  ]
+}
