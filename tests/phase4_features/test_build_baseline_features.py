@@ -38,6 +38,17 @@ from scripts.phase4_features.audit_feature_coverage import (
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+SELF_REFERENCE_INTERMARKET_COLUMNS = {
+    "feature_rel_ret_vs_ES_15",
+    "feature_rel_ret_vs_ZN_15",
+    "feature_rel_ret_vs_CL_15",
+    "feature_rel_ret_vs_6E_15",
+    "feature_corr_vs_ES_60",
+    "feature_corr_vs_ZN_60",
+    "feature_corr_vs_CL_60",
+    "feature_corr_vs_6E_60",
+}
 pytestmark = pytest.mark.filterwarnings("ignore:DataFrame is highly fragmented:Warning")
 
 
@@ -813,6 +824,9 @@ def test_registry_excludes_targets_audit_source_and_forbidden_columns() -> None:
     assert validate_registry(FEATURE_COLS) == []
     assert all(col.startswith("feature_") for col in FEATURE_COLS)
     assert not any(col.startswith("target_") for col in FEATURE_COLS)
+    assert SELF_REFERENCE_INTERMARKET_COLUMNS.isdisjoint(FEATURE_COLS)
+    assert "feature_es_zn_divergence_30" in FEATURE_COLS
+    assert "feature_cl_es_divergence_30" in FEATURE_COLS
     for column in (
         "target_fade_long_success_15m",
         "target_fade_short_success_15m",
