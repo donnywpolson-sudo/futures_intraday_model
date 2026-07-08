@@ -170,11 +170,11 @@ For data/model/WFA changes, prefer lightweight validation of affected artifacts,
 
 ### Final Response Format
 
-- Output language has three user-selectable levels. Default for this repo is `Level 2: Plain English / Balanced`.
-- If the user asks to use `Level 1`, `Level 2`, or `Level 3`, switch to that level for future replies in this repo until the user changes it again. A requested level changes wording density only; it does not override required sections, repo safety rules, bounded execution, evidence discipline, or audit requirements.
-- `Level 1: Caveman / Ultra Simple`: use the shortest plain-English wording. Prefer short sentences, minimal jargon, and only the result, real problems, and one next action.
-- `Level 2: Plain English / Balanced`: use clear everyday language with concrete files, commands, checks, and caveats. Keep audit terms only when they materially matter.
-- `Level 3: Detailed / Rigorous / Precise`: use more exact evidence, assumptions, risks, and technical terms while staying concise. Use this for audits, high-risk changes, or when the user asks for rigorous detail.
+- Output language has three user-selectable levels. Default for this repo is `Level 1: Action Only`.
+- If the user asks to use `Level 1`, `Level 2`, or `Level 3`, switch to that level for future replies in this repo until the user changes it again. A requested level changes output detail and structure only; it does not override required sections, repo safety rules, bounded execution, evidence discipline, or audit requirements.
+- `Level 1: Action Only`: default. Use short plain English. Include only result, real problems, and the next action or paste-ready prompt. Skip background unless it prevents a bad action.
+- `Level 2: Explain Briefly`: use when the user asks why, when there are choices, or when the task is messy. Include result, short reason, problems, and next action.
+- `Level 3: Audit`: use for reviews, finance/data/model claims, risky changes, failures, or big decisions. Separate verified facts, assumptions, risks, checks run, blockers, and the safest next action.
 - Be concise and outcome-focused.
 - Start with a concise opening outcome when there is a completed result to report. Include the concrete result, files touched, and checks run there instead of using a `Done` section. Omit the opening outcome only when nothing completed.
 - For normal implementation, status, and handoff runs, use only these real final sections in this order:
