@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.phase8_model_selection.evaluate_predictions import (  # noqa: E402
+    DIRECT_RETURN_TRADING_FAILURE,
     PolicyConfig,
     PromotionGateConfig,
     SIDE_AWARE_TREND_TARGETS,
@@ -18,6 +19,9 @@ from scripts.phase8_model_selection.evaluate_predictions import (  # noqa: E402
     load_policy_config,
     main,
 )
+from scripts.phase8_model_selection.build_failure_analysis import build_failure_analysis  # noqa: E402
+from scripts.phase7_prediction_audit.audit_predictions import build_prediction_audit  # noqa: E402
+from scripts.phase9_research.statistical_validity import build_statistical_validity_report  # noqa: E402
 
 
 def _sha256(path: Path) -> str:
@@ -52,10 +56,12 @@ def _write_models(
     *,
     p_trend_danger_blocks_fade_trades: bool = False,
     side_aware_trend_blocks_fade_trades: bool = True,
+    raw_return_prediction_direct_trading_allowed: bool = False,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     trend_block = str(p_trend_danger_blocks_fade_trades).lower()
     side_aware_trend_block = str(side_aware_trend_blocks_fade_trades).lower()
+    raw_return_block = str(raw_return_prediction_direct_trading_allowed).lower()
     path.write_text(
         f"""
 calibration:
@@ -67,18 +73,19 @@ position_policy:
   p_trend_danger_blocks_fade_trades: {trend_block}
   side_aware_trend_blocks_fade_trades: {side_aware_trend_block}
   p_fade_success_allows_fade_trades: true
-  raw_return_prediction_direct_trading_allowed: false
+  raw_return_prediction_direct_trading_allowed: {raw_return_block}
 """.strip(),
         encoding="utf-8",
     )
     return path
 
 
-def _policy() -> PolicyConfig:
+def _policy(*, raw_return_prediction_direct_trading_allowed: bool = False) -> PolicyConfig:
     return PolicyConfig(
         long_short_margin=0.05,
         min_fade_success=0.50,
         max_trend_danger=0.50,
+        raw_return_prediction_direct_trading_allowed=raw_return_prediction_direct_trading_allowed,
         p_trend_danger_blocks_fade_trades=False,
         side_aware_trend_blocks_fade_trades=True,
     )
@@ -433,6 +440,15 @@ def test_policy_metrics_do_not_hard_block_aggregate_trend_danger(tmp_path: Path)
     assert overall["gross_return_dollars"] == 150.0
     assert overall["cost_dollars"] == 30.0
     assert overall["net_return_dollars"] == 120.0
+    assert overall["avg_net_dollars_per_trade"] == 40.0
+    assert overall["avg_gross_dollars_per_trade"] == 50.0
+    assert "profit_factor" in overall
+    assert "sortino_like" in overall
+    assert "calmar_like" in overall
+    assert "tail_loss_95_dollars" in overall
+    assert "cvar_95_dollars" in overall
+    assert "skew_net_dollars" in overall
+    assert "kurtosis_net_dollars" in overall
     assert overall["max_drawdown_dollars"] <= 0.0
     assert overall["position_change_abs_sum"] >= 3.0
 
@@ -447,15 +463,56 @@ def test_policy_metrics_do_not_hard_block_aggregate_trend_danger(tmp_path: Path)
     assert metrics["live_execution_ready"] is False
     assert metrics["execution_realism"] == "research_non_overlapping_target_window_execution_policy"
     assert metrics["execution_policy"] == "max_one_contract_non_overlapping_target_window"
+    assert metrics["warning_count"] == 0
+    assert metrics["warnings"] == []
+    assert metrics["research_caveats"] == [
+        "policy economics use max-one-contract non-overlapping target-window execution; "
+        "partial fills, order rejection, latency, and capacity remain outside Phase 8"
+    ]
     assert metrics["research_alpha_ready"] is False
     assert metrics["model_promotion_allowed"] is False
+    metric_gate = metrics["promotion_metric_gate"]
+    assert metric_gate["status"] == "FAIL"
+    assert metric_gate["promotion_metrics_ready"] is False
+    assert metric_gate["baseline_comparison_gate"]["candidate_beats_no_trade"] is True
+    no_trade = metric_gate["baseline_comparison_gate"]["baselines"][0]
+    assert no_trade["baseline_id"] == "no_trade"
+    assert no_trade["net_return_dollars"] == 0.0
+    assert no_trade["trade_count"] == 0
+    assert any(
+        baseline["baseline_id"] == "random_entry" and baseline["status"] == "MISSING"
+        for baseline in metric_gate["baseline_comparison_gate"]["baselines"]
+    )
+    assert "baseline comparison missing: random_entry" in metric_gate["failures"]
+    assert metric_gate["cost_execution_stress_gate"]["required_cost_stress_multiplier"] == 2.0
+    assert metric_gate["capacity_liquidity_gate"]["status"] == "FAIL"
+    assert "capacity evidence missing" in metric_gate["failures"]
+    assert "regime breakdown missing" in metric_gate["failures"]
     assert metrics["statistical_validity_gate"]["status"] == "FAIL"
     assert "pbo" in metrics["statistical_validity_gate"]["check_results"]
     assert metrics["policy_config"]["p_trend_danger_blocks_fade_trades"] is False
     assert metrics["policy_config"]["side_aware_trend_blocks_fade_trades"] is True
+    expected_return_role = {
+        "expected_return_target": "target_ret_15m",
+        "source_model_family": "ridge_regression",
+        "source_model_id": "ridge_return_v1",
+        "role": "baseline_control_only",
+        "direct_return_trading_allowed": False,
+        "direct_return_signal_used": False,
+        "entry_signal_driver": "logistic_probability_gates",
+        "reason": (
+            "expected_return is available for diagnostics/control, but policy entries are "
+            "driven by p_long/p_short/p_flat/fade/trend probability gates"
+        ),
+    }
+    assert metrics["return_prediction_role"] == expected_return_role
     assert phase8_metrics["metrics"]["overall"]["net_return_dollars"] == 120.0
+    assert phase8_metrics["promotion_metric_gate"] == metric_gate
+    assert phase8_metrics["return_prediction_role"] == expected_return_role
     assert decision["promoted"] is False
     assert decision["model_promotion_allowed"] is False
+    assert decision["promotion_metric_gate"] == metric_gate
+    assert decision["return_prediction_role"] == expected_return_role
     assert decision["statistical_validity_gate"]["statistical_validity_ready"] is False
     assert any(
         "Probability of Backtest Overfitting" in blocker
@@ -470,7 +527,11 @@ def test_policy_metrics_do_not_hard_block_aggregate_trend_danger(tmp_path: Path)
     assert selection["selected_model_id"] is None
     assert selection["research_alpha_ready"] is False
     assert selection["model_promotion_allowed"] is False
+    assert selection["promotion_metric_gate"] == metric_gate
+    assert selection["return_prediction_role"] == expected_return_role
+    assert selection["research_caveats"] == metrics["research_caveats"]
     assert calibration["status"] == "NO_CALIBRATION_APPLIED"
+    assert calibration["research_caveats"] == metrics["research_caveats"]
     assert set(comparison["model_id"]) == {
         "ridge_return_v1",
         "logistic_direction_v1",
@@ -483,6 +544,124 @@ def test_policy_metrics_do_not_hard_block_aggregate_trend_danger(tmp_path: Path)
     }
     assert calibration["calibration_curve_count"] > 0
     assert turnover.loc[0, "trade_count"] == 3
+
+
+def test_phase8_fails_closed_when_direct_return_trading_is_requested(tmp_path: Path) -> None:
+    prediction_path = _write_predictions(
+        tmp_path / "data" / "predictions" / "baseline" / "oos_predictions.parquet"
+    )
+    manifest_path = _write_manifest(
+        tmp_path / "reports" / "wfa" / "baseline_predictions_manifest.json",
+        prediction_path,
+    )
+    costs_path = _write_costs(tmp_path / "configs" / "costs.yaml")
+    models_path = _write_models(
+        tmp_path / "configs" / "models.yaml",
+        raw_return_prediction_direct_trading_allowed=True,
+    )
+
+    result = evaluate_predictions(
+        predictions_path=prediction_path,
+        predictions_manifest=manifest_path,
+        costs_config=costs_path,
+        models_config=models_path,
+        metrics_root=tmp_path / "reports" / "metrics",
+        model_selection_root=tmp_path / "reports" / "model_selection",
+        run="baseline",
+        policy=load_policy_config(
+            models_path,
+            long_short_margin=0.05,
+            min_fade_success=0.50,
+            max_trend_danger=0.50,
+        ),
+        promotion_gate=_promotion_gate(),
+    )
+
+    assert result["failure_count"] > 0
+    assert DIRECT_RETURN_TRADING_FAILURE in result["failures"]
+    metrics = json.loads(result["metrics_path"].read_text(encoding="utf-8"))
+    decision = json.loads(result["alpha_promotion_decision_path"].read_text(encoding="utf-8"))
+    role = metrics["return_prediction_role"]
+    assert role["role"] == "baseline_control_only"
+    assert role["direct_return_trading_allowed"] is True
+    assert role["direct_return_signal_used"] is False
+    assert role["entry_signal_driver"] == "logistic_probability_gates"
+    assert metrics["research_policy_metrics_ready"] is False
+    assert metrics["research_alpha_ready"] is False
+    assert metrics["model_promotion_allowed"] is False
+    assert DIRECT_RETURN_TRADING_FAILURE in metrics["failures"]
+    assert DIRECT_RETURN_TRADING_FAILURE in decision["failures"]
+    assert decision["model_promotion_allowed"] is False
+
+
+def test_phase8_consumes_report_only_diagnostic_evidence(tmp_path: Path) -> None:
+    prediction_path = _write_predictions(
+        tmp_path / "data" / "predictions" / "baseline" / "oos_predictions.parquet"
+    )
+    manifest_path = _write_manifest(
+        tmp_path / "reports" / "wfa" / "baseline_predictions_manifest.json",
+        prediction_path,
+    )
+    costs_path = _write_costs(tmp_path / "configs" / "costs.yaml")
+    models_path = _write_models(tmp_path / "configs" / "models.yaml")
+    prediction_audit = build_prediction_audit(
+        predictions_path=prediction_path,
+        predictions_manifest=manifest_path,
+        output_root=tmp_path / "reports" / "prediction_audit" / "baseline",
+        run="baseline",
+    )
+    failure_analysis = build_failure_analysis(
+        predictions_path=prediction_path,
+        predictions_manifest=manifest_path,
+        costs_config=costs_path,
+        models_config=models_path,
+        output_root=tmp_path / "reports" / "failure_analysis" / "baseline",
+        run="baseline",
+        policy=_policy(),
+    )
+    statistical_validity = build_statistical_validity_report(
+        predictions_path=prediction_path,
+        predictions_manifest=manifest_path,
+        costs_config=costs_path,
+        models_config=models_path,
+        output_root=tmp_path / "reports" / "statistical_validity" / "baseline",
+        run="baseline",
+        policy=_policy(),
+        bootstrap_samples=50,
+        bootstrap_seed=123,
+    )
+
+    result = evaluate_predictions(
+        predictions_path=prediction_path,
+        predictions_manifest=manifest_path,
+        costs_config=costs_path,
+        models_config=models_path,
+        metrics_root=tmp_path / "reports" / "metrics",
+        model_selection_root=tmp_path / "reports" / "model_selection",
+        run="baseline",
+        policy=_policy(),
+        promotion_gate=_promotion_gate(),
+        phase7_prediction_audit_report=Path(prediction_audit["outputs"]["summary"]),
+        failure_analysis_report=Path(failure_analysis["outputs"]["summary"]),
+        statistical_validity_report=Path(statistical_validity["outputs"]["summary"]),
+    )
+
+    assert result["failure_count"] == 0
+    gate = result["promotion_metric_gate"]
+    assert gate["phase7_prediction_audit_gate"]["status"] == "PASS"
+    assert gate["prediction_diagnostics_gate"]["status"] == "PASS"
+    assert gate["baseline_comparison_gate"]["evidence_source"] == "report"
+    assert not any(
+        failure == "baseline comparison missing: random_entry"
+        for failure in gate["baseline_comparison_gate"]["failures"]
+    )
+    assert gate["capacity_liquidity_gate"]["evidence_source"] == "report"
+    assert result["promotion_gate"]["model_promotion_allowed"] is False
+    metrics = json.loads(result["metrics_path"].read_text(encoding="utf-8"))
+    assert metrics["statistical_validity_gate"]["evidence_source"] == "report"
+    assert metrics["diagnostic_evidence_reports"]["phase7_prediction_audit_report"].endswith(
+        "prediction_audit_summary.json"
+    )
 
 
 def test_policy_metrics_block_side_aware_adverse_trend_probability(tmp_path: Path) -> None:

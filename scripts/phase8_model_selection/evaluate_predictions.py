@@ -29,6 +29,18 @@ DEFAULT_RUN = "baseline"
 NO_CALIBRATION_ID = "no_calibration"
 EXECUTION_POLICY_NAME = "max_one_contract_non_overlapping_target_window"
 EXECUTION_REALISM = "research_non_overlapping_target_window_execution_policy"
+RESEARCH_EXECUTION_CAVEATS = [
+    "policy economics use max-one-contract non-overlapping target-window execution; "
+    "partial fills, order rejection, latency, and capacity remain outside Phase 8"
+]
+COST_STRESS_MULTIPLIERS = [1.5, 2.0, 3.0]
+REQUIRED_COST_STRESS_MULTIPLIER = 2.0
+MISSING_BASELINE_IDS = [
+    "random_entry",
+    "simple_trend",
+    "simple_carry",
+    "simple_mean_reversion",
+]
 STATISTICAL_VALIDITY_REQUIRED_CHECKS = {
     "pbo": "Probability of Backtest Overfitting",
     "deflated_sharpe": "Deflated Sharpe",
@@ -126,6 +138,28 @@ class PromotionGateConfig:
     require_positive_net_all_folds: bool = True
 
 
+DIRECT_RETURN_TRADING_FAILURE = (
+    "raw_return_prediction_direct_trading_allowed=true is not implemented or approved; "
+    "expected_return remains baseline/control only"
+)
+
+
+def build_return_prediction_role(policy: PolicyConfig) -> dict[str, Any]:
+    return {
+        "expected_return_target": "target_ret_15m",
+        "source_model_family": "ridge_regression",
+        "source_model_id": "ridge_return_v1",
+        "role": "baseline_control_only",
+        "direct_return_trading_allowed": bool(policy.raw_return_prediction_direct_trading_allowed),
+        "direct_return_signal_used": False,
+        "entry_signal_driver": "logistic_probability_gates",
+        "reason": (
+            "expected_return is available for diagnostics/control, but policy entries are "
+            "driven by p_long/p_short/p_flat/fade/trend probability gates"
+        ),
+    }
+
+
 def _read_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -200,10 +234,35 @@ def _json_default(value: object) -> object:
     return str(value)
 
 
+def _json_sanitize(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _json_sanitize(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_sanitize(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_sanitize(item) for item in value]
+    if isinstance(value, Path):
+        return value.as_posix()
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating, float)):
+        result = float(value)
+        return result if math.isfinite(result) else None
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    try:
+        missing = pd.isna(value)
+    except TypeError:
+        missing = False
+    if isinstance(missing, bool) and missing:
+        return None
+    return value
+
+
 def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(payload, indent=2, default=_json_default, allow_nan=False),
+        json.dumps(_json_sanitize(payload), indent=2, default=_json_default, allow_nan=False),
         encoding="utf-8",
     )
 
@@ -346,6 +405,45 @@ def _max_drawdown(values: pd.Series) -> float | None:
     equity = numeric.cumsum()
     drawdown = equity - equity.cummax()
     return float(drawdown.min())
+
+
+def _sortino_like(values: pd.Series) -> float | None:
+    numeric = pd.to_numeric(values, errors="coerce").fillna(0.0)
+    if numeric.empty:
+        return None
+    downside = numeric[numeric < 0.0]
+    if downside.empty:
+        return None
+    downside_std = float(downside.std(ddof=0))
+    if downside_std <= 0.0:
+        return None
+    return float(numeric.mean() / downside_std * math.sqrt(len(numeric)))
+
+
+def _tail_loss(values: pd.Series, quantile: float = 0.05) -> float | None:
+    numeric = pd.to_numeric(values, errors="coerce").dropna()
+    if numeric.empty:
+        return None
+    return _safe_float(numeric.quantile(quantile))
+
+
+def _cvar(values: pd.Series, quantile: float = 0.05) -> float | None:
+    numeric = pd.to_numeric(values, errors="coerce").dropna()
+    if numeric.empty:
+        return None
+    threshold = numeric.quantile(quantile)
+    tail = numeric[numeric <= threshold]
+    return _safe_float(tail.mean()) if not tail.empty else None
+
+
+def _skew_float(values: pd.Series) -> float | None:
+    numeric = pd.to_numeric(values, errors="coerce").dropna()
+    return _safe_float(numeric.skew()) if len(numeric) >= 3 else None
+
+
+def _kurtosis_float(values: pd.Series) -> float | None:
+    numeric = pd.to_numeric(values, errors="coerce").dropna()
+    return _safe_float(numeric.kurt()) if len(numeric) >= 4 else None
 
 
 def _prediction_manifest_failures(
@@ -777,10 +875,6 @@ def build_policy_frame(
     previous_position = base.groupby(group_cols, dropna=False)["position"].shift(1).fillna(0)
     base["position_change_abs"] = (base["position"] - previous_position).abs()
     base["round_turns_per_bar"] = base["trade_count"].astype(float)
-    warnings.append(
-        "policy economics use max-one-contract non-overlapping target-window execution; "
-        "partial fills, order rejection, latency, and capacity remain outside Phase 8"
-    )
     return base, failures, warnings
 
 
@@ -808,11 +902,24 @@ def _policy_summary(frame: pd.DataFrame, scope: str, key_values: Mapping[str, An
     candidate_trade_count = (
         int(frame["candidate_trade_count"].sum()) if "candidate_trade_count" in frame else trade_count
     )
-    winning_trades = frame.loc[frame["trade_count"].eq(1), "net_dollars"] if trade_count else pd.Series(dtype=float)
+    trade_frame = (
+        frame.loc[frame["trade_count"].eq(1)]
+        if trade_count and "trade_count" in frame
+        else pd.DataFrame()
+    )
+    net_trades = (
+        trade_frame["net_dollars"] if "net_dollars" in trade_frame else pd.Series(dtype=float)
+    )
+    gross_trades = (
+        trade_frame["gross_dollars"] if "gross_dollars" in trade_frame else pd.Series(dtype=float)
+    )
+    max_drawdown = _max_drawdown(frame["net_dollars"]) if "net_dollars" in frame else None
     return {
         "scope": scope,
         **dict(key_values),
         "row_count": rows,
+        "active_signal_row_count": candidate_trade_count,
+        "executed_trade_row_count": trade_count,
         "trade_count": trade_count,
         "candidate_trade_count": candidate_trade_count,
         "blocked_by_execution_overlap": int(frame["blocked_by_execution_overlap"].sum())
@@ -829,9 +936,24 @@ def _policy_summary(frame: pd.DataFrame, scope: str, key_values: Mapping[str, An
         "net_return_dollars": net,
         "avg_gross_dollars_per_row": _mean_float(frame["gross_dollars"]) if "gross_dollars" in frame else None,
         "avg_net_dollars_per_row": _mean_float(frame["net_dollars"]) if "net_dollars" in frame else None,
+        "avg_gross_dollars_per_trade": gross / trade_count if trade_count else None,
+        "avg_net_dollars_per_trade": net / trade_count if trade_count else None,
         "gross_sharpe_like": _sharpe_like(frame["gross_dollars"]) if "gross_dollars" in frame else None,
         "net_sharpe_like": _sharpe_like(frame["net_dollars"]) if "net_dollars" in frame else None,
-        "max_drawdown_dollars": _max_drawdown(frame["net_dollars"]) if "net_dollars" in frame else None,
+        "sortino_like": _sortino_like(frame["net_dollars"]) if "net_dollars" in frame else None,
+        "calmar_like": net / abs(max_drawdown)
+        if max_drawdown is not None and max_drawdown < 0.0
+        else None,
+        "max_drawdown_dollars": max_drawdown,
+        "tail_loss_95_dollars": _tail_loss(net_trades),
+        "cvar_95_dollars": _cvar(net_trades),
+        "skew_net_dollars": _skew_float(net_trades),
+        "kurtosis_net_dollars": _kurtosis_float(net_trades),
+        "profit_factor": (
+            float(net_trades[net_trades > 0.0].sum() / abs(net_trades[net_trades < 0.0].sum()))
+            if not net_trades.empty and float(abs(net_trades[net_trades < 0.0].sum())) > 0.0
+            else None
+        ),
         "cost_drag_to_abs_gross": cost / abs(gross) if abs(gross) > 0.0 else None,
         "turnover_per_bar": (
             position_changes / rows if rows and "position_change_abs" in frame else None
@@ -845,7 +967,7 @@ def _policy_summary(frame: pd.DataFrame, scope: str, key_values: Mapping[str, An
         else 0.0,
         "round_turns_per_bar": float(trade_count) / rows if rows else None,
         "win_rate_net_positive": (
-            float(winning_trades.gt(0.0).mean()) if trade_count and not winning_trades.empty else None
+            float(net_trades.gt(0.0).mean()) if trade_count and not net_trades.empty else None
         ),
         "blocked_by_fade_filter": int(frame["blocked_by_fade_filter"].sum())
         if "blocked_by_fade_filter" in frame
@@ -868,6 +990,15 @@ def build_policy_metrics(policy_frame: pd.DataFrame) -> tuple[dict[str, Any], pd
         summaries.append(_policy_summary(policy_frame, "overall", {}))
         for market, group in policy_frame.groupby("market", dropna=False):
             summaries.append(_policy_summary(group, "market", {"market": market}))
+        if "year" in policy_frame.columns:
+            for year, group in policy_frame.groupby("year", dropna=False):
+                summaries.append(
+                    _policy_summary(
+                        group,
+                        "year",
+                        {"year": _safe_int(year) if _safe_int(year) is not None else str(year)},
+                    )
+                )
         for fold_id, group in policy_frame.groupby("fold_id", dropna=False):
             summaries.append(_policy_summary(group, "fold", {"fold_id": fold_id}))
         for (market, fold_id), group in policy_frame.groupby(["market", "fold_id"], dropna=False):
@@ -1034,8 +1165,73 @@ def evaluate_promotion_gate(
     }
 
 
-def build_statistical_validity_gate(prediction_manifest: Mapping[str, Any]) -> dict[str, Any]:
-    evidence = prediction_manifest.get("statistical_validity_gate")
+def _validate_evidence_report(
+    *,
+    path: Path | None,
+    report_name: str,
+    run: str,
+    predictions_path: Path,
+    predictions_manifest: Path | None,
+) -> tuple[dict[str, Any], list[str]]:
+    if path is None:
+        return {}, []
+    failures: list[str] = []
+    if not path.exists():
+        return {}, [f"{report_name} evidence report missing: {_relative_path(path)}"]
+    payload = _read_json(path)
+    if not payload:
+        return {}, [f"{report_name} evidence report unreadable or not a JSON object"]
+    if payload.get("run") != run:
+        failures.append(
+            f"{report_name} run mismatch: report={payload.get('run')!r} cli={run!r}"
+        )
+    report_prediction_path = _manifest_path(payload.get("prediction_path"))
+    if report_prediction_path is None:
+        failures.append(f"{report_name} prediction_path missing")
+    elif _normalized_path(report_prediction_path) != _normalized_path(predictions_path):
+        failures.append(f"{report_name} prediction_path does not match CLI predictions path")
+    if predictions_manifest is not None:
+        report_manifest_path = _manifest_path(
+            payload.get("predictions_manifest_path") or payload.get("prediction_manifest_path")
+        )
+        if report_manifest_path is None:
+            failures.append(f"{report_name} predictions_manifest_path missing")
+        elif _normalized_path(report_manifest_path) != _normalized_path(predictions_manifest):
+            failures.append(f"{report_name} predictions_manifest_path does not match CLI manifest path")
+    input_hashes = payload.get("input_file_hashes")
+    actual_hash, hash_mapping_present = _manifest_hash_lookup(input_hashes, predictions_path)
+    if not hash_mapping_present:
+        failures.append(f"{report_name} input_file_hashes missing")
+    elif actual_hash is None:
+        failures.append(f"{report_name} input_file_hashes missing prediction path")
+    elif predictions_path.exists() and actual_hash != _file_sha256(predictions_path):
+        failures.append(f"{report_name} prediction hash does not match current prediction parquet")
+    if predictions_manifest is not None:
+        manifest_hash, manifest_hash_mapping_present = _manifest_hash_lookup(
+            input_hashes,
+            predictions_manifest,
+        )
+        if not manifest_hash_mapping_present:
+            failures.append(f"{report_name} input_file_hashes missing")
+        elif manifest_hash is None:
+            failures.append(f"{report_name} input_file_hashes missing prediction manifest path")
+        elif predictions_manifest.exists() and manifest_hash != _file_sha256(predictions_manifest):
+            failures.append(f"{report_name} manifest hash does not match current manifest")
+    return payload, failures
+
+
+def build_statistical_validity_gate(
+    prediction_manifest: Mapping[str, Any],
+    statistical_validity_report: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    if isinstance(statistical_validity_report, Mapping) and statistical_validity_report:
+        evidence = statistical_validity_report.get("required_checks")
+        if not isinstance(evidence, Mapping):
+            evidence = statistical_validity_report.get("statistical_validity_gate")
+        if not isinstance(evidence, Mapping):
+            evidence = statistical_validity_report.get("statistical_validity")
+    else:
+        evidence = prediction_manifest.get("statistical_validity_gate")
     if not isinstance(evidence, Mapping):
         evidence = prediction_manifest.get("statistical_validity")
     if not isinstance(evidence, Mapping):
@@ -1065,10 +1261,302 @@ def build_statistical_validity_gate(prediction_manifest: Mapping[str, Any]) -> d
         "check_results": check_results,
         "failure_count": len(blockers),
         "failures": blockers,
+        "evidence_source": "report" if statistical_validity_report else "prediction_manifest",
         "promotion_policy": (
             "gross/net metrics, Sharpe-like summaries, and isolated fold/market wins "
             "are diagnostic only until this gate passes"
         ),
+    }
+
+
+def build_baseline_comparison_gate(
+    policy_metrics: Mapping[str, Any],
+    baseline_report: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    if isinstance(baseline_report, Mapping) and baseline_report:
+        report_gate = baseline_report.get("baseline_comparison_gate")
+        if isinstance(report_gate, Mapping):
+            baselines = report_gate.get("baselines", [])
+            blockers = [str(item) for item in report_gate.get("failures", [])]
+            status = str(report_gate.get("status", "")).upper() or "FAIL"
+            return {
+                "gate_name": "baseline_comparison_gate",
+                "status": "PASS" if status == "PASS" and not blockers else "FAIL",
+                "candidate": report_gate.get("candidate"),
+                "baselines": baselines if isinstance(baselines, list) else [],
+                "candidate_beats_no_trade": bool(report_gate.get("candidate_beats_no_trade")),
+                "baseline_comparison_ready": bool(
+                    report_gate.get("baseline_comparison_ready")
+                ),
+                "failure_count": len(blockers),
+                "failures": blockers,
+                "evidence_source": "report",
+            }
+    overall = policy_metrics.get("overall", {})
+    overall = overall if isinstance(overall, Mapping) else {}
+    candidate_net = _safe_float(overall.get("net_return_dollars"))
+    candidate_gross = _safe_float(overall.get("gross_return_dollars"))
+    candidate_cost = _safe_float(overall.get("cost_dollars"))
+    candidate_turnover = _safe_float(overall.get("turnover_per_bar"))
+    candidate_trades = _safe_int(overall.get("trade_count")) or 0
+    blockers: list[str] = []
+
+    no_trade = {
+        "baseline_id": "no_trade",
+        "status": "PASS",
+        "gross_return_dollars": 0.0,
+        "net_return_dollars": 0.0,
+        "cost_dollars": 0.0,
+        "trade_count": 0,
+        "turnover_per_bar": 0.0,
+    }
+    candidate_beats_no_trade = candidate_net is not None and candidate_net > 0.0
+    if not candidate_beats_no_trade:
+        blockers.append("candidate net_return_dollars does not beat no-trade baseline")
+    baselines: list[dict[str, Any]] = [
+        no_trade,
+        *[
+            {
+                "baseline_id": baseline_id,
+                "status": "MISSING",
+                "required_before_promotion": True,
+                "reason": "baseline not implemented for this Phase 8 report",
+            }
+            for baseline_id in MISSING_BASELINE_IDS
+        ],
+    ]
+    blockers.extend(
+        f"baseline comparison missing: {baseline_id}" for baseline_id in MISSING_BASELINE_IDS
+    )
+    return {
+        "gate_name": "baseline_comparison_gate",
+        "status": "PASS" if not blockers else "FAIL",
+        "candidate": {
+            "gross_return_dollars": candidate_gross,
+            "net_return_dollars": candidate_net,
+            "cost_dollars": candidate_cost,
+            "trade_count": candidate_trades,
+            "turnover_per_bar": candidate_turnover,
+        },
+        "baselines": baselines,
+        "candidate_beats_no_trade": candidate_beats_no_trade,
+        "failure_count": len(blockers),
+        "failures": blockers,
+        "evidence_source": "phase8_default_missing_baselines",
+    }
+
+
+def build_cost_execution_stress_gate(policy_frame: pd.DataFrame) -> dict[str, Any]:
+    blockers: list[str] = []
+    stress_results: list[dict[str, Any]] = []
+    if policy_frame.empty or not {"gross_dollars", "cost_dollars"} <= set(policy_frame.columns):
+        blockers.append("policy rows missing for cost stress")
+    else:
+        gross = _sum_float(policy_frame["gross_dollars"])
+        base_cost = _sum_float(policy_frame["cost_dollars"])
+        for multiplier in COST_STRESS_MULTIPLIERS:
+            stressed_cost = base_cost * multiplier
+            stressed_net = gross - stressed_cost
+            cost_drag = stressed_cost / abs(gross) if abs(gross) > 0.0 else None
+            edge_survives = stressed_net > 0.0
+            stress_results.append(
+                {
+                    "cost_multiplier": multiplier,
+                    "gross_return_dollars": gross,
+                    "stressed_cost_dollars": stressed_cost,
+                    "stressed_net_return_dollars": stressed_net,
+                    "stressed_cost_drag_to_abs_gross": cost_drag,
+                    "edge_survives": edge_survives,
+                    "required_for_promotion": multiplier == REQUIRED_COST_STRESS_MULTIPLIER,
+                }
+            )
+            if multiplier == REQUIRED_COST_STRESS_MULTIPLIER and not edge_survives:
+                blockers.append(
+                    f"edge does not survive {REQUIRED_COST_STRESS_MULTIPLIER}x cost stress"
+                )
+    return {
+        "gate_name": "cost_execution_stress_gate",
+        "status": "PASS" if not blockers else "FAIL",
+        "required_cost_stress_multiplier": REQUIRED_COST_STRESS_MULTIPLIER,
+        "stress_results": stress_results,
+        "failure_count": len(blockers),
+        "failures": blockers,
+    }
+
+
+def build_capacity_liquidity_gate(
+    capacity_liquidity_report: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    if isinstance(capacity_liquidity_report, Mapping) and capacity_liquidity_report:
+        report_gate = capacity_liquidity_report.get("capacity_liquidity_gate")
+        if not isinstance(report_gate, Mapping):
+            report_gate = capacity_liquidity_report
+        status = str(report_gate.get("status", "")).upper()
+        ready = bool(report_gate.get("capacity_liquidity_ready")) or status == "PASS"
+        blockers = [str(item) for item in report_gate.get("failures", [])]
+        if not ready and not blockers:
+            blockers.append("capacity/liquidity report is not PASS")
+        return {
+            "gate_name": "capacity_liquidity_gate",
+            "status": "PASS" if ready and not blockers else "FAIL",
+            "capacity_liquidity_ready": ready and not blockers,
+            "failure_count": len(blockers),
+            "failures": blockers,
+            "evidence_source": "report",
+            "policy": report_gate.get(
+                "policy",
+                "capacity, liquidity, and market-impact evidence blocks promotion unless PASS",
+            ),
+        }
+    blockers = [
+        "capacity evidence missing",
+        "liquidity evidence missing",
+        "market-impact evidence missing",
+    ]
+    return {
+        "gate_name": "capacity_liquidity_gate",
+        "status": "FAIL",
+        "capacity_liquidity_ready": False,
+        "failure_count": len(blockers),
+        "failures": blockers,
+        "evidence_source": "missing",
+        "policy": "missing capacity, liquidity, or market-impact evidence blocks promotion",
+    }
+
+
+def build_phase7_prediction_audit_gate(
+    prediction_audit_report: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    ready = bool(
+        prediction_audit_report
+        and (
+            prediction_audit_report.get("phase7_prediction_audit_ready") is True
+            or prediction_audit_report.get("prediction_diagnostics_ready") is True
+        )
+    )
+    status = str(prediction_audit_report.get("status", "")) if prediction_audit_report else "MISSING"
+    evidence_source = "missing"
+    if prediction_audit_report:
+        evidence_source = (
+            "phase7_prediction_audit"
+            if prediction_audit_report.get("phase7_prediction_audit_ready") is not None
+            else "legacy_prediction_diagnostics"
+        )
+    failures: list[str] = []
+    if not ready:
+        failures.append("Phase 7 prediction audit missing or failing")
+    return {
+        "gate_name": "phase7_prediction_audit_gate",
+        "status": "PASS" if ready else "FAIL",
+        "phase7_prediction_audit_ready": ready,
+        "prediction_diagnostics_ready": ready,
+        "required_before_promotion": True,
+        "evidence_source": evidence_source,
+        "report_status": status,
+        "failure_count": len(failures),
+        "failures": failures,
+    }
+
+
+def build_promotion_metric_gate(
+    *,
+    policy_metrics: Mapping[str, Any],
+    policy_frame: pd.DataFrame,
+    gate_config: PromotionGateConfig,
+    statistical_validity_gate: Mapping[str, Any],
+    prediction_audit_report: Mapping[str, Any] | None = None,
+    baseline_report: Mapping[str, Any] | None = None,
+    capacity_liquidity_report: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    overall = policy_metrics.get("overall", {})
+    overall = overall if isinstance(overall, Mapping) else {}
+    summaries = policy_metrics.get("summaries", [])
+    summaries = summaries if isinstance(summaries, list) else []
+    baseline_gate = build_baseline_comparison_gate(policy_metrics, baseline_report)
+    stress_gate = build_cost_execution_stress_gate(policy_frame)
+    capacity_gate = build_capacity_liquidity_gate(capacity_liquidity_report)
+    phase7_gate = build_phase7_prediction_audit_gate(prediction_audit_report)
+    blockers: list[str] = []
+    if phase7_gate["status"] != "PASS":
+        blockers.extend(str(item) for item in phase7_gate["failures"])
+
+    required_positive = (
+        "gross_return_dollars",
+        "net_return_dollars",
+        "avg_net_dollars_per_trade",
+        "net_sharpe_like",
+        "sortino_like",
+        "calmar_like",
+    )
+    for field in required_positive:
+        value = _safe_float(overall.get(field))
+        if value is None or value <= 0.0:
+            blockers.append(f"{field} must be positive for promotion: {value}")
+
+    profit_factor = _safe_float(overall.get("profit_factor"))
+    if profit_factor is None or profit_factor <= 1.0:
+        blockers.append(f"profit_factor must exceed 1.0 for promotion: {profit_factor}")
+
+    cost_drag = _safe_float(overall.get("cost_drag_to_abs_gross"))
+    if cost_drag is None or cost_drag > gate_config.max_cost_drag_to_abs_gross:
+        blockers.append(
+            f"cost_drag_to_abs_gross {cost_drag} above maximum "
+            f"{gate_config.max_cost_drag_to_abs_gross}"
+        )
+
+    for field in (
+        "max_drawdown_dollars",
+        "tail_loss_95_dollars",
+        "cvar_95_dollars",
+        "skew_net_dollars",
+        "kurtosis_net_dollars",
+    ):
+        if _safe_float(overall.get(field)) is None:
+            blockers.append(f"{field} missing from promotion-facing metrics")
+
+    summary_scopes = {
+        str(item.get("scope"))
+        for item in summaries
+        if isinstance(item, Mapping) and item.get("scope") is not None
+    }
+    for scope in ("market", "fold", "year"):
+        if scope not in summary_scopes:
+            blockers.append(f"{scope} breakdown missing")
+    blockers.append("regime breakdown missing")
+
+    if baseline_gate["status"] != "PASS":
+        blockers.extend(str(item) for item in baseline_gate["failures"])
+    if stress_gate["status"] != "PASS":
+        blockers.extend(str(item) for item in stress_gate["failures"])
+    if capacity_gate["status"] != "PASS":
+        blockers.extend(str(item) for item in capacity_gate["failures"])
+    if statistical_validity_gate.get("statistical_validity_ready") is not True:
+        blockers.extend(str(item) for item in statistical_validity_gate.get("failures", []))
+
+    unique_blockers = sorted(set(blockers))
+    return {
+        "gate_name": "promotion_metric_gate",
+        "status": "PASS" if not unique_blockers else "FAIL",
+        "promotion_metrics_ready": not unique_blockers,
+        "required_metric_groups": [
+            "phase7_prediction_audit",
+            "gross_net_costs",
+            "trade_activity",
+            "drawdown_tail_shape",
+            "risk_adjusted_return",
+            "market_fold_year_regime_breakdowns",
+            "baseline_comparisons",
+            "cost_execution_stress",
+            "capacity_liquidity",
+            "statistical_validity",
+        ],
+        "baseline_comparison_gate": baseline_gate,
+        "cost_execution_stress_gate": stress_gate,
+        "capacity_liquidity_gate": capacity_gate,
+        "phase7_prediction_audit_gate": phase7_gate,
+        "prediction_diagnostics_gate": phase7_gate,
+        "failure_count": len(unique_blockers),
+        "failures": unique_blockers,
     }
 
 
@@ -1226,19 +1714,48 @@ def evaluate_predictions(
     policy: PolicyConfig,
     promotion_gate: PromotionGateConfig,
     phase8_root: Path | None = None,
+    phase7_prediction_audit_report: Path | None = None,
+    prediction_diagnostics_report: Path | None = None,
+    baseline_report: Path | None = None,
+    failure_analysis_report: Path | None = None,
+    statistical_validity_report: Path | None = None,
+    capacity_liquidity_report: Path | None = None,
 ) -> dict[str, Any]:
     generated_at = datetime.now(timezone.utc).isoformat()
     resolved_phase8_root = phase8_root or metrics_root.parent / "phase8"
     failures: list[str] = []
     warnings: list[str] = []
+    return_prediction_role = build_return_prediction_role(policy)
+    if policy.raw_return_prediction_direct_trading_allowed:
+        failures.append(DIRECT_RETURN_TRADING_FAILURE)
     models = _read_yaml(models_config)
     manifest = _read_json(predictions_manifest) if predictions_manifest else {}
+    evidence_report_paths = {
+        "phase7_prediction_audit_report": phase7_prediction_audit_report,
+        "prediction_diagnostics_report": prediction_diagnostics_report,
+        "baseline_report": baseline_report,
+        "failure_analysis_report": failure_analysis_report,
+        "statistical_validity_report": statistical_validity_report,
+        "capacity_liquidity_report": capacity_liquidity_report,
+    }
     if not predictions_path.exists():
         failures.append(f"prediction parquet missing: {_relative_path(predictions_path)}")
         predictions = pd.DataFrame()
     else:
         predictions = pd.read_parquet(predictions_path)
         failures.extend(_validate_prediction_columns(predictions))
+    evidence_reports: dict[str, dict[str, Any]] = {}
+    for report_name, report_path in evidence_report_paths.items():
+        payload, evidence_failures = _validate_evidence_report(
+            path=report_path,
+            report_name=report_name,
+            run=run,
+            predictions_path=predictions_path,
+            predictions_manifest=predictions_manifest,
+        )
+        if payload:
+            evidence_reports[report_name] = payload
+        failures.extend(evidence_failures)
     manifest_failures = (
         _prediction_manifest_failures(
             manifest,
@@ -1274,13 +1791,42 @@ def evaluate_predictions(
         model_comparison = build_model_comparison(predictions)
         calibration_report = build_calibration_report(predictions, models)
     promotion_gate_report = evaluate_promotion_gate(policy_metrics, promotion_gate)
-    statistical_validity_gate = build_statistical_validity_gate(manifest)
+    failure_analysis_payload = evidence_reports.get("failure_analysis_report", {})
+    baseline_payload = evidence_reports.get("baseline_report") or failure_analysis_payload
+    capacity_payload = evidence_reports.get("capacity_liquidity_report") or failure_analysis_payload
+    statistical_validity_gate = build_statistical_validity_gate(
+        manifest,
+        evidence_reports.get("statistical_validity_report"),
+    )
+    phase7_prediction_audit_payload = (
+        evidence_reports.get("phase7_prediction_audit_report")
+        or evidence_reports.get("prediction_diagnostics_report")
+    )
+    promotion_metric_gate = build_promotion_metric_gate(
+        policy_metrics=policy_metrics,
+        policy_frame=policy_frame,
+        gate_config=promotion_gate,
+        statistical_validity_gate=statistical_validity_gate,
+        prediction_audit_report=phase7_prediction_audit_payload,
+        baseline_report=baseline_payload,
+        capacity_liquidity_report=capacity_payload,
+    )
     if not statistical_validity_gate["statistical_validity_ready"]:
         promotion_gate_report["research_alpha_ready"] = False
         promotion_gate_report["model_promotion_allowed"] = False
         promotion_gate_report["promotion_blockers"] = [
             *promotion_gate_report["promotion_blockers"],
             *statistical_validity_gate["failures"],
+        ]
+        promotion_gate_report["promotion_blocker_count"] = len(
+            promotion_gate_report["promotion_blockers"]
+        )
+    if not promotion_metric_gate["promotion_metrics_ready"]:
+        promotion_gate_report["research_alpha_ready"] = False
+        promotion_gate_report["model_promotion_allowed"] = False
+        promotion_gate_report["promotion_blockers"] = [
+            *promotion_gate_report["promotion_blockers"],
+            *promotion_metric_gate["failures"],
         ]
         promotion_gate_report["promotion_blocker_count"] = len(
             promotion_gate_report["promotion_blockers"]
@@ -1295,6 +1841,12 @@ def evaluate_predictions(
         promotion_gate_report["promotion_blocker_count"] = len(
             promotion_gate_report["promotion_blockers"]
         )
+    promotion_gate_report["promotion_blockers"] = list(
+        dict.fromkeys(str(item) for item in promotion_gate_report["promotion_blockers"])
+    )
+    promotion_gate_report["promotion_blocker_count"] = len(
+        promotion_gate_report["promotion_blockers"]
+    )
 
     metrics_root.mkdir(parents=True, exist_ok=True)
     model_selection_root.mkdir(parents=True, exist_ok=True)
@@ -1338,7 +1890,12 @@ def evaluate_predictions(
         "prediction_manifest_hash": _file_hash_or_missing(predictions_manifest)
         if predictions_manifest
         else None,
+        "diagnostic_evidence_reports": {
+            key: _relative_path(value) if value is not None else None
+            for key, value in evidence_report_paths.items()
+        },
         "policy_config": asdict(policy),
+        "return_prediction_role": return_prediction_role,
         "prediction_count": int(len(predictions)),
         "policy_row_count": int(policy_metrics["overall"].get("row_count") or 0),
         "failure_count": len(failures),
@@ -1351,10 +1908,14 @@ def evaluate_predictions(
         "final_holdout_touched": bool(final_holdout_touched),
         "trading_semantics_changed": False,
         "promotion_gate": promotion_gate_report,
+        "promotion_metric_gate": promotion_metric_gate,
         "statistical_validity_gate": statistical_validity_gate,
+        "phase7_prediction_audit_gate": promotion_metric_gate["phase7_prediction_audit_gate"],
+        "prediction_diagnostics_gate": promotion_metric_gate["phase7_prediction_audit_gate"],
         "live_execution_ready": False,
         "execution_realism": EXECUTION_REALISM,
         "execution_policy": EXECUTION_POLICY_NAME,
+        "research_caveats": list(RESEARCH_EXECUTION_CAVEATS),
         "live_execution_blockers": [
             "policy uses saved OOS predictions, not a live signal router",
             "costs use fixed round-turn assumptions after target-window netting",
@@ -1381,6 +1942,10 @@ def evaluate_predictions(
         "models_config": _relative_path(models_config),
         "model_config_hash": _stable_hash(models),
         "prediction_manifest_artifact_evidence_ready": not manifest_failures,
+        "diagnostic_evidence_reports": {
+            key: _relative_path(value) if value is not None else None
+            for key, value in evidence_report_paths.items()
+        },
         "selection_status": "NOT_SELECTED_BASELINE_DIAGNOSTICS_ONLY",
         "selected_model_id": None,
         "selection_reason": (
@@ -1393,7 +1958,9 @@ def evaluate_predictions(
         "failures": failures,
         "warnings": warnings,
         "policy_config": asdict(policy),
+        "return_prediction_role": return_prediction_role,
         "promotion_gate": promotion_gate_report,
+        "promotion_metric_gate": promotion_metric_gate,
         "statistical_validity_gate": statistical_validity_gate,
         "research_alpha_ready": promotion_gate_report["research_alpha_ready"],
         "model_promotion_allowed": promotion_gate_report["model_promotion_allowed"],
@@ -1404,6 +1971,7 @@ def evaluate_predictions(
         "live_execution_ready": False,
         "execution_realism": EXECUTION_REALISM,
         "execution_policy": EXECUTION_POLICY_NAME,
+        "research_caveats": list(RESEARCH_EXECUTION_CAVEATS),
     }
     _write_json(model_selection_report_path, selection_report)
 
@@ -1419,6 +1987,7 @@ def evaluate_predictions(
         "failure_count": len(failures),
         "warning_count": len(warnings),
         "failures": failures,
+        "research_caveats": list(RESEARCH_EXECUTION_CAVEATS),
         **calibration_report,
     }
     _write_json(calibration_report_path, calibration_payload)
@@ -1441,7 +2010,13 @@ def evaluate_predictions(
         "research_alpha_ready": promotion_gate_report["research_alpha_ready"],
         "model_promotion_allowed": promotion_gate_report["model_promotion_allowed"],
         "promotion_gate": promotion_gate_report,
+        "promotion_metric_gate": promotion_metric_gate,
         "statistical_validity_gate": statistical_validity_gate,
+        "return_prediction_role": return_prediction_role,
+        "diagnostic_evidence_reports": {
+            key: _relative_path(value) if value is not None else None
+            for key, value in evidence_report_paths.items()
+        },
         "blockers": promotion_gate_report["promotion_blockers"],
         "costed_oos": policy_metrics["overall"],
         "markets": market_summaries,
@@ -1449,6 +2024,7 @@ def evaluate_predictions(
         "final_holdout_touched": bool(final_holdout_touched),
         "used_final_holdout_for_tuning": False,
         "trading_semantics_changed": False,
+        "research_caveats": list(RESEARCH_EXECUTION_CAVEATS),
         "failure_count": len(failures),
         "warning_count": len(warnings),
         "failures": failures,
@@ -1470,6 +2046,8 @@ def evaluate_predictions(
         "alpha_promotion_decision_path": alpha_decision_path,
         "policy_metrics": policy_metrics,
         "promotion_gate": promotion_gate_report,
+        "promotion_metric_gate": promotion_metric_gate,
+        "diagnostic_evidence_reports": evidence_reports,
     }
 
 
@@ -1486,6 +2064,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--metrics-root", default=DEFAULT_METRICS_ROOT.as_posix())
     parser.add_argument("--model-selection-root", default=DEFAULT_MODEL_SELECTION_ROOT.as_posix())
     parser.add_argument("--phase8-root", default=DEFAULT_PHASE8_ROOT.as_posix())
+    parser.add_argument("--phase7-prediction-audit", default=None)
+    parser.add_argument(
+        "--prediction-diagnostics",
+        default=None,
+        help="Legacy alias for --phase7-prediction-audit.",
+    )
+    parser.add_argument("--baseline-report", default=None)
+    parser.add_argument("--failure-analysis-report", default=None)
+    parser.add_argument("--statistical-validity-report", default=None)
+    parser.add_argument("--capacity-liquidity-report", default=None)
     parser.add_argument("--run", default=DEFAULT_RUN)
     parser.add_argument("--long-short-margin", type=float, default=0.05)
     parser.add_argument("--min-fade-success", type=float, default=0.50)
@@ -1560,6 +2148,22 @@ def main() -> int:
             require_positive_net_all_markets=not args.allow_negative_net_market,
             require_positive_net_all_folds=not args.allow_negative_net_fold,
         ),
+        phase7_prediction_audit_report=Path(args.phase7_prediction_audit)
+        if args.phase7_prediction_audit
+        else None,
+        prediction_diagnostics_report=Path(args.prediction_diagnostics)
+        if args.prediction_diagnostics
+        else None,
+        baseline_report=Path(args.baseline_report) if args.baseline_report else None,
+        failure_analysis_report=Path(args.failure_analysis_report)
+        if args.failure_analysis_report
+        else None,
+        statistical_validity_report=Path(args.statistical_validity_report)
+        if args.statistical_validity_report
+        else None,
+        capacity_liquidity_report=Path(args.capacity_liquidity_report)
+        if args.capacity_liquidity_report
+        else None,
     )
     overall = result["policy_metrics"]["overall"]
     promotion = result["promotion_gate"]

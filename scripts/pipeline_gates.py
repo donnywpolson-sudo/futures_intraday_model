@@ -69,6 +69,17 @@ def _matching_hash(hash_map: object, path: Path) -> str | None:
     return None
 
 
+def _profile_matches(manifest_profile: object, expected_profile: str) -> bool:
+    if manifest_profile == expected_profile:
+        return True
+    if not isinstance(manifest_profile, str):
+        return False
+    return (
+        manifest_profile.startswith(f"{expected_profile}_")
+        and manifest_profile.endswith("_active_placement")
+    )
+
+
 def _nonempty_sequence(value: object) -> bool:
     return isinstance(value, (list, tuple, set, dict)) and bool(value)
 
@@ -158,7 +169,7 @@ def check_upstream_manifest(
         failures.append(
             f"upstream manifest stage is {manifest.get('stage')!r}, not {expected_stage!r}"
         )
-    if manifest.get("profile") != expected_profile:
+    if not _profile_matches(manifest.get("profile"), expected_profile):
         failures.append(
             f"upstream manifest profile is {manifest.get('profile')!r}, not {expected_profile!r}"
         )
@@ -229,13 +240,14 @@ def check_upstream_manifest(
             if _nonempty_sequence(output.get("failures")):
                 failures.append(f"upstream manifest output {index} failures are non-empty")
 
-    hash_map = manifest.get("output_file_hashes")
     for market, year in expected_pairs:
         output_path = expected_output_root / market / f"{year}.parquet"
         if not output_path.exists():
             failures.append(f"upstream output missing: {relative_path(output_path)}")
             continue
-        expected_hash = _matching_hash(hash_map, output_path)
+        expected_hash = _matching_hash(manifest.get("output_file_hashes"), output_path)
+        if expected_hash is None:
+            expected_hash = _matching_hash(manifest.get("output_hashes"), output_path)
         if expected_hash is None:
             failures.append(f"upstream output hash missing: {relative_path(output_path)}")
             continue
