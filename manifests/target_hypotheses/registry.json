@@ -707,6 +707,62 @@
       "next_allowed_actions": []
     },
     {
+      "target_hypothesis_id": "first_hour_midday_pullback_continuation_30m_v1",
+      "status": "REJECTED",
+      "wfa_allowed": false,
+      "target_family": "es_first_hour_midday_pullback_continuation_30m",
+      "scope": {
+        "profile": "tier_1",
+        "resolved_profile": "tier_1_research",
+        "markets": [
+          "ES"
+        ],
+        "years": [
+          2023,
+          2024
+        ]
+      },
+      "description": "Predeclared ES-only materially new first-hour midday pullback continuation candidate testing whether a strong first-hour directional move followed by a controlled 35%-60% midday pullback and one-tick resumption identifies cost-clearing 30-minute continuation. This candidate does not use stopped ORAC/opening-range acceptance, VWAP reclaim, opening-drive failed-followthrough, session-compression, late-session range-resolution, or volume-pace breakout logic.",
+      "status_reason": "Rejected by bounded ES-only first-hour midday pullback discovery smoke: STOP_INPUT_FAILURE. All four ES research folds had empty train or test rows, event count was 26, long/short/flat counts were 2/0/24, fold metrics were empty, discovery top total net was 0.0, duplicate overlap with the current 15m deadzone target was 0.5 <= 0.8 cap, and target_smoke_is_tradability_proof=false. Do not rerun discovery, tune thresholds/features/costs/folds/session windows/pullback rules, run WFA/modeling, Phase 8, promotion, artifact freeze, paper, or live execution from this branch.",
+      "pre_registration": {
+        "research_question": "After ES makes a strong first-hour directional move, does a controlled 35%-60% midday pullback that holds the causal session-midpoint guard and then resumes in the first-hour direction identify cost-clearing 30-minute continuation on ES 2023/2024 research folds?",
+        "entry_condition": "Candidate rows require the existing row-valid mask, exactly the first 60 valid same-session bars to define first-hour state, a first-hour directional move clearing max(12 ticks, round-turn cost ticks + min_profit_ticks, prior 60-bar close-diff volatility scaled to sqrt(60)), an 11:00 through 13:30 America/Chicago event window, previous-bar pullback depth between 35% and 60%, and current close resumption of at least one tick in the first-hour direction.",
+        "direction": "Continuation direction is the first-hour directional side: long after an upward first-hour move and qualifying pullback/resumption; short after a downward first-hour move and qualifying pullback/resumption.",
+        "target_definition": "Use next-open entry after the resumption event, fixed same-session 30-minute open-to-open exit, existing path-validity filters, non-overlapping events, configured ES costs, and a continuation label that requires terminal movement in the event direction to exceed the predeclared threshold.",
+        "threshold_rule": "Label threshold is max(round-turn cost ticks + min_profit_ticks, prior 60-bar 1m close-diff std * sqrt(30)); first-hour strength threshold is max(12 ticks, round-turn cost ticks + min_profit_ticks, prior 60-bar 1m close-diff std * sqrt(60)); no threshold, pullback-depth, midpoint, event-window, exit, feature, cost, fold, market, or year change after source tests, preflight, packet, or discovery output.",
+        "material_difference_from_stopped_branches": "This branch is not ORAC or opening-range acceptance because it does not use opening-range highs/lows, first post-opening-range acceptance, or opening-range event capture. It is not VWAP reclaim because it does not use VWAP excursion or reclaim-through-VWAP logic. It is not opening-drive failed-followthrough because it continues after controlled pullback rather than reversing after failed opening-drive continuation. It is not session-compression because it does not use prior box compression or percentile thresholds. It is not late-session range-resolution because it uses the midday window and fixed 30-minute exit rather than post-15:00 range resolution or session-close exit. It is not volume-pace breakout because it uses first-hour state and pullback/resumption rather than volume-pace-confirmed range breaks.",
+        "controls": [
+          "compare duplicate overlap with current deadzone target and stopped ES target families",
+          "require class-balance and event-count gates",
+          "require fold-stability gates on ES_research_0001 through ES_research_0004",
+          "do not tune thresholds, features, costs, folds, markets, years, event windows, pullback depth, midpoint rule, exits, or labels after seeing source-test, preflight, packet, or discovery output"
+        ],
+        "discovery_success_rule": "Discovery can advance only if separately approved later and a bounded smoke reports DISCOVERY_PASS with positive stage net, at least half of discovery folds positive, nonconstant predictions, sufficient event/class balance, and duplicate overlap at or below the registered cap.",
+        "stop_rules": [
+          "STOP_INPUT_FAILURE on stale/missing registry, split, feature, cost, or matrix evidence",
+          "STOP_CLASS_COLLAPSE if long, short, or flat events fail minimum count or rate gates",
+          "STOP_DUPLICATE_TARGET if overlap with the current deadzone target or stopped ES target families exceeds the registered cap",
+          "STOP_UNSTABLE_FOLDS if fewer than half of discovery folds have positive top net",
+          "STOP_DISCOVERY_NEGATIVE_NET if discovery top net is nonpositive"
+        ],
+        "forbidden_actions": [
+          "no stopped-target discovery reruns",
+          "no discovery-run without separate bounded approval",
+          "no WFA/modeling, Phase 8, promotion, artifact freeze, paper, or live execution without separate bounded approval",
+          "no provider downloads or cost-config mutation from this candidate registration",
+          "no threshold, feature, cost, fold, market, year, event-window, pullback-depth, midpoint-rule, exit, or label tuning after source-test, preflight, packet, or discovery output",
+          "no use of holdout or forward rows for selection",
+          "no reuse as a new hypothesis if stopped"
+        ],
+        "implementation_status": "Source/tests-only target construction is implemented in the Phase 9 ES target smoke harness. The single approved discovery smoke stopped with STOP_INPUT_FAILURE; WFA/modeling, Phase 8, promotion, artifact freeze, paper, and live execution remain unapproved."
+      },
+      "source_reports": [
+        "reports/pipeline_audit/first_hour_midday_pullback_source_packet_20260709_first_hour_midday_pullback_continuation_30m_v1_discovery_smoke.md",
+        "reports/pipeline_audit/first_hour_midday_pullback_source_packet_20260709_first_hour_midday_pullback_continuation_30m_v1_discovery_smoke.json"
+      ],
+      "next_allowed_actions": []
+    },
+    {
       "target_hypothesis_id": "late_session_range_resolve_session_close_v1",
       "status": "REJECTED",
       "wfa_allowed": false,

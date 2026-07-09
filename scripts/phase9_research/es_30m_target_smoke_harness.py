@@ -938,6 +938,170 @@ def apply_volume_pace_breakout_continuation_30m_target(
     return out
 
 
+def apply_first_hour_midday_pullback_continuation_30m_target(
+    frame: pd.DataFrame,
+    cost_config: Mapping[str, float],
+    spec: TargetSpec,
+) -> pd.DataFrame:
+    out = frame.sort_values("ts", kind="mergesort").reset_index(drop=True).copy()
+    ts = pd.to_datetime(out["ts"], utc=True, errors="coerce")
+    local_ts = ts.dt.tz_convert("America/Chicago")
+    minute_of_day = local_ts.dt.hour * 60 + local_ts.dt.minute
+    keys = [out["market"], out["year"], out["session_segment_id"]]
+    row_valid = _row_valid_mask(out)
+
+    tick_size = float(cost_config["tick_size"])
+    tick_value = float(cost_config["tick_value"])
+    cost_dollars = float(cost_config["round_turn_cost_dollars"])
+
+    open_ = _numeric(out, "open")
+    high = _numeric(out, "high")
+    low = _numeric(out, "low")
+    close = _numeric(out, "close")
+    session = out["session_segment_id"].astype("string")
+
+    valid_bar_number = row_valid.astype("int64").groupby(keys, dropna=False, sort=False).cumsum()
+    first_hour_window = row_valid & valid_bar_number.between(1, 60)
+    first_hour_count = first_hour_window.astype("int64").groupby(keys, dropna=False, sort=False).transform("sum")
+    first_hour_open = open_.where(row_valid & valid_bar_number.eq(1)).groupby(
+        keys,
+        dropna=False,
+        sort=False,
+    ).transform("first")
+    first_hour_high = high.where(first_hour_window).groupby(keys, dropna=False, sort=False).transform("max")
+    first_hour_low = low.where(first_hour_window).groupby(keys, dropna=False, sort=False).transform("min")
+    first_hour_ready = (
+        first_hour_count.eq(60)
+        & valid_bar_number.gt(60)
+        & first_hour_open.notna()
+        & first_hour_high.notna()
+        & first_hour_low.notna()
+    )
+
+    up_move_ticks = (first_hour_high - first_hour_open) / tick_size
+    down_move_ticks = (first_hour_open - first_hour_low) / tick_size
+    raw_direction = pd.Series(0, index=out.index, dtype="int64")
+    raw_direction = raw_direction.mask(up_move_ticks.gt(down_move_ticks), 1)
+    raw_direction = raw_direction.mask(down_move_ticks.gt(up_move_ticks), -1)
+    first_hour_move_ticks = pd.Series(np.nan, index=out.index, dtype="float64")
+    first_hour_move_ticks = first_hour_move_ticks.mask(raw_direction.eq(1), up_move_ticks)
+    first_hour_move_ticks = first_hour_move_ticks.mask(raw_direction.eq(-1), down_move_ticks)
+
+    cost_floor_ticks = float(cost_config["cost_ticks"]) + float(cost_config["min_profit_ticks"])
+    first_hour_floor_ticks = max(12.0, cost_floor_ticks)
+    first_hour_vol_ticks = _prior_horizon_vol_ticks(out, tick_size, horizon_bars=60) * VOL_MULTIPLIER
+    first_hour_threshold_ticks = pd.Series(
+        np.maximum(first_hour_vol_ticks, first_hour_floor_ticks),
+        index=out.index,
+        dtype="float64",
+    )
+    strong_direction = (
+        first_hour_ready
+        & raw_direction.ne(0)
+        & first_hour_move_ticks.notna()
+        & first_hour_threshold_ticks.notna()
+        & first_hour_move_ticks.ge(first_hour_threshold_ticks)
+    )
+    first_hour_direction = raw_direction.where(strong_direction, 0)
+    first_hour_extreme = pd.Series(np.nan, index=out.index, dtype="float64")
+    first_hour_extreme = first_hour_extreme.mask(first_hour_direction.eq(1), first_hour_high)
+    first_hour_extreme = first_hour_extreme.mask(first_hour_direction.eq(-1), first_hour_low)
+
+    pullback_depth = pd.Series(np.nan, index=out.index, dtype="float64")
+    long_pullback_base = strong_direction & first_hour_direction.eq(1) & up_move_ticks.gt(0.0)
+    short_pullback_base = strong_direction & first_hour_direction.eq(-1) & down_move_ticks.gt(0.0)
+    pullback_depth = pullback_depth.mask(
+        long_pullback_base,
+        (first_hour_extreme - close) / (first_hour_extreme - first_hour_open),
+    )
+    pullback_depth = pullback_depth.mask(
+        short_pullback_base,
+        (close - first_hour_extreme) / (first_hour_open - first_hour_extreme),
+    )
+    pullback_qualified = row_valid & pullback_depth.between(0.35, 0.60, inclusive="both")
+    previous_pullback_qualified = (
+        pullback_qualified.shift(1).fillna(False).astype(bool)
+        & session.shift(1).eq(session).fillna(False)
+    )
+    previous_pullback_depth = pullback_depth.shift(1)
+
+    causal_session_high = high.where(row_valid).groupby(keys, dropna=False, sort=False).cummax()
+    causal_session_low = low.where(row_valid).groupby(keys, dropna=False, sort=False).cummin()
+    session_midpoint = (causal_session_high + causal_session_low) / 2.0
+    midpoint_guard = (
+        (first_hour_direction.eq(1) & close.ge(session_midpoint))
+        | (first_hour_direction.eq(-1) & close.le(session_midpoint))
+    )
+    resumption_ticks = first_hour_direction.astype(float) * ((close - close.shift(1)) / tick_size)
+    event_window = minute_of_day.ge(11 * 60) & minute_of_day.le(13 * 60 + 30)
+    scope = out["market"].astype("string").eq(MARKET) & out["year"].isin([2023, 2024])
+    event_ready = (
+        scope
+        & row_valid
+        & event_window
+        & strong_direction
+        & previous_pullback_qualified
+        & midpoint_guard
+        & resumption_ticks.ge(1.0)
+    )
+    event_direction = pd.Series(0, index=out.index, dtype="int64")
+    event_direction = event_direction.mask(event_ready, first_hour_direction)
+
+    entry_price = open_.shift(-ENTRY_OFFSET_BARS)
+    exit_price = open_.shift(-EXIT_OFFSET_BARS)
+    entry_ts = ts.shift(-ENTRY_OFFSET_BARS)
+    exit_ts = ts.shift(-EXIT_OFFSET_BARS)
+    threshold_ticks = _threshold_ticks(out, cost_config, horizon_bars=HORIZON_BARS)
+    signed_exit_ticks = event_direction.astype(float) * ((exit_price - entry_price) / tick_size)
+    valid = (
+        _path_valid_mask(out)
+        & event_direction.ne(0)
+        & entry_price.notna()
+        & exit_price.notna()
+        & threshold_ticks.notna()
+        & np.isfinite(threshold_ticks)
+        & np.isfinite(signed_exit_ticks)
+    )
+    direction = pd.Series(0, index=out.index, dtype="int64")
+    direction = direction.mask(valid & (signed_exit_ticks > threshold_ticks), event_direction)
+    nonflat = direction.ne(0) & valid
+    gross_dollars = signed_exit_ticks * tick_value
+    net_dollars = gross_dollars - cost_dollars
+    cols = {
+        "first_hour_open": f"target_first_hour_open_{spec.slug}",
+        "first_hour_extreme": f"target_first_hour_extreme_{spec.slug}",
+        "first_hour_move_ticks": f"target_first_hour_move_ticks_{spec.slug}",
+        "first_hour_direction": f"target_first_hour_direction_{spec.slug}",
+        "first_hour_threshold_ticks": f"target_first_hour_threshold_ticks_{spec.slug}",
+        "pullback_depth": f"target_pullback_depth_{spec.slug}",
+        "session_midpoint": f"target_session_midpoint_{spec.slug}",
+        "event_direction": f"target_event_direction_{spec.slug}",
+        "resumption_ticks": f"target_resumption_ticks_{spec.slug}",
+        "timeout_exit_ticks": f"target_timeout_exit_ticks_{spec.slug}",
+    }
+
+    out[spec.valid_column] = valid.astype(bool)
+    out[spec.direction_column] = direction
+    out[spec.nonflat_column] = nonflat.astype(bool)
+    out[spec.gross_column] = gross_dollars.where(valid)
+    out[spec.cost_column] = pd.Series(cost_dollars, index=out.index).where(valid)
+    out[spec.net_column] = net_dollars.where(valid)
+    out[spec.entry_ts_column] = entry_ts.where(valid)
+    out[spec.exit_ts_column] = exit_ts.where(valid)
+    out[spec.threshold_ticks_column] = threshold_ticks.where(valid)
+    out[cols["first_hour_open"]] = first_hour_open.where(first_hour_ready)
+    out[cols["first_hour_extreme"]] = first_hour_extreme.where(strong_direction)
+    out[cols["first_hour_move_ticks"]] = first_hour_move_ticks.where(first_hour_ready)
+    out[cols["first_hour_direction"]] = first_hour_direction.where(first_hour_ready, 0)
+    out[cols["first_hour_threshold_ticks"]] = first_hour_threshold_ticks.where(first_hour_ready)
+    out[cols["pullback_depth"]] = previous_pullback_depth.where(event_direction.ne(0))
+    out[cols["session_midpoint"]] = session_midpoint.where(row_valid & event_window)
+    out[cols["event_direction"]] = event_direction
+    out[cols["resumption_ticks"]] = resumption_ticks.where(previous_pullback_qualified & event_window)
+    out[cols["timeout_exit_ticks"]] = signed_exit_ticks.where(valid)
+    return out
+
+
 def _late_session_range_resolve_columns(slug: str) -> dict[str, str]:
     return {
         "range_high": f"target_range_high_{slug}",
@@ -1631,6 +1795,39 @@ TARGET_SPECS: dict[str, TargetSpec] = {
             "60-bar same-session range, one-tick close break, same-session-bar "
             "volume pace ratio >= 1.5 versus median of at least 20 prior "
             "sessions, next-open entry, and fixed 30-minute timeout exit"
+        ),
+    ),
+    "first_hour_midday_pullback_continuation_30m_v1": TargetSpec(
+        hypothesis_id="first_hour_midday_pullback_continuation_30m_v1",
+        target_family="es_first_hour_midday_pullback_continuation_30m",
+        slug="first_hour_midday_pullback_continuation_30m",
+        description=(
+            "ES-only 2023-2024 30-minute continuation target conditioned on a "
+            "strong first-hour directional move followed by a controlled midday "
+            "pullback and one-tick resumption in the first-hour direction."
+        ),
+        apply=apply_first_hour_midday_pullback_continuation_30m_target,
+        auxiliary_columns=(
+            "target_first_hour_open_first_hour_midday_pullback_continuation_30m",
+            "target_first_hour_extreme_first_hour_midday_pullback_continuation_30m",
+            "target_first_hour_move_ticks_first_hour_midday_pullback_continuation_30m",
+            "target_first_hour_direction_first_hour_midday_pullback_continuation_30m",
+            "target_first_hour_threshold_ticks_first_hour_midday_pullback_continuation_30m",
+            "target_pullback_depth_first_hour_midday_pullback_continuation_30m",
+            "target_session_midpoint_first_hour_midday_pullback_continuation_30m",
+            "target_event_direction_first_hour_midday_pullback_continuation_30m",
+            "target_resumption_ticks_first_hour_midday_pullback_continuation_30m",
+            "target_timeout_exit_ticks_first_hour_midday_pullback_continuation_30m",
+        ),
+        threshold_description=(
+            "label threshold = max(round-turn cost ticks + min_profit_ticks, "
+            "prior 60-bar 1m close-diff std * sqrt(30)); first-hour strength "
+            "requires max(12 ticks, round-turn cost ticks + min_profit_ticks, "
+            "prior 60-bar 1m close-diff std * sqrt(60)); event requires first "
+            "60 valid same-session bars, 35%-60% pullback depth, 11:00 through "
+            "13:30 America/Chicago window, causal session-midpoint guard, "
+            "one-tick resumption, next-open entry, and fixed 30-minute "
+            "same-session timeout exit"
         ),
     ),
     "late_session_range_resolve_session_close_v1": TargetSpec(

@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.phase9_research.es_30m_target_smoke_harness import (
     EVALUATION_COMPONENT_RANK,
     TARGET_SPECS,
+    apply_first_hour_midday_pullback_continuation_30m_target,
     apply_late_session_range_resolve_session_close_target,
     apply_opening_drive_failed_followthrough_15m_target,
     apply_opening_range_acceptance_event_capture_30m_target,
@@ -486,6 +487,90 @@ def _volume_pace_breakout_frame(
     sessions.append(build_session(prior_sessions, "long"))
     sessions.append(build_session(prior_sessions + 1, "short"))
     sessions.append(build_session(prior_sessions + 2, "flat"))
+    return pd.concat(sessions, ignore_index=True)
+
+
+def _first_hour_midday_pullback_frame() -> pd.DataFrame:
+    session_periods = 220
+    event_idx = 150
+    entry_idx = event_idx + 1
+    exit_idx = event_idx + 31
+    sessions: list[pd.DataFrame] = []
+    base_ts = pd.Timestamp("2024-01-02T14:30:00Z")
+
+    def set_bar(
+        open_: list[float],
+        high: list[float],
+        low: list[float],
+        close: list[float],
+        idx: int,
+        price: float,
+    ) -> None:
+        open_[idx] = price
+        high[idx] = price + 0.25
+        low[idx] = price - 0.25
+        close[idx] = price
+
+    def build_session(session_idx: int, event_kind: str) -> pd.DataFrame:
+        ts = pd.date_range(base_ts + pd.Timedelta(days=session_idx), periods=session_periods, freq="min")
+        open_ = [100.0] * session_periods
+        high = [100.25] * session_periods
+        low = [99.75] * session_periods
+        close = [100.0] * session_periods
+
+        if event_kind == "short":
+            low[30] = 94.0
+            close[30] = 94.0
+            set_bar(open_, high, low, close, event_idx - 1, 97.0)
+            set_bar(open_, high, low, close, event_idx, 96.5)
+            open_[entry_idx] = 96.5
+            open_[exit_idx] = 91.5
+            close[exit_idx] = 91.5
+            high[exit_idx] = 91.75
+            low[exit_idx] = 91.25
+        else:
+            high[30] = 106.0
+            close[30] = 106.0
+            set_bar(open_, high, low, close, event_idx - 1, 103.0)
+            set_bar(open_, high, low, close, event_idx, 103.5)
+            open_[entry_idx] = 103.5
+            if event_kind == "flat":
+                open_[exit_idx] = 103.75
+            else:
+                open_[exit_idx] = 108.5
+            close[exit_idx] = open_[exit_idx]
+            high[exit_idx] = open_[exit_idx] + 0.25
+            low[exit_idx] = open_[exit_idx] - 0.25
+
+        return pd.DataFrame(
+            {
+                "ts": ts,
+                "market": "ES",
+                "year": 2024,
+                "session_segment_id": f"ES_2024_FIRST_HOUR_PULLBACK_{session_idx:04d}",
+                "open": open_,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": 100,
+                "causal_valid": True,
+                "valid_ohlcv": True,
+                "inside_session": True,
+                "feature_input_valid": True,
+                "feature_row_valid": True,
+                "training_row_valid": True,
+                "target_valid": True,
+                "target_sign_with_deadzone": [1 if idx % 3 == 0 else 0 for idx in range(session_periods)],
+                "is_synthetic": False,
+                "roll_window_flag": False,
+                "boundary_session_flag": False,
+                "feature_signal": range(session_periods),
+            }
+        )
+
+    sessions.append(build_session(0, "long"))
+    sessions.append(build_session(1, "short"))
+    sessions.append(build_session(2, "flat"))
     return pd.concat(sessions, ignore_index=True)
 
 
@@ -1267,6 +1352,163 @@ def test_volume_pace_breakout_distribution_has_long_short_and_flat() -> None:
     spec = TARGET_SPECS["volume_pace_breakout_continuation_30m_v1"]
     labeled = apply_volume_pace_breakout_continuation_30m_target(
         _volume_pace_breakout_frame(),
+        _cost_config(),
+        spec,
+    )
+    events, skipped = non_overlapping_events(labeled, spec)
+    balance = class_balance(events, spec)
+    distribution = target_distribution_summary(events, spec)
+
+    assert skipped >= 0
+    assert events[spec.entry_ts_column].iloc[1:].gt(events[spec.exit_ts_column].shift(1).iloc[1:]).all()
+    assert balance["event_count"] == len(events)
+    assert balance["counts"]["long"] >= 1
+    assert balance["counts"]["short"] >= 1
+    assert balance["counts"]["flat"] >= 1
+    assert spec.net_column in distribution
+
+
+def test_first_hour_midday_pullback_continuation_30m_target_spec_is_distinct() -> None:
+    spec = TARGET_SPECS["first_hour_midday_pullback_continuation_30m_v1"]
+
+    assert spec.target_family == "es_first_hour_midday_pullback_continuation_30m"
+    assert spec.slug == "first_hour_midday_pullback_continuation_30m"
+    assert spec.horizon_bars == 30
+    assert "35%-60% pullback depth" in spec.threshold_description
+    assert "first-hour strength" in spec.threshold_description
+    assert "target_first_hour_open_first_hour_midday_pullback_continuation_30m" in spec.target_columns
+    assert "target_first_hour_extreme_first_hour_midday_pullback_continuation_30m" in spec.target_columns
+    assert "target_first_hour_move_ticks_first_hour_midday_pullback_continuation_30m" in spec.target_columns
+    assert "target_first_hour_direction_first_hour_midday_pullback_continuation_30m" in spec.target_columns
+    assert "target_first_hour_threshold_ticks_first_hour_midday_pullback_continuation_30m" in spec.target_columns
+    assert "target_pullback_depth_first_hour_midday_pullback_continuation_30m" in spec.target_columns
+    assert "target_session_midpoint_first_hour_midday_pullback_continuation_30m" in spec.target_columns
+    assert "target_event_direction_first_hour_midday_pullback_continuation_30m" in spec.target_columns
+    assert "target_resumption_ticks_first_hour_midday_pullback_continuation_30m" in spec.target_columns
+    assert "target_timeout_exit_ticks_first_hour_midday_pullback_continuation_30m" in spec.target_columns
+
+
+def test_first_hour_midday_pullback_continuation_30m_label_math() -> None:
+    spec = TARGET_SPECS["first_hour_midday_pullback_continuation_30m_v1"]
+    labeled = apply_first_hour_midday_pullback_continuation_30m_target(
+        _first_hour_midday_pullback_frame(),
+        _cost_config(),
+        spec,
+    )
+    first_hour_open = "target_first_hour_open_first_hour_midday_pullback_continuation_30m"
+    first_hour_extreme = "target_first_hour_extreme_first_hour_midday_pullback_continuation_30m"
+    first_hour_move = "target_first_hour_move_ticks_first_hour_midday_pullback_continuation_30m"
+    first_hour_direction = "target_first_hour_direction_first_hour_midday_pullback_continuation_30m"
+    first_hour_threshold = "target_first_hour_threshold_ticks_first_hour_midday_pullback_continuation_30m"
+    pullback_depth = "target_pullback_depth_first_hour_midday_pullback_continuation_30m"
+    session_midpoint = "target_session_midpoint_first_hour_midday_pullback_continuation_30m"
+    event_direction = "target_event_direction_first_hour_midday_pullback_continuation_30m"
+    resumption_ticks = "target_resumption_ticks_first_hour_midday_pullback_continuation_30m"
+    timeout_ticks = "target_timeout_exit_ticks_first_hour_midday_pullback_continuation_30m"
+
+    session_periods = 220
+    event_idx = 150
+    long_idx = event_idx
+    short_idx = session_periods + event_idx
+    flat_idx = 2 * session_periods + event_idx
+
+    assert labeled.loc[long_idx, spec.valid_column] == True
+    assert labeled.loc[long_idx, first_hour_open] == 100.0
+    assert labeled.loc[long_idx, first_hour_extreme] == 106.0
+    assert labeled.loc[long_idx, first_hour_move] == 24.0
+    assert labeled.loc[long_idx, first_hour_direction] == 1
+    assert labeled.loc[long_idx, first_hour_threshold] <= 24.0
+    assert labeled.loc[long_idx, pullback_depth] == 0.5
+    assert labeled.loc[long_idx, session_midpoint] == 102.875
+    assert labeled.loc[long_idx, event_direction] == 1
+    assert labeled.loc[long_idx, resumption_ticks] == 2.0
+    assert labeled.loc[long_idx, spec.direction_column] == 1
+    assert labeled.loc[long_idx, spec.nonflat_column] == True
+    assert labeled.loc[long_idx, timeout_ticks] == 20.0
+    assert labeled.loc[long_idx, spec.gross_column] == 250.0
+    assert labeled.loc[long_idx, spec.net_column] == 225.0
+
+    assert labeled.loc[short_idx, spec.valid_column] == True
+    assert labeled.loc[short_idx, first_hour_open] == 100.0
+    assert labeled.loc[short_idx, first_hour_extreme] == 94.0
+    assert labeled.loc[short_idx, first_hour_move] == 24.0
+    assert labeled.loc[short_idx, first_hour_direction] == -1
+    assert labeled.loc[short_idx, pullback_depth] == 0.5
+    assert labeled.loc[short_idx, event_direction] == -1
+    assert labeled.loc[short_idx, resumption_ticks] == 2.0
+    assert labeled.loc[short_idx, spec.direction_column] == -1
+    assert labeled.loc[short_idx, spec.nonflat_column] == True
+    assert labeled.loc[short_idx, timeout_ticks] == 20.0
+    assert labeled.loc[short_idx, spec.gross_column] == 250.0
+    assert labeled.loc[short_idx, spec.net_column] == 225.0
+
+    assert labeled.loc[flat_idx, spec.valid_column] == True
+    assert labeled.loc[flat_idx, event_direction] == 1
+    assert labeled.loc[flat_idx, spec.direction_column] == 0
+    assert labeled.loc[flat_idx, spec.nonflat_column] == False
+    assert labeled.loc[flat_idx, timeout_ticks] == 1.0
+    assert labeled.loc[flat_idx, spec.gross_column] == 12.5
+    assert labeled.loc[flat_idx, spec.net_column] == -12.5
+
+
+def test_first_hour_midday_pullback_event_side_does_not_use_future_path() -> None:
+    spec = TARGET_SPECS["first_hour_midday_pullback_continuation_30m_v1"]
+    event_direction = "target_event_direction_first_hour_midday_pullback_continuation_30m"
+    event_idx = 150
+    base = apply_first_hour_midday_pullback_continuation_30m_target(
+        _first_hour_midday_pullback_frame(),
+        _cost_config(),
+        spec,
+    )
+    mutated_frame = _first_hour_midday_pullback_frame()
+    mutated_frame.loc[event_idx + 10, ["high", "low", "close"]] = [120.0, 119.5, 120.0]
+    mutated = apply_first_hour_midday_pullback_continuation_30m_target(mutated_frame, _cost_config(), spec)
+
+    assert base.loc[event_idx, event_direction] == mutated.loc[event_idx, event_direction]
+    assert base.loc[event_idx, spec.valid_column] == mutated.loc[event_idx, spec.valid_column]
+
+
+def test_first_hour_midday_pullback_rejects_cross_session_30m_horizon() -> None:
+    spec = TARGET_SPECS["first_hour_midday_pullback_continuation_30m_v1"]
+    session_periods = 220
+    event_idx = 150
+    frame = _first_hour_midday_pullback_frame()
+    frame.loc[event_idx + 20 : session_periods - 1, "session_segment_id"] = "ES_2024_BROKEN_PATH"
+    labeled = apply_first_hour_midday_pullback_continuation_30m_target(frame, _cost_config(), spec)
+
+    assert labeled.loc[event_idx, spec.valid_column] == False
+
+
+def test_first_hour_midday_pullback_rejects_midpoint_break() -> None:
+    spec = TARGET_SPECS["first_hour_midday_pullback_continuation_30m_v1"]
+    event_direction = "target_event_direction_first_hour_midday_pullback_continuation_30m"
+    event_idx = 150
+    frame = _first_hour_midday_pullback_frame()
+    frame.loc[event_idx - 1, ["open", "high", "low", "close"]] = [102.5, 102.75, 102.25, 102.5]
+    frame.loc[event_idx, ["open", "high", "low", "close"]] = [102.75, 103.0, 102.5, 102.75]
+    labeled = apply_first_hour_midday_pullback_continuation_30m_target(frame, _cost_config(), spec)
+
+    assert labeled.loc[event_idx, spec.valid_column] == False
+    assert labeled.loc[event_idx, event_direction] == 0
+
+
+def test_first_hour_midday_pullback_rejects_pullback_outside_35_to_60_percent() -> None:
+    spec = TARGET_SPECS["first_hour_midday_pullback_continuation_30m_v1"]
+    event_direction = "target_event_direction_first_hour_midday_pullback_continuation_30m"
+    event_idx = 150
+    frame = _first_hour_midday_pullback_frame()
+    frame.loc[event_idx - 1, ["open", "high", "low", "close"]] = [104.25, 104.5, 104.0, 104.25]
+    frame.loc[event_idx, ["open", "high", "low", "close"]] = [104.5, 104.75, 104.25, 104.5]
+    labeled = apply_first_hour_midday_pullback_continuation_30m_target(frame, _cost_config(), spec)
+
+    assert labeled.loc[event_idx, spec.valid_column] == False
+    assert labeled.loc[event_idx, event_direction] == 0
+
+
+def test_first_hour_midday_pullback_distribution_has_long_short_and_flat() -> None:
+    spec = TARGET_SPECS["first_hour_midday_pullback_continuation_30m_v1"]
+    labeled = apply_first_hour_midday_pullback_continuation_30m_target(
+        _first_hour_midday_pullback_frame(),
         _cost_config(),
         spec,
     )
