@@ -79,6 +79,19 @@ REQUIRED_MANIFEST_FIELDS = [
     "request_status",
 ]
 
+PROVENANCE_MANIFEST_FIELDS = [
+    "dataset_version",
+    "schema_version",
+    "request_text",
+    "original_filename",
+    "original_file_sha256",
+    "download_started_at",
+    "download_completed_at",
+    "transfer_history",
+    "provenance_status",
+    "reproducibility_status",
+]
+
 DEFINITION_METADATA_FIELDS = [
     "ts_recv",
     "ts_event",

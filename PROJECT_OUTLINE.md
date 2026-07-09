@@ -63,6 +63,10 @@ and generated evidence locations. It is an index, not a second source of truth.
     exceptions for DBN coverage gates.
   - `configs/alpha_tiered.yaml`: profile market/year definitions consumed by
     data, research, holdout, and forward gates.
+  - `manifests/phase1a_acquisition_registry.jsonl`: tracked Phase 1A
+    acquisition request registry with one row per unique request definition.
+    Legacy/current artifacts without original delivery hashes are labeled
+    `post_transfer_hash_only` and `partially_reproducible`, not invalid.
 - Current generated data-health evidence:
   - `reports/data_manifest/`: generated master data health matrix and data
     manifest coverage reports.
@@ -81,10 +85,11 @@ and generated evidence locations. It is an index, not a second source of truth.
   `configs/data_manifest.yaml` unless they change durable coverage policy.
 - Future DBN redownloads must follow the standard redownload/rebuild policy below:
   Phase 1A request-plan preflight before provider download, staged DBN
-  acquisition only after that preflight passes or an explicit bounded override
-  is approved, post-download DBN file/manifest validation before active
-  replacement, Phase 1B raw parquet build plus immediate raw/DBN validation
-  second, and Phase 2 readiness/staged causal rebuild last.
+  acquisition only after that preflight passes, the dry-run plan is tracked,
+  an explicit bounded approval names the tracked plan, post-download DBN
+  file/manifest validation before active replacement, Phase 1B raw parquet
+  build plus immediate raw/DBN validation second, and Phase 2 readiness/staged
+  causal rebuild last.
 
 ## Active Layout
 
@@ -1037,6 +1042,11 @@ Required pre-download plan command, no provider API calls:
 ```powershell
 python -m scripts.phase1A_download.download_databento_raw --universe extended_cme --start-year 2010 --end-year 2026 --end-date 2026-06-10 --schema all --mode download-dbn --raw-format dbn-zstd --chunk year --workers 4 --resume --dry-run --reports-root reports\raw_ingest
 ```
+Future provider downloads require a tracked dry-run plan and explicit bounded
+scope approval before any download starts. Pass the approval id and approved
+tracked dry-run plan path to the download command; the runtime stable
+`plan_hash` must match the approved plan hash.
+
 
 Cost estimate evidence, when provider metadata calls are approved but before
 any download. This estimates cost only; it is not a zero-cost blocking gate by
@@ -1055,10 +1065,12 @@ python -m scripts.phase1A_download.download_databento_raw --universe extended_cm
 
 Provider download command, only after pre-download plan and cost evidence are
 accepted under a bounded approval. If exact zero-cost is required, the
-zero-cost gate above must pass first:
+zero-cost gate above must pass first. Do not pass `--zero-cost-start-search` to
+a provider download command; convert any start-date search into a fixed approved
+start and matching tracked dry-run plan before download:
 
 ```powershell
-python -m scripts.phase1A_download.download_databento_raw --universe extended_cme --start-year 2010 --end-year 2026 --end-date 2026-06-10 --schema all --mode download-dbn --raw-format dbn-zstd --chunk year --workers 4 --resume --reports-root reports\raw_ingest
+python -m scripts.phase1A_download.download_databento_raw --universe extended_cme --start-year 2010 --end-year 2026 --end-date 2026-06-10 --schema all --mode download-dbn --raw-format dbn-zstd --chunk year --workers 4 --resume --reports-root reports\raw_ingest --approval-id <APPROVAL_ID> --approved-plan-path reports\raw_ingest\databento_download_plan_dry_run.json
 ```
 
 Inputs:
@@ -1127,6 +1139,13 @@ Post-download DBN file/manifest validation:
 - Manifest `path` points to the actual DBN file, `file_size_bytes` is positive,
   and `file_sha256` equals the actual DBN bytes.
 - No unexpected overwrite occurred.
+- New DBN manifests persist provenance fields when available:
+  `dataset_version`, `schema_version`, `request_text`, `original_filename`,
+  `original_file_sha256`, `download_started_at`, `download_completed_at`,
+  `transfer_history`, `provenance_status`, and `reproducibility_status`.
+  Existing manifests that only prove current file hashes remain valid current
+  artifacts, but their provenance must be classified as `post_transfer_hash_only`
+  and `partially_reproducible` unless original delivery evidence is recovered.
 
 Stop conditions:
 
@@ -2101,7 +2120,7 @@ Major trust gate checks:
 | Gate | Narrow check or status |
 | --- | --- |
 | Coordination docs | `python -m scripts.validation.check_coordination_docs` |
-| Raw Data And Metadata Gate / Phase 1A | `python -m pytest -q tests/phase1A_download/test_download_databento_raw.py tests/validation/test_check_dbn_archive_coverage.py` |
+| Raw Data And Metadata Gate / Phase 1A | `python -m pytest -q tests/phase1A_download/test_download_databento_raw.py tests/validation/test_check_dbn_archive_coverage.py tests/validation/test_phase1a_acquisition_registry.py`; `python -m scripts.validation.phase1a_acquisition_registry --validate-only` |
 | Phase 1B raw/DBN validation | `python -m pytest -q tests/validation/test_audit_raw_dbn_alignment.py tests/validation/test_audit_enriched_raw_optional_schemas.py` |
 | Cleaning And Normalization Gate / Phase 2 | `python -m pytest -q tests/phase2_causal_base/test_build_causal_base_data.py tests/validation/test_audit_phase2_readiness.py tests/validation/test_check_phase2_manifest_trust.py` |
 | Label And Target Gate / Phase 3 | `python -m pytest -q tests/phase3_labels/test_build_labels.py tests/validation/test_target_policy_contract.py` |

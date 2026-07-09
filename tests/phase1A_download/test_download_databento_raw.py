@@ -72,6 +72,7 @@ from scripts.phase1A_download.download_databento_raw import (
     store_to_required_dataframe,
     validate_download,
     validate_raw_file_manifest,
+    verify_approved_download_plan,
     write_json,
     write_required_dataframe_parquet,
     write_store_parquet,
@@ -1918,6 +1919,15 @@ def test_execute_batch_download_writes_temp_dir_then_final_dbn_file(tmp_path: Pa
     assert manifest["encoding"] == "dbn"
     assert manifest["compression"] == "zstd"
     assert manifest["file_size_bytes"] == len(b"dbn-zstd-placeholder")
+    assert manifest["request_text"]
+    assert manifest["original_filename"] == "job-test.dbn.zst"
+    assert manifest["original_file_sha256"] == manifest["file_sha256"]
+    assert manifest["download_started_at"]
+    assert manifest["download_completed_at"]
+    assert manifest["transfer_history"][0]["action"] == "databento_batch_download_to_temp"
+    assert manifest["transfer_history"][1]["action"] == "filesystem_move_to_final_path"
+    assert manifest["provenance_status"] == "original_delivery_hash_recorded"
+    assert manifest["reproducibility_status"] == "partially_reproducible"
     assert not validate_raw_file_manifest(
         final_file,
         expected_schema="ohlcv-1m",
@@ -3281,6 +3291,193 @@ def test_plan_and_results_share_run_id_and_plan_hash() -> None:
     assert results[0]["plan_hash"] == plan["plan_hash"]
     assert results[0]["output_role"] == "pipeline_raw_parquet"
     assert results[0]["pipeline_raw_ready"] is True
+
+
+def test_plan_hash_is_stable_across_dry_run_and_download_run_kind() -> None:
+    base_plan = {
+        "mode": "download-dbn",
+        "chunk": "year",
+        "raw_format": "dbn-zstd",
+        "output_role": "dbn_archive",
+        "pipeline_raw_ready": False,
+        "approval_id": None,
+        "approved_plan_path": None,
+        "tasks": [
+            {
+                "dataset": CME_DATASET,
+                "product": "ES",
+                "year": 2024,
+                "start": "2024-01-01",
+                "end": "2025-01-01",
+                "symbol": "ES.v.0",
+                "output_path": "data/dbn/ohlcv_1m/ES/2024/2024-01-01_2025-01-01.dbn.zst",
+                "schema": "ohlcv-1m",
+                "stype_in": "continuous",
+                "stype_out": "instrument_id",
+                "chunk": "year",
+                "raw_format": "dbn-zstd",
+            }
+        ],
+    }
+
+    dry_plan = finalize_plan_provenance(dict(base_plan), run_kind="dry_run")
+    download_plan = finalize_plan_provenance(dict(base_plan), run_kind="download")
+
+    assert dry_plan["plan_hash"] == download_plan["plan_hash"]
+
+
+def test_provider_download_requires_approval_before_client_init(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_out = tmp_path / "reports" / "databento_download_plan.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "download_databento_raw.py",
+            "--markets",
+            "ES",
+            "--start",
+            "2024-01-01",
+            "--end",
+            "2024-01-02",
+            "--plan-out",
+            plan_out.as_posix(),
+        ],
+    )
+    monkeypatch.setattr(
+        downloader,
+        "get_client",
+        lambda: pytest.fail("client should not initialize without approval"),
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+
+    assert "--approval-id" in str(excinfo.value)
+    assert not plan_out.exists()
+
+
+def test_zero_cost_start_search_download_fails_before_client_init(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_out = tmp_path / "reports" / "databento_download_plan.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "download_databento_raw.py",
+            "--markets",
+            "ES",
+            "--start",
+            "2024-01-01",
+            "--end",
+            "2024-01-02",
+            "--schema",
+            "trades",
+            "--zero-cost-only",
+            "--zero-cost-start-search",
+            "--plan-out",
+            plan_out.as_posix(),
+        ],
+    )
+    monkeypatch.setattr(
+        downloader,
+        "get_client",
+        lambda: pytest.fail("client should not initialize for unapproved start search"),
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+
+    assert "--zero-cost-start-search is not allowed" in str(excinfo.value)
+    assert not plan_out.exists()
+
+
+def test_approved_plan_hash_mismatch_fails_before_client_init(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_out = tmp_path / "reports" / "databento_download_plan.json"
+    approved_plan = tmp_path / "approved_plan.json"
+    approved_plan.write_text(json.dumps({"plan_hash": "wrong"}), encoding="utf-8")
+    monkeypatch.setattr(downloader, "path_is_git_tracked", lambda path: True)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "download_databento_raw.py",
+            "--markets",
+            "ES",
+            "--start",
+            "2024-01-01",
+            "--end",
+            "2024-01-02",
+            "--plan-out",
+            plan_out.as_posix(),
+            "--approval-id",
+            "APPROVE_TEST_DOWNLOAD",
+            "--approved-plan-path",
+            approved_plan.as_posix(),
+        ],
+    )
+    monkeypatch.setattr(
+        downloader,
+        "get_client",
+        lambda: pytest.fail("client should not initialize on hash mismatch"),
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+
+    assert "approved plan hash mismatch" in str(excinfo.value)
+    assert not plan_out.exists()
+
+
+def test_verify_approved_download_plan_allows_matching_tracked_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = finalize_plan_provenance(
+        {
+            "mode": "download-dbn",
+            "chunk": "year",
+            "raw_format": "dbn-zstd",
+            "output_role": "dbn_archive",
+            "pipeline_raw_ready": False,
+            "approval_id": None,
+            "approved_plan_path": None,
+            "tasks": [],
+        },
+        run_kind="download",
+    )
+    approved_plan = tmp_path / "approved_plan.json"
+    approved_plan.write_text(json.dumps({"plan_hash": plan["plan_hash"]}), encoding="utf-8")
+    args = build_arg_parser().parse_args(
+        [
+            "--markets",
+            "ES",
+            "--start",
+            "2024-01-01",
+            "--end",
+            "2024-01-02",
+            "--approval-id",
+            "APPROVE_TEST_DOWNLOAD",
+            "--approved-plan-path",
+            approved_plan.as_posix(),
+        ]
+    )
+    monkeypatch.setattr(downloader, "path_is_git_tracked", lambda path: True)
+
+    metadata = verify_approved_download_plan(args, plan)
+
+    assert metadata == {
+        "approval_id": "APPROVE_TEST_DOWNLOAD",
+        "approved_plan_path": approved_plan.as_posix(),
+        "approved_plan_hash": plan["plan_hash"],
+    }
 
 
 def test_dbn_download_manifest_and_chunk_rows_contain_expected_fields(

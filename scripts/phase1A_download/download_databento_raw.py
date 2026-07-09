@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import shutil
+import subprocess
 import time
 import json
 import sys
@@ -38,6 +39,7 @@ from scripts.phase1_raw_contract import (  # noqa: E402
     REQUIRED_DATASET,
     REQUIRED_DEFINITION_FIELDS,
     REQUIRED_MANIFEST_FIELDS,
+    PROVENANCE_MANIFEST_FIELDS,
     REQUIRED_SCHEMAS,
     SCHEMA_PATHS,
     SUPPORTED_SCHEMAS,
@@ -1058,6 +1060,40 @@ def file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def canonical_json_text(payload: object) -> str:
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def task_request_payload(
+    task: DownloadTask,
+    *,
+    encoding: str = EXPECTED_ENCODING,
+    compression: str = EXPECTED_COMPRESSION,
+) -> dict[str, object]:
+    return {
+        "dataset": task.dataset,
+        "symbols": task.symbol,
+        "schema": task.schema,
+        "stype_in": task.stype_in,
+        "stype_out": task.stype_out,
+        "start": task.start,
+        "end": task.end,
+        "encoding": encoding,
+        "compression": compression,
+        "delivery": "download",
+        "split_duration": batch_split_duration_for_chunk(task.chunk),
+    }
 
 
 def has_non_empty_output(path: Path) -> bool:
@@ -3326,8 +3362,10 @@ def execute_batch_task(
             timeout_seconds=batch_wait_timeout_seconds,
             poll_seconds=batch_poll_seconds,
         )
+        download_started_at = utc_now_iso()
         print(f"BATCH_DOWNLOAD_START job_id={job_id} tmp_dir={tmp_dir.as_posix()}", flush=True)
         downloaded = client.batch.download(job_id=job_id, output_dir=tmp_dir)
+        download_completed_at = utc_now_iso()
         downloaded_paths = [Path(path) for path in downloaded]
         dbn_paths = [path for path in downloaded_paths if is_dbn_file(path) and path_size_bytes(path) > 0]
         if not dbn_paths:
@@ -3337,6 +3375,9 @@ def execute_batch_task(
                 f"Databento batch download produced {len(dbn_paths)} DBN files for one market/year task"
             )
         condition_info = fetch_dataset_conditions(client, task) if convert_parquet else None
+        original_path = dbn_paths[0]
+        original_filename = original_path.name
+        original_file_sha256 = file_sha256(original_path)
 
         if out.exists():
             if out.is_dir():
@@ -3344,12 +3385,34 @@ def execute_batch_task(
             else:
                 out.unlink()
         out.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(dbn_paths[0].as_posix(), out.as_posix())
+        move_started_at = utc_now_iso()
+        shutil.move(original_path.as_posix(), out.as_posix())
+        move_completed_at = utc_now_iso()
         raw_manifest = build_raw_file_manifest(
             task,
             out,
             job_id=job_id,
             request_status="ok",
+            original_filename=original_filename,
+            original_file_sha256=original_file_sha256,
+            download_started_at=download_started_at,
+            download_completed_at=download_completed_at,
+            transfer_history=[
+                {
+                    "action": "databento_batch_download_to_temp",
+                    "path": original_path.as_posix(),
+                    "completed_at": download_completed_at,
+                    "sha256": original_file_sha256,
+                },
+                {
+                    "action": "filesystem_move_to_final_path",
+                    "from_path": original_path.as_posix(),
+                    "to_path": out.as_posix(),
+                    "started_at": move_started_at,
+                    "completed_at": move_completed_at,
+                    "content_hash_expected_preserved": True,
+                },
+            ],
         )
         write_json(raw_file_manifest_path(out), raw_manifest)
         converted_paths = (
@@ -3492,7 +3555,27 @@ def build_raw_file_manifest(
     *,
     job_id: str | None,
     request_status: str,
+    dataset_version: str | None = None,
+    schema_version: str | None = None,
+    request_text: str | None = None,
+    original_filename: str | None = None,
+    original_file_sha256: str | None = None,
+    download_started_at: str | None = None,
+    download_completed_at: str | None = None,
+    transfer_history: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
+    manifest_timestamp = utc_now_iso()
+    completed_at = download_completed_at or manifest_timestamp
+    provenance_status = (
+        "original_delivery_hash_recorded"
+        if original_file_sha256
+        else "post_transfer_hash_only"
+    )
+    reproducibility_status = (
+        "reproducible_with_recorded_original_hash"
+        if original_file_sha256 and dataset_version and schema_version
+        else "partially_reproducible"
+    )
     manifest = {
         "vendor": VENDOR,
         "dataset": task.dataset,
@@ -3505,17 +3588,35 @@ def build_raw_file_manifest(
         "stype_out": task.stype_out,
         "encoding": EXPECTED_ENCODING,
         "compression": EXPECTED_COMPRESSION,
-        "downloaded_at": datetime.now(timezone.utc).isoformat(),
+        "downloaded_at": completed_at,
         "path": path.as_posix(),
         "file_size_bytes": path_size_bytes(path),
         "file_sha256": file_sha256(path),
         "job_id": job_id,
         "api_client_version": databento_client_version(),
         "request_status": request_status,
+        "dataset_version": dataset_version,
+        "schema_version": schema_version,
+        "request_text": request_text or canonical_json_text(task_request_payload(task)),
+        "original_filename": original_filename,
+        "original_file_sha256": original_file_sha256,
+        "download_started_at": download_started_at,
+        "download_completed_at": completed_at,
+        "transfer_history": transfer_history or [],
+        "provenance_status": provenance_status,
+        "reproducibility_status": reproducibility_status,
     }
     missing = [field for field in REQUIRED_MANIFEST_FIELDS if field not in manifest]
     if missing:
         raise ValueError("raw file manifest missing fields: " + ",".join(missing))
+    missing_provenance = [
+        field for field in PROVENANCE_MANIFEST_FIELDS if field not in manifest
+    ]
+    if missing_provenance:
+        raise ValueError(
+            "raw file manifest missing provenance fields: "
+            + ",".join(missing_provenance)
+        )
     return manifest
 
 
@@ -3570,13 +3671,27 @@ def validate_raw_file_manifest(
 
 
 def canonical_json_hash(payload: object) -> str:
-    encoded = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    ).encode("utf-8")
+    encoded = canonical_json_text(payload).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+PLAN_HASH_EXCLUDED_FIELDS = {
+    "approval_id",
+    "approved_plan_hash",
+    "approved_plan_path",
+    "generated_at",
+    "plan_hash",
+    "run_id",
+    "run_kind",
+}
+
+
+def stable_plan_payload(plan: Mapping[str, object]) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in plan.items()
+        if key not in PLAN_HASH_EXCLUDED_FIELDS
+    }
 
 
 def output_role_for_run(mode: str, raw_format: str, output_root: Path) -> str:
@@ -3605,12 +3720,10 @@ def dry_run_plan_path(plan_out: Path) -> Path:
 
 
 def finalize_plan_provenance(plan: dict[str, object], *, run_kind: str) -> dict[str, object]:
-    plan["generated_at"] = datetime.now(timezone.utc).isoformat()
+    plan["generated_at"] = utc_now_iso()
     plan["run_id"] = uuid4().hex
     plan["run_kind"] = run_kind
-    plan["plan_hash"] = canonical_json_hash(
-        {key: value for key, value in plan.items() if key != "plan_hash"}
-    )
+    plan["plan_hash"] = canonical_json_hash(stable_plan_payload(plan))
     return plan
 
 
@@ -3679,6 +3792,77 @@ def report_path(args: argparse.Namespace, name: str) -> Path:
     if args.plan_out:
         return Path(args.plan_out).with_name(name)
     return effective_reports_root(args) / name
+
+
+def repo_relative_path(path: Path, repo_root: Path = PROJECT_ROOT) -> str:
+    resolved_root = repo_root.resolve()
+    resolved_path = path.resolve()
+    try:
+        return resolved_path.relative_to(resolved_root).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def path_is_git_tracked(path: Path, repo_root: Path = PROJECT_ROOT) -> bool:
+    relative = repo_relative_path(path, repo_root)
+    result = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", relative],
+        cwd=repo_root,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def requires_download_approval(args: argparse.Namespace) -> bool:
+    if args.dry_run or args.estimate_cost or args.convert_existing:
+        return False
+    if args.mode == "convert-parquet":
+        return False
+    return args.mode in DBN_DOWNLOAD_MODES or args.mode == "stream"
+
+
+def verify_approved_download_plan(
+    args: argparse.Namespace,
+    plan: Mapping[str, object],
+) -> dict[str, object] | None:
+    if not requires_download_approval(args):
+        return None
+    if not args.approval_id:
+        raise SystemExit(
+            "provider download requires --approval-id from an explicit bounded approval"
+        )
+    if not args.approved_plan_path:
+        raise SystemExit(
+            "provider download requires --approved-plan-path pointing to a tracked dry-run plan"
+        )
+    approved_plan_path = Path(args.approved_plan_path)
+    if not approved_plan_path.exists():
+        raise SystemExit(f"approved plan does not exist: {approved_plan_path}")
+    if not path_is_git_tracked(approved_plan_path):
+        raise SystemExit(
+            "approved plan is not tracked by git: "
+            + repo_relative_path(approved_plan_path)
+        )
+    try:
+        approved_plan = json.loads(approved_plan_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise SystemExit(f"approved plan is unreadable JSON: {exc}") from exc
+    approved_hash = approved_plan.get("plan_hash")
+    runtime_hash = plan.get("plan_hash")
+    if not approved_hash:
+        raise SystemExit("approved plan is missing plan_hash")
+    if approved_hash != runtime_hash:
+        raise SystemExit(
+            "approved plan hash mismatch: "
+            f"approved={approved_hash!r} runtime={runtime_hash!r}"
+        )
+    return {
+        "approval_id": args.approval_id,
+        "approved_plan_path": approved_plan_path.as_posix(),
+        "approved_plan_hash": approved_hash,
+    }
 
 
 def optional_schema_roots_from_args(args: argparse.Namespace) -> dict[str, Path]:
@@ -3789,6 +3973,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--out", help="Legacy output root override; prefer --dbn-root or --raw-root.")
     parser.add_argument("--plan-out", help="Override download plan path; defaults under --reports-root.")
+    parser.add_argument(
+        "--approval-id",
+        help="Required for provider downloads; identifies the bounded human approval.",
+    )
+    parser.add_argument(
+        "--approved-plan-path",
+        help="Required for provider downloads; tracked dry-run plan whose plan_hash must match the runtime plan.",
+    )
     parser.add_argument("--chunk", choices=["none", "day", "month", "year"], default="year")
     parser.add_argument(
         "--mode",
@@ -3956,6 +4148,12 @@ def main() -> int:
         non_tick_schemas = [schema for schema in requested_schemas if schema not in TICK_SCHEMAS]
         if non_tick_schemas:
             raise SystemExit("--zero-cost-start-search only supports mbp-1/trades tick schemas")
+        if requires_download_approval(args):
+            raise SystemExit(
+                "--zero-cost-start-search is not allowed on provider download runs; "
+                "run it only during approved estimate/preflight work, then rerun the "
+                "download with the fixed approved start and matching tracked dry-run plan"
+            )
 
     tasks = build_tasks_for_schemas(
         products,
@@ -4045,6 +4243,8 @@ def main() -> int:
         "output_role": output_role,
         "pipeline_raw_ready": pipeline_raw_ready,
         "archive_only": output_role in {"archive_only", "dbn_archive"},
+        "approval_id": args.approval_id,
+        "approved_plan_path": args.approved_plan_path,
         "tasks": [asdict(task) for task in tasks],
     }
     plan = finalize_plan_provenance(
@@ -4062,6 +4262,10 @@ def main() -> int:
         write_json(dry_run_plan_path(plan_out), plan)
         print_dry_run(tasks)
         return 0
+
+    approved_plan_metadata = verify_approved_download_plan(args, plan)
+    if approved_plan_metadata is not None:
+        plan.update(approved_plan_metadata)
 
     write_json(plan_out, plan)
 
