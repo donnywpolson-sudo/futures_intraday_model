@@ -183,6 +183,77 @@ def _write_raw(
     return path
 
 
+def _source_ohlcv_frame(ts_values: list[str] | None = None) -> pd.DataFrame:
+    values = ts_values or [
+        "2024-01-02T15:00:00.000000123Z",
+        "2024-01-02T15:01:00.000000456Z",
+    ]
+    return pd.DataFrame(
+        {
+            "ts_event": [pd.Timestamp(value) for value in values],
+            "open": [100.0 + idx for idx, _value in enumerate(values)],
+            "high": [101.0 + idx for idx, _value in enumerate(values)],
+            "low": [99.0 + idx for idx, _value in enumerate(values)],
+            "close": [100.5 + idx for idx, _value in enumerate(values)],
+            "volume": [10 + idx for idx, _value in enumerate(values)],
+            "rtype": [33 for _value in values],
+            "publisher_id": [1 for _value in values],
+            "instrument_id": [100 for _value in values],
+            "symbol": ["ESH4" for _value in values],
+        }
+    )
+
+
+def _write_raw_rows(
+    raw_root: Path,
+    ohlcv_path: Path,
+    source: pd.DataFrame,
+    *,
+    market: str = "ES",
+    year: int = 2024,
+    row_indices: list[int] | None = None,
+    ts_overrides: dict[int, str] | None = None,
+) -> Path:
+    path = raw_root / market / f"{year}.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    source_hash = file_sha256(ohlcv_path)
+    rows: list[dict[str, object]] = []
+    indices = row_indices if row_indices is not None else list(range(len(source)))
+    for source_idx in indices:
+        source_row = source.iloc[source_idx]
+        ts_value = (
+            pd.Timestamp(ts_overrides[source_idx])
+            if ts_overrides and source_idx in ts_overrides
+            else source_row["ts_event"]
+        )
+        rows.append(
+            {
+                "ts_event": ts_value,
+                "open": source_row["open"],
+                "high": source_row["high"],
+                "low": source_row["low"],
+                "close": source_row["close"],
+                "volume": source_row["volume"],
+                "rtype": source_row["rtype"],
+                "publisher_id": source_row["publisher_id"],
+                "instrument_id": source_row["instrument_id"],
+                "symbol": source_row["symbol"],
+                "data_quality_status": "available",
+                "data_quality_degraded": False,
+                "market": market,
+                "year": year,
+                "raw_symbol": source_row["symbol"],
+                "tick_size": 0.25,
+                "contract_multiplier_or_point_value": 50.0,
+                "source_schema": "ohlcv-1m",
+                "source_file": ohlcv_path.as_posix(),
+                "source_sha256": source_hash,
+            }
+        )
+    pd.DataFrame(rows).to_parquet(path, index=False)
+    return path
+
+
 def test_raw_dbn_alignment_passes_clean_market_year(tmp_path: Path, monkeypatch) -> None:
     config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2024])
     dbn_root = tmp_path / "data" / "dbn"
@@ -204,6 +275,192 @@ def test_raw_dbn_alignment_passes_clean_market_year(tmp_path: Path, monkeypatch)
     assert metrics["output_path"] == (raw_root / "ES" / "2024.parquet").as_posix()
     assert metrics["ohlcv_input_paths"] == [ohlcv.as_posix()]
     assert metrics["definition_paths"] == [definition.as_posix()]
+
+
+def test_raw_dbn_alignment_row_parity_passes_exact_rows(tmp_path: Path, monkeypatch) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2024])
+    dbn_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m")
+    definition = _write_dbn_with_manifest(dbn_root, "definition")
+    _write_required_metadata_dbns(dbn_root)
+    source = _source_ohlcv_frame()
+    _write_raw_rows(raw_root, ohlcv, source)
+    _install_fake_databento(monkeypatch, {ohlcv: source, definition: _definition_frame()})
+
+    report = build_report(
+        config_path=config,
+        profile="tier_3",
+        dbn_root=dbn_root,
+        raw_root=raw_root,
+        skip_definition_join=True,
+        row_parity=True,
+    )
+
+    assert report["status"] == "PASS"
+    assert report["row_parity_status"] == "checked"
+    assert report["row_parity_failure_count"] == 0
+    parity = report["row_parity_results"][0]
+    assert parity["source_row_count"] == 2
+    assert parity["raw_ohlcv_row_count"] == 2
+    assert parity["timestamp_ns_missing_count"] == 0
+    assert parity["row_order_matches_source"] is True
+    assert parity["raw_ts_event_timezone"] == "UTC"
+
+
+def test_raw_dbn_alignment_row_parity_fails_missing_source_row(tmp_path: Path, monkeypatch) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2024])
+    dbn_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m")
+    definition = _write_dbn_with_manifest(dbn_root, "definition")
+    _write_required_metadata_dbns(dbn_root)
+    source = _source_ohlcv_frame(
+        [
+            "2024-01-02T15:00:00.000000123Z",
+            "2024-01-02T15:00:00.000000123Z",
+        ]
+    )
+    source.loc[1, source.columns] = source.loc[0].to_list()
+    _write_raw_rows(raw_root, ohlcv, source, row_indices=[0])
+    _install_fake_databento(monkeypatch, {ohlcv: source, definition: _definition_frame()})
+
+    report = build_report(
+        config_path=config,
+        profile="tier_3",
+        dbn_root=dbn_root,
+        raw_root=raw_root,
+        skip_definition_join=True,
+        row_parity=True,
+    )
+
+    assert report["status"] == "FAIL"
+    parity = report["row_parity_failures"][0]
+    assert parity["missing_source_row_count"] == 1
+    assert "row_count_mismatch source=2 raw_ohlcv=1" in parity["failures"]
+    assert "source_duplicates_collapsed_without_dedup_ledger" in parity["failures"]
+
+
+def test_raw_dbn_alignment_row_parity_fails_reordered_rows(tmp_path: Path, monkeypatch) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2024])
+    dbn_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m")
+    definition = _write_dbn_with_manifest(dbn_root, "definition")
+    _write_required_metadata_dbns(dbn_root)
+    source = _source_ohlcv_frame(
+        [
+            "2024-01-02T15:01:00.000000456Z",
+            "2024-01-02T15:00:00.000000123Z",
+        ]
+    )
+    _write_raw_rows(raw_root, ohlcv, source, row_indices=[1, 0])
+    _install_fake_databento(monkeypatch, {ohlcv: source, definition: _definition_frame()})
+
+    report = build_report(
+        config_path=config,
+        profile="tier_3",
+        dbn_root=dbn_root,
+        raw_root=raw_root,
+        skip_definition_join=True,
+        row_parity=True,
+    )
+
+    parity = report["row_parity_failures"][0]
+    assert report["status"] == "FAIL"
+    assert parity["missing_source_row_count"] == 0
+    assert parity["output_only_row_count"] == 0
+    assert parity["row_order_matches_source"] is False
+    assert "row_order_mismatch" in parity["failures"]
+
+
+def test_raw_dbn_alignment_row_parity_fails_timestamp_nanosecond_corruption(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2024])
+    dbn_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m")
+    definition = _write_dbn_with_manifest(dbn_root, "definition")
+    _write_required_metadata_dbns(dbn_root)
+    source = _source_ohlcv_frame(["2024-01-02T15:00:00.000000123Z"])
+    _write_raw_rows(
+        raw_root,
+        ohlcv,
+        source,
+        ts_overrides={0: "2024-01-02T15:00:00.000000000Z"},
+    )
+    _install_fake_databento(monkeypatch, {ohlcv: source, definition: _definition_frame()})
+
+    report = build_report(
+        config_path=config,
+        profile="tier_3",
+        dbn_root=dbn_root,
+        raw_root=raw_root,
+        skip_definition_join=True,
+        row_parity=True,
+    )
+
+    parity = report["row_parity_failures"][0]
+    assert report["status"] == "FAIL"
+    assert parity["timestamp_ns_missing_count"] == 1
+    assert parity["timestamp_ns_output_only_count"] == 1
+    assert any("timestamp_ns_multiset_mismatch" in failure for failure in parity["failures"])
+
+
+def test_raw_dbn_alignment_source_only_raw_schema_rejects_enriched_columns(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2024])
+    dbn_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m")
+    definition = _write_dbn_with_manifest(dbn_root, "definition")
+    _write_required_metadata_dbns(dbn_root)
+    source = _source_ohlcv_frame()
+    _write_raw_rows(raw_root, ohlcv, source)
+    _install_fake_databento(monkeypatch, {ohlcv: source, definition: _definition_frame()})
+
+    report = build_report(
+        config_path=config,
+        profile="tier_3",
+        dbn_root=dbn_root,
+        raw_root=raw_root,
+        skip_definition_join=True,
+        require_source_only_raw=True,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["source_only_raw_schema_failure_count"] == 1
+    columns = report["source_only_raw_schema_failures"][0]["derived_or_enrichment_columns"]
+    assert "data_quality_status" in columns
+    assert "raw_symbol" in columns
+    assert "tick_size" in columns
+
+
+def test_raw_dbn_alignment_rejects_future_only_definition_join(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _write_config(tmp_path / "alpha_tiered.yaml", ["ES"], [2024])
+    dbn_root = tmp_path / "data" / "dbn"
+    raw_root = tmp_path / "data" / "raw"
+    ohlcv = _write_dbn_with_manifest(dbn_root, "ohlcv-1m")
+    definition = _write_dbn_with_manifest(dbn_root, "definition")
+    _write_required_metadata_dbns(dbn_root)
+    source = _source_ohlcv_frame(["2024-01-02T15:00:00Z"])
+    _write_raw_rows(raw_root, ohlcv, source)
+    future_definition = _definition_frame()
+    future_definition["ts_event"] = [pd.Timestamp("2024-01-03T00:00:00Z")]
+    _install_fake_databento(monkeypatch, {ohlcv: source, definition: future_definition})
+
+    report = build_report(config_path=config, profile="tier_3", dbn_root=dbn_root, raw_root=raw_root)
+
+    assert report["status"] == "FAIL"
+    assert report["definition_join_mismatch_count"] == 1
+    assert "missing definition coverage" in report["definition_join_mismatches"][0]["failure"]
 
 
 def test_raw_dbn_alignment_discovery_profile_uses_raw_market_years(

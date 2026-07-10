@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import sys
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -66,6 +68,31 @@ RAW_OPTIONAL_AUDIT_COLUMNS = [
     "source_schema",
 ]
 DEFINITION_COMPARE_COLUMNS = ["raw_symbol", "tick_size", "contract_multiplier_or_point_value"]
+ROW_PARITY_SOURCE_COLUMNS = [
+    "ts_event",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "rtype",
+    "publisher_id",
+    "instrument_id",
+    "symbol",
+]
+ROW_PARITY_TRACEABILITY_COLUMNS = {
+    "source_schema",
+    "source_file",
+    "source_sha256",
+    "source_row_ordinal",
+    "dbn_row_ordinal",
+    "dbn_file_row_ordinal",
+    "dbn_group_row_ordinal",
+    "ts_event_ns",
+    "row_hash",
+}
+SOURCE_ONLY_RAW_ALLOWED_COLUMNS = set(ROW_PARITY_SOURCE_COLUMNS) | ROW_PARITY_TRACEABILITY_COLUMNS
+ROW_PARITY_SAMPLE_LIMIT = 10
 MAX_HASH_WORKERS = 4
 TRADES_SCHEMA = "trades"
 TRADES_RECONSTRUCTED_SOURCE_SCHEMA = "trades_reconstructed_ohlcv_1m"
@@ -499,6 +526,277 @@ def _cached_file_sha256(path: Path, file_hashes: dict[Path, str] | None) -> str:
     return file_sha256(path)
 
 
+def _timestamp_ns_series(series: pd.Series) -> pd.Series:
+    ts = pd.to_datetime(series, utc=True, errors="coerce")
+    ns = ts.astype("int64").astype("object")
+    ns.loc[ts.isna()] = None
+    return ns
+
+
+def _timestamp_timezone_name(series: pd.Series) -> str | None:
+    dtype = series.dtype
+    if isinstance(dtype, pd.DatetimeTZDtype):
+        return str(dtype.tz)
+    return None
+
+
+def _canonical_row_value(value: object) -> object:
+    if pd.isna(value):
+        return None
+    if hasattr(value, "item"):
+        try:
+            value = value.item()
+        except (AttributeError, ValueError):
+            pass
+    if isinstance(value, float):
+        return float(value)
+    if isinstance(value, int):
+        return int(value)
+    return str(value)
+
+
+def _row_hash(row: pd.Series) -> str:
+    payload = {
+        "ts_event_ns": _canonical_row_value(row.get("ts_event_ns")),
+        "open": _canonical_row_value(row.get("open")),
+        "high": _canonical_row_value(row.get("high")),
+        "low": _canonical_row_value(row.get("low")),
+        "close": _canonical_row_value(row.get("close")),
+        "volume": _canonical_row_value(row.get("volume")),
+        "rtype": _canonical_row_value(row.get("rtype")),
+        "publisher_id": _canonical_row_value(row.get("publisher_id")),
+        "instrument_id": _canonical_row_value(row.get("instrument_id")),
+        "symbol": _canonical_row_value(row.get("symbol")),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _add_row_identity_columns(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out["ts_event_ns"] = _timestamp_ns_series(out["ts_event"])
+    out["row_hash"] = out.apply(_row_hash, axis=1)
+    return out
+
+
+def _frame_from_dbn_for_parity(path: Path) -> pd.DataFrame:
+    import databento as db
+
+    store = db.DBNStore.from_file(path)
+    df_or_frames = store.to_df(price_type="float", pretty_ts=True, map_symbols=True)
+    if isinstance(df_or_frames, pd.DataFrame):
+        frame = df_or_frames.copy()
+    else:
+        frame = pd.concat(df_or_frames, ignore_index=False)
+    if "ts_event" not in frame.columns:
+        if isinstance(frame.index, pd.DatetimeIndex):
+            frame = frame.reset_index()
+            first_col = frame.columns[0]
+            if first_col != "ts_event":
+                frame = frame.rename(columns={first_col: "ts_event"})
+        else:
+            raise ValueError(f"DBN parity frame has no ts_event column or DatetimeIndex: {path.as_posix()}")
+    missing = sorted(set(ROW_PARITY_SOURCE_COLUMNS) - set(frame.columns))
+    if missing:
+        raise ValueError(f"DBN parity frame missing columns {missing}: {path.as_posix()}")
+    return frame[ROW_PARITY_SOURCE_COLUMNS].copy()
+
+
+def _load_ohlcv_source_parity_frame(
+    paths: list[Path],
+    *,
+    file_hashes: dict[Path, str] | None,
+) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    group_row_ordinal = 0
+    for path in paths:
+        frame = _frame_from_dbn_for_parity(path)
+        frame["source_file"] = path.as_posix()
+        frame["source_sha256"] = _cached_file_sha256(path, file_hashes)
+        frame["dbn_file_row_ordinal"] = range(len(frame))
+        frame["dbn_group_row_ordinal"] = range(group_row_ordinal, group_row_ordinal + len(frame))
+        group_row_ordinal += len(frame)
+        frames.append(frame)
+    if not frames:
+        return pd.DataFrame(columns=ROW_PARITY_SOURCE_COLUMNS)
+    return _add_row_identity_columns(pd.concat(frames, ignore_index=True))
+
+
+def _raw_ohlcv_parity_frame(path: Path, *, local_ohlcv_hashes: set[str]) -> pd.DataFrame:
+    columns = sorted(set(ROW_PARITY_SOURCE_COLUMNS) | {"source_schema", "source_file", "source_sha256"})
+    frame = _read_raw_audit_frame(path, columns)
+    missing = sorted(set(ROW_PARITY_SOURCE_COLUMNS) - set(frame.columns))
+    if missing:
+        raise ValueError(f"raw parquet parity frame missing columns {missing}: {path.as_posix()}")
+    frame = frame.copy()
+    frame["raw_row_ordinal"] = range(len(frame))
+    if "source_schema" in frame.columns:
+        schema_mask = frame["source_schema"].fillna("").astype(str).map(
+            lambda value: SCHEMA in {part.strip() for part in value.split(";") if part.strip()}
+        )
+    else:
+        schema_mask = pd.Series([True] * len(frame), index=frame.index)
+    if "source_sha256" in frame.columns and local_ohlcv_hashes:
+        hash_mask = frame["source_sha256"].fillna("").astype(str).map(
+            lambda value: bool(
+                {part.strip() for part in value.split(";") if part.strip()} & local_ohlcv_hashes
+            )
+        )
+    else:
+        hash_mask = pd.Series([True] * len(frame), index=frame.index)
+    filtered = frame.loc[schema_mask & hash_mask].copy()
+    return _add_row_identity_columns(filtered)
+
+
+def _sample_rows(df: pd.DataFrame, hashes: Iterable[str]) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    wanted = list(hashes)
+    for row_hash in wanted:
+        rows = df.loc[df["row_hash"] == row_hash]
+        if rows.empty:
+            continue
+        row = rows.iloc[0]
+        payload: dict[str, Any] = {
+            "row_hash": row_hash,
+            "ts_event": str(row.get("ts_event")),
+            "ts_event_ns": _canonical_row_value(row.get("ts_event_ns")),
+            "instrument_id": _canonical_row_value(row.get("instrument_id")),
+            "symbol": _canonical_row_value(row.get("symbol")),
+            "open": _canonical_row_value(row.get("open")),
+            "high": _canonical_row_value(row.get("high")),
+            "low": _canonical_row_value(row.get("low")),
+            "close": _canonical_row_value(row.get("close")),
+            "volume": _canonical_row_value(row.get("volume")),
+        }
+        for column in ("source_file", "source_sha256", "dbn_file_row_ordinal", "dbn_group_row_ordinal", "raw_row_ordinal"):
+            if column in row.index:
+                payload[column] = _canonical_row_value(row.get(column))
+        selected.append(payload)
+        if len(selected) >= ROW_PARITY_SAMPLE_LIMIT:
+            break
+    return selected
+
+
+def _counter_delta_count(left: Counter[str], right: Counter[str]) -> int:
+    return int(sum((left - right).values()))
+
+
+def _first_order_mismatch(source_hashes: list[str], raw_hashes: list[str]) -> dict[str, Any] | None:
+    for index, (source_hash, raw_hash) in enumerate(zip(source_hashes, raw_hashes)):
+        if source_hash != raw_hash:
+            return {
+                "row_index": index,
+                "source_row_hash": source_hash,
+                "raw_row_hash": raw_hash,
+            }
+    if len(source_hashes) != len(raw_hashes):
+        return {
+            "row_index": min(len(source_hashes), len(raw_hashes)),
+            "source_row_hash": source_hashes[min(len(source_hashes), len(raw_hashes))] if len(source_hashes) > len(raw_hashes) else None,
+            "raw_row_hash": raw_hashes[min(len(source_hashes), len(raw_hashes))] if len(raw_hashes) > len(source_hashes) else None,
+        }
+    return None
+
+
+def _classify_raw_columns(path: Path) -> dict[str, Any]:
+    columns = _parquet_columns(path)
+    derived = sorted(column for column in columns if column not in SOURCE_ONLY_RAW_ALLOWED_COLUMNS)
+    missing_source = sorted(column for column in ROW_PARITY_SOURCE_COLUMNS if column not in columns)
+    return {
+        "path": path.as_posix(),
+        "column_count": len(columns),
+        "source_only_allowed_columns": sorted(SOURCE_ONLY_RAW_ALLOWED_COLUMNS),
+        "missing_source_columns": missing_source,
+        "derived_or_enrichment_columns": derived,
+        "derived_or_enrichment_column_count": len(derived),
+    }
+
+
+def _validate_row_parity(
+    *,
+    key: tuple[str, int],
+    raw_path: Path,
+    ohlcv_paths: list[Path],
+    file_hashes: dict[Path, str] | None,
+) -> dict[str, Any]:
+    market, year = key
+    result: dict[str, Any] = {
+        "market": market,
+        "year": year,
+        "raw_path": raw_path.as_posix(),
+        "ohlcv_input_paths": [path.as_posix() for path in ohlcv_paths],
+        "status": "PASS",
+        "failures": [],
+    }
+    try:
+        source = _load_ohlcv_source_parity_frame(ohlcv_paths, file_hashes=file_hashes)
+        local_hashes = {_cached_file_sha256(path, file_hashes) for path in ohlcv_paths}
+        raw = _raw_ohlcv_parity_frame(raw_path, local_ohlcv_hashes=local_hashes)
+    except Exception as exc:
+        result["status"] = "FAIL"
+        result["failures"] = [f"row parity load failed: {exc}"]
+        return result
+
+    source_counter = Counter(source["row_hash"].astype(str))
+    raw_counter = Counter(raw["row_hash"].astype(str))
+    missing_hashes = source_counter - raw_counter
+    output_only_hashes = raw_counter - source_counter
+    source_hashes = source["row_hash"].astype(str).tolist()
+    raw_hashes = raw["row_hash"].astype(str).tolist()
+    source_ts_counter = Counter(source["ts_event_ns"].dropna().astype(str))
+    raw_ts_counter = Counter(raw["ts_event_ns"].dropna().astype(str))
+    timestamp_missing = _counter_delta_count(source_ts_counter, raw_ts_counter)
+    timestamp_output_only = _counter_delta_count(raw_ts_counter, source_ts_counter)
+    source_duplicate_rows = int(sum(count - 1 for count in source_counter.values() if count > 1))
+    raw_duplicate_rows = int(sum(count - 1 for count in raw_counter.values() if count > 1))
+    raw_columns = set(_parquet_columns(raw_path))
+    dedup_ledger_present = bool(raw_columns & {"dedup_ledger_id", "dedup_reason", "dedup_source_row_hash"})
+    order_mismatch = _first_order_mismatch(source_hashes, raw_hashes)
+    raw_ts_dtype = str(pd.read_parquet(raw_path, columns=["ts_event"])["ts_event"].dtype)
+    raw_ts_tz = _timestamp_timezone_name(pd.read_parquet(raw_path, columns=["ts_event"])["ts_event"])
+
+    failures: list[str] = []
+    if len(source) != len(raw):
+        failures.append(f"row_count_mismatch source={len(source)} raw_ohlcv={len(raw)}")
+    if missing_hashes:
+        failures.append(f"missing_source_rows={sum(missing_hashes.values())}")
+    if output_only_hashes:
+        failures.append(f"output_only_rows={sum(output_only_hashes.values())}")
+    if timestamp_missing or timestamp_output_only:
+        failures.append(
+            f"timestamp_ns_multiset_mismatch missing={timestamp_missing} output_only={timestamp_output_only}"
+        )
+    if order_mismatch is not None:
+        failures.append("row_order_mismatch")
+    if source_duplicate_rows > raw_duplicate_rows and not dedup_ledger_present:
+        failures.append("source_duplicates_collapsed_without_dedup_ledger")
+    if raw_ts_tz != "UTC":
+        failures.append(f"raw_ts_event_timezone_not_utc: {raw_ts_tz or 'none'}")
+
+    result.update(
+        {
+            "status": "FAIL" if failures else "PASS",
+            "failures": failures,
+            "source_row_count": int(len(source)),
+            "raw_ohlcv_row_count": int(len(raw)),
+            "source_duplicate_row_hash_count": source_duplicate_rows,
+            "raw_duplicate_row_hash_count": raw_duplicate_rows,
+            "dedup_ledger_present": dedup_ledger_present,
+            "missing_source_row_count": int(sum(missing_hashes.values())),
+            "output_only_row_count": int(sum(output_only_hashes.values())),
+            "timestamp_ns_missing_count": timestamp_missing,
+            "timestamp_ns_output_only_count": timestamp_output_only,
+            "row_order_matches_source": order_mismatch is None,
+            "first_order_mismatch": order_mismatch,
+            "raw_ts_event_dtype": raw_ts_dtype,
+            "raw_ts_event_timezone": raw_ts_tz,
+            "missing_source_rows": _sample_rows(source, missing_hashes.elements()),
+            "output_only_rows": _sample_rows(raw, output_only_hashes.elements()),
+        }
+    )
+    return result
+
+
 def _validate_raw_schema_and_values(
     *,
     key: tuple[str, int],
@@ -721,6 +1019,8 @@ def build_report(
     dbn_root: Path,
     raw_root: Path,
     skip_definition_join: bool = False,
+    row_parity: bool = False,
+    require_source_only_raw: bool = False,
     repair_manifest_path: Path | None = None,
     expected_only: bool = False,
     include_market_years: Iterable[tuple[str, int]] | None = None,
@@ -816,6 +1116,10 @@ def build_report(
     source_hash_mismatches: list[dict[str, Any]] = []
     accepted_repair_sources: list[dict[str, Any]] = []
     definition_join_mismatches: list[dict[str, Any]] = []
+    row_parity_results: list[dict[str, Any]] = []
+    row_parity_failures: list[dict[str, Any]] = []
+    raw_column_classifications: list[dict[str, Any]] = []
+    source_only_raw_schema_failures: list[dict[str, Any]] = []
     raw_file_metrics: list[dict[str, Any]] = []
     definition_join_checked_count = 0
     raw_columns = RAW_REQUIRED_COLUMNS + RAW_OPTIONAL_AUDIT_COLUMNS
@@ -834,6 +1138,30 @@ def build_report(
                 ],
             }
         )
+        column_classification = _classify_raw_columns(path)
+        raw_column_classifications.append({**_row(key), **column_classification})
+        metrics["derived_or_enrichment_column_count"] = column_classification[
+            "derived_or_enrichment_column_count"
+        ]
+        if require_source_only_raw and column_classification["derived_or_enrichment_columns"]:
+            source_only_raw_schema_failures.append(
+                {
+                    **_row(key, path=path.as_posix()),
+                    "derived_or_enrichment_columns": column_classification[
+                        "derived_or_enrichment_columns"
+                    ],
+                }
+            )
+        if row_parity and key in ohlcv_index:
+            parity = _validate_row_parity(
+                key=key,
+                raw_path=path,
+                ohlcv_paths=ohlcv_index[key],
+                file_hashes=file_hashes,
+            )
+            row_parity_results.append(parity)
+            if parity["status"] != "PASS":
+                row_parity_failures.append(parity)
         raw_file_metrics.append(metrics)
         if failures:
             raw_schema_failures.append({**_row(key, path=path.as_posix()), "failures": failures})
@@ -882,6 +1210,10 @@ def build_report(
         failures.append(f"source hash mismatches: {len(source_hash_mismatches)}")
     if definition_join_mismatches:
         failures.append(f"definition join mismatches: {len(definition_join_mismatches)}")
+    if row_parity_failures:
+        failures.append(f"row parity failures: {len(row_parity_failures)}")
+    if source_only_raw_schema_failures:
+        failures.append(f"source-only raw schema failures: {len(source_only_raw_schema_failures)}")
     if missing_include_profile_market_years:
         failures.append(
             "include-list market-years missing from profile: "
@@ -897,6 +1229,11 @@ def build_report(
         "definition_join_skipped": bool(skip_definition_join),
         "definition_join_status": "skipped" if skip_definition_join else "checked",
         "definition_join_checked_market_year_count": definition_join_checked_count,
+        "row_parity_status": "checked" if row_parity else "not_run",
+        "row_parity_checked_market_year_count": len(row_parity_results),
+        "row_parity_failure_count": len(row_parity_failures),
+        "source_only_raw_required": bool(require_source_only_raw),
+        "source_only_raw_schema_failure_count": len(source_only_raw_schema_failures),
         "failures": failures,
         "dataset": CME_DATASET,
         "profile": profile,
@@ -953,6 +1290,10 @@ def build_report(
         "raw_schema_failure_count": len(raw_schema_failures),
         "source_hash_mismatch_count": len(source_hash_mismatches),
         "definition_join_mismatch_count": len(definition_join_mismatches),
+        "raw_column_classifications": raw_column_classifications,
+        "row_parity_results": row_parity_results,
+        "row_parity_failures": row_parity_failures,
+        "source_only_raw_schema_failures": source_only_raw_schema_failures,
         "pre_availability_exemptions": pre_availability_exemptions,
         "missing_ohlcv_dbn": [_row(key) for key in missing_ohlcv],
         "missing_definition_dbn": [_row(key) for key in missing_definition],
@@ -1002,6 +1343,11 @@ def write_markdown(path: Path, report: dict[str, Any]) -> None:
         f"- Definition join status: {report['definition_join_status']}",
         f"- Definition join checked market-years: {report['definition_join_checked_market_year_count']}",
         f"- Definition join mismatches: {report['definition_join_mismatch_count']}",
+        f"- Row parity status: {report['row_parity_status']}",
+        f"- Row parity checked market-years: {report['row_parity_checked_market_year_count']}",
+        f"- Row parity failures: {report['row_parity_failure_count']}",
+        f"- Source-only raw required: {report['source_only_raw_required']}",
+        f"- Source-only raw schema failures: {report['source_only_raw_schema_failure_count']}",
         "",
         "## Failures",
         "",
@@ -1019,6 +1365,18 @@ def write_markdown(path: Path, report: dict[str, Any]) -> None:
                 f"- {row['market']} {row['year']} rows={row['row_count']} "
                 f"source_file={row['source_file']}"
             )
+    if report.get("row_parity_failures"):
+        lines.extend(["", "## Row Parity Failures", ""])
+        for row in report["row_parity_failures"][:100]:
+            lines.append(
+                f"- {row['market']} {row['year']} source_rows={row.get('source_row_count')} "
+                f"raw_ohlcv_rows={row.get('raw_ohlcv_row_count')} failures={'; '.join(row.get('failures', []))}"
+            )
+    if report.get("source_only_raw_schema_failures"):
+        lines.extend(["", "## Source-Only Raw Schema Failures", ""])
+        for row in report["source_only_raw_schema_failures"][:100]:
+            columns = ",".join(row.get("derived_or_enrichment_columns", [])[:20])
+            lines.append(f"- {row['market']} {row['year']} derived_or_enrichment_columns={columns}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -1032,6 +1390,16 @@ def parse_args() -> argparse.Namespace:
         "--skip-definition-join",
         action="store_true",
         help="Skip expensive point-in-time definition rebuild checks; report is partial.",
+    )
+    parser.add_argument(
+        "--row-parity",
+        action="store_true",
+        help="Decode OHLCV DBNs and compare source rows, timestamp nanoseconds, duplicates, and row order to raw parquet.",
+    )
+    parser.add_argument(
+        "--require-source-only-raw",
+        action="store_true",
+        help="Fail if raw parquet contains columns outside OHLCV source fields plus traceability fields.",
     )
     parser.add_argument(
         "--repair-manifest",
@@ -1064,6 +1432,8 @@ def main() -> int:
         dbn_root=Path(args.dbn_root),
         raw_root=Path(args.raw_root),
         skip_definition_join=bool(args.skip_definition_join),
+        row_parity=bool(args.row_parity),
+        require_source_only_raw=bool(args.require_source_only_raw),
         repair_manifest_path=Path(args.repair_manifest) if args.repair_manifest else None,
         expected_only=bool(args.expected_only),
         include_market_years=(
@@ -1086,7 +1456,9 @@ def main() -> int:
         "needs_phase1b={needs_phase1b_conversion_count} raw_only={raw_only_count} "
         "invalid_manifests={invalid_manifest_count} source_hash_mismatches={source_hash_mismatch_count} "
         "definition_join_status={definition_join_status} "
-        "definition_join_mismatches={definition_join_mismatch_count}".format(**report)
+        "definition_join_mismatches={definition_join_mismatch_count} "
+        "row_parity_status={row_parity_status} row_parity_failures={row_parity_failure_count} "
+        "source_only_raw_schema_failures={source_only_raw_schema_failure_count}".format(**report)
     )
     return 0 if report["status"] == "PASS" else 1
 
