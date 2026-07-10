@@ -475,6 +475,8 @@ def _base_rows(count: int = 40, market: str = "ES") -> list[dict[str, object]]:
                 "close": open_price,
                 "volume": 10,
                 "causal_valid": True,
+                "phase2_ready": True,
+                "phase2_not_ready_reason": "",
                 "session_segment_id": "session_2024-01-02_seg0",
                 "is_synthetic": False,
                 "valid_ohlcv": True,
@@ -942,9 +944,9 @@ def _rows_with_gross_ticks(gross_ticks: float) -> list[dict[str, object]]:
         row["low"] = entry_price - 0.25
         row["close"] = entry_price
     rows[1]["open"] = entry_price
-    rows[16]["open"] = exit_price
-    rows[16]["high"] = max(exit_price, entry_price) + 0.25
-    rows[16]["low"] = min(exit_price, entry_price) - 0.25
+    rows[31]["open"] = exit_price
+    rows[31]["high"] = max(exit_price, entry_price) + 0.25
+    rows[31]["low"] = min(exit_price, entry_price) - 0.25
     return rows
 
 
@@ -968,10 +970,10 @@ def test_entry_exit_alignment_uses_next_bar_open_not_close_t(tmp_path: Path) -> 
     output = pd.read_parquet(output_path)
     row = output.iloc[0]
     assert row["target_entry_ts"] == rows[1]["ts"]
-    assert row["target_exit_ts"] == rows[16]["ts"]
+    assert row["target_exit_ts"] == rows[31]["ts"]
     assert row["target_entry_price"] == rows[1]["open"]
-    assert row["target_exit_price"] == rows[16]["open"]
-    assert row["target_horizon_bars"] == 15
+    assert row["target_exit_price"] == rows[31]["open"]
+    assert row["target_horizon_bars"] == 30
     assert row["target_entry_price"] != rows[0]["close"]
 
 
@@ -1130,6 +1132,7 @@ def test_invalid_reasons_for_current_and_future_path_flags(tmp_path: Path) -> No
         ("session_segment_cross", 5, "session_segment_id", "session_2024-01-02_seg1"),
         ("synthetic_path", 5, "is_synthetic", True),
         ("invalid_ohlcv_path", 5, "valid_ohlcv", False),
+        ("phase2_not_ready_path", 5, "phase2_ready", False),
         ("boundary_session_path", 5, "boundary_session_flag", True),
         ("roll_path", 5, "roll_window_flag", True),
     ]
@@ -1161,22 +1164,25 @@ def test_tick_dollar_cost_and_deadzone_conversion() -> None:
         row["low"] = 99.75
         row["close"] = 100.0
     rows[1]["open"] = 100.0
-    rows[16]["open"] = 101.0
+    rows[31]["open"] = 101.0
     labeled = add_labels(
         pd.DataFrame(rows),
         load_market_config("ES", Path("missing.yaml")),
     )
 
     row = labeled.iloc[0]
-    assert row["target_ret_ticks_15m"] == 4.0
-    assert row["target_gross_dollars_15m"] == 50.0
+    assert row["target_ret_ticks_30m"] == 4.0
+    assert row["target_gross_dollars_30m"] == 50.0
     assert row["target_estimated_cost_ticks"] == 2.0
     assert row["target_estimated_cost_dollars"] == 25.0
     assert row["target_net_ticks_after_est_cost"] == 2.0
     assert row["target_net_dollars_after_est_cost"] == 25.0
-    assert row["target_sign_15m"] == 1
+    assert row["target_sign_30m"] == 1
     assert row["target_sign_with_deadzone"] == 0
     assert row["target_tradeable_after_cost"] == True
+    assert row["target_favorable_after_cost_30m"] == False
+    assert row["target_fillable_after_slippage_30m"] == False
+    assert "target_ret_ticks_15m" not in labeled.columns
 
 
 def test_explicit_cost_config_is_loaded_and_reported(tmp_path: Path) -> None:
@@ -1264,7 +1270,7 @@ def test_net_ticks_after_cost_semantics() -> None:
             load_market_config("ES", Path("missing.yaml")),
         )
         row = labeled.iloc[0]
-        gross = row["target_ret_ticks_15m"]
+        gross = row["target_ret_ticks_30m"]
         net = row["target_net_ticks_after_est_cost"]
 
         assert gross == gross_ticks
@@ -1275,108 +1281,17 @@ def test_net_ticks_after_cost_semantics() -> None:
         assert net == 0 or gross * net > 0
 
 
-def test_adaptive_atr_threshold_uses_past_only_data() -> None:
-    rows = _base_rows()
-    for row in rows:
-        row["open"] = 100.0
-        row["high"] = 100.25
-        row["low"] = 100.0
-        row["close"] = 100.0
-    rows[1]["open"] = 100.0
-    rows[2]["high"] = 100.75
-    rows[20]["high"] = 150.0
-    rows[20]["low"] = 50.0
-    labeled = add_labels(
-        pd.DataFrame(rows),
-        load_market_config("ES", Path("missing.yaml")),
-    )
-
-    assert labeled.loc[0, "fade_long_success_15m"] == True
-
-
-def test_adaptive_atr_resets_at_invalid_rows_and_session_boundaries() -> None:
-    rows = _base_rows(count=60)
+def test_primary_30m_and_robustness_60m_labels_are_independent() -> None:
+    rows = _base_rows(count=80)
     for row in rows:
         row["open"] = 100.0
         row["high"] = 100.25
         row["low"] = 99.75
         row["close"] = 100.0
-
-    rows[0]["high"] = 120.0
-    rows[0]["low"] = 80.0
-    rows[1]["valid_ohlcv"] = False
-    rows[4]["high"] = 100.50
-
-    for idx in range(0, 22):
-        rows[idx]["session_segment_id"] = "session_prev"
-    for idx in range(22, len(rows)):
-        rows[idx]["session_segment_id"] = "session_next"
-    rows[21]["high"] = 120.0
-    rows[21]["low"] = 80.0
-    rows[24]["high"] = 100.50
-
-    labeled = add_labels(
-        pd.DataFrame(rows),
-        load_market_config("ES", Path("missing.yaml")),
-    )
-
-    assert labeled.loc[2, "target_valid"] == True
-    assert labeled.loc[2, "fade_long_success_15m"] == True
-    assert labeled.loc[22, "target_valid"] == True
-    assert labeled.loc[22, "fade_long_success_15m"] == True
-
-
-def test_fade_and_30m_regime_labels() -> None:
-    rows = _base_rows(count=45)
-    for row in rows:
-        row["open"] = 100.0
-        row["high"] = 100.25
-        row["low"] = 99.75
-        row["close"] = 100.0
-    rows[1]["open"] = 100.0
-    rows[2]["high"] = 101.0
-    rows[3]["high"] = 100.75
-    rows[4]["low"] = 99.25
-    rows[25]["high"] = 102.0
-    rows[26]["low"] = 98.0
-    rows[28]["low"] = 99.0
-    labeled = add_labels(
-        pd.DataFrame(rows),
-        load_market_config("ES", Path("missing.yaml")),
-    )
-
-    row = labeled.iloc[0]
-    assert row["mfe_ticks_15m"] == 4.0
-    assert row["mae_ticks_15m"] == -3.0
-    assert row["fade_long_success_15m"] == True
-    assert row["fade_short_success_15m"] == False
-    assert row["target_fade_long_success_15m"] == True
-    assert row["target_fade_short_success_15m"] == False
-    assert row["target_fade_success_15m"] == True
-    assert row["trend_danger_up_30m"] == True
-    assert row["trend_danger_down_30m"] == True
-    assert row["target_trend_adverse_long_30m"] == True
-    assert row["target_trend_favorable_long_30m"] == True
-    assert row["target_trend_adverse_short_30m"] == True
-    assert row["target_trend_favorable_short_30m"] == True
-    assert row["target_trend_danger_long_30m"] == True
-    assert row["target_trend_danger_short_30m"] == True
-    assert row["target_trend_danger_30m"] == True
-    assert row["revert_to_vwap_30m"] == True
-    assert row["revert_to_session_mid_30m"] == True
-
-
-def test_side_aware_30m_trend_labels_require_valid_30m_path() -> None:
-    rows = _base_rows(count=45)
-    for row in rows:
-        row["open"] = 100.0
-        row["high"] = 100.25
-        row["low"] = 99.75
-        row["close"] = 100.0
-    rows[1]["open"] = 100.0
-    rows[25]["high"] = 110.0
-    rows[25]["low"] = 90.0
-    rows[25]["session_segment_id"] = "session_2024-01-02_seg1"
+    rows[31]["open"] = 102.0
+    rows[31]["high"] = 102.25
+    rows[61]["open"] = 103.0
+    rows[61]["high"] = 103.25
 
     labeled = add_labels(
         pd.DataFrame(rows),
@@ -1385,15 +1300,91 @@ def test_side_aware_30m_trend_labels_require_valid_30m_path() -> None:
 
     row = labeled.iloc[0]
     assert row["target_valid"] == True
-    for column in (
-        "trend_danger_up_30m",
-        "trend_danger_down_30m",
-        "target_trend_adverse_long_30m",
-        "target_trend_favorable_long_30m",
-        "target_trend_adverse_short_30m",
-        "target_trend_favorable_short_30m",
-    ):
-        assert row[column] == False
+    assert row["target_30m_valid"] == True
+    assert row["target_60m_valid"] == True
+    assert row["target_ret_ticks_30m"] == 8.0
+    assert row["target_ret_ticks_60m"] == 12.0
+    assert row["target_mfe_long_ticks_30m"] == 9.0
+    assert row["target_mae_long_ticks_30m"] == -1.0
+    assert row["target_favorable_after_cost_long_30m"] == True
+    assert row["target_fillable_after_slippage_long_30m"] == True
+    assert row["target_accept_long_30m"] == True
+    assert row["target_accept_long_60m"] == True
+    assert row["target_apex_confirmed_long_30m_60m"] == True
+    assert row["diagnostic_valid_15m"] == True
+    assert "target_ret_15m" not in labeled.columns
+
+
+def test_apex_mae_threat_rejects_otherwise_accepted_primary_path() -> None:
+    rows = _base_rows(count=80)
+    for row in rows:
+        row["open"] = 100.0
+        row["high"] = 100.25
+        row["low"] = 99.75
+        row["close"] = 100.0
+    rows[10]["low"] = 94.75
+    rows[31]["open"] = 102.0
+    rows[31]["high"] = 102.25
+
+    labeled = add_labels(
+        pd.DataFrame(rows),
+        load_market_config("ES", Path("missing.yaml")),
+    )
+
+    row = labeled.iloc[0]
+    assert row["target_valid"] == True
+    assert row["target_favorable_after_cost_long_30m"] == True
+    assert row["target_fillable_after_slippage_long_30m"] == True
+    assert row["target_mae_long_dollars_30m"] == -262.5
+    assert row["target_apex_dll_eod_threat_long_30m"] == True
+    assert row["target_accept_long_30m"] == False
+
+
+def test_apex_eod_close_buffer_invalidates_primary_path() -> None:
+    rows = _base_rows(count=80)
+    start = pd.Timestamp("2024-01-02T21:30:00Z")
+    for i, row in enumerate(rows):
+        row["ts"] = start + pd.Timedelta(minutes=i)
+        row["open"] = 100.0
+        row["high"] = 100.25
+        row["low"] = 99.75
+        row["close"] = 100.0
+
+    labeled = add_labels(
+        pd.DataFrame(rows),
+        load_market_config("ES", Path("missing.yaml")),
+    )
+
+    row = labeled.iloc[0]
+    assert row["target_valid"] == False
+    assert row["target_invalid_reason"] == "apex_eod_close_buffer"
+    assert row["target_no_hold_into_close_30m"] == False
+    assert row["target_accept_any_30m"] == False
+
+
+def test_60m_robustness_can_fail_independently_of_primary_30m() -> None:
+    rows = _base_rows(count=80)
+    for row in rows:
+        row["open"] = 100.0
+        row["high"] = 100.25
+        row["low"] = 99.75
+        row["close"] = 100.0
+    rows[31]["open"] = 102.0
+    rows[31]["high"] = 102.25
+    rows[31]["low"] = 101.75
+    rows[45]["session_segment_id"] = "session_2024-01-02_seg1"
+
+    labeled = add_labels(
+        pd.DataFrame(rows),
+        load_market_config("ES", Path("missing.yaml")),
+    )
+
+    row = labeled.iloc[0]
+    assert row["target_30m_valid"] == True
+    assert row["target_60m_valid"] == False
+    assert row["target_60m_invalid_reason"] == "session_segment_cross"
+    assert row["target_accept_long_30m"] == True
+    assert row["target_apex_confirmed_any_30m_60m"] == False
 
 
 def test_output_schema_and_reports(tmp_path: Path) -> None:
@@ -1419,16 +1410,16 @@ def test_output_schema_and_reports(tmp_path: Path) -> None:
     assert output["cost_source"].eq("test_costs").all()
     assert output["cost_provisional"].eq(False).all()
     for column in (
-        "target_fade_long_success_15m",
-        "target_fade_short_success_15m",
-        "target_fade_success_15m",
-        "target_trend_adverse_long_30m",
-        "target_trend_favorable_long_30m",
-        "target_trend_adverse_short_30m",
-        "target_trend_favorable_short_30m",
-        "target_trend_danger_long_30m",
-        "target_trend_danger_short_30m",
-        "target_trend_danger_30m",
+        "target_ret_ticks_30m",
+        "target_ret_ticks_60m",
+        "target_favorable_after_cost_30m",
+        "target_fillable_after_slippage_30m",
+        "target_apex_dll_eod_threat_30m",
+        "target_no_hold_into_close_30m",
+        "target_accept_any_30m",
+        "target_accept_any_60m",
+        "target_apex_confirmed_any_30m_60m",
+        "diagnostic_ret_ticks_15m",
     ):
         assert column in output.columns
     manifest = json.loads((reports_root / "label_manifest.json").read_text())
@@ -1482,10 +1473,8 @@ def test_output_schema_and_reports(tmp_path: Path) -> None:
     assert manifest["outputs"][0]["warning_count"] == len(result.warnings)
     assert manifest["outputs"][0]["failure_count"] == len(result.failures)
     assert manifest["outputs"][0]["failures"] == result.failures
-    assert (
-        manifest["label_semantics"]["target_tradeable_after_cost"]
-        == "absolute move exceeds estimated cost; not guaranteed profitability"
-    )
+    assert manifest["label_semantics"]["label_semantics_id"] == LABEL_SEMANTICS_ID
+    assert "primary 30m" in manifest["label_semantics"]["target_ret_ticks_30m"]
 
 
 def test_mixed_roll_detection_availability_is_reported(tmp_path: Path) -> None:

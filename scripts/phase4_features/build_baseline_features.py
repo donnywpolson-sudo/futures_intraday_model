@@ -99,7 +99,9 @@ STATIC_PROFILE_YEARS = {
 TIER1_MARKETS = tuple(CORE_PROFILE_MARKETS)
 EPS = 1e-12
 SHOCK_DENOMINATOR_MIN_RANGE_FRACTION = 0.01
-PHASE3_LABEL_SEMANTICS_ID = "phase3_labels_v1_next_1m_open_to_15m_open"
+PHASE3_LABEL_SEMANTICS_ID = (
+    "phase3_labels_v2_next_1m_open_30m_primary_60m_confirm_apex_aware"
+)
 
 FEATURE_FAMILIES: dict[str, list[str]] = {
     "baseline_ohlcv": [
@@ -309,20 +311,24 @@ REQUIRED_LABEL_CONTRACT_COLUMNS = [
     "cost_source",
     "cost_provisional",
     "roll_detection_available",
-    "target_ret_15m",
-    "target_ret_ticks_15m",
+    "target_ret_30m",
+    "target_ret_ticks_30m",
     "target_net_ticks_after_est_cost",
     "target_tradeable_after_cost",
-    "target_fade_long_success_15m",
-    "target_fade_short_success_15m",
-    "target_fade_success_15m",
-    "target_trend_adverse_long_30m",
-    "target_trend_favorable_long_30m",
-    "target_trend_adverse_short_30m",
-    "target_trend_favorable_short_30m",
-    "target_trend_danger_long_30m",
-    "target_trend_danger_short_30m",
-    "target_trend_danger_30m",
+    "target_favorable_after_cost_30m",
+    "target_fillable_after_slippage_30m",
+    "target_apex_dll_eod_threat_30m",
+    "target_no_hold_into_close_30m",
+    "target_accept_any_30m",
+    "target_60m_valid",
+    "target_ret_60m",
+    "target_ret_ticks_60m",
+    "target_favorable_after_cost_60m",
+    "target_fillable_after_slippage_60m",
+    "target_apex_dll_eod_threat_60m",
+    "target_no_hold_into_close_60m",
+    "target_accept_any_60m",
+    "target_apex_confirmed_any_30m_60m",
     "target_valid",
 ]
 
@@ -335,10 +341,15 @@ LABEL_NON_NULL_COLUMNS = [
 ]
 
 TARGET_VALUE_COLUMNS = [
-    "target_ret_15m",
-    "target_ret_ticks_15m",
+    "target_ret_30m",
+    "target_ret_ticks_30m",
     "target_net_ticks_after_est_cost",
     "target_tradeable_after_cost",
+    "target_favorable_after_cost_30m",
+    "target_fillable_after_slippage_30m",
+    "target_apex_dll_eod_threat_30m",
+    "target_no_hold_into_close_30m",
+    "target_accept_any_30m",
 ]
 
 

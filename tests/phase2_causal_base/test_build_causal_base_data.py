@@ -1549,7 +1549,8 @@ def test_phase2_readiness_allows_vendor_trusted_ohlcv_no_trade_gap(
     assert not synthetic.empty
     assert synthetic["raw_row_present"].eq(False).all()
     assert synthetic["causal_valid"].eq(False).all()
-    assert synthetic["volume"].eq(0).all()
+    assert synthetic["phase2_ready"].eq(False).all()
+    assert synthetic[["open", "high", "low", "close", "volume"]].isna().all().all()
 
 
 def test_vendor_trusted_ohlcv_policy_does_not_override_explicit_local_trade_failure(
@@ -4665,14 +4666,19 @@ def test_causal_base_schema_synthetic_and_source_lineage(tmp_path: Path) -> None
     synthetic = output.loc[output["is_synthetic"]].iloc[0]
     assert synthetic["raw_row_present"] == False
     assert synthetic["causal_valid"] == False
+    assert synthetic["phase2_ready"] == False
     assert "synthetic" in synthetic["causal_invalid_reason"]
+    assert synthetic["phase2_not_ready_reason"] == synthetic["causal_invalid_reason"]
     assert synthetic["boundary_session_flag"] == True
     assert pd.isna(synthetic["source_row_number"])
-    assert synthetic["open"] == 100.5
-    assert synthetic["high"] == 100.5
-    assert synthetic["low"] == 100.5
-    assert synthetic["close"] == 100.5
-    assert synthetic["volume"] == 0
+    assert pd.isna(synthetic["open"])
+    assert pd.isna(synthetic["high"])
+    assert pd.isna(synthetic["low"])
+    assert pd.isna(synthetic["close"])
+    assert pd.isna(synthetic["volume"])
+    assert synthetic["valid_ohlcv"] == False
+    assert "invalid_ohlcv" in synthetic["causal_invalid_reason"]
+    assert synthetic["bar_available_ts"] == synthetic["ts"] + pd.Timedelta(minutes=1)
 
     raw_rows = output.loc[~output["is_synthetic"]]
     assert raw_rows["source_row_number"].tolist() == [0, 1]
@@ -4680,6 +4686,14 @@ def test_causal_base_schema_synthetic_and_source_lineage(tmp_path: Path) -> None
     assert raw_rows["inside_session"].all()
     assert raw_rows["boundary_session_flag"].all()
     assert not raw_rows["causal_valid"].any()
+    assert raw_rows["phase2_ready"].eq(raw_rows["causal_valid"]).all()
+    assert raw_rows["phase2_not_ready_reason"].eq(raw_rows["causal_invalid_reason"]).all()
+    assert (
+        pd.to_datetime(raw_rows["bar_available_ts"], utc=True)
+        .eq(pd.to_datetime(raw_rows["ts"], utc=True) + pd.Timedelta(minutes=1))
+        .all()
+    )
+    assert raw_rows["normalization_rule_version"].nunique() == 1
     assert raw_rows["causal_invalid_reason"].str.contains("boundary_session").all()
     assert output["calendar_coverage_status"].eq("config_backed").all()
 

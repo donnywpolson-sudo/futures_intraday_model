@@ -479,35 +479,43 @@ def _frame(
             "roll_window_flag": False,
             "target_valid": True,
             "target_invalid_reason": "",
-            "target_ret_15m": 0.0,
-            "target_ret_ticks_15m": 0.0,
-            "target_gross_dollars_15m": 0.0,
+            "target_ret_30m": 0.0,
+            "target_ret_ticks_30m": 0.0,
+            "target_gross_dollars_30m": 0.0,
             "target_estimated_cost_ticks": 2.0,
             "target_estimated_cost_dollars": 25.0,
             "target_net_ticks_after_est_cost": 0.0,
             "target_net_dollars_after_est_cost": 0.0,
-            "target_sign_15m": 0,
+            "target_sign_30m": 0,
             "target_sign_with_deadzone": 0,
             "target_tradeable_after_cost": False,
-            "target_horizon_bars": 15,
-            "mae_ticks_15m": 0.0,
-            "mfe_ticks_15m": 0.0,
-            "fade_long_success_15m": False,
-            "fade_short_success_15m": False,
-            "target_fade_long_success_15m": False,
-            "target_fade_short_success_15m": False,
-            "target_fade_success_15m": False,
-            "trend_danger_up_30m": False,
-            "trend_danger_down_30m": False,
-            "target_trend_adverse_long_30m": False,
-            "target_trend_favorable_long_30m": False,
-            "target_trend_adverse_short_30m": False,
-            "target_trend_favorable_short_30m": False,
-            "target_trend_danger_long_30m": False,
-            "target_trend_danger_short_30m": False,
-            "target_trend_danger_30m": False,
-            "revert_to_vwap_30m": False,
-            "revert_to_session_mid_30m": False,
+            "target_horizon_bars": 30,
+            "target_30m_valid": True,
+            "target_30m_invalid_reason": "",
+            "target_favorable_after_cost_30m": False,
+            "target_fillable_after_slippage_30m": False,
+            "target_apex_dll_eod_threat_30m": False,
+            "target_no_hold_into_close_30m": True,
+            "target_accept_any_30m": False,
+            "target_60m_valid": True,
+            "target_60m_invalid_reason": "",
+            "target_ret_60m": 0.0,
+            "target_ret_ticks_60m": 0.0,
+            "target_favorable_after_cost_60m": False,
+            "target_fillable_after_slippage_60m": False,
+            "target_apex_dll_eod_threat_60m": False,
+            "target_no_hold_into_close_60m": True,
+            "target_accept_any_60m": False,
+            "target_apex_confirmed_any_30m_60m": False,
+            "diagnostic_valid_15m": True,
+            "diagnostic_ret_15m": 0.0,
+            "diagnostic_ret_ticks_15m": 0.0,
+            "diagnostic_gross_dollars_15m": 0.0,
+            "diagnostic_mfe_long_ticks_15m": 0.0,
+            "diagnostic_mae_long_ticks_15m": 0.0,
+            "diagnostic_mfe_short_ticks_15m": 0.0,
+            "diagnostic_mae_short_ticks_15m": 0.0,
+            "diagnostic_favorable_after_cost_15m": False,
             "source_path": "fixture",
             "source_file_hash": "hash",
             "source_row_number": np.arange(rows),
@@ -828,23 +836,15 @@ def test_registry_excludes_targets_audit_source_and_forbidden_columns() -> None:
     assert "feature_es_zn_divergence_30" in FEATURE_COLS
     assert "feature_cl_es_divergence_30" in FEATURE_COLS
     for column in (
-        "target_fade_long_success_15m",
-        "target_fade_short_success_15m",
-        "target_fade_success_15m",
-        "target_trend_adverse_long_30m",
-        "target_trend_favorable_long_30m",
-        "target_trend_adverse_short_30m",
-        "target_trend_favorable_short_30m",
-        "target_trend_danger_long_30m",
-        "target_trend_danger_short_30m",
-        "target_trend_danger_30m",
+        "diagnostic_ret_ticks_15m",
+        "diagnostic_favorable_after_cost_15m",
     ):
         assert column in REGIME_LABEL_COLUMNS
         assert column in FORBIDDEN_FEATURE_COLUMNS
         assert column not in FEATURE_COLS
     assert "instrument_id" not in FEATURE_COLS
     assert "feature_input_valid" not in FEATURE_COLS
-    injected = validate_registry([*FEATURE_COLS, "target_ret_15m"])
+    injected = validate_registry([*FEATURE_COLS, "target_ret_30m"])
     assert injected
     assert any("forbidden columns" in failure for failure in injected)
     for prefix in (
@@ -978,16 +978,10 @@ def test_process_file_writes_matrix_registries_and_reports(tmp_path: Path) -> No
     assert result.status in {"PASS", "WARN"}
     assert set(FEATURE_COLS).issubset(output.columns)
     for column in (
-        "target_fade_long_success_15m",
-        "target_fade_short_success_15m",
-        "target_fade_success_15m",
-        "target_trend_adverse_long_30m",
-        "target_trend_favorable_long_30m",
-        "target_trend_adverse_short_30m",
-        "target_trend_favorable_short_30m",
-        "target_trend_danger_long_30m",
-        "target_trend_danger_short_30m",
-        "target_trend_danger_30m",
+        "target_accept_any_30m",
+        "target_accept_any_60m",
+        "target_apex_confirmed_any_30m_60m",
+        "diagnostic_ret_ticks_15m",
     ):
         assert column in output.columns
         assert column not in FEATURE_COLS

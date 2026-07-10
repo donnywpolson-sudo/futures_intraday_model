@@ -35,6 +35,8 @@ DISCOVERY_PROFILES = {"all_raw", "all_raw_data"}
 DEFAULT_PROFILE_CONFIG = Path("configs/alpha_tiered.yaml")
 DEFAULT_SESSION_CONFIG = Path("configs/market_sessions.yaml")
 DEFAULT_RAW_ALIGNMENT_REPORT = Path("reports/raw_ingest/raw_dbn_alignment.json")
+NORMALIZATION_RULE_VERSION = "phase2_causal_session_normalization_v2"
+BAR_AVAILABLE_LAG = pd.Timedelta(minutes=1)
 LOCAL_TRADE_GAP_AUDIT_START = "2025-06-18"
 LOCAL_TRADE_GAP_AUDIT_END = "2026-06-13"
 LOCAL_TRADE_GAP_AUDIT_PROFILES = ("tier_3_holdout", "tier_3_forward")
@@ -198,6 +200,10 @@ OUTPUT_COLUMNS = [
     "inside_session",
     "causal_valid",
     "causal_invalid_reason",
+    "phase2_ready",
+    "phase2_not_ready_reason",
+    "bar_available_ts",
+    "normalization_rule_version",
     "session_id",
     "session_date",
     "session_segment_id",
@@ -251,6 +257,57 @@ CAUSAL_INVALID_REASON_GATES = {
     "degraded_session": ("session_data_quality_degraded", True),
     "roll_window": ("roll_window_flag", True),
     "boundary_session": ("boundary_session_flag", True),
+}
+
+NORMALIZATION_RULE_REGISTRY: dict[str, dict[str, object]] = {
+    "inside_session": {
+        "inputs": ["ts", "configs/market_sessions.yaml"],
+        "availability": "same timestamp calendar metadata only",
+        "may_use_future_rows": False,
+        "modeling_use": "exclusion gate only",
+    },
+    "session_id": {
+        "inputs": ["ts", "configs/market_sessions.yaml"],
+        "availability": "same timestamp calendar metadata only",
+        "may_use_future_rows": False,
+        "modeling_use": "session grouping only",
+    },
+    "session_segment_id": {
+        "inputs": ["session_id", "instrument_id", "roll_boundary_flag"],
+        "availability": "uses current and prior rows only",
+        "may_use_future_rows": False,
+        "modeling_use": "session and roll-safe grouping only",
+    },
+    "is_synthetic": {
+        "inputs": ["raw timestamp gaps", "session calendar"],
+        "availability": "adjacent-row audit context",
+        "may_use_future_rows": True,
+        "modeling_use": "exclusion gate only",
+    },
+    "boundary_session_flag": {
+        "inputs": ["adjacent-year context", "session_segment_id"],
+        "availability": "adjacent-year audit context",
+        "may_use_future_rows": True,
+        "modeling_use": "exclusion gate only",
+    },
+    "roll_window_flag": {
+        "inputs": ["instrument_id", "ts", "configured roll window"],
+        "availability": "uses current, prior, and next roll boundary for exclusion",
+        "may_use_future_rows": True,
+        "modeling_use": "exclusion gate only",
+    },
+    "phase2_ready": {
+        "inputs": ["causal_valid"],
+        "availability": "derived from deterministic Phase 2 gates",
+        "may_use_future_rows": False,
+        "modeling_use": "hard downstream readiness gate",
+    },
+    "bar_available_ts": {
+        "inputs": ["ts"],
+        "availability": "strictly after bar timestamp",
+        "may_use_future_rows": False,
+        "modeling_use": "feature availability timestamp",
+    },
 }
 
 SESSION_TEMPLATE = "cme_globex_17_16_ct"
@@ -3137,7 +3194,6 @@ def _build_synthetic_rows(
     def repeated_values(column: str) -> np.ndarray:
         return candidates[column].to_numpy()[repeated_positions]
 
-    close_values = repeated_values("close")
     synth_df = pd.DataFrame(
         {
             "ts": synthetic_ts,
@@ -3150,17 +3206,17 @@ def _build_synthetic_rows(
             "instrument_id": repeated_values("instrument_id"),
             "publisher_id": repeated_values("publisher_id"),
             "rtype": repeated_values("rtype"),
-            "open": close_values,
-            "high": close_values,
-            "low": close_values,
-            "close": close_values,
-            "volume": np.zeros(len(repeated_positions), dtype=np.int64),
+            "open": np.full(len(repeated_positions), np.nan),
+            "high": np.full(len(repeated_positions), np.nan),
+            "low": np.full(len(repeated_positions), np.nan),
+            "close": np.full(len(repeated_positions), np.nan),
+            "volume": np.full(len(repeated_positions), np.nan),
             "raw_row_present": False,
             "is_synthetic": True,
             "synthetic_gap_id": pd.NA,
             "synthetic_gap_size_minutes": np.repeat(candidate_gaps, repeat_counts),
             "synthetic_gap_reason": "missing_in_session_minute",
-            "valid_ohlcv": True,
+            "valid_ohlcv": False,
             "data_quality_status": repeated_values("data_quality_status"),
             "data_quality_degraded": repeated_values("data_quality_degraded"),
             "source_path": repeated_values("source_path"),
@@ -3692,6 +3748,23 @@ def causal_gate_contract_failures(
             f"missing required raw columns: rows={int(missing_required_reason.sum())}"
         )
 
+    if "phase2_ready" in df.columns:
+        phase2_ready = df["phase2_ready"].fillna(False).astype(bool)
+        readiness_mismatch = phase2_ready.ne(causal_valid)
+        if readiness_mismatch.any():
+            failures.append(
+                "phase2_ready differs from causal_valid: "
+                f"rows={int(readiness_mismatch.sum())}"
+            )
+    if "phase2_not_ready_reason" in df.columns:
+        phase2_reason = df["phase2_not_ready_reason"].fillna("").astype(str).str.strip()
+        reason_mismatch = phase2_reason.ne(reasons)
+        if reason_mismatch.any():
+            failures.append(
+                "phase2_not_ready_reason differs from causal_invalid_reason: "
+                f"rows={int(reason_mismatch.sum())}"
+            )
+
     return failures
 
 
@@ -3724,6 +3797,7 @@ def _coerce_output_types(df: pd.DataFrame, extra_columns: Iterable[str] | None =
         "trainable_data_quality",
         "inside_session",
         "causal_valid",
+        "phase2_ready",
         "boundary_session_flag",
         "is_session_open",
         "is_session_close",
@@ -3761,6 +3835,17 @@ def _coerce_output_types(df: pd.DataFrame, extra_columns: Iterable[str] | None =
     df["data_quality_status"] = df["data_quality_status"].fillna("unknown").astype(str)
     df["synthetic_gap_reason"] = df["synthetic_gap_reason"].astype("string")
     df["causal_invalid_reason"] = df["causal_invalid_reason"].fillna("").astype("string")
+    df["phase2_not_ready_reason"] = (
+        df["phase2_not_ready_reason"].fillna("").astype("string")
+    )
+    df["bar_available_ts"] = pd.to_datetime(
+        df["bar_available_ts"], utc=True, errors="coerce"
+    )
+    df["normalization_rule_version"] = (
+        df["normalization_rule_version"]
+        .fillna(NORMALIZATION_RULE_VERSION)
+        .astype("string")
+    )
 
     return df[OUTPUT_COLUMNS + extra_output_columns]
 
@@ -4154,6 +4239,15 @@ def process_file(
     df["causal_invalid_reason"] = _build_causal_invalid_reason(
         df, result.missing_required_raw_cols
     )
+    df["phase2_ready"] = df["causal_valid"].astype(bool)
+    df["phase2_not_ready_reason"] = df["causal_invalid_reason"].where(
+        ~df["phase2_ready"],
+        "",
+    )
+    df["bar_available_ts"] = pd.to_datetime(
+        df["ts"], utc=True, errors="coerce"
+    ) + BAR_AVAILABLE_LAG
+    df["normalization_rule_version"] = NORMALIZATION_RULE_VERSION
     result.failures.extend(
         causal_gate_contract_failures(
             df, missing_required_raw_cols=result.missing_required_raw_cols
@@ -4506,6 +4600,8 @@ def write_reports(
         "accepted_readiness_exceptions": accepted_exceptions,
         "accepted_exception_failure_count": len(exception_failures),
         "accepted_readiness_exception_failures": exception_failures,
+        "normalization_rule_version": NORMALIZATION_RULE_VERSION,
+        "normalization_rule_registry": NORMALIZATION_RULE_REGISTRY,
         **authority,
         **(selection_metadata or {}),
     }

@@ -9,9 +9,10 @@ import json
 import os
 import subprocess
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from pathlib import Path
 from typing import Iterable, Mapping
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -123,10 +124,20 @@ STATIC_PROFILE_YEARS = {
 }
 
 ENTRY_OFFSET_BARS = 1
-EXIT_OFFSET_BARS = 16
-REGIME_OFFSET_BARS = 31
+PRIMARY_TARGET_HORIZON_BARS = 30
+CONFIRMATION_TARGET_HORIZON_BARS = 60
+DIAGNOSTIC_TARGET_HORIZON_BARS = 15
+EXIT_OFFSET_BARS = ENTRY_OFFSET_BARS + PRIMARY_TARGET_HORIZON_BARS
+REGIME_OFFSET_BARS = ENTRY_OFFSET_BARS + CONFIRMATION_TARGET_HORIZON_BARS
+DIAGNOSTIC_EXIT_OFFSET_BARS = ENTRY_OFFSET_BARS + DIAGNOSTIC_TARGET_HORIZON_BARS
 ATR_LOOKBACK_BARS = 60
-LABEL_SEMANTICS_ID = "phase3_labels_v1_next_1m_open_to_15m_open"
+LABEL_SEMANTICS_ID = (
+    "phase3_labels_v2_next_1m_open_30m_primary_60m_confirm_apex_aware"
+)
+APEX_EOD_TIMEZONE = ZoneInfo("America/New_York")
+APEX_EOD_SNAPSHOT_TIME = time(16, 59, 59)
+APEX_NO_HOLD_CLOSE_BUFFER_MINUTES = 5
+APEX_ROW_MAE_REJECT_DOLLARS = 250.0
 
 REQUIRED_INPUT_COLUMNS = [
     "ts",
@@ -151,14 +162,14 @@ GENERIC_LABEL_COLUMNS = [
     "target_entry_price",
     "target_exit_price",
     "target_horizon_bars",
-    "target_ret_15m",
-    "target_ret_ticks_15m",
-    "target_gross_dollars_15m",
+    "target_ret_30m",
+    "target_ret_ticks_30m",
+    "target_gross_dollars_30m",
     "target_estimated_cost_ticks",
     "target_estimated_cost_dollars",
     "target_net_ticks_after_est_cost",
     "target_net_dollars_after_est_cost",
-    "target_sign_15m",
+    "target_sign_30m",
     "target_sign_with_deadzone",
     "target_tradeable_after_cost",
     "target_valid",
@@ -166,24 +177,86 @@ GENERIC_LABEL_COLUMNS = [
 ]
 
 REGIME_LABEL_COLUMNS = [
-    "mae_ticks_15m",
-    "mfe_ticks_15m",
-    "fade_long_success_15m",
-    "fade_short_success_15m",
-    "target_fade_long_success_15m",
-    "target_fade_short_success_15m",
-    "target_fade_success_15m",
-    "trend_danger_up_30m",
-    "trend_danger_down_30m",
-    "target_trend_adverse_long_30m",
-    "target_trend_favorable_long_30m",
-    "target_trend_adverse_short_30m",
-    "target_trend_favorable_short_30m",
-    "target_trend_danger_long_30m",
-    "target_trend_danger_short_30m",
-    "target_trend_danger_30m",
-    "revert_to_vwap_30m",
-    "revert_to_session_mid_30m",
+    "target_entry_ts_30m",
+    "target_exit_ts_30m",
+    "target_entry_price_30m",
+    "target_exit_price_30m",
+    "target_horizon_bars_30m",
+    "target_30m_valid",
+    "target_30m_invalid_reason",
+    "target_net_ticks_after_est_cost_30m",
+    "target_net_dollars_after_est_cost_30m",
+    "target_sign_with_deadzone_30m",
+    "target_tradeable_after_cost_30m",
+    "target_mfe_long_ticks_30m",
+    "target_mae_long_ticks_30m",
+    "target_mfe_short_ticks_30m",
+    "target_mae_short_ticks_30m",
+    "target_mfe_long_dollars_30m",
+    "target_mae_long_dollars_30m",
+    "target_mfe_short_dollars_30m",
+    "target_mae_short_dollars_30m",
+    "target_favorable_after_cost_long_30m",
+    "target_favorable_after_cost_short_30m",
+    "target_favorable_after_cost_30m",
+    "target_fillable_after_slippage_long_30m",
+    "target_fillable_after_slippage_short_30m",
+    "target_fillable_after_slippage_30m",
+    "target_apex_dll_eod_threat_long_30m",
+    "target_apex_dll_eod_threat_short_30m",
+    "target_apex_dll_eod_threat_30m",
+    "target_no_hold_into_close_30m",
+    "target_accept_long_30m",
+    "target_accept_short_30m",
+    "target_accept_any_30m",
+    "target_entry_ts_60m",
+    "target_exit_ts_60m",
+    "target_entry_price_60m",
+    "target_exit_price_60m",
+    "target_horizon_bars_60m",
+    "target_60m_valid",
+    "target_60m_invalid_reason",
+    "target_ret_60m",
+    "target_ret_ticks_60m",
+    "target_gross_dollars_60m",
+    "target_net_ticks_after_est_cost_60m",
+    "target_net_dollars_after_est_cost_60m",
+    "target_sign_60m",
+    "target_sign_with_deadzone_60m",
+    "target_tradeable_after_cost_60m",
+    "target_mfe_long_ticks_60m",
+    "target_mae_long_ticks_60m",
+    "target_mfe_short_ticks_60m",
+    "target_mae_short_ticks_60m",
+    "target_mfe_long_dollars_60m",
+    "target_mae_long_dollars_60m",
+    "target_mfe_short_dollars_60m",
+    "target_mae_short_dollars_60m",
+    "target_favorable_after_cost_long_60m",
+    "target_favorable_after_cost_short_60m",
+    "target_favorable_after_cost_60m",
+    "target_fillable_after_slippage_long_60m",
+    "target_fillable_after_slippage_short_60m",
+    "target_fillable_after_slippage_60m",
+    "target_apex_dll_eod_threat_long_60m",
+    "target_apex_dll_eod_threat_short_60m",
+    "target_apex_dll_eod_threat_60m",
+    "target_no_hold_into_close_60m",
+    "target_accept_long_60m",
+    "target_accept_short_60m",
+    "target_accept_any_60m",
+    "target_apex_confirmed_long_30m_60m",
+    "target_apex_confirmed_short_30m_60m",
+    "target_apex_confirmed_any_30m_60m",
+    "diagnostic_valid_15m",
+    "diagnostic_ret_15m",
+    "diagnostic_ret_ticks_15m",
+    "diagnostic_gross_dollars_15m",
+    "diagnostic_mfe_long_ticks_15m",
+    "diagnostic_mae_long_ticks_15m",
+    "diagnostic_mfe_short_ticks_15m",
+    "diagnostic_mae_short_ticks_15m",
+    "diagnostic_favorable_after_cost_15m",
 ]
 
 LABEL_PROVENANCE_COLUMNS = [
@@ -906,13 +979,20 @@ def _future_path_checks(df: pd.DataFrame, horizon_offset: int) -> dict[str, pd.S
     boundary = pd.Series(False, index=idx)
     roll = pd.Series(False, index=idx)
     segment_cross = pd.Series(False, index=idx)
+    phase2_not_ready = pd.Series(False, index=idx)
 
     roll_boundary = _as_bool(df, "roll_boundary_flag")
+    phase2_ready = (
+        _as_bool(df, "phase2_ready")
+        if "phase2_ready" in df.columns
+        else _as_bool(df, "causal_valid")
+    )
     for offset in range(0, horizon_offset + 1):
         synthetic |= _as_bool(df, "is_synthetic").shift(-offset, fill_value=False)
         invalid_ohlcv |= ~_as_bool(df, "valid_ohlcv", default=True).shift(
             -offset, fill_value=True
         )
+        phase2_not_ready |= ~phase2_ready.shift(-offset, fill_value=True)
         boundary |= _as_bool(df, "boundary_session_flag").shift(-offset, fill_value=False)
         roll |= _as_bool(df, "roll_window_flag").shift(-offset, fill_value=False)
         roll |= roll_boundary.shift(-offset, fill_value=False)
@@ -927,6 +1007,7 @@ def _future_path_checks(df: pd.DataFrame, horizon_offset: int) -> dict[str, pd.S
         "boundary": boundary.astype(bool),
         "roll": roll.astype(bool),
         "segment_cross": segment_cross.astype(bool),
+        "phase2_not_ready": phase2_not_ready.astype(bool),
     }
 
 
@@ -980,11 +1061,12 @@ def _first_hit(
     threshold_ticks: pd.Series,
     tick_size: float,
     *,
+    horizon_offset: int,
     side: str,
     kind: str,
 ) -> np.ndarray:
     first = np.full(len(df), np.inf)
-    for offset in range(1, EXIT_OFFSET_BARS + 1):
+    for offset in range(1, horizon_offset + 1):
         high = pd.to_numeric(df["high"], errors="coerce").shift(-offset)
         low = pd.to_numeric(df["low"], errors="coerce").shift(-offset)
         if side == "long" and kind == "profit":
@@ -1025,56 +1107,107 @@ def _price_valid(series: pd.Series) -> pd.Series:
     return numeric.notna() & np.isfinite(numeric) & (numeric > 0)
 
 
-def add_labels(df: pd.DataFrame, config: MarketConfig) -> pd.DataFrame:
-    df = df.sort_values("ts", kind="mergesort").reset_index(drop=True).copy()
-    tick_size = config.tick_size
-    tick_value = config.tick_value
+def _apex_close_buffer_start_seconds() -> int:
+    close_seconds = (
+        APEX_EOD_SNAPSHOT_TIME.hour * 3600
+        + APEX_EOD_SNAPSHOT_TIME.minute * 60
+        + APEX_EOD_SNAPSHOT_TIME.second
+    )
+    return max(0, close_seconds - APEX_NO_HOLD_CLOSE_BUFFER_MINUTES * 60)
 
-    entry_price = pd.to_numeric(df["open"], errors="coerce").shift(-ENTRY_OFFSET_BARS)
-    exit_price = pd.to_numeric(df["open"], errors="coerce").shift(-EXIT_OFFSET_BARS)
-    entry_ts = pd.to_datetime(df["ts"], utc=True, errors="coerce").shift(-ENTRY_OFFSET_BARS)
-    exit_ts = pd.to_datetime(df["ts"], utc=True, errors="coerce").shift(-EXIT_OFFSET_BARS)
 
-    atr_ref_ticks = _true_range_ticks(df, tick_size)
-    profit_threshold_ticks = np.maximum(config.min_profit_ticks, 0.50 * atr_ref_ticks)
-    adverse_threshold_ticks = np.maximum(config.min_stop_ticks, 1.00 * atr_ref_ticks)
-    trend_adverse_threshold_ticks = np.maximum(config.min_stop_ticks, 1.50 * atr_ref_ticks)
-    trend_favorable_threshold_ticks = trend_adverse_threshold_ticks
+def _apex_eod_close_buffer_flag(df: pd.DataFrame, horizon_offset: int) -> pd.Series:
+    timestamps = pd.to_datetime(df["ts"], utc=True, errors="coerce")
+    close_seconds = (
+        APEX_EOD_SNAPSHOT_TIME.hour * 3600
+        + APEX_EOD_SNAPSHOT_TIME.minute * 60
+        + APEX_EOD_SNAPSHOT_TIME.second
+    )
+    buffer_start = _apex_close_buffer_start_seconds()
+    flagged = pd.Series(False, index=df.index)
 
-    checks_15m = _future_path_checks(df, EXIT_OFFSET_BARS)
-    checks_30m = _future_path_checks(df, REGIME_OFFSET_BARS)
+    for offset in range(ENTRY_OFFSET_BARS, horizon_offset + 1):
+        local_ts = timestamps.shift(-offset).dt.tz_convert(APEX_EOD_TIMEZONE)
+        seconds = (
+            local_ts.dt.hour * 3600
+            + local_ts.dt.minute * 60
+            + local_ts.dt.second
+        )
+        flagged |= (
+            local_ts.notna()
+            & seconds.ge(buffer_start)
+            & seconds.le(close_seconds)
+        )
 
-    causal_valid = _as_bool(df, "causal_valid")
+    return flagged.astype(bool)
+
+
+def _target_invalid_reason(
+    index: pd.Index,
+    target_valid: pd.Series,
+    reason_masks: list[tuple[str, pd.Series]],
+) -> pd.Series:
+    invalid_reason = pd.Series(pd.NA, index=index, dtype="string")
+    for reason, mask in reason_masks:
+        invalid_reason = invalid_reason.mask(
+            invalid_reason.isna() & ~target_valid & mask,
+            reason,
+        )
+    return invalid_reason
+
+
+def _horizon_label_values(
+    df: pd.DataFrame,
+    config: MarketConfig,
+    *,
+    horizon_bars: int,
+    horizon_offset: int,
+    suffix: str,
+    causal_valid: pd.Series,
+    entry_price: pd.Series,
+    entry_ts: pd.Series,
+    tick_size: float,
+    tick_value: float,
+) -> dict[str, pd.Series]:
+    exit_price = pd.to_numeric(df["open"], errors="coerce").shift(-horizon_offset)
+    exit_ts = pd.to_datetime(df["ts"], utc=True, errors="coerce").shift(-horizon_offset)
+    checks = _future_path_checks(df, horizon_offset)
+    close_buffer = _apex_eod_close_buffer_flag(df, horizon_offset)
+    no_hold_into_close = ~close_buffer
+
     entry_missing = entry_ts.isna()
     exit_missing = exit_ts.isna()
     entry_exit_invalid = ~_price_valid(entry_price) | ~_price_valid(exit_price)
-
     target_valid = (
         causal_valid
         & ~entry_missing
         & ~exit_missing
-        & ~checks_15m["segment_cross"]
-        & ~checks_15m["synthetic"]
-        & ~checks_15m["invalid_ohlcv"]
-        & ~checks_15m["boundary"]
-        & ~checks_15m["roll"]
+        & no_hold_into_close
+        & ~checks["segment_cross"]
+        & ~checks["synthetic"]
+        & ~checks["invalid_ohlcv"]
+        & ~checks["phase2_not_ready"]
+        & ~checks["boundary"]
+        & ~checks["roll"]
         & ~entry_exit_invalid
     )
-
-    invalid_reason = pd.Series(pd.NA, index=df.index, dtype="string")
-    reason_masks = [
-        ("current_causal_valid_false", ~causal_valid),
-        ("entry_missing", entry_missing),
-        ("exit_missing", exit_missing),
-        ("session_segment_cross", checks_15m["segment_cross"]),
-        ("synthetic_path", checks_15m["synthetic"]),
-        ("invalid_ohlcv_path", checks_15m["invalid_ohlcv"]),
-        ("boundary_session_path", checks_15m["boundary"]),
-        ("roll_path", checks_15m["roll"]),
-        ("entry_exit_price_invalid", entry_exit_invalid),
-    ]
-    for reason, mask in reason_masks:
-        invalid_reason = invalid_reason.mask(invalid_reason.isna() & ~target_valid & mask, reason)
+    invalid_reason = _target_invalid_reason(
+        df.index,
+        target_valid,
+        [
+            ("current_causal_valid_false", ~causal_valid),
+            ("entry_missing", entry_missing),
+            ("exit_missing", exit_missing),
+            ("apex_eod_close_buffer", close_buffer),
+            ("session_segment_cross", checks["segment_cross"]),
+            ("synthetic_path", checks["synthetic"]),
+            ("invalid_ohlcv_path", checks["invalid_ohlcv"]),
+            ("phase2_not_ready_path", checks["phase2_not_ready"]),
+            ("boundary_session_path", checks["boundary"]),
+            ("roll_path", checks["roll"]),
+            ("entry_exit_price_invalid", entry_exit_invalid),
+        ],
+    )
 
     gross_ticks = (exit_price - entry_price) / tick_size
     gross_dollars = gross_ticks * tick_value
@@ -1084,120 +1217,186 @@ def add_labels(df: pd.DataFrame, config: MarketConfig) -> pd.DataFrame:
     sign = np.sign(gross_ticks).fillna(0).astype("int64")
     deadzone_ticks = config.estimated_cost_ticks + config.min_profit_ticks
     sign_deadzone = sign.mask(gross_ticks.abs() <= deadzone_ticks, 0).astype("int64")
+    tradeable_after_cost = target_valid & gross_ticks.abs().gt(config.estimated_cost_ticks)
 
-    future_high_15m = _future_extreme(df, "high", EXIT_OFFSET_BARS, "max")
-    future_low_15m = _future_extreme(df, "low", EXIT_OFFSET_BARS, "min")
-    mfe_ticks = (future_high_15m - entry_price) / tick_size
-    mae_ticks = (future_low_15m - entry_price) / tick_size
+    future_high = _future_extreme(df, "high", horizon_offset, "max")
+    future_low = _future_extreme(df, "low", horizon_offset, "min")
+    mfe_long_ticks = (future_high - entry_price) / tick_size
+    mae_long_ticks = (future_low - entry_price) / tick_size
+    mfe_short_ticks = (entry_price - future_low) / tick_size
+    mae_short_ticks = (entry_price - future_high) / tick_size
+    mfe_long_dollars = mfe_long_ticks * tick_value
+    mae_long_dollars = mae_long_ticks * tick_value
+    mfe_short_dollars = mfe_short_ticks * tick_value
+    mae_short_dollars = mae_short_ticks * tick_value
 
-    long_profit_first = _first_hit(
-        df, entry_price, profit_threshold_ticks, tick_size, side="long", kind="profit"
+    stressed_deadzone_ticks = (2.0 * config.estimated_cost_ticks) + config.min_profit_ticks
+    favorable_long = target_valid & gross_ticks.gt(deadzone_ticks)
+    favorable_short = target_valid & gross_ticks.lt(-deadzone_ticks)
+    fillable_long = target_valid & gross_ticks.gt(stressed_deadzone_ticks)
+    fillable_short = target_valid & gross_ticks.lt(-stressed_deadzone_ticks)
+    apex_threat_long = target_valid & mae_long_dollars.le(-APEX_ROW_MAE_REJECT_DOLLARS)
+    apex_threat_short = target_valid & mae_short_dollars.le(-APEX_ROW_MAE_REJECT_DOLLARS)
+    accept_long = favorable_long & fillable_long & ~apex_threat_long
+    accept_short = favorable_short & fillable_short & ~apex_threat_short
+
+    return {
+        f"target_entry_ts_{suffix}": entry_ts.where(target_valid),
+        f"target_exit_ts_{suffix}": exit_ts.where(target_valid),
+        f"target_entry_price_{suffix}": entry_price.where(target_valid),
+        f"target_exit_price_{suffix}": exit_price.where(target_valid),
+        f"target_horizon_bars_{suffix}": pd.Series(horizon_bars, index=df.index).where(
+            target_valid
+        ),
+        f"target_{suffix}_valid": target_valid.astype(bool),
+        f"target_{suffix}_invalid_reason": invalid_reason,
+        f"target_ret_{suffix}": (exit_price / entry_price - 1.0).where(target_valid),
+        f"target_ret_ticks_{suffix}": gross_ticks.where(target_valid),
+        f"target_gross_dollars_{suffix}": gross_dollars.where(target_valid),
+        f"target_net_ticks_after_est_cost_{suffix}": net_ticks.where(target_valid),
+        f"target_net_dollars_after_est_cost_{suffix}": net_dollars.where(target_valid),
+        f"target_sign_{suffix}": sign.where(target_valid, 0).astype("int64"),
+        f"target_sign_with_deadzone_{suffix}": sign_deadzone.where(
+            target_valid, 0
+        ).astype("int64"),
+        f"target_tradeable_after_cost_{suffix}": tradeable_after_cost.astype(bool),
+        f"target_mfe_long_ticks_{suffix}": mfe_long_ticks.where(target_valid),
+        f"target_mae_long_ticks_{suffix}": mae_long_ticks.where(target_valid),
+        f"target_mfe_short_ticks_{suffix}": mfe_short_ticks.where(target_valid),
+        f"target_mae_short_ticks_{suffix}": mae_short_ticks.where(target_valid),
+        f"target_mfe_long_dollars_{suffix}": mfe_long_dollars.where(target_valid),
+        f"target_mae_long_dollars_{suffix}": mae_long_dollars.where(target_valid),
+        f"target_mfe_short_dollars_{suffix}": mfe_short_dollars.where(target_valid),
+        f"target_mae_short_dollars_{suffix}": mae_short_dollars.where(target_valid),
+        f"target_favorable_after_cost_long_{suffix}": favorable_long.astype(bool),
+        f"target_favorable_after_cost_short_{suffix}": favorable_short.astype(bool),
+        f"target_favorable_after_cost_{suffix}": (favorable_long | favorable_short).astype(
+            bool
+        ),
+        f"target_fillable_after_slippage_long_{suffix}": fillable_long.astype(bool),
+        f"target_fillable_after_slippage_short_{suffix}": fillable_short.astype(bool),
+        f"target_fillable_after_slippage_{suffix}": (fillable_long | fillable_short).astype(
+            bool
+        ),
+        f"target_apex_dll_eod_threat_long_{suffix}": apex_threat_long.astype(bool),
+        f"target_apex_dll_eod_threat_short_{suffix}": apex_threat_short.astype(bool),
+        f"target_apex_dll_eod_threat_{suffix}": (
+            apex_threat_long | apex_threat_short
+        ).astype(bool),
+        f"target_no_hold_into_close_{suffix}": no_hold_into_close.astype(bool),
+        f"target_accept_long_{suffix}": accept_long.astype(bool),
+        f"target_accept_short_{suffix}": accept_short.astype(bool),
+        f"target_accept_any_{suffix}": (accept_long | accept_short).astype(bool),
+    }
+
+
+def _diagnostic_15m_values(
+    horizon_values: Mapping[str, pd.Series],
+) -> dict[str, pd.Series]:
+    valid = horizon_values["target_15m_valid"]
+    favorable = (
+        horizon_values["target_favorable_after_cost_long_15m"]
+        | horizon_values["target_favorable_after_cost_short_15m"]
     )
-    long_adverse_first = _first_hit(
-        df, entry_price, adverse_threshold_ticks, tick_size, side="long", kind="adverse"
+    return {
+        "diagnostic_valid_15m": valid,
+        "diagnostic_ret_15m": horizon_values["target_ret_15m"],
+        "diagnostic_ret_ticks_15m": horizon_values["target_ret_ticks_15m"],
+        "diagnostic_gross_dollars_15m": horizon_values["target_gross_dollars_15m"],
+        "diagnostic_mfe_long_ticks_15m": horizon_values["target_mfe_long_ticks_15m"],
+        "diagnostic_mae_long_ticks_15m": horizon_values["target_mae_long_ticks_15m"],
+        "diagnostic_mfe_short_ticks_15m": horizon_values["target_mfe_short_ticks_15m"],
+        "diagnostic_mae_short_ticks_15m": horizon_values["target_mae_short_ticks_15m"],
+        "diagnostic_favorable_after_cost_15m": favorable.astype(bool),
+    }
+
+
+def add_labels(df: pd.DataFrame, config: MarketConfig) -> pd.DataFrame:
+    df = df.sort_values("ts", kind="mergesort").reset_index(drop=True).copy()
+    tick_size = config.tick_size
+    tick_value = config.tick_value
+
+    entry_price = pd.to_numeric(df["open"], errors="coerce").shift(-ENTRY_OFFSET_BARS)
+    entry_ts = pd.to_datetime(df["ts"], utc=True, errors="coerce").shift(-ENTRY_OFFSET_BARS)
+
+    causal_valid = _as_bool(df, "causal_valid")
+
+    labels_30m = _horizon_label_values(
+        df,
+        config,
+        horizon_bars=PRIMARY_TARGET_HORIZON_BARS,
+        horizon_offset=EXIT_OFFSET_BARS,
+        suffix="30m",
+        causal_valid=causal_valid,
+        entry_price=entry_price,
+        entry_ts=entry_ts,
+        tick_size=tick_size,
+        tick_value=tick_value,
     )
-    short_profit_first = _first_hit(
-        df, entry_price, profit_threshold_ticks, tick_size, side="short", kind="profit"
+    labels_60m = _horizon_label_values(
+        df,
+        config,
+        horizon_bars=CONFIRMATION_TARGET_HORIZON_BARS,
+        horizon_offset=REGIME_OFFSET_BARS,
+        suffix="60m",
+        causal_valid=causal_valid,
+        entry_price=entry_price,
+        entry_ts=entry_ts,
+        tick_size=tick_size,
+        tick_value=tick_value,
     )
-    short_adverse_first = _first_hit(
-        df, entry_price, adverse_threshold_ticks, tick_size, side="short", kind="adverse"
+    labels_15m = _horizon_label_values(
+        df,
+        config,
+        horizon_bars=DIAGNOSTIC_TARGET_HORIZON_BARS,
+        horizon_offset=DIAGNOSTIC_EXIT_OFFSET_BARS,
+        suffix="15m",
+        causal_valid=causal_valid,
+        entry_price=entry_price,
+        entry_ts=entry_ts,
+        tick_size=tick_size,
+        tick_value=tick_value,
     )
 
-    fade_long_success = (
-        target_valid.to_numpy()
-        & np.isfinite(long_profit_first)
-        & (long_profit_first < long_adverse_first)
-    )
-    fade_short_success = (
-        target_valid.to_numpy()
-        & np.isfinite(short_profit_first)
-        & (short_profit_first < short_adverse_first)
-    )
+    for column, values in labels_30m.items():
+        df[column] = values
+    for column, values in labels_60m.items():
+        df[column] = values
+    for column, values in _diagnostic_15m_values(labels_15m).items():
+        df[column] = values
 
-    entry_30m_valid = ~entry_missing & _price_valid(entry_price)
-    valid_30m = (
-        causal_valid
-        & entry_30m_valid
-        & ~checks_30m["segment_cross"]
-        & ~checks_30m["synthetic"]
-        & ~checks_30m["invalid_ohlcv"]
-        & ~checks_30m["boundary"]
-        & ~checks_30m["roll"]
-    )
-    future_high_30m = _future_extreme(df, "high", REGIME_OFFSET_BARS, "max")
-    future_low_30m = _future_extreme(df, "low", REGIME_OFFSET_BARS, "min")
-    trend_up_ticks = (future_high_30m - entry_price) / tick_size
-    trend_down_ticks = (entry_price - future_low_30m) / tick_size
-    trend_danger_up = valid_30m & (trend_up_ticks >= trend_adverse_threshold_ticks)
-    trend_danger_down = valid_30m & (trend_down_ticks >= trend_adverse_threshold_ticks)
-    trend_adverse_long = valid_30m & (trend_down_ticks >= trend_adverse_threshold_ticks)
-    trend_favorable_long = valid_30m & (trend_up_ticks >= trend_favorable_threshold_ticks)
-    trend_adverse_short = valid_30m & (trend_up_ticks >= trend_adverse_threshold_ticks)
-    trend_favorable_short = valid_30m & (trend_down_ticks >= trend_favorable_threshold_ticks)
-
-    vwap, session_mid = _past_session_levels(df)
-    revert_to_vwap = valid_30m & (
-        ((entry_price >= vwap) & (future_low_30m <= vwap))
-        | ((entry_price < vwap) & (future_high_30m >= vwap))
-    )
-    revert_to_session_mid = valid_30m & (
-        ((entry_price >= session_mid) & (future_low_30m <= session_mid))
-        | ((entry_price < session_mid) & (future_high_30m >= session_mid))
-    )
-
-    df["target_entry_ts"] = entry_ts.where(target_valid)
-    df["target_exit_ts"] = exit_ts.where(target_valid)
-    df["target_entry_price"] = entry_price.where(target_valid)
-    df["target_exit_price"] = exit_price.where(target_valid)
-    df["target_horizon_bars"] = pd.Series(EXIT_OFFSET_BARS - ENTRY_OFFSET_BARS, index=df.index).where(
-        target_valid
-    )
-    df["target_ret_15m"] = (exit_price / entry_price - 1.0).where(target_valid)
-    df["target_ret_ticks_15m"] = gross_ticks.where(target_valid)
-    df["target_gross_dollars_15m"] = gross_dollars.where(target_valid)
+    df["target_entry_ts"] = df["target_entry_ts_30m"]
+    df["target_exit_ts"] = df["target_exit_ts_30m"]
+    df["target_entry_price"] = df["target_entry_price_30m"]
+    df["target_exit_price"] = df["target_exit_price_30m"]
+    df["target_horizon_bars"] = df["target_horizon_bars_30m"]
     df["target_estimated_cost_ticks"] = pd.Series(
         config.estimated_cost_ticks, index=df.index
-    ).where(target_valid)
+    ).where(df["target_30m_valid"])
     df["target_estimated_cost_dollars"] = pd.Series(
         config.estimated_cost_dollars, index=df.index
-    ).where(target_valid)
-    df["target_net_ticks_after_est_cost"] = net_ticks.where(target_valid)
-    df["target_net_dollars_after_est_cost"] = net_dollars.where(target_valid)
-    df["target_sign_15m"] = sign.where(target_valid, 0).astype("int64")
-    df["target_sign_with_deadzone"] = sign_deadzone.where(target_valid, 0).astype("int64")
-    df["target_tradeable_after_cost"] = (gross_ticks.abs() > config.estimated_cost_ticks).where(
-        target_valid, False
+    ).where(df["target_30m_valid"])
+    df["target_net_ticks_after_est_cost"] = df["target_net_ticks_after_est_cost_30m"]
+    df["target_net_dollars_after_est_cost"] = df["target_net_dollars_after_est_cost_30m"]
+    df["target_sign_with_deadzone"] = df["target_sign_with_deadzone_30m"]
+    df["target_tradeable_after_cost"] = df["target_tradeable_after_cost_30m"]
+    df["target_valid"] = df["target_30m_valid"]
+    df["target_invalid_reason"] = df["target_30m_invalid_reason"]
+    df["target_apex_confirmed_long_30m_60m"] = (
+        df["target_accept_long_30m"] & df["target_accept_long_60m"]
     )
-    df["target_valid"] = target_valid.astype(bool)
-    df["target_invalid_reason"] = invalid_reason
-
-    df["mae_ticks_15m"] = mae_ticks.where(target_valid)
-    df["mfe_ticks_15m"] = mfe_ticks.where(target_valid)
-    df["fade_long_success_15m"] = pd.Series(fade_long_success, index=df.index)
-    df["fade_short_success_15m"] = pd.Series(fade_short_success, index=df.index)
-    df["target_fade_long_success_15m"] = df["fade_long_success_15m"].astype(bool)
-    df["target_fade_short_success_15m"] = df["fade_short_success_15m"].astype(bool)
-    df["target_fade_success_15m"] = (
-        df["target_fade_long_success_15m"] | df["target_fade_short_success_15m"]
+    df["target_apex_confirmed_short_30m_60m"] = (
+        df["target_accept_short_30m"] & df["target_accept_short_60m"]
     )
-    df["trend_danger_up_30m"] = trend_danger_up.fillna(False).astype(bool)
-    df["trend_danger_down_30m"] = trend_danger_down.fillna(False).astype(bool)
-    df["target_trend_adverse_long_30m"] = trend_adverse_long.fillna(False).astype(bool)
-    df["target_trend_favorable_long_30m"] = trend_favorable_long.fillna(False).astype(bool)
-    df["target_trend_adverse_short_30m"] = trend_adverse_short.fillna(False).astype(bool)
-    df["target_trend_favorable_short_30m"] = trend_favorable_short.fillna(False).astype(bool)
-    df["target_trend_danger_long_30m"] = df["trend_danger_up_30m"].astype(bool)
-    df["target_trend_danger_short_30m"] = df["trend_danger_down_30m"].astype(bool)
-    df["target_trend_danger_30m"] = (
-        df["target_trend_danger_long_30m"] | df["target_trend_danger_short_30m"]
+    df["target_apex_confirmed_any_30m_60m"] = (
+        df["target_apex_confirmed_long_30m_60m"]
+        | df["target_apex_confirmed_short_30m_60m"]
     )
-    df["revert_to_vwap_30m"] = revert_to_vwap.fillna(False).astype(bool)
-    df["revert_to_session_mid_30m"] = revert_to_session_mid.fillna(False).astype(bool)
     df["label_semantics"] = LABEL_SEMANTICS_ID
     df["cost_source"] = config.cost_source
     df["cost_provisional"] = bool(config.provisional)
 
-    return df
+    return df[[column for column in df.columns if column not in LABEL_COLUMNS] + LABEL_COLUMNS]
 
 
 def process_file(
@@ -1382,9 +1581,42 @@ def write_reports(
         ),
     }
     label_semantics = {
-        "target_ret_ticks_15m": "signed directional price move; positive means price moved up, negative means price moved down",
-        "target_net_ticks_after_est_cost": "signed directional move beyond estimated cost; costs reduce magnitude and never flip sign",
-        "target_tradeable_after_cost": "absolute move exceeds estimated cost; not guaranteed profitability",
+        "label_semantics_id": LABEL_SEMANTICS_ID,
+        "target_ret_ticks_30m": (
+            "primary 30m signed next-1m-open to next-31m-open move; positive means price "
+            "moved up, negative means price moved down"
+        ),
+        "target_ret_ticks_60m": (
+            "independent robustness signed next-1m-open to next-61m-open move; positive means "
+            "price moved up, negative means price moved down"
+        ),
+        "target_net_ticks_after_est_cost": (
+            "primary 30m signed directional move beyond estimated round-turn cost; costs reduce "
+            "magnitude and never flip sign"
+        ),
+        "target_favorable_after_cost_30m": (
+            "primary 30m path has enough signed close-to-close move to clear configured cost plus "
+            "minimum profit deadzone"
+        ),
+        "target_fillable_after_slippage_30m": (
+            "primary 30m path clears minimum profit after a 2x configured-cost stress"
+        ),
+        "target_apex_dll_eod_threat_30m": (
+            "one-contract primary 30m MFE/MAE path breaches the conservative "
+            f"${APEX_ROW_MAE_REJECT_DOLLARS:.0f} Apex row-risk danger threshold"
+        ),
+        "target_no_hold_into_close_30m": (
+            "primary 30m path does not enter the Apex EOD close buffer ending at "
+            f"{APEX_EOD_SNAPSHOT_TIME.isoformat()} America/New_York"
+        ),
+        "target_accept_any_30m": (
+            "primary 30m side-aware acceptance: favorable after cost, fillable under stressed "
+            "costs, no Apex row-risk danger, and no hold into close"
+        ),
+        "target_apex_confirmed_any_30m_60m": (
+            "same side accepted by both independent 30m primary and 60m robustness labels"
+        ),
+        "diagnostic_ret_ticks_15m": "optional diagnostic only; not a primary target",
     }
 
     report = {

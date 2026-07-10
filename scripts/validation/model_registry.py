@@ -128,7 +128,7 @@ def validate_purge_policy(config: dict[str, Any]) -> list[str]:
     if int(purge.get("resolved_purge_bars", -1)) != expected:
         errors.append(f"resolved_purge_bars must be {expected}")
     if trend_horizon > target_horizon and resolved < entry_lag + trend_horizon:
-        errors.append("resolved purge does not cover side-aware 30m trend horizon")
+        errors.append("resolved purge does not cover robustness horizon")
     if resolved == expected_horizon:
         errors.append("hardcoded target_horizon purge does not cover entry lag")
     return errors

@@ -93,10 +93,10 @@ defaults:
     HE: ag_livestock
 
   entry_lag_bars: 1
-  target_horizon_bars: 15
-  trend_horizon_bars: 30
+  target_horizon_bars: 30
+  trend_horizon_bars: 60
   purge_bars: auto
-  resolved_purge_bars: 31
+  resolved_purge_bars: 61
 
   roll_window_bars: 15
   max_synthetic_gap_minutes: 120

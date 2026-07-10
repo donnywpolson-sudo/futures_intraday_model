@@ -11,10 +11,10 @@ policy:
 # Purge/embargo sizing for target-aligned WFA.
 purge:
   entry_lag_bars: 1
-  target_horizon_bars: 15
-  trend_horizon_bars: 30
+  target_horizon_bars: 30
+  trend_horizon_bars: 60
   purge_bars: auto
-  resolved_purge_bars: 31
+  resolved_purge_bars: 61
 
 approved_initial_model_families:
   - ridge_return
@@ -30,53 +30,69 @@ approved_initial_model_families:
 # Label columns grouped by modeling purpose.
 target_groups:
   return_target:
-    - target_ret_15m
-    - target_ret_ticks_15m
+    - target_ret_30m
+    - target_ret_ticks_30m
     - target_net_ticks_after_est_cost
     - target_net_dollars_after_est_cost
 
   direction_target:
-    - target_sign_15m
+    - target_sign_30m
     - target_sign_with_deadzone
     - target_tradeable_after_cost
+    - target_favorable_after_cost_30m
+    - target_accept_any_30m
 
-  fade_success_target:
-    - target_fade_long_success_15m
-    - target_fade_short_success_15m
-    - target_fade_success_15m
+  robustness_target:
+    - target_ret_60m
+    - target_ret_ticks_60m
+    - target_favorable_after_cost_60m
+    - target_accept_any_60m
+    - target_apex_confirmed_any_30m_60m
 
-  trend_danger_target:
-    - target_trend_danger_long_30m
-    - target_trend_danger_short_30m
-    - target_trend_danger_30m
+  apex_risk_target:
+    - target_apex_dll_eod_threat_long_30m
+    - target_apex_dll_eod_threat_short_30m
+    - target_apex_dll_eod_threat_30m
+    - target_apex_dll_eod_threat_60m
+    - target_no_hold_into_close_30m
+    - target_no_hold_into_close_60m
+    - target_fillable_after_slippage_30m
+    - target_fillable_after_slippage_60m
 
-  side_aware_trend_target:
-    - target_trend_adverse_long_30m
-    - target_trend_favorable_long_30m
-    - target_trend_adverse_short_30m
-    - target_trend_favorable_short_30m
+  side_aware_apex_target:
+    - target_favorable_after_cost_long_30m
+    - target_favorable_after_cost_short_30m
+    - target_fillable_after_slippage_long_30m
+    - target_fillable_after_slippage_short_30m
+    - target_accept_long_30m
+    - target_accept_short_30m
+    - target_accept_long_60m
+    - target_accept_short_60m
 
 # Target-derived columns that must never become features.
 feature_exclusion:
   target_only_groups:
     - return_target
     - direction_target
-    - fade_success_target
-    - trend_danger_target
-    - side_aware_trend_target
+    - robustness_target
+    - apex_risk_target
+    - side_aware_apex_target
   forbidden_feature_prefixes:
     - target_
   forbidden_feature_targets:
-    - target_fade_long_success_15m
-    - target_fade_short_success_15m
-    - target_fade_success_15m
-    - target_trend_adverse_long_30m
-    - target_trend_favorable_long_30m
-    - target_trend_adverse_short_30m
-    - target_trend_favorable_short_30m
-    - target_trend_danger_long_30m
-    - target_trend_danger_short_30m
-    - target_trend_danger_30m
+    - target_favorable_after_cost_30m
+    - target_favorable_after_cost_60m
+    - target_fillable_after_slippage_30m
+    - target_fillable_after_slippage_60m
+    - target_apex_dll_eod_threat_30m
+    - target_apex_dll_eod_threat_60m
+    - target_accept_any_30m
+    - target_accept_any_60m
+    - target_apex_confirmed_any_30m_60m
+    - target_favorable_after_cost_long_30m
+    - target_favorable_after_cost_short_30m
+    - target_accept_long_30m
+    - target_accept_short_30m
 
 model_stages:
   phase_7a_linear_controls:
@@ -99,7 +115,7 @@ models:
       task: regression
       enabled: true
       requires_optional_dependency: false
-    target: target_ret_15m
+    target: target_ret_30m
 
   logistic_direction_v1:
     <<: &linear_control_classifier
@@ -112,27 +128,27 @@ models:
 
   logistic_fade_success_v1:
     <<: *linear_control_classifier
-    target: target_fade_success_15m
+    target: target_accept_any_30m
 
   logistic_trend_danger_v1:
     <<: *linear_control_classifier
-    target: target_trend_danger_30m
+    target: target_apex_dll_eod_threat_30m
 
   logistic_trend_adverse_long_v1:
     <<: *linear_control_classifier
-    target: target_trend_adverse_long_30m
+    target: target_apex_dll_eod_threat_long_30m
 
   logistic_trend_favorable_long_v1:
     <<: *linear_control_classifier
-    target: target_trend_favorable_long_30m
+    target: target_favorable_after_cost_long_30m
 
   logistic_trend_adverse_short_v1:
     <<: *linear_control_classifier
-    target: target_trend_adverse_short_30m
+    target: target_apex_dll_eod_threat_short_30m
 
   logistic_trend_favorable_short_v1:
     <<: *linear_control_classifier
-    target: target_trend_favorable_short_30m
+    target: target_favorable_after_cost_short_30m
 
   histgb_direction_v1:
     <<: &sklearn_nonlinear_classifier
@@ -145,11 +161,11 @@ models:
 
   histgb_fade_success_v1:
     <<: *sklearn_nonlinear_classifier
-    target: target_fade_success_15m
+    target: target_accept_any_30m
 
   histgb_trend_danger_v1:
     <<: *sklearn_nonlinear_classifier
-    target: target_trend_danger_30m
+    target: target_apex_dll_eod_threat_30m
 
   lightgbm_direction_v1:
     <<: &optional_direction_boosted_tree

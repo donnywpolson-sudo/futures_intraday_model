@@ -57,25 +57,25 @@ def test_purge_auto_resolution() -> None:
     purge = config["purge"]
 
     assert purge["entry_lag_bars"] == 1
-    assert purge["target_horizon_bars"] == 15
-    assert purge["trend_horizon_bars"] == 30
+    assert purge["target_horizon_bars"] == 30
+    assert purge["trend_horizon_bars"] == 60
     assert purge["purge_bars"] == "auto"
-    assert resolve_purge_bars(purge) == 31
-    assert purge["resolved_purge_bars"] == 31
+    assert resolve_purge_bars(purge) == 61
+    assert purge["resolved_purge_bars"] == 61
     alpha = load_yaml(ROOT / "configs" / "alpha_tiered.yaml")
-    assert alpha["defaults"]["resolved_purge_bars"] == 31
+    assert alpha["defaults"]["resolved_purge_bars"] == 61
 
     bad = dict(purge)
-    bad["purge_bars"] = 30
-    bad["resolved_purge_bars"] = 30
+    bad["purge_bars"] = 60
+    bad["resolved_purge_bars"] = 60
     errors = validate_purge_policy({"purge": bad})
     assert any("purge_bars must be auto" in error for error in errors)
     assert any("does not cover entry lag" in error for error in errors)
 
     too_short = dict(purge)
-    too_short["resolved_purge_bars"] = 16
+    too_short["resolved_purge_bars"] = 31
     assert any(
-        "resolved_purge_bars must be 31" in error
+        "resolved_purge_bars must be 61" in error
         for error in validate_purge_policy({"purge": too_short})
     )
 
@@ -87,27 +87,28 @@ def test_target_group_exclusion() -> None:
     assert set(groups) == {
         "return_target",
         "direction_target",
-        "fade_success_target",
-        "trend_danger_target",
-        "side_aware_trend_target",
+        "robustness_target",
+        "apex_risk_target",
+        "side_aware_apex_target",
     }
 
     targets = all_target_columns(config)
     assert {
-        "target_fade_success_15m",
-        "target_trend_danger_30m",
-        "target_trend_adverse_long_30m",
-        "target_trend_favorable_long_30m",
-        "target_trend_adverse_short_30m",
-        "target_trend_favorable_short_30m",
+        "target_ret_30m",
+        "target_ret_60m",
+        "target_accept_any_30m",
+        "target_accept_any_60m",
+        "target_apex_dll_eod_threat_30m",
+        "target_apex_confirmed_any_30m_60m",
     }.issubset(targets)
 
     forbidden_targets = set(config["feature_exclusion"]["forbidden_feature_targets"])
-    assert set(groups["fade_success_target"]).issubset(forbidden_targets)
-    assert set(groups["trend_danger_target"]).issubset(forbidden_targets)
-    assert set(groups["side_aware_trend_target"]).issubset(forbidden_targets)
+    assert set(groups["robustness_target"]).issubset(targets)
+    assert set(groups["apex_risk_target"]).issubset(targets)
+    assert set(groups["side_aware_apex_target"]).issubset(targets)
+    assert "target_accept_any_30m" in forbidden_targets
 
-    injected = validate_registry(["target_fade_success_15m", "target_trend_adverse_long_30m"])
+    injected = validate_registry(["target_accept_any_30m", "target_ret_60m"])
     assert any("forbidden columns" in failure for failure in injected)
 
 
