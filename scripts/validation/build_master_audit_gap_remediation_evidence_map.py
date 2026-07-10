@@ -32,6 +32,10 @@ REPORT_MD = "master_audit_gap_remediation_evidence_map.md"
 GAP_AREAS = ("data_integrity", "statistical_validity", "operational_resilience")
 
 SOURCE_PATHS = {
+    "phase1a_reconciliation": Path(
+        "reports/master_audit/master_audit_phase1a_reconciliation_20260710/"
+        "master_audit_phase1a_reconciliation.json"
+    ),
     "master_readiness": Path(
         "reports/master_audit/master_audit_research_factory_readiness_20260710/"
         "master_audit_research_factory_readiness.json"
@@ -43,9 +47,17 @@ SOURCE_PATHS = {
         "reports/master_audit/master_audit_phase1b_reconciliation_20260709/"
         "master_audit_phase1b_reconciliation.json"
     ),
+    "phase1b_broad_reconciliation": Path(
+        "reports/master_audit/master_audit_phase1b_broad_reconciliation_20260710/"
+        "master_audit_phase1b_broad_reconciliation.json"
+    ),
     "phase2_reconciliation": Path(
         "reports/master_audit/master_audit_phase2_reconciliation_20260709/"
         "master_audit_phase2_reconciliation.json"
+    ),
+    "phase2_active_scope_reconciliation": Path(
+        "reports/master_audit/master_audit_phase2_active_scope_reconciliation_20260710/"
+        "master_audit_phase2_active_scope_reconciliation.json"
     ),
     "target_timing": Path(
         "reports/model_trust_audit/target_timing_v2_tier1_core_20260709/"
@@ -72,6 +84,21 @@ SOURCE_PATHS = {
 }
 
 JSON_FIELDS = {
+    "phase1a_reconciliation": {
+        "status": "status",
+        "phase1a_source_lineage_ready": "summary.phase1a_source_lineage_ready",
+        "archive_coverage_status": "summary.archive_coverage_status",
+        "expected_archive_count": "summary.expected_archive_count",
+        "missing_archive_count": "summary.missing_archive_count",
+        "missing_manifest_count": "summary.missing_manifest_count",
+        "invalid_manifest_count": "summary.invalid_manifest_count",
+        "registry_validation_failure_count": "summary.registry_validation_failure_count",
+        "original_delivery_reproducibility_ready": (
+            "summary.original_delivery_reproducibility_ready"
+        ),
+        "model_trust_ready": "summary.model_trust_ready",
+        "promotion_allowed": "summary.promotion_allowed",
+    },
     "master_readiness": {
         "status": "status",
         "readiness_score": "summary.readiness_score",
@@ -94,6 +121,35 @@ JSON_FIELDS = {
         "phase1b_limited_scope_ready": "summary.phase1b_limited_scope_ready",
         "raw_dbn_alignment_audit_executed": "summary.raw_dbn_alignment_audit_executed",
     },
+    "phase1b_broad_reconciliation": {
+        "status": "status",
+        "raw_row_parity_and_conversion_ready": (
+            "summary.raw_row_parity_and_conversion_ready"
+        ),
+        "broad_phase1b_accepted": "summary.broad_phase1b_accepted",
+        "market_report_count": "summary.market_report_count",
+        "pass_market_reports": "summary.pass_market_reports",
+        "fail_market_reports": "summary.fail_market_reports",
+        "missing_report_count": "summary.missing_report_count",
+        "expected_market_year_count": "summary.expected_market_year_count",
+        "raw_market_year_count": "summary.raw_market_year_count",
+        "needs_phase1b_conversion_count": "summary.needs_phase1b_conversion_count",
+        "raw_only_count": "summary.raw_only_count",
+        "invalid_manifest_count": "summary.invalid_manifest_count",
+        "source_hash_mismatch_count": "summary.source_hash_mismatch_count",
+        "definition_join_mismatch_count": "summary.definition_join_mismatch_count",
+        "raw_schema_failure_count": "summary.raw_schema_failure_count",
+        "required_schema_exception_failure_count": (
+            "summary.required_schema_exception_failure_count"
+        ),
+        "accepted_repair_source_count": "summary.accepted_repair_source_count",
+        "legacy_full_alignment_context": "summary.legacy_full_alignment_context",
+        "raw_dbn_alignment_audit_executed": "summary.raw_dbn_alignment_audit_executed",
+        "phase1b_conversion_executed": "summary.phase1b_conversion_executed",
+        "phase2_accepted": "summary.phase2_accepted",
+        "model_trust_ready": "summary.model_trust_ready",
+        "promotion_allowed": "summary.promotion_allowed",
+    },
     "phase2_reconciliation": {
         "status": "status",
         "phase2_full_master_audit_accepted": "summary.phase2_full_master_audit_accepted",
@@ -105,10 +161,71 @@ JSON_FIELDS = {
         ),
         "readiness_status": "summary.readiness_status",
     },
+    "phase2_active_scope_reconciliation": {
+        "status": "status",
+        "causal_session_active_scope_ready": (
+            "summary.causal_session_active_scope_ready"
+        ),
+        "phase2_active_scope_ready": "summary.phase2_active_scope_ready",
+        "active_scoped_output_count": "summary.active_scoped_output_count",
+        "active_hash_match_count": "summary.active_hash_match_count",
+        "phase2_full_master_audit_accepted": (
+            "summary.phase2_full_master_audit_accepted"
+        ),
+        "phase2_session_normalization_audit_accepted": (
+            "summary.phase2_session_normalization_audit_accepted"
+        ),
+        "phase2_build_or_readiness_accepted": (
+            "summary.phase2_build_or_readiness_accepted"
+        ),
+        "audit_phase2_causal_session_normalization_executed": (
+            "summary.audit_phase2_causal_session_normalization_executed"
+        ),
+        "phase2_readiness_or_build_executed": (
+            "summary.phase2_readiness_or_build_executed"
+        ),
+        "causal_rebuild_executed": "summary.causal_rebuild_executed",
+        "parquet_audit_executed": "summary.parquet_audit_executed",
+        "causal_parquet_read_executed": "summary.causal_parquet_read_executed",
+        "readiness_status": "summary.readiness_status",
+        "readiness_severe_blocker_count": "summary.readiness_severe_blocker_count",
+        "scoped_raw_without_causal_count": "summary.scoped_raw_without_causal_count",
+        "target_timing_status": "summary.target_timing_status",
+        "target_timing_pair_count": "summary.target_timing_pair_count",
+        "target_timing_row_count": "summary.target_timing_row_count",
+        "target_timing_row_key_mismatches": (
+            "summary.target_timing_row_key_mismatches"
+        ),
+        "target_timing_entry_30m_not_after_ts": (
+            "summary.target_timing_entry_30m_not_after_ts"
+        ),
+        "target_timing_entry_60m_not_after_ts": (
+            "summary.target_timing_entry_60m_not_after_ts"
+        ),
+        "target_timing_exit_30m_offset_mismatches": (
+            "summary.target_timing_exit_30m_offset_mismatches"
+        ),
+        "target_timing_exit_60m_offset_mismatches": (
+            "summary.target_timing_exit_60m_offset_mismatches"
+        ),
+        "target_timing_same_session_30m_violations": (
+            "summary.target_timing_same_session_30m_violations"
+        ),
+        "target_timing_same_session_60m_violations": (
+            "summary.target_timing_same_session_60m_violations"
+        ),
+        "completed_bar_convention_assumed": (
+            "summary.completed_bar_convention_assumed"
+        ),
+        "model_trust_ready": "summary.model_trust_ready",
+        "promotion_allowed": "summary.promotion_allowed",
+        "paper_live_allowed": "summary.paper_live_allowed",
+        "production_ready": "summary.production_ready",
+    },
     "target_timing": {
         "status": "status",
-        "failure_count": "failure_count",
-        "warning_count": "warning_count",
+        "failure_count": "summary.failure_count",
+        "warning_count": "summary.warning_count",
     },
     "statistical_validity": {
         "status": "status",
@@ -140,7 +257,13 @@ CHECK_SPECS = [
         "area": "data_integrity",
         "check_id": "source_acquisition_lineage",
         "name": "Accepted provider/source acquisition lineage",
-        "source_keys": ["master_readiness", "run_status"],
+        "source_keys": ["phase1a_reconciliation"],
+        "pass_when": "phase1a_source_lineage_ready",
+        "pass_rationale": (
+            "Reviewed PASS: Phase 1A source-lineage reconciliation passed report-only "
+            "using existing registry and archive-coverage evidence. Original-delivery "
+            "reproducibility remains a caveat, not a model-trust upgrade."
+        ),
         "rationale": (
             "Reviewed FAIL: the Master Audit evidence map reports Phase 1A as NOT_RUN/"
             "unknown, so accepted provider/source acquisition lineage is not established."
@@ -150,7 +273,14 @@ CHECK_SPECS = [
         "area": "data_integrity",
         "check_id": "raw_row_parity_and_conversion",
         "name": "Raw DBN/raw parquet row parity and conversion evidence",
-        "source_keys": ["phase1b_reconciliation", "run_status"],
+        "source_keys": ["phase1b_broad_reconciliation", "phase1b_reconciliation", "run_status"],
+        "pass_when": "phase1b_broad_raw_parity_ready",
+        "pass_rationale": (
+            "Reviewed PASS: broad Phase 1B raw row-parity/conversion reconciliation "
+            "passed report-only using existing 33-market expected-only evidence. The "
+            "older full-profile alignment FAIL is preserved as superseded context; "
+            "Phase 2, model trust, and promotion remain blocked."
+        ),
         "rationale": (
             "Reviewed FAIL: Phase 1B evidence is limited-scope report-only evidence; "
             "broad Phase 1B acceptance is false and raw DBN alignment execution was not run."
@@ -160,7 +290,19 @@ CHECK_SPECS = [
         "area": "data_integrity",
         "check_id": "causal_session_active_scope",
         "name": "Causal/session normalization and active scope lineage",
-        "source_keys": ["phase2_reconciliation", "target_timing"],
+        "source_keys": [
+            "phase2_active_scope_reconciliation",
+            "phase2_reconciliation",
+            "target_timing",
+        ],
+        "pass_when": "phase2_active_scope_ready",
+        "pass_rationale": (
+            "Reviewed PASS: Phase 2 active-scope causal/session reconciliation "
+            "passed report-only using existing active manifests, active-to-label hash "
+            "lineage, readiness caveats, and target-timing evidence for 6E/CL/ES/ZN "
+            "2023/2024. Full Phase 2 Master Audit acceptance, model trust, and "
+            "promotion remain blocked."
+        ),
         "rationale": (
             "Reviewed FAIL: Phase 2 has limited active hash-lineage evidence only; full "
             "Master Audit acceptance and session-normalization acceptance remain false."
@@ -286,6 +428,118 @@ def _missing_sources(
     return missing
 
 
+def _phase1a_source_lineage_ready(
+    source_evidence: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    evidence = source_evidence.get("phase1a_reconciliation", {})
+    fields = evidence.get("fields")
+    if not isinstance(fields, Mapping):
+        return False
+    return (
+        fields.get("status") == "PASS_MASTER_AUDIT_PHASE1A_RECONCILIATION_REPORT_ONLY"
+        and fields.get("phase1a_source_lineage_ready") is True
+        and fields.get("archive_coverage_status") == "PASS"
+        and fields.get("expected_archive_count") == 2108
+        and fields.get("missing_archive_count") == 0
+        and fields.get("missing_manifest_count") == 0
+        and fields.get("invalid_manifest_count") == 0
+        and fields.get("registry_validation_failure_count") == 0
+        and fields.get("model_trust_ready") is False
+        and fields.get("promotion_allowed") is False
+    )
+
+
+def _phase1b_broad_raw_parity_ready(
+    source_evidence: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    evidence = source_evidence.get("phase1b_broad_reconciliation", {})
+    fields = evidence.get("fields")
+    if not isinstance(fields, Mapping):
+        return False
+    return (
+        fields.get("status") == "PASS_MASTER_AUDIT_PHASE1B_BROAD_RECONCILIATION_REPORT_ONLY"
+        and fields.get("raw_row_parity_and_conversion_ready") is True
+        and fields.get("broad_phase1b_accepted") is True
+        and fields.get("market_report_count") == 33
+        and fields.get("pass_market_reports") == 33
+        and fields.get("fail_market_reports") == 0
+        and fields.get("missing_report_count") == 0
+        and fields.get("expected_market_year_count") == 527
+        and fields.get("raw_market_year_count") == 527
+        and fields.get("needs_phase1b_conversion_count") == 0
+        and fields.get("raw_only_count") == 0
+        and fields.get("invalid_manifest_count") == 0
+        and fields.get("source_hash_mismatch_count") == 0
+        and fields.get("definition_join_mismatch_count") == 0
+        and fields.get("raw_schema_failure_count") == 0
+        and fields.get("required_schema_exception_failure_count") == 0
+        and fields.get("accepted_repair_source_count") == 6
+        and fields.get("legacy_full_alignment_context")
+        == "SUPERSEDED_BY_CORRECTED_EXPECTED_ONLY_BATCHES"
+        and fields.get("raw_dbn_alignment_audit_executed") is False
+        and fields.get("phase1b_conversion_executed") is False
+        and fields.get("phase2_accepted") is False
+        and fields.get("model_trust_ready") is False
+        and fields.get("promotion_allowed") is False
+    )
+
+
+def _phase2_active_scope_ready(
+    source_evidence: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    evidence = source_evidence.get("phase2_active_scope_reconciliation", {})
+    fields = evidence.get("fields")
+    if not isinstance(fields, Mapping):
+        return False
+    return (
+        fields.get("status")
+        == "PASS_MASTER_AUDIT_PHASE2_ACTIVE_SCOPE_RECONCILIATION_REPORT_ONLY"
+        and fields.get("causal_session_active_scope_ready") is True
+        and fields.get("phase2_active_scope_ready") is True
+        and fields.get("active_scoped_output_count") == 8
+        and fields.get("active_hash_match_count") == 8
+        and fields.get("phase2_full_master_audit_accepted") is False
+        and fields.get("phase2_session_normalization_audit_accepted") is False
+        and fields.get("phase2_build_or_readiness_accepted") is False
+        and fields.get("audit_phase2_causal_session_normalization_executed") is False
+        and fields.get("phase2_readiness_or_build_executed") is False
+        and fields.get("causal_rebuild_executed") is False
+        and fields.get("parquet_audit_executed") is False
+        and fields.get("causal_parquet_read_executed") is False
+        and fields.get("readiness_status") == "WARN"
+        and fields.get("readiness_severe_blocker_count") == 0
+        and fields.get("scoped_raw_without_causal_count") == 0
+        and fields.get("target_timing_status") == "PASS_TARGET_TIMING_AUDIT"
+        and fields.get("target_timing_pair_count") == 8
+        and fields.get("target_timing_row_count") == 2_837_374
+        and fields.get("target_timing_row_key_mismatches") == 0
+        and fields.get("target_timing_entry_30m_not_after_ts") == 0
+        and fields.get("target_timing_entry_60m_not_after_ts") == 0
+        and fields.get("target_timing_exit_30m_offset_mismatches") == 0
+        and fields.get("target_timing_exit_60m_offset_mismatches") == 0
+        and fields.get("target_timing_same_session_30m_violations") == 0
+        and fields.get("target_timing_same_session_60m_violations") == 0
+        and fields.get("completed_bar_convention_assumed") is True
+        and fields.get("model_trust_ready") is False
+        and fields.get("promotion_allowed") is False
+        and fields.get("paper_live_allowed") is False
+        and fields.get("production_ready") is False
+    )
+
+
+def _spec_passes(
+    spec: Mapping[str, Any],
+    source_evidence: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    if spec.get("pass_when") == "phase1a_source_lineage_ready":
+        return _phase1a_source_lineage_ready(source_evidence)
+    if spec.get("pass_when") == "phase1b_broad_raw_parity_ready":
+        return _phase1b_broad_raw_parity_ready(source_evidence)
+    if spec.get("pass_when") == "phase2_active_scope_ready":
+        return _phase2_active_scope_ready(source_evidence)
+    return False
+
+
 def build_gap_checks(
     *,
     source_evidence: Mapping[str, Mapping[str, Any]],
@@ -295,17 +549,18 @@ def build_gap_checks(
         source_keys = list(spec["source_keys"])
         missing = _missing_sources(source_keys, source_evidence)
         source_hashes = _source_hashes(source_keys, source_evidence)
-        status = "MISSING_EVIDENCE" if missing else "FAIL"
+        passed = not missing and _spec_passes(spec, source_evidence)
+        status = "PASS" if passed else "MISSING_EVIDENCE" if missing else "FAIL"
         reason = (
             f"source evidence missing or unreadable: {missing}"
             if missing
-            else str(spec["rationale"])
+            else str(spec.get("pass_rationale") if passed else spec["rationale"])
         )
         check = {
             "check_id": spec["check_id"],
             "name": spec["name"],
             "status": status,
-            "review_status": "FAIL",
+            "review_status": "PASS" if passed else "FAIL",
             "review_rationale": reason,
             "evidence_paths": [
                 str(source_evidence[key]["path"])
@@ -340,12 +595,15 @@ def build_gap_maps(
         status = _area_status(checks)
         maps[area] = {
             "status": status,
-            "ready": False,
+            "ready": status == "PASS",
             "score_eligible": False,
             "score_contribution": 0,
             "checks": checks,
             "failure_count": sum(1 for check in checks if check["status"] != "PASS"),
             "accepted_evidence": [],
+            "accepted_check_ids": [
+                str(check["check_id"]) for check in checks if check["status"] == "PASS"
+            ],
             "missing_evidence": [
                 check["name"] for check in checks if check["status"] != "PASS"
             ],
@@ -406,7 +664,7 @@ def build_report(
                 area: gap_maps[area]["score_contribution"] for area in GAP_AREAS
             },
             "any_gap_area_pass": any(gap_maps[area]["status"] == "PASS" for area in GAP_AREAS),
-            "data_integrity_ready": False,
+            "data_integrity_ready": gap_maps["data_integrity"]["status"] == "PASS",
             "statistical_validity_ready": False,
             "operational_resilience_ready": False,
             "model_trust_ready": False,

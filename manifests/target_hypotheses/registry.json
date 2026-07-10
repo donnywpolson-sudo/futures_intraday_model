@@ -62,7 +62,23 @@
         "reports/pipeline_audit/tier1_core_directional_baseline_v1_discovery_smoke_20260704T025853Z.md",
         "reports/pipeline_audit/tier1_core_directional_baseline_v1_discovery_smoke_20260704T025853Z.json"
       ],
-      "next_allowed_actions": []
+      "next_allowed_actions": [],
+      "master_audit_disposition_notes": [
+        {
+          "schema_version": 1,
+          "source": "master_audit_canonical_trial_search_append_only_mutation_execution_20260710",
+          "mutation_type": "APPEND_REGISTRY_DISPOSITION_NOTE",
+          "missing_source_report_path": "reports/pipeline_audit/tier1_core_directional_baseline_v1_discovery_smoke_20260704T025853Z.json",
+          "note": "Source JSON remains unrecovered after local filesystem and git-history search; preserve the missing path and use registry/trial-status notes as secondary disposition context only under separate append-only approval.",
+          "primary_source_json_absent_caveat": true,
+          "source_package": "reports/master_audit/master_audit_canonical_trial_search_append_only_mutation_package_20260710/master_audit_canonical_trial_search_append_only_mutation_package.json",
+          "applied_at_utc": "2026-07-10T14:21:01Z",
+          "status_change_allowed": false,
+          "wfa_allowed_change_allowed": false,
+          "source_report_rewrite_allowed": false,
+          "next_allowed_actions_change_allowed": false
+        }
+      ]
     },
     {
       "target_hypothesis_id": "directional_path_quality_target_v1",
@@ -89,7 +105,23 @@
         "reports/pipeline_audit/directional_path_quality_target_v1_smoke_20260617T095912Z.md",
         "reports/pipeline_audit/directional_path_quality_target_v1_smoke_20260617T095912Z.json"
       ],
-      "next_allowed_actions": []
+      "next_allowed_actions": [],
+      "master_audit_disposition_notes": [
+        {
+          "schema_version": 1,
+          "source": "master_audit_canonical_trial_search_append_only_mutation_execution_20260710",
+          "mutation_type": "APPEND_REGISTRY_DISPOSITION_NOTE",
+          "missing_source_report_path": "reports/pipeline_audit/directional_path_quality_target_v1_smoke_20260617T095912Z.json",
+          "note": "Source JSON remains unrecovered after local filesystem and git-history search; preserve the missing path and use registry/trial-status notes as secondary disposition context only under separate append-only approval.",
+          "primary_source_json_absent_caveat": true,
+          "source_package": "reports/master_audit/master_audit_canonical_trial_search_append_only_mutation_package_20260710/master_audit_canonical_trial_search_append_only_mutation_package.json",
+          "applied_at_utc": "2026-07-10T14:21:01Z",
+          "status_change_allowed": false,
+          "wfa_allowed_change_allowed": false,
+          "source_report_rewrite_allowed": false,
+          "next_allowed_actions_change_allowed": false
+        }
+      ]
     },
     {
       "target_hypothesis_id": "es_30m_directional_extension_target_v1",
@@ -113,7 +145,23 @@
         "reports/pipeline_audit/es_30m_directional_extension_target_v1_discovery_smoke.md",
         "reports/pipeline_audit/es_30m_directional_extension_target_v1_discovery_smoke.json"
       ],
-      "next_allowed_actions": []
+      "next_allowed_actions": [],
+      "master_audit_disposition_notes": [
+        {
+          "schema_version": 1,
+          "source": "master_audit_canonical_trial_search_append_only_mutation_execution_20260710",
+          "mutation_type": "APPEND_REGISTRY_DISPOSITION_NOTE",
+          "missing_source_report_path": "reports/pipeline_audit/es_30m_directional_extension_target_v1_discovery_smoke.json",
+          "note": "Source JSON remains unrecovered after local filesystem and git-history search; preserve the missing path and use registry/trial-status notes as secondary disposition context only under separate append-only approval.",
+          "primary_source_json_absent_caveat": true,
+          "source_package": "reports/master_audit/master_audit_canonical_trial_search_append_only_mutation_package_20260710/master_audit_canonical_trial_search_append_only_mutation_package.json",
+          "applied_at_utc": "2026-07-10T14:21:01Z",
+          "status_change_allowed": false,
+          "wfa_allowed_change_allowed": false,
+          "source_report_rewrite_allowed": false,
+          "next_allowed_actions_change_allowed": false
+        }
+      ]
     },
     {
       "target_hypothesis_id": "vol_scaled_terminal_30m_v1",
@@ -137,7 +185,23 @@
         "reports/pipeline_audit/es_30m_target_triage_v1_vol_scaled_terminal_30m_v1_discovery_smoke.md",
         "reports/pipeline_audit/es_30m_target_triage_v1_vol_scaled_terminal_30m_v1_discovery_smoke.json"
       ],
-      "next_allowed_actions": []
+      "next_allowed_actions": [],
+      "master_audit_disposition_notes": [
+        {
+          "schema_version": 1,
+          "source": "master_audit_canonical_trial_search_append_only_mutation_execution_20260710",
+          "mutation_type": "APPEND_REGISTRY_DISPOSITION_NOTE",
+          "missing_source_report_path": "reports/pipeline_audit/es_30m_target_triage_v1_vol_scaled_terminal_30m_v1_discovery_smoke.json",
+          "note": "Source JSON remains unrecovered after local filesystem and git-history search; preserve the missing path and use registry/trial-status notes as secondary disposition context only under separate append-only approval.",
+          "primary_source_json_absent_caveat": true,
+          "source_package": "reports/master_audit/master_audit_canonical_trial_search_append_only_mutation_package_20260710/master_audit_canonical_trial_search_append_only_mutation_package.json",
+          "applied_at_utc": "2026-07-10T14:21:01Z",
+          "status_change_allowed": false,
+          "wfa_allowed_change_allowed": false,
+          "source_report_rewrite_allowed": false,
+          "next_allowed_actions_change_allowed": false
+        }
+      ]
     },
     {
       "target_hypothesis_id": "triple_barrier_30m_v1",
@@ -161,7 +225,23 @@
         "reports/pipeline_audit/es_30m_target_triage_v1_triple_barrier_30m_v1_discovery_smoke.md",
         "reports/pipeline_audit/es_30m_target_triage_v1_triple_barrier_30m_v1_discovery_smoke.json"
       ],
-      "next_allowed_actions": []
+      "next_allowed_actions": [],
+      "master_audit_disposition_notes": [
+        {
+          "schema_version": 1,
+          "source": "master_audit_canonical_trial_search_append_only_mutation_execution_20260710",
+          "mutation_type": "APPEND_REGISTRY_DISPOSITION_NOTE",
+          "missing_source_report_path": "reports/pipeline_audit/es_30m_target_triage_v1_triple_barrier_30m_v1_discovery_smoke.json",
+          "note": "Source JSON remains unrecovered after local filesystem and git-history search; preserve the missing path and use registry/trial-status notes as secondary disposition context only under separate append-only approval.",
+          "primary_source_json_absent_caveat": true,
+          "source_package": "reports/master_audit/master_audit_canonical_trial_search_append_only_mutation_package_20260710/master_audit_canonical_trial_search_append_only_mutation_package.json",
+          "applied_at_utc": "2026-07-10T14:21:01Z",
+          "status_change_allowed": false,
+          "wfa_allowed_change_allowed": false,
+          "source_report_rewrite_allowed": false,
+          "next_allowed_actions_change_allowed": false
+        }
+      ]
     },
     {
       "target_hypothesis_id": "prior_extreme_failure_30m_v1",
@@ -185,7 +265,23 @@
         "reports/pipeline_audit/es_30m_target_triage_v1_prior_extreme_failure_30m_v1_discovery_smoke.md",
         "reports/pipeline_audit/es_30m_target_triage_v1_prior_extreme_failure_30m_v1_discovery_smoke.json"
       ],
-      "next_allowed_actions": []
+      "next_allowed_actions": [],
+      "master_audit_disposition_notes": [
+        {
+          "schema_version": 1,
+          "source": "master_audit_canonical_trial_search_append_only_mutation_execution_20260710",
+          "mutation_type": "APPEND_REGISTRY_DISPOSITION_NOTE",
+          "missing_source_report_path": "reports/pipeline_audit/es_30m_target_triage_v1_prior_extreme_failure_30m_v1_discovery_smoke.json",
+          "note": "Source JSON remains unrecovered after local filesystem and git-history search; preserve the missing path and use registry/trial-status notes as secondary disposition context only under separate append-only approval.",
+          "primary_source_json_absent_caveat": true,
+          "source_package": "reports/master_audit/master_audit_canonical_trial_search_append_only_mutation_package_20260710/master_audit_canonical_trial_search_append_only_mutation_package.json",
+          "applied_at_utc": "2026-07-10T14:21:01Z",
+          "status_change_allowed": false,
+          "wfa_allowed_change_allowed": false,
+          "source_report_rewrite_allowed": false,
+          "next_allowed_actions_change_allowed": false
+        }
+      ]
     },
     {
       "target_hypothesis_id": "vwap_reversion_30m_v1",
@@ -213,7 +309,51 @@
         "reports/pipeline_audit/es_30m_target_triage_v1_vwap_reversion_30m_v1_locked_smoke.md",
         "reports/pipeline_audit/es_30m_target_triage_v1_vwap_reversion_30m_v1_locked_smoke.json"
       ],
-      "next_allowed_actions": []
+      "next_allowed_actions": [],
+      "master_audit_disposition_notes": [
+        {
+          "schema_version": 1,
+          "source": "master_audit_canonical_trial_search_append_only_mutation_execution_20260710",
+          "mutation_type": "APPEND_REGISTRY_DISPOSITION_NOTE",
+          "missing_source_report_path": "reports/pipeline_audit/es_30m_target_triage_v1_vwap_reversion_30m_v1_discovery_smoke.json",
+          "note": "Source JSON remains unrecovered after local filesystem and git-history search; preserve the missing path and use registry/trial-status notes as secondary disposition context only under separate append-only approval.",
+          "primary_source_json_absent_caveat": true,
+          "source_package": "reports/master_audit/master_audit_canonical_trial_search_append_only_mutation_package_20260710/master_audit_canonical_trial_search_append_only_mutation_package.json",
+          "applied_at_utc": "2026-07-10T14:21:01Z",
+          "status_change_allowed": false,
+          "wfa_allowed_change_allowed": false,
+          "source_report_rewrite_allowed": false,
+          "next_allowed_actions_change_allowed": false
+        },
+        {
+          "schema_version": 1,
+          "source": "master_audit_canonical_trial_search_append_only_mutation_execution_20260710",
+          "mutation_type": "APPEND_REGISTRY_DISPOSITION_NOTE",
+          "missing_source_report_path": "reports/pipeline_audit/es_30m_target_triage_v1_vwap_reversion_30m_v1_confirmation_smoke.json",
+          "note": "Source JSON remains unrecovered after local filesystem and git-history search; preserve the missing path and use registry/trial-status notes as secondary disposition context only under separate append-only approval.",
+          "primary_source_json_absent_caveat": true,
+          "source_package": "reports/master_audit/master_audit_canonical_trial_search_append_only_mutation_package_20260710/master_audit_canonical_trial_search_append_only_mutation_package.json",
+          "applied_at_utc": "2026-07-10T14:21:01Z",
+          "status_change_allowed": false,
+          "wfa_allowed_change_allowed": false,
+          "source_report_rewrite_allowed": false,
+          "next_allowed_actions_change_allowed": false
+        },
+        {
+          "schema_version": 1,
+          "source": "master_audit_canonical_trial_search_append_only_mutation_execution_20260710",
+          "mutation_type": "APPEND_REGISTRY_DISPOSITION_NOTE",
+          "missing_source_report_path": "reports/pipeline_audit/es_30m_target_triage_v1_vwap_reversion_30m_v1_locked_smoke.json",
+          "note": "Source JSON remains unrecovered after local filesystem and git-history search; preserve the missing path and use registry/trial-status notes as secondary disposition context only under separate append-only approval.",
+          "primary_source_json_absent_caveat": true,
+          "source_package": "reports/master_audit/master_audit_canonical_trial_search_append_only_mutation_package_20260710/master_audit_canonical_trial_search_append_only_mutation_package.json",
+          "applied_at_utc": "2026-07-10T14:21:01Z",
+          "status_change_allowed": false,
+          "wfa_allowed_change_allowed": false,
+          "source_report_rewrite_allowed": false,
+          "next_allowed_actions_change_allowed": false
+        }
+      ]
     },
     {
       "target_hypothesis_id": "vwap_reclaim_continuation_15m_v1",
@@ -308,7 +448,23 @@
         "reports/pipeline_audit/es_30m_target_triage_v1_opportunity_risk_asymmetry_30m_v1_discovery_smoke.md",
         "reports/pipeline_audit/es_30m_target_triage_v1_opportunity_risk_asymmetry_30m_v1_discovery_smoke.json"
       ],
-      "next_allowed_actions": []
+      "next_allowed_actions": [],
+      "master_audit_disposition_notes": [
+        {
+          "schema_version": 1,
+          "source": "master_audit_canonical_trial_search_append_only_mutation_execution_20260710",
+          "mutation_type": "APPEND_REGISTRY_DISPOSITION_NOTE",
+          "missing_source_report_path": "reports/pipeline_audit/es_30m_target_triage_v1_opportunity_risk_asymmetry_30m_v1_discovery_smoke.json",
+          "note": "Source JSON remains unrecovered after local filesystem and git-history search; preserve the missing path and use registry/trial-status notes as secondary disposition context only under separate append-only approval.",
+          "primary_source_json_absent_caveat": true,
+          "source_package": "reports/master_audit/master_audit_canonical_trial_search_append_only_mutation_package_20260710/master_audit_canonical_trial_search_append_only_mutation_package.json",
+          "applied_at_utc": "2026-07-10T14:21:01Z",
+          "status_change_allowed": false,
+          "wfa_allowed_change_allowed": false,
+          "source_report_rewrite_allowed": false,
+          "next_allowed_actions_change_allowed": false
+        }
+      ]
     },
     {
       "target_hypothesis_id": "opportunity_risk_component_rank_30m_v1",
@@ -332,7 +488,23 @@
         "reports/pipeline_audit/es_30m_target_triage_v1_opportunity_risk_component_rank_30m_v1_discovery_smoke.json",
         "reports/pipeline_audit/es_30m_target_triage_v1_opportunity_risk_component_rank_30m_v1_discovery_smoke.md"
       ],
-      "next_allowed_actions": []
+      "next_allowed_actions": [],
+      "master_audit_disposition_notes": [
+        {
+          "schema_version": 1,
+          "source": "master_audit_canonical_trial_search_append_only_mutation_execution_20260710",
+          "mutation_type": "APPEND_REGISTRY_DISPOSITION_NOTE",
+          "missing_source_report_path": "reports/pipeline_audit/es_30m_target_triage_v1_opportunity_risk_component_rank_30m_v1_discovery_smoke.json",
+          "note": "Source JSON remains unrecovered after local filesystem and git-history search; preserve the missing path and use registry/trial-status notes as secondary disposition context only under separate append-only approval.",
+          "primary_source_json_absent_caveat": true,
+          "source_package": "reports/master_audit/master_audit_canonical_trial_search_append_only_mutation_package_20260710/master_audit_canonical_trial_search_append_only_mutation_package.json",
+          "applied_at_utc": "2026-07-10T14:21:01Z",
+          "status_change_allowed": false,
+          "wfa_allowed_change_allowed": false,
+          "source_report_rewrite_allowed": false,
+          "next_allowed_actions_change_allowed": false
+        }
+      ]
     },
     {
       "target_hypothesis_id": "opening_range_acceptance_continuation_30m_v1",
@@ -388,6 +560,50 @@
       ],
       "next_allowed_actions": [
         "PREPARE_BOUNDED_NEXT_PHASE_PLAN"
+      ],
+      "master_audit_disposition_notes": [
+        {
+          "schema_version": 1,
+          "source": "master_audit_canonical_trial_search_append_only_mutation_execution_20260710",
+          "mutation_type": "APPEND_REGISTRY_DISPOSITION_NOTE",
+          "missing_source_report_path": "reports/pipeline_audit/es_30m_target_smoke_opening_range_acceptance_continuation_30m_v1_discovery_smoke.json",
+          "note": "Source JSON remains unrecovered after local filesystem and git-history search; preserve the missing path and use registry/trial-status notes as secondary disposition context only under separate append-only approval.",
+          "primary_source_json_absent_caveat": true,
+          "source_package": "reports/master_audit/master_audit_canonical_trial_search_append_only_mutation_package_20260710/master_audit_canonical_trial_search_append_only_mutation_package.json",
+          "applied_at_utc": "2026-07-10T14:21:01Z",
+          "status_change_allowed": false,
+          "wfa_allowed_change_allowed": false,
+          "source_report_rewrite_allowed": false,
+          "next_allowed_actions_change_allowed": false
+        },
+        {
+          "schema_version": 1,
+          "source": "master_audit_canonical_trial_search_append_only_mutation_execution_20260710",
+          "mutation_type": "APPEND_REGISTRY_DISPOSITION_NOTE",
+          "missing_source_report_path": "reports/pipeline_audit/es_30m_target_smoke_opening_range_acceptance_continuation_30m_v1_confirmation_smoke.json",
+          "note": "Source JSON remains unrecovered after local filesystem and git-history search; preserve the missing path and use registry/trial-status notes as secondary disposition context only under separate append-only approval.",
+          "primary_source_json_absent_caveat": true,
+          "source_package": "reports/master_audit/master_audit_canonical_trial_search_append_only_mutation_package_20260710/master_audit_canonical_trial_search_append_only_mutation_package.json",
+          "applied_at_utc": "2026-07-10T14:21:01Z",
+          "status_change_allowed": false,
+          "wfa_allowed_change_allowed": false,
+          "source_report_rewrite_allowed": false,
+          "next_allowed_actions_change_allowed": false
+        },
+        {
+          "schema_version": 1,
+          "source": "master_audit_canonical_trial_search_append_only_mutation_execution_20260710",
+          "mutation_type": "APPEND_REGISTRY_DISPOSITION_NOTE",
+          "missing_source_report_path": "reports/pipeline_audit/es_30m_target_smoke_opening_range_acceptance_continuation_30m_v1_locked_smoke.json",
+          "note": "Source JSON remains unrecovered after local filesystem and git-history search; preserve the missing path and use registry/trial-status notes as secondary disposition context only under separate append-only approval.",
+          "primary_source_json_absent_caveat": true,
+          "source_package": "reports/master_audit/master_audit_canonical_trial_search_append_only_mutation_package_20260710/master_audit_canonical_trial_search_append_only_mutation_package.json",
+          "applied_at_utc": "2026-07-10T14:21:01Z",
+          "status_change_allowed": false,
+          "wfa_allowed_change_allowed": false,
+          "source_report_rewrite_allowed": false,
+          "next_allowed_actions_change_allowed": false
+        }
       ]
     },
     {

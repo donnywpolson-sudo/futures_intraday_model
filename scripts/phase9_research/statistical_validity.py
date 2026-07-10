@@ -44,6 +44,7 @@ REQUIRED_CHECKS = (
     "parameter_stability",
     "regime_breakdowns",
 )
+TRIAL_SEARCH_READY_STATUS = "PASS_MASTER_AUDIT_POST_MUTATION_TRIAL_SEARCH_COMPLETENESS_RECONCILIATION_REPORT_ONLY"
 
 
 def _write_csv(path: Path, frame: pd.DataFrame) -> None:
@@ -110,6 +111,41 @@ def _trial_count(trial_log: Mapping[str, Any] | None) -> int | None:
     if isinstance(trials, list):
         return len(trials)
     return None
+
+
+def _trial_search_context(payload: Mapping[str, Any] | None) -> tuple[dict[str, Any] | None, list[str]]:
+    if not isinstance(payload, Mapping):
+        return None, []
+    summary = payload.get("summary")
+    if not isinstance(summary, Mapping):
+        return None, ["trial-search ledger missing summary object"]
+    failures: list[str] = []
+    expected = {
+        "status": TRIAL_SEARCH_READY_STATUS,
+        "trial_ledger_search_path_complete": True,
+        "family_metadata_row_count": 22,
+        "search_family_count": 10,
+        "multiple_testing_family_count": 2,
+        "statistical_recompute_executed": False,
+        "statistical_validity_ready": False,
+        "model_trust_ready": False,
+        "promotion_allowed": False,
+    }
+    for key, value in expected.items():
+        actual = payload.get(key) if key == "status" else summary.get(key)
+        if actual != value:
+            failures.append(
+                f"trial-search ledger expected {key}={value!r} but found {actual!r}"
+            )
+    if failures:
+        return None, failures
+    return {
+        "trial_count": int(summary["family_metadata_row_count"]),
+        "search_family_count": int(summary["search_family_count"]),
+        "multiple_testing_family_count": int(summary["multiple_testing_family_count"]),
+        "source_status": payload.get("status"),
+        "trial_ledger_search_path_complete": summary.get("trial_ledger_search_path_complete"),
+    }, []
 
 
 def _bootstrap(values: pd.Series, *, seed: int, samples: int) -> pd.DataFrame:
@@ -229,24 +265,70 @@ def _required_check_payloads(
     stability: pd.DataFrame,
     adversarial: pd.DataFrame,
     trial_log: Mapping[str, Any] | None,
+    trial_search_context: Mapping[str, Any] | None,
 ) -> dict[str, dict[str, Any]]:
     psr_value, psr_detail = _psr(net_returns)
-    trials = _trial_count(trial_log)
+    trials = (
+        _safe_int(trial_search_context.get("trial_count"))
+        if isinstance(trial_search_context, Mapping)
+        else _trial_count(trial_log)
+    )
+    search_families = (
+        _safe_int(trial_search_context.get("search_family_count"))
+        if isinstance(trial_search_context, Mapping)
+        else None
+    )
+    multiple_testing_families = (
+        _safe_int(trial_search_context.get("multiple_testing_family_count"))
+        if isinstance(trial_search_context, Mapping)
+        else None
+    )
     stability_ready = (
         not stability.empty
         and "scope" in stability
         and stability[stability["scope"].eq("fold")]["positive_net"].nunique(dropna=False) > 0
     )
     regime_ready = False
+    raw_p_value = _safe_float(1.0 - psr_value) if psr_value is not None else None
+    adjusted_p_value = (
+        _safe_float(min(1.0, raw_p_value * float(trials)))
+        if raw_p_value is not None and trials is not None
+        else None
+    )
+    pbo_status = (
+        "FAIL_MISSING_TRIAL_LOG"
+        if trials is None
+        else "FAIL_NO_VARIANT_PERFORMANCE_MATRIX"
+        if trial_search_context is not None
+        else "FAIL_REQUIRES_VARIANT_MATRIX"
+    )
+    deflated_sharpe_status = (
+        "FAIL_MISSING_TRIAL_LOG"
+        if trials is None
+        else "FAIL_NEGATIVE_SHARPE_AFTER_TRIAL_COUNT_DEFLATION"
+        if trial_search_context is not None
+        else "FAIL"
+    )
+    multiple_testing_status = (
+        "FAIL_MISSING_TRIAL_LOG"
+        if trials is None
+        else "FAIL_BONFERRONI_ADJUSTED_PSR"
+        if trial_search_context is not None
+        else "FAIL"
+    )
     checks = {
         "pbo": {
-            "status": "FAIL_MISSING_TRIAL_LOG" if trials is None else "FAIL_REQUIRES_VARIANT_MATRIX",
+            "status": pbo_status,
             "trial_count": trials,
-            "reason": "PBO requires variant/search-path evidence, not a single selected backtest",
+            "search_family_count": search_families,
+            "multiple_testing_family_count": multiple_testing_families,
+            "reason": "PBO requires a variant performance matrix, not only canonical trial/search family counts",
         },
         "deflated_sharpe": {
-            "status": "FAIL_MISSING_TRIAL_LOG" if trials is None else "FAIL",
+            "status": deflated_sharpe_status,
             "trial_count": trials,
+            "search_family_count": search_families,
+            "observed_sharpe_like": psr_detail.get("sharpe_like"),
             "reason": "Deflated Sharpe requires observed Sharpe plus search/trial count evidence",
         },
         "probabilistic_sharpe": {
@@ -262,9 +344,13 @@ def _required_check_payloads(
             "sample_count": BOOTSTRAP_SAMPLES,
         },
         "multiple_testing_adjustment": {
-            "status": "FAIL_MISSING_TRIAL_LOG" if trials is None else "FAIL",
+            "status": multiple_testing_status,
             "trial_count": trials,
-            "reason": "multiple-testing adjustment cannot be accepted without full tested-variant evidence",
+            "search_family_count": search_families,
+            "multiple_testing_family_count": multiple_testing_families,
+            "raw_p_value": raw_p_value,
+            "bonferroni_adjusted_p_value": adjusted_p_value,
+            "reason": "multiple-testing adjustment remains failed because adjusted PSR evidence does not pass",
         },
         "parameter_stability": {
             "status": "PASS" if stability_ready else "FAIL",
@@ -288,12 +374,25 @@ def build_statistical_validity_report(
     run: str,
     policy: PolicyConfig,
     trial_log_path: Path | None = None,
+    trial_search_ledger_path: Path | None = None,
     bootstrap_samples: int = BOOTSTRAP_SAMPLES,
     bootstrap_seed: int = BOOTSTRAP_SEED,
 ) -> dict[str, Any]:
     failures: list[str] = []
     manifest = _read_json(predictions_manifest)
     trial_log = _read_json(trial_log_path) if trial_log_path and trial_log_path.exists() else None
+    trial_search_payload = (
+        _read_json(trial_search_ledger_path)
+        if trial_search_ledger_path and trial_search_ledger_path.exists()
+        else None
+    )
+    trial_search_context, trial_search_failures = _trial_search_context(trial_search_payload)
+    if trial_search_ledger_path is not None:
+        if not trial_search_ledger_path.exists():
+            trial_search_failures.append(
+                f"trial-search ledger missing: {_relative_path(trial_search_ledger_path)}"
+            )
+        failures.extend(trial_search_failures)
     if not predictions_path.exists():
         predictions = pd.DataFrame()
         failures.append(f"prediction parquet missing: {_relative_path(predictions_path)}")
@@ -323,6 +422,7 @@ def build_statistical_validity_report(
         stability=stability,
         adversarial=adversarial,
         trial_log=trial_log,
+        trial_search_context=trial_search_context,
     )
     check_failures = [
         f"statistical-validity evidence missing or failing: {key}"
@@ -370,11 +470,19 @@ def build_statistical_validity_report(
                 for path in (predictions_path, predictions_manifest, costs_config, models_config, trial_log_path)
                 if path is not None
             ]
+            + ([trial_search_ledger_path] if trial_search_ledger_path is not None else [])
         ),
         "outputs": outputs,
         "research_only": True,
         "model_promotion_allowed": False,
     }
+    if trial_search_context is not None:
+        payload["trial_search_evidence"] = {
+            "trial_search_ledger_path": _relative_path(trial_search_ledger_path)
+            if trial_search_ledger_path is not None
+            else None,
+            **dict(trial_search_context),
+        }
     _write_json(summary_path, payload)
     readme_path.write_text(
         "\n".join(
@@ -402,6 +510,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT.as_posix())
     parser.add_argument("--run", default=DEFAULT_RUN)
     parser.add_argument("--trial-log")
+    parser.add_argument("--trial-search-ledger")
     parser.add_argument("--bootstrap-samples", type=int, default=BOOTSTRAP_SAMPLES)
     parser.add_argument("--bootstrap-seed", type=int, default=BOOTSTRAP_SEED)
     parser.add_argument("--long-short-margin", type=float, default=0.05)
@@ -427,6 +536,9 @@ def main() -> int:
         run=args.run,
         policy=policy,
         trial_log_path=Path(args.trial_log) if args.trial_log else None,
+        trial_search_ledger_path=Path(args.trial_search_ledger)
+        if args.trial_search_ledger
+        else None,
         bootstrap_samples=args.bootstrap_samples,
         bootstrap_seed=args.bootstrap_seed,
     )
