@@ -121,6 +121,40 @@ def _phase_payloads() -> dict[str, dict[str, object]]:
     return payloads
 
 
+def _gap_payload(
+    *,
+    status: str,
+    score_eligible: bool,
+    source_hashes: dict[str, str] | None = None,
+) -> dict[str, object]:
+    source_hashes = {"evidence.json": "abc123"} if source_hashes is None else source_hashes
+    return {
+        "status": "PASS_MASTER_AUDIT_GAP_REMEDIATION_EVIDENCE_MAP_REPORT_ONLY",
+        "summary": {
+            "gap_area_statuses": {
+                "data_integrity": status,
+                "statistical_validity": status,
+                "operational_resilience": status,
+            }
+        },
+        "outputs": {"json": audit.DEFAULT_GAP_REMEDIATION.as_posix()},
+        "gap_maps": {
+            area: {
+                "status": status,
+                "score_eligible": score_eligible,
+                "checks": [
+                    {
+                        "check_id": f"{area}_check",
+                        "status": status,
+                        "source_hashes": source_hashes,
+                    }
+                ],
+            }
+            for area in ("data_integrity", "statistical_validity", "operational_resilience")
+        },
+    }
+
+
 def _payloads() -> dict[str, dict[str, object]]:
     return {
         "run_status": _run_status_payload(),
@@ -193,6 +227,7 @@ def test_happy_path_passes_with_score_20_not_ready(tmp_path: Path) -> None:
     assert report["summary"]["research_factory_ready"] is False
     assert report["summary"]["research_readiness_ready"] is False
     assert all(value is False for value in report["non_approval"].values())
+    assert report["research_readiness"]["gap_remediation"]["available"] is False
 
 
 def test_lifecycle_stages_are_exact_and_non_authorizing(tmp_path: Path) -> None:
@@ -329,3 +364,75 @@ def test_invalid_output_root_fails_closed(tmp_path: Path) -> None:
 
     assert report["status"] == audit.FAIL_STATUS
     assert any("invalid report output root" in failure for failure in report["failures"])
+
+
+def test_gap_remediation_fail_map_does_not_raise_zero_scores(tmp_path: Path) -> None:
+    reports_root = _base_repo(tmp_path)
+    _write_json(
+        tmp_path / audit.DEFAULT_GAP_REMEDIATION,
+        _gap_payload(status="FAIL", score_eligible=False),
+    )
+
+    report = audit.build_report(
+        repo_root=tmp_path,
+        reports_root=reports_root,
+        generated_at_utc="2026-07-10T00:00:00Z",
+        git_status_lines=[],
+    )
+
+    scores = report["research_readiness"]["scores"]
+    assert report["status"] == audit.PASS_STATUS
+    assert scores["total"] == 20
+    assert scores["data_integrity"] == 0
+    assert scores["statistical_validity"] == 0
+    assert scores["operational_resilience"] == 0
+    gap_summary = report["research_readiness"]["gap_remediation"]
+    assert gap_summary["available"] is True
+    assert gap_summary["gap_area_statuses"]["data_integrity"] == "FAIL"
+    assert gap_summary["score_eligible_areas"] == []
+
+
+def test_gap_remediation_pass_requires_source_hashes_for_score(tmp_path: Path) -> None:
+    reports_root = _base_repo(tmp_path)
+    _write_json(
+        tmp_path / audit.DEFAULT_GAP_REMEDIATION,
+        _gap_payload(status="PASS", score_eligible=True, source_hashes={}),
+    )
+
+    report = audit.build_report(
+        repo_root=tmp_path,
+        reports_root=reports_root,
+        generated_at_utc="2026-07-10T00:00:00Z",
+        git_status_lines=[],
+    )
+
+    scores = report["research_readiness"]["scores"]
+    assert scores["total"] == 20
+    assert scores["data_integrity"] == 0
+    assert report["research_readiness"]["gap_remediation"]["score_eligible_areas"] == []
+
+
+def test_gap_remediation_pass_with_hashes_adds_evidence_tied_scores(tmp_path: Path) -> None:
+    reports_root = _base_repo(tmp_path)
+    _write_json(
+        tmp_path / audit.DEFAULT_GAP_REMEDIATION,
+        _gap_payload(status="PASS", score_eligible=True),
+    )
+
+    report = audit.build_report(
+        repo_root=tmp_path,
+        reports_root=reports_root,
+        generated_at_utc="2026-07-10T00:00:00Z",
+        git_status_lines=[],
+    )
+
+    scores = report["research_readiness"]["scores"]
+    assert scores["total"] == 35
+    assert scores["data_integrity"] == 5
+    assert scores["statistical_validity"] == 5
+    assert scores["operational_resilience"] == 5
+    assert report["summary"]["score_criteria_met"][-3:] == [
+        "data_integrity_gap_remediation_pass",
+        "statistical_validity_gap_remediation_pass",
+        "operational_resilience_gap_remediation_pass",
+    ]

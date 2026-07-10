@@ -40,6 +40,10 @@ DEFAULT_OVERVIEW = Path(
 DEFAULT_CLOSEOUT = Path(
     "reports/master_audit/master_audit_closeout_20260709/master_audit_closeout.json"
 )
+DEFAULT_GAP_REMEDIATION = Path(
+    "reports/master_audit/master_audit_gap_remediation_20260710/"
+    "master_audit_gap_remediation_evidence_map.json"
+)
 
 REQUIRED_DOCS = {
     "master_audit": Path("MASTER_AUDIT.md"),
@@ -329,6 +333,20 @@ def load_payloads(
     return payloads, failures
 
 
+def load_optional_payload(
+    *,
+    repo_root: Path,
+    path: Path,
+) -> tuple[dict[str, Any] | None, str | None]:
+    resolved = resolve_path(repo_root, path)
+    if not resolved.exists():
+        return None, None
+    payload, error = read_json_object(resolved)
+    if error:
+        return None, f"optional JSON input unavailable: {path.as_posix()} ({error})"
+    return payload, None
+
+
 def run_status_row(run_status: Mapping[str, Any], audit_area: str) -> dict[str, Any]:
     for row in as_list(run_status.get("run_status_table")):
         if isinstance(row, Mapping) and row.get("audit_area") == audit_area:
@@ -339,6 +357,61 @@ def run_status_row(run_status: Mapping[str, Any], audit_area: str) -> dict[str, 
 def non_approval_all_false(payload: Mapping[str, Any]) -> bool:
     non_approval = payload.get("non_approval")
     return isinstance(non_approval, Mapping) and all(value is False for value in non_approval.values())
+
+
+def gap_area_score_eligible(
+    gap_payload: Mapping[str, Any],
+    area: str,
+) -> bool:
+    gap_maps = gap_payload.get("gap_maps")
+    if not isinstance(gap_maps, Mapping):
+        return False
+    area_map = gap_maps.get(area)
+    if not isinstance(area_map, Mapping):
+        return False
+    if area_map.get("status") != "PASS" or area_map.get("score_eligible") is not True:
+        return False
+    checks = as_list(area_map.get("checks"))
+    if not checks:
+        return False
+    for check in checks:
+        if not isinstance(check, Mapping):
+            return False
+        if check.get("status") != "PASS":
+            return False
+        hashes = check.get("source_hashes")
+        if not isinstance(hashes, Mapping) or not hashes:
+            return False
+        if any(not value for value in hashes.values()):
+            return False
+    return True
+
+
+def gap_remediation_summary(gap_payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not gap_payload:
+        return {
+            "available": False,
+            "path": None,
+            "gap_area_statuses": {},
+            "score_eligible_areas": [],
+        }
+    gap_maps = gap_payload.get("gap_maps")
+    area_statuses: dict[str, Any] = {}
+    score_eligible: list[str] = []
+    if isinstance(gap_maps, Mapping):
+        for area, area_map in gap_maps.items():
+            if isinstance(area_map, Mapping):
+                area_statuses[str(area)] = area_map.get("status")
+                if gap_area_score_eligible(gap_payload, str(area)):
+                    score_eligible.append(str(area))
+    outputs = gap_payload.get("outputs")
+    path = outputs.get("json") if isinstance(outputs, Mapping) else None
+    return {
+        "available": True,
+        "path": path,
+        "gap_area_statuses": area_statuses,
+        "score_eligible_areas": sorted(score_eligible),
+    }
 
 
 def current_git_status(
@@ -459,16 +532,28 @@ def readiness_scores(
         total += 5
         criteria.append("master_audit_builder_and_test_surfaces_exist")
 
+    gap_payload = payloads.get("gap_remediation", {})
+    for area in ("data_integrity", "statistical_validity", "operational_resilience"):
+        if gap_area_score_eligible(gap_payload, area):
+            total += 5
+            criteria.append(f"{area}_gap_remediation_pass")
+
     component_scores = {
         "platform_integrity": 5 if "core_reports_present_and_parse" in criteria else 0,
-        "data_integrity": 0,
+        "data_integrity": (
+            5 if "data_integrity_gap_remediation_pass" in criteria else 0
+        ),
         "leakage_control": 5 if "phase3_phase4_limited_scope_only" in criteria else 0,
-        "statistical_validity": 0,
+        "statistical_validity": (
+            5 if "statistical_validity_gap_remediation_pass" in criteria else 0
+        ),
         "governance": 5 if "non_approval_flags_preserve_no_forbidden_execution" in criteria else 0,
         "research_automation": (
             5 if "master_audit_builder_and_test_surfaces_exist" in criteria else 0
         ),
-        "operational_resilience": 0,
+        "operational_resilience": (
+            5 if "operational_resilience_gap_remediation_pass" in criteria else 0
+        ),
         "total": total,
     }
     return component_scores, criteria
@@ -510,6 +595,7 @@ def build_research_readiness(
             "provider_network": "N/A - not approved / not in scope",
             "trading_readiness": "N/A - not approved / not in scope",
         },
+        "gap_remediation": gap_remediation_summary(payloads.get("gap_remediation")),
     }
 
 
@@ -650,6 +736,7 @@ def build_report(
     run_status_path: Path = DEFAULT_RUN_STATUS,
     overview_path: Path = DEFAULT_OVERVIEW,
     closeout_path: Path = DEFAULT_CLOSEOUT,
+    gap_remediation_path: Path = DEFAULT_GAP_REMEDIATION,
     generated_at_utc: str | None = None,
     git_status_lines: Sequence[str] | None = None,
 ) -> dict[str, Any]:
@@ -663,7 +750,32 @@ def build_report(
         closeout_path=closeout_path,
     )
     evidence = build_input_evidence(repo_root=repo_root, paths=input_paths, dirty_map=dirty_map)
+    gap_evidence = inventory.evidence_file(
+        repo_root=repo_root,
+        relative_path=gap_remediation_path,
+        json_fields={
+            "status": "status",
+            "data_integrity_status": "summary.gap_area_statuses.data_integrity",
+            "statistical_validity_status": (
+                "summary.gap_area_statuses.statistical_validity"
+            ),
+            "operational_resilience_status": (
+                "summary.gap_area_statuses.operational_resilience"
+            ),
+        },
+        dirty_map=dirty_map,
+    )
+    if gap_evidence.get("exists"):
+        evidence.append(gap_evidence)
     payloads, load_failures = load_payloads(repo_root=repo_root, paths=input_paths)
+    gap_payload, gap_error = load_optional_payload(
+        repo_root=repo_root,
+        path=gap_remediation_path,
+    )
+    if gap_payload is not None:
+        payloads["gap_remediation"] = gap_payload
+    if gap_error:
+        load_failures.append(gap_error)
     source_surface = collect_source_surface(repo_root)
     output_rel = rel(reports_root, repo_root)
     checks, check_failures = build_checks(
@@ -694,6 +806,7 @@ def build_report(
                 "existing Master Audit JSON/MD reports",
                 "Master Audit builder/test source filenames",
                 "current git status --short",
+                "optional Master Audit gap remediation evidence map",
             ],
         },
         "input_evidence": evidence,
@@ -823,6 +936,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-status", default=DEFAULT_RUN_STATUS.as_posix())
     parser.add_argument("--overview", default=DEFAULT_OVERVIEW.as_posix())
     parser.add_argument("--closeout", default=DEFAULT_CLOSEOUT.as_posix())
+    parser.add_argument("--gap-remediation", default=DEFAULT_GAP_REMEDIATION.as_posix())
     return parser
 
 
@@ -836,6 +950,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         run_status_path=Path(args.run_status),
         overview_path=Path(args.overview),
         closeout_path=Path(args.closeout),
+        gap_remediation_path=Path(args.gap_remediation),
     )
     json_path, md_path = write_report(report, reports_root)
     print(
