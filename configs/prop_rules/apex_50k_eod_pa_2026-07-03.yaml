@@ -1,0 +1,241 @@
+schema_version: 1
+provider: apex_trader_funding
+program: eod_no_fee
+account_name: apex_50k_eod_pa
+account_phase: performance_account
+account_size: 50000
+currency: USD
+version_date: 2026-07-03
+
+source_urls:
+  - https://apextraderfunding.com/help-center/eod-trailing-drawdown-accounts/eod-drawdown-explained/
+  - https://apextraderfunding.com/help-center/eod-trailing-drawdown-accounts/eod-performance-accounts-pa/
+  - https://apextraderfunding.com/help-center/eod-trailing-drawdown-accounts/eod-payouts/
+  - https://apextraderfunding.com/help-center/additional-helpful-items/daily-loss-limit-explained/
+  - https://apextraderfunding.com/help-center/additional-helpful-items/scaling-levels-pa-explained/
+  - https://apextraderfunding.com/help-center/billing/inactivity-policy-on-performance-accounts-pa/
+  - https://apextraderfunding.com/help-center/getting-started/prohibited-activities/
+
+account_nature:
+  simulated_funded_account: true
+  live_brokerage_capital: false
+  user_capital_at_risk: false
+  payout_rights_based_on_simulated_pnl: true
+
+capital_model:
+  nominal_starting_balance: 50000
+  initial_fail_level: 48000
+  initial_practical_risk_budget: 2000
+  initial_daily_loss_cap: 1000
+  threshold_lock_profit: 2100
+  threshold_lock_balance: 52100
+  locked_eod_threshold: 50100
+  safety_net: 52100
+  minimum_balance_to_request_first_payout: 52600
+  interpretation: pa_drawdown_budget_not_cash_account
+
+performance_account:
+  starting_balance: 50000
+  simulated_funded_account: true
+  max_active_pa_accounts: 20
+  payout_split_percent: 100
+  max_drawdown: 2000
+  initial_eod_threshold: 48000
+  threshold_stop_level: 50100
+  threshold_stops_when_highest_eod_balance_reaches: 52100
+  max_contracts_absolute: 4
+  daily_loss_limit_minimum: 1000
+  daily_loss_limit_maximum: 3000
+
+session_rules:
+  eod_balance_snapshot_time: "16:59:59"
+  eod_balance_snapshot_timezone: America/New_York
+  trading_day_reset_time: "18:00:00"
+  trading_day_reset_timezone: America/New_York
+  holding_positions_through_market_close_prohibited: true
+
+drawdown:
+  type: eod_trailing
+  calculation_time: "16:59:59"
+  calculation_timezone: America/New_York
+  session_reset_time: "18:00:00"
+  session_reset_timezone: America/New_York
+  basis: highest_end_of_day_balance
+  includes_unrealized_pnl_for_enforcement: true
+  enforce_intraday_after_threshold_is_set: true
+  threshold_never_decreases: true
+  close_pa_on_touch: true
+  liquidation_on_touch: true
+  daily_loss_limit_affects_eod_threshold: false
+  threshold_stops_trailing: true
+  threshold_stop_level: 50100
+  threshold_stops_when_highest_eod_balance_reaches: 52100
+
+daily_loss_limit:
+  monitored_intraday: true
+  includes_unrealized_pnl: true
+  liquidation_on_touch: true
+  pauses_trading_until_next_session: true
+  closes_pa_on_touch: false
+  resets_at_session_open: true
+  session_reset_time: "18:00:00"
+  session_reset_timezone: America/New_York
+  changes_with_pa_tier: true
+  minimum_level_1_limit: 1000
+
+rule_outcomes:
+  daily_loss_limit_hit:
+    liquidate_open_positions: true
+    pause_trading_until_next_session: true
+    close_pa_permanently: false
+  eod_threshold_touch:
+    liquidate_open_positions: true
+    pause_trading_until_next_session: false
+    close_pa_permanently: true
+  prohibited_activity:
+    close_pa_permanently: true
+  sixth_approved_payout:
+    close_pa_completed: true
+
+pa_scaling:
+  update_frequency: daily_after_market_close
+  tier_basis: prior_full_trading_session_ending_balance
+  tier_changes_intraday: false
+  tier_can_move_up: true
+  tier_can_move_down: true
+  level_1_floor: true
+  max_tier: 4
+  position_limit_scope: all_open_positions_combined
+  order_over_contract_limit_behavior: reject_order
+  micro_contract_equivalency:
+    micro_contracts_per_standard_contract: 10
+  tiers:
+    - tier: 1
+      min_profit: 0
+      max_profit: 1499.99
+      max_contracts: 2
+      daily_loss_limit: 1000
+    - tier: 2
+      min_profit: 1500
+      max_profit: 2999.99
+      max_contracts: 3
+      daily_loss_limit: 1000
+    - tier: 3
+      min_profit: 3000
+      max_profit: 5999.99
+      max_contracts: 4
+      daily_loss_limit: 2000
+    - tier: 4
+      min_profit: 6000
+      max_profit: null
+      max_contracts: 4
+      daily_loss_limit: 3000
+
+payout:
+  minimum_qualifying_trading_days: 5
+  qualifying_days_must_be_consecutive: false
+  minimum_daily_profit_per_qualifying_day: 250
+  safety_net: 52100
+  minimum_balance_to_request: 52600
+  minimum_payout_request: 500
+  payout_split_percent: 100
+  consistency_rule:
+    enabled: true
+    max_single_profitable_day_fraction: 0.50
+    calculation_period: since_last_approved_payout
+  max_payouts_per_account: 6
+  max_request_by_payout_number:
+    1: 1500
+    2: 1500
+    3: 2000
+    4: 2500
+    5: 2500
+    6: 3000
+  can_continue_trading_after_request: true
+  trade_as_if_requested_payout_removed: true
+  payout_denial_closes_pa: false
+
+payout_lifecycle:
+  statuses:
+    - ineligible
+    - eligible
+    - requested
+    - approved
+    - denied
+  max_approved_payouts: 6
+  close_pa_after_sixth_approved_payout: true
+  denied_payout_closes_pa: false
+
+balance_after_payout:
+  subtract_requested_payout_immediately_for_risk_checks: true
+  trade_as_if_requested_payout_removed: true
+  permanent_safety_net: 52100
+  only_balance_above_safety_net_is_payout_eligible: true
+
+simulator_behavior_contract:
+  event_order:
+    - update_realized_and_unrealized_pnl
+    - check_contract_limit_before_order_execution
+    - reject_orders_over_contract_limit
+    - check_intraday_daily_loss_limit_against_equity
+    - liquidate_and_pause_if_daily_loss_limit_is_hit
+    - check_eod_threshold_intraday
+    - liquidate_and_close_pa_if_eod_threshold_is_touched
+    - update_highest_eod_balance_threshold_and_next_session_tier_at_eod_snapshot
+    - count_payout_qualifying_days
+    - enforce_payout_consistency
+    - allow_payout_request_only_if_balance_meets_minimum
+    - subtract_requested_payout_for_risk_checks
+    - close_pa_after_sixth_approved_payout
+
+inactivity:
+  rolling_window_days: 30
+  required_qualifying_profit_days: 2
+  minimum_profit_per_qualifying_day: 50
+  dormant_after_days_without_requirement: 15
+  close_after_days_without_requirement: 30
+  closure_reversible: false
+  trading_without_qualifying_profit_prevents_closure: false
+
+checks:
+  enforce_balance_and_equity: true
+  enforce_eod_trailing_threshold: true
+  enforce_daily_loss_limit: true
+  enforce_max_contracts: true
+  enforce_pa_scaling: true
+  enforce_payout_eligibility: true
+  enforce_inactivity: true
+  reject_orders_over_contract_limit: true
+  close_pa_on_prohibited_activity: true
+
+execution_assumptions:
+  include_commissions: true
+  include_exchange_fees: true
+  include_bid_ask_spread: true
+  include_slippage: true
+  simulate_rejected_orders_over_contract_limit: true
+  simulate_auto_liquidation_market_fill: true
+  liquidation_fill_may_finish_above_or_below_dll_threshold: true
+
+prohibited_activity_flags:
+  account_sharing: true
+  payment_or_payout_account_not_in_own_name: true
+  bad_faith_chargeback_or_dispute: true
+  false_or_misleading_information: true
+  vpn_proxy_or_anonymizer_to_evade_rules: true
+  system_or_document_manipulation: true
+  gaming_or_exploiting_program: true
+  trading_without_stop_or_defined_risk: true
+  disproportionate_risk_reward: true
+  using_threshold_as_stop_loss: true
+  unsustainable_strategy: true
+  simulation_environment_exploitation: true
+  hft_or_exploitative_strategy: true
+  non_directional_bracket_trading: true
+  unauthorized_user_access: true
+  account_or_resource_sharing: true
+  multiple_user_accounts: true
+  holding_positions_through_market_close: true
+  automation_or_algorithm_usage: true
+  gambling_style_news_trading: true
+  hedging: true

@@ -22,6 +22,7 @@ from scripts.phase8_model_selection.evaluate_predictions import (  # noqa: E402
 from scripts.phase8_model_selection.build_failure_analysis import build_failure_analysis  # noqa: E402
 from scripts.phase7_prediction_audit.audit_predictions import build_prediction_audit  # noqa: E402
 from scripts.phase9_research.statistical_validity import build_statistical_validity_report  # noqa: E402
+from scripts.validation import prop_account_rules as prop_rules  # noqa: E402
 
 
 def _sha256(path: Path) -> str:
@@ -78,6 +79,32 @@ position_policy:
         encoding="utf-8",
     )
     return path
+
+
+def _copy_prop_rule_inputs(tmp_path: Path) -> tuple[Path, Path]:
+    prop_config = tmp_path / prop_rules.DEFAULT_PROP_RULES_CONFIG
+    report_schema = tmp_path / prop_rules.DEFAULT_REPORT_SCHEMA
+    prop_config.parent.mkdir(parents=True, exist_ok=True)
+    report_schema.parent.mkdir(parents=True, exist_ok=True)
+    prop_config.write_text(
+        (prop_rules.REPO_ROOT / prop_rules.DEFAULT_PROP_RULES_CONFIG).read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    report_schema.write_text(
+        (prop_rules.REPO_ROOT / prop_rules.DEFAULT_REPORT_SCHEMA).read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    return prop_config, report_schema
+
+
+def _assert_valid_prop_account_rules(payload: dict[str, object]) -> None:
+    prop_summary = payload["prop_account_rules"]
+    assert isinstance(prop_summary, dict)
+    assert prop_summary["account_phase"] == "performance_account"
+    assert prop_summary["initial_practical_risk_budget"] == 2000
+    assert prop_summary["safety_net"] == 52100
+    assert prop_summary["max_approved_payouts"] == 6
+    assert prop_summary["strategy_logic_changed"] is False
 
 
 def _policy(*, raw_return_prediction_direct_trading_allowed: bool = False) -> PolicyConfig:
@@ -357,6 +384,49 @@ def _write_manifest(
     return path
 
 
+def _write_execution_realism_report(
+    path: Path,
+    prediction_path: Path,
+    manifest_path: Path,
+    *,
+    status: str = "PASS",
+    include_primary_evidence: bool = True,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    check_results: dict[str, dict[str, object]] = {}
+    for check_key in (
+        "delay_stress",
+        "liquidity_window",
+        "spread_slippage",
+        "partial_fills_rejects",
+    ):
+        check: dict[str, object] = {
+            "status": status,
+            "reason": f"{check_key} fixture status is {status}",
+        }
+        if include_primary_evidence:
+            source_path = f"external_primary_execution/{check_key}.json"
+            check["evidence_paths"] = [source_path]
+            check["source_hashes"] = {source_path: f"{check_key}-sha256-fixture"}
+        check_results[check_key] = check
+    payload = {
+        "run": "baseline",
+        "prediction_path": prediction_path.as_posix(),
+        "predictions_manifest_path": manifest_path.as_posix(),
+        "input_file_hashes": {
+            prediction_path.as_posix(): _sha256(prediction_path),
+            manifest_path.as_posix(): _sha256(manifest_path),
+        },
+        "execution_realism_gate": {
+            "status": status,
+            "execution_realism_ready": status == "PASS",
+            "check_results": check_results,
+        },
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
 def test_cli_predictions_has_no_implicit_data_predictions_default() -> None:
     args = build_arg_parser().parse_args([])
 
@@ -375,10 +445,26 @@ def test_cli_missing_predictions_fails_clearly(monkeypatch: pytest.MonkeyPatch, 
 
 def test_cli_accepts_explicit_report_scoped_predictions(tmp_path: Path) -> None:
     prediction_path = tmp_path / "reports" / "wfa" / "fixture_predictions.parquet"
+    prop_config_path = tmp_path / "configs" / "prop_rules" / "fixture.yaml"
+    prop_report_schema_path = tmp_path / "configs" / "report_schema" / "fixture.yaml"
 
-    args = build_arg_parser().parse_args(["--predictions", prediction_path.as_posix()])
+    args = build_arg_parser().parse_args(
+        [
+            "--predictions",
+            prediction_path.as_posix(),
+            "--prop-rules-config",
+            prop_config_path.as_posix(),
+            "--prop-report-schema",
+            prop_report_schema_path.as_posix(),
+            "--execution-realism-report",
+            (tmp_path / "reports" / "execution_realism.json").as_posix(),
+        ]
+    )
 
     assert Path(args.predictions).as_posix() == prediction_path.as_posix()
+    assert Path(args.prop_rules_config).as_posix() == prop_config_path.as_posix()
+    assert Path(args.prop_report_schema).as_posix() == prop_report_schema_path.as_posix()
+    assert Path(args.execution_realism_report).name == "execution_realism.json"
 
 
 def test_policy_config_reads_side_aware_trend_blocker_flag(tmp_path: Path) -> None:
@@ -417,6 +503,7 @@ def test_policy_metrics_do_not_hard_block_aggregate_trend_danger(tmp_path: Path)
     manifest_path = _write_manifest(tmp_path / "reports" / "wfa" / "baseline_predictions_manifest.json", prediction_path)
     costs_path = _write_costs(tmp_path / "configs" / "costs.yaml")
     models_path = _write_models(tmp_path / "configs" / "models.yaml")
+    prop_config_path, prop_report_schema_path = _copy_prop_rule_inputs(tmp_path)
 
     result = evaluate_predictions(
         predictions_path=prediction_path,
@@ -425,6 +512,8 @@ def test_policy_metrics_do_not_hard_block_aggregate_trend_danger(tmp_path: Path)
         models_config=models_path,
         metrics_root=tmp_path / "reports" / "metrics",
         model_selection_root=tmp_path / "reports" / "model_selection",
+        prop_rules_config=prop_config_path,
+        prop_report_schema=prop_report_schema_path,
         run="baseline",
         policy=_policy(),
         promotion_gate=_promotion_gate(),
@@ -460,6 +549,8 @@ def test_policy_metrics_do_not_hard_block_aggregate_trend_danger(tmp_path: Path)
     comparison = pd.read_csv(result["model_comparison_path"])
     turnover = pd.read_csv(result["turnover_path"])
 
+    for payload in (metrics, phase8_metrics, decision, selection):
+        _assert_valid_prop_account_rules(payload)
     assert metrics["live_execution_ready"] is False
     assert metrics["execution_realism"] == "research_non_overlapping_target_window_execution_policy"
     assert metrics["execution_policy"] == "max_one_contract_non_overlapping_target_window"
@@ -544,6 +635,46 @@ def test_policy_metrics_do_not_hard_block_aggregate_trend_danger(tmp_path: Path)
     }
     assert calibration["calibration_curve_count"] > 0
     assert turnover.loc[0, "trade_count"] == 3
+
+
+def test_prop_rule_loading_failure_blocks_phase8_promotion(tmp_path: Path) -> None:
+    prediction_path = _write_predictions(
+        tmp_path / "data" / "predictions" / "baseline" / "oos_predictions.parquet"
+    )
+    manifest_path = _write_manifest(
+        tmp_path / "reports" / "wfa" / "baseline_predictions_manifest.json",
+        prediction_path,
+    )
+    costs_path = _write_costs(tmp_path / "configs" / "costs.yaml")
+    models_path = _write_models(tmp_path / "configs" / "models.yaml")
+    _, prop_report_schema_path = _copy_prop_rule_inputs(tmp_path)
+
+    result = evaluate_predictions(
+        predictions_path=prediction_path,
+        predictions_manifest=manifest_path,
+        costs_config=costs_path,
+        models_config=models_path,
+        metrics_root=tmp_path / "reports" / "metrics",
+        model_selection_root=tmp_path / "reports" / "model_selection",
+        prop_rules_config=tmp_path / "configs" / "prop_rules" / "missing.yaml",
+        prop_report_schema=prop_report_schema_path,
+        run="baseline",
+        policy=_policy(),
+        promotion_gate=_promotion_gate(),
+    )
+
+    assert result["failure_count"] > 0
+    assert any("prop-account rule loading failed" in failure for failure in result["failures"])
+    metrics = json.loads(result["metrics_path"].read_text(encoding="utf-8"))
+    decision = json.loads(result["alpha_promotion_decision_path"].read_text(encoding="utf-8"))
+
+    assert metrics["research_policy_metrics_ready"] is False
+    assert metrics["research_alpha_ready"] is False
+    assert metrics["model_promotion_allowed"] is False
+    assert metrics["prop_account_rules"]["status"] == "FAIL_PROP_ACCOUNT_RULES"
+    assert "prop-account rule loading failed" in metrics["prop_account_rules"]["failure"]
+    assert decision["model_promotion_allowed"] is False
+    assert decision["prop_account_rules"]["status"] == "FAIL_PROP_ACCOUNT_RULES"
 
 
 def test_phase8_fails_closed_when_direct_return_trading_is_requested(tmp_path: Path) -> None:
@@ -656,11 +787,154 @@ def test_phase8_consumes_report_only_diagnostic_evidence(tmp_path: Path) -> None
         for failure in gate["baseline_comparison_gate"]["failures"]
     )
     assert gate["capacity_liquidity_gate"]["evidence_source"] == "report"
+    assert gate["execution_realism_gate"]["evidence_source"] == "missing"
+    assert gate["execution_realism_gate"]["check_results"]["delay_stress"]["status"] == (
+        "MISSING_EVIDENCE"
+    )
     assert result["promotion_gate"]["model_promotion_allowed"] is False
     metrics = json.loads(result["metrics_path"].read_text(encoding="utf-8"))
     assert metrics["statistical_validity_gate"]["evidence_source"] == "report"
     assert metrics["diagnostic_evidence_reports"]["phase7_prediction_audit_report"].endswith(
         "prediction_audit_summary.json"
+    )
+
+
+def test_phase8_surfaces_valid_execution_realism_report(tmp_path: Path) -> None:
+    prediction_path = _write_predictions(
+        tmp_path / "data" / "predictions" / "baseline" / "oos_predictions.parquet"
+    )
+    manifest_path = _write_manifest(
+        tmp_path / "reports" / "wfa" / "baseline_predictions_manifest.json",
+        prediction_path,
+    )
+    execution_report = _write_execution_realism_report(
+        tmp_path / "reports" / "execution_realism" / "baseline_summary.json",
+        prediction_path,
+        manifest_path,
+    )
+    costs_path = _write_costs(tmp_path / "configs" / "costs.yaml")
+    models_path = _write_models(tmp_path / "configs" / "models.yaml")
+    prop_config_path, prop_report_schema_path = _copy_prop_rule_inputs(tmp_path)
+
+    result = evaluate_predictions(
+        predictions_path=prediction_path,
+        predictions_manifest=manifest_path,
+        costs_config=costs_path,
+        models_config=models_path,
+        metrics_root=tmp_path / "reports" / "metrics",
+        model_selection_root=tmp_path / "reports" / "model_selection",
+        prop_rules_config=prop_config_path,
+        prop_report_schema=prop_report_schema_path,
+        run="baseline",
+        policy=_policy(),
+        promotion_gate=_promotion_gate(),
+        execution_realism_report=execution_report,
+    )
+
+    gate = result["execution_realism_gate"]
+    assert gate["status"] == "PASS"
+    assert gate["execution_realism_ready"] is True
+    assert gate["check_results"]["delay_stress"]["source_hashes"]
+    metrics = json.loads(result["phase8_metrics_path"].read_text(encoding="utf-8"))
+    decision = json.loads(result["alpha_promotion_decision_path"].read_text(encoding="utf-8"))
+    selection = json.loads(result["model_selection_report_path"].read_text(encoding="utf-8"))
+    for payload in (metrics, decision, selection):
+        assert payload["execution_realism_gate"]["check_results"]["delay_stress"]["status"] == "PASS"
+        assert payload["diagnostic_evidence_reports"]["execution_realism_report"].endswith(
+            "baseline_summary.json"
+        )
+    assert decision["model_promotion_allowed"] is False
+
+
+def test_phase8_rejects_execution_realism_pass_without_primary_evidence(tmp_path: Path) -> None:
+    prediction_path = _write_predictions(
+        tmp_path / "data" / "predictions" / "baseline" / "oos_predictions.parquet"
+    )
+    manifest_path = _write_manifest(
+        tmp_path / "reports" / "wfa" / "baseline_predictions_manifest.json",
+        prediction_path,
+    )
+    execution_report = _write_execution_realism_report(
+        tmp_path / "reports" / "execution_realism" / "baseline_summary.json",
+        prediction_path,
+        manifest_path,
+        include_primary_evidence=False,
+    )
+    costs_path = _write_costs(tmp_path / "configs" / "costs.yaml")
+    models_path = _write_models(tmp_path / "configs" / "models.yaml")
+    prop_config_path, prop_report_schema_path = _copy_prop_rule_inputs(tmp_path)
+
+    result = evaluate_predictions(
+        predictions_path=prediction_path,
+        predictions_manifest=manifest_path,
+        costs_config=costs_path,
+        models_config=models_path,
+        metrics_root=tmp_path / "reports" / "metrics",
+        model_selection_root=tmp_path / "reports" / "model_selection",
+        prop_rules_config=prop_config_path,
+        prop_report_schema=prop_report_schema_path,
+        run="baseline",
+        policy=_policy(),
+        promotion_gate=_promotion_gate(),
+        execution_realism_report=execution_report,
+    )
+
+    gate = result["execution_realism_gate"]
+    assert gate["status"] == "FAIL"
+    assert gate["check_results"]["delay_stress"]["status"] == "MISSING_EVIDENCE"
+    assert "requires primary source paths and source hashes" in gate["failures"][0]
+    decision = json.loads(result["alpha_promotion_decision_path"].read_text(encoding="utf-8"))
+    assert decision["execution_realism_gate"]["check_results"]["delay_stress"]["status"] == (
+        "MISSING_EVIDENCE"
+    )
+    assert decision["model_promotion_allowed"] is False
+
+
+def test_phase8_does_not_surface_hash_invalid_execution_realism_report(tmp_path: Path) -> None:
+    prediction_path = _write_predictions(
+        tmp_path / "data" / "predictions" / "baseline" / "oos_predictions.parquet"
+    )
+    manifest_path = _write_manifest(
+        tmp_path / "reports" / "wfa" / "baseline_predictions_manifest.json",
+        prediction_path,
+    )
+    execution_report = _write_execution_realism_report(
+        tmp_path / "reports" / "execution_realism" / "baseline_summary.json",
+        prediction_path,
+        manifest_path,
+    )
+    payload = json.loads(execution_report.read_text(encoding="utf-8"))
+    payload["input_file_hashes"][prediction_path.as_posix()] = "stale-hash"
+    execution_report.write_text(json.dumps(payload), encoding="utf-8")
+    costs_path = _write_costs(tmp_path / "configs" / "costs.yaml")
+    models_path = _write_models(tmp_path / "configs" / "models.yaml")
+    prop_config_path, prop_report_schema_path = _copy_prop_rule_inputs(tmp_path)
+
+    result = evaluate_predictions(
+        predictions_path=prediction_path,
+        predictions_manifest=manifest_path,
+        costs_config=costs_path,
+        models_config=models_path,
+        metrics_root=tmp_path / "reports" / "metrics",
+        model_selection_root=tmp_path / "reports" / "model_selection",
+        prop_rules_config=prop_config_path,
+        prop_report_schema=prop_report_schema_path,
+        run="baseline",
+        policy=_policy(),
+        promotion_gate=_promotion_gate(),
+        execution_realism_report=execution_report,
+    )
+
+    assert result["failure_count"] > 0
+    assert "execution_realism_report prediction hash does not match" in " ".join(
+        result["failures"]
+    )
+    assert result["execution_realism_gate"]["check_results"]["delay_stress"]["status"] == (
+        "MISSING_EVIDENCE"
+    )
+    decision = json.loads(result["alpha_promotion_decision_path"].read_text(encoding="utf-8"))
+    assert decision["execution_realism_gate"]["check_results"]["delay_stress"]["status"] == (
+        "MISSING_EVIDENCE"
     )
 
 

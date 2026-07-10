@@ -1,0 +1,50 @@
+schema_version: 1
+report_name: prop_account_backtest_report
+
+required_fields:
+  - account_name
+  - provider
+  - program
+  - rule_version_date
+  - strategy_name
+  - backtest_start
+  - backtest_end
+  - pa_status
+  - status_date
+  - ending_balance
+  - realized_pnl
+  - max_intraday_drawdown
+  - max_end_of_day_drawdown
+  - eod_threshold_path
+  - daily_loss_limit_hits
+  - contract_limit_rejections
+  - payout_eligibility
+  - payout_status
+  - payout_number
+  - requested_payout_amount
+  - approved_payout_amount
+  - balance_after_requested_payout
+  - safety_net_buffer
+  - dll_pause_count
+  - pa_closure_reason
+  - total_cash_payouts
+  - simulated_account_pnl
+  - capital_efficiency
+
+recommended_fields:
+  - lowest_equity
+  - highest_eod_balance
+  - current_eod_threshold
+  - current_pa_tier
+  - qualifying_payout_days
+  - consistency_percentage
+  - available_payout_amount
+  - eligible_payout_amount
+  - tier_down_events
+  - failure_reason
+  - rule_violations
+
+capital_efficiency:
+  preferred_formula: net_profit / initial_practical_risk_budget
+  alternate_formula: net_profit / nominal_starting_balance
+  note: Use initial_practical_risk_budget for prop-firm realism; nominal balance can be reported for comparison only.

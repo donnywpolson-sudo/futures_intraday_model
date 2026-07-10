@@ -17,6 +17,12 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from scripts.validation.prop_account_rules import (
+    DEFAULT_PROP_RULES_CONFIG,
+    DEFAULT_REPORT_SCHEMA as DEFAULT_PROP_REPORT_SCHEMA,
+    build_prop_account_rules_summary,
+)
+
 
 DEFAULT_PREDICTIONS = Path("data") / "predictions" / "baseline" / "oos_predictions.parquet"
 DEFAULT_PREDICTIONS_MANIFEST = Path("reports/wfa/baseline_predictions_manifest.json")
@@ -50,6 +56,23 @@ STATISTICAL_VALIDITY_REQUIRED_CHECKS = {
     "parameter_stability": "parameter stability",
     "regime_breakdowns": "regime breakdowns",
 }
+EXECUTION_REALISM_REQUIRED_CHECKS = {
+    "delay_stress": "execution delay stress",
+    "liquidity_window": "execution liquidity window",
+    "spread_slippage": "execution spread/slippage",
+    "partial_fills_rejects": "execution partial fills/rejects",
+}
+EXECUTION_REALISM_SOURCE_HASH_FIELDS = (
+    "source_hashes",
+    "source_file_hashes",
+    "evidence_hashes",
+    "input_file_hashes",
+)
+EXECUTION_REALISM_SOURCE_PATH_FIELDS = (
+    "evidence_paths",
+    "source_paths",
+    "primary_source_paths",
+)
 
 POLICY_REQUIRED_TARGETS = {
     "expected_return": ("target_ret_15m", "y_pred_calibrated"),
@@ -1424,6 +1447,150 @@ def build_capacity_liquidity_gate(
     }
 
 
+def _strings_from_value(value: object) -> list[str]:
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, Iterable) and not isinstance(value, (Mapping, str, bytes)):
+        values: list[str] = []
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                values.append(item.strip())
+            elif isinstance(item, Mapping):
+                for key in ("path", "source_path", "evidence_path"):
+                    path_value = item.get(key)
+                    if isinstance(path_value, str) and path_value.strip():
+                        values.append(path_value.strip())
+        return values
+    return []
+
+
+def _execution_realism_source_hashes(check: Mapping[str, Any]) -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    for field in EXECUTION_REALISM_SOURCE_HASH_FIELDS:
+        value = check.get(field)
+        if isinstance(value, Mapping):
+            for path, digest in value.items():
+                if isinstance(path, str) and isinstance(digest, str) and path and digest:
+                    hashes[path] = digest
+        elif isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
+            for item in value:
+                if not isinstance(item, Mapping):
+                    continue
+                path = item.get("path") or item.get("source_path") or item.get("evidence_path")
+                digest = item.get("sha256") or item.get("hash") or item.get("digest")
+                if isinstance(path, str) and isinstance(digest, str) and path and digest:
+                    hashes[path] = digest
+    return hashes
+
+
+def _execution_realism_source_paths(
+    check: Mapping[str, Any],
+    source_hashes: Mapping[str, str],
+) -> list[str]:
+    paths: list[str] = []
+    for field in EXECUTION_REALISM_SOURCE_PATH_FIELDS:
+        paths.extend(_strings_from_value(check.get(field)))
+    paths.extend(str(path) for path in source_hashes if str(path))
+    return sorted(set(paths))
+
+
+def _normalize_execution_realism_check(
+    *,
+    check_key: str,
+    check_name: str,
+    check: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(check, Mapping) or not check:
+        return {
+            "status": "MISSING_EVIDENCE",
+            "reason": f"{check_name} evidence is missing",
+            "required_primary_evidence": True,
+            "evidence_paths": [],
+            "source_hashes": {},
+        }
+    raw_status = str(check.get("status", "")).upper()
+    reason = str(check.get("reason") or check.get("failure") or f"{check_name} status is missing")
+    source_hashes = _execution_realism_source_hashes(check)
+    source_paths = _execution_realism_source_paths(check, source_hashes)
+    if raw_status in {"PASS", "FAIL"}:
+        if not source_paths or not source_hashes:
+            return {
+                "status": "MISSING_EVIDENCE",
+                "reason": (
+                    f"{check_name} {raw_status} requires primary source paths and source hashes"
+                ),
+                "reported_status": raw_status,
+                "required_primary_evidence": True,
+                "evidence_paths": source_paths,
+                "source_hashes": source_hashes,
+            }
+        return {
+            "status": raw_status,
+            "reason": reason,
+            "reported_status": raw_status,
+            "required_primary_evidence": True,
+            "evidence_paths": source_paths,
+            "source_hashes": source_hashes,
+        }
+    if raw_status in {"", "MISSING", "MISSING_EVIDENCE", "UNAVAILABLE"}:
+        status = "MISSING_EVIDENCE"
+    else:
+        status = "MISSING_EVIDENCE"
+        reason = f"{check_name} status {raw_status or 'missing'} is not auditable"
+    return {
+        "status": status,
+        "reason": reason,
+        "reported_status": raw_status or "MISSING",
+        "required_primary_evidence": True,
+        "evidence_paths": source_paths,
+        "source_hashes": source_hashes,
+    }
+
+
+def build_execution_realism_gate(
+    execution_realism_report: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    report_gate: Mapping[str, Any] = {}
+    evidence_source = "missing"
+    if isinstance(execution_realism_report, Mapping) and execution_realism_report:
+        candidate = execution_realism_report.get("execution_realism_gate")
+        report_gate = candidate if isinstance(candidate, Mapping) else execution_realism_report
+        evidence_source = "report"
+    checks_payload = report_gate.get("check_results", report_gate.get("checks", {}))
+    checks = checks_payload if isinstance(checks_payload, Mapping) else {}
+    check_results = {
+        check_key: _normalize_execution_realism_check(
+            check_key=check_key,
+            check_name=check_name,
+            check=checks.get(check_key) if isinstance(checks, Mapping) else None,
+        )
+        for check_key, check_name in EXECUTION_REALISM_REQUIRED_CHECKS.items()
+    }
+    blockers = [
+        f"{check_name}: {check_results[check_key]['reason']}"
+        for check_key, check_name in EXECUTION_REALISM_REQUIRED_CHECKS.items()
+        if check_results[check_key]["status"] != "PASS"
+    ]
+    ready = not blockers
+    return {
+        "gate_name": "execution_realism_gate",
+        "status": "PASS" if ready else "FAIL",
+        "execution_realism_ready": ready,
+        "required_before_promotion": True,
+        "evidence_source": evidence_source,
+        "report_status": str(report_gate.get("status", "MISSING")).upper() if report_gate else "MISSING",
+        "required_checks": list(EXECUTION_REALISM_REQUIRED_CHECKS),
+        "check_results": check_results,
+        "failure_count": len(blockers),
+        "failures": blockers,
+        "policy": (
+            "delay, liquidity-window, spread/slippage, and partial-fill/reject evidence "
+            "must come from primary source paths with hashes before promotion or paper/live"
+        ),
+    }
+
+
 def build_phase7_prediction_audit_gate(
     prediction_audit_report: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -1467,6 +1634,7 @@ def build_promotion_metric_gate(
     prediction_audit_report: Mapping[str, Any] | None = None,
     baseline_report: Mapping[str, Any] | None = None,
     capacity_liquidity_report: Mapping[str, Any] | None = None,
+    execution_realism_report: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     overall = policy_metrics.get("overall", {})
     overall = overall if isinstance(overall, Mapping) else {}
@@ -1475,6 +1643,7 @@ def build_promotion_metric_gate(
     baseline_gate = build_baseline_comparison_gate(policy_metrics, baseline_report)
     stress_gate = build_cost_execution_stress_gate(policy_frame)
     capacity_gate = build_capacity_liquidity_gate(capacity_liquidity_report)
+    execution_gate = build_execution_realism_gate(execution_realism_report)
     phase7_gate = build_phase7_prediction_audit_gate(prediction_audit_report)
     blockers: list[str] = []
     if phase7_gate["status"] != "PASS":
@@ -1530,6 +1699,8 @@ def build_promotion_metric_gate(
         blockers.extend(str(item) for item in stress_gate["failures"])
     if capacity_gate["status"] != "PASS":
         blockers.extend(str(item) for item in capacity_gate["failures"])
+    if execution_gate["status"] != "PASS":
+        blockers.extend(str(item) for item in execution_gate["failures"])
     if statistical_validity_gate.get("statistical_validity_ready") is not True:
         blockers.extend(str(item) for item in statistical_validity_gate.get("failures", []))
 
@@ -1548,11 +1719,13 @@ def build_promotion_metric_gate(
             "baseline_comparisons",
             "cost_execution_stress",
             "capacity_liquidity",
+            "execution_realism",
             "statistical_validity",
         ],
         "baseline_comparison_gate": baseline_gate,
         "cost_execution_stress_gate": stress_gate,
         "capacity_liquidity_gate": capacity_gate,
+        "execution_realism_gate": execution_gate,
         "phase7_prediction_audit_gate": phase7_gate,
         "prediction_diagnostics_gate": phase7_gate,
         "failure_count": len(unique_blockers),
@@ -1713,6 +1886,8 @@ def evaluate_predictions(
     run: str,
     policy: PolicyConfig,
     promotion_gate: PromotionGateConfig,
+    prop_rules_config: Path = DEFAULT_PROP_RULES_CONFIG,
+    prop_report_schema: Path = DEFAULT_PROP_REPORT_SCHEMA,
     phase8_root: Path | None = None,
     phase7_prediction_audit_report: Path | None = None,
     prediction_diagnostics_report: Path | None = None,
@@ -1720,11 +1895,30 @@ def evaluate_predictions(
     failure_analysis_report: Path | None = None,
     statistical_validity_report: Path | None = None,
     capacity_liquidity_report: Path | None = None,
+    execution_realism_report: Path | None = None,
 ) -> dict[str, Any]:
     generated_at = datetime.now(timezone.utc).isoformat()
     resolved_phase8_root = phase8_root or metrics_root.parent / "phase8"
     failures: list[str] = []
     warnings: list[str] = []
+    try:
+        prop_account_rules = build_prop_account_rules_summary(
+            repo_root=Path.cwd(),
+            prop_rules_config=prop_rules_config,
+            report_schema=prop_report_schema,
+        )
+    except Exception as exc:
+        prop_failure = f"prop-account rule loading failed: {exc}"
+        failures.append(prop_failure)
+        prop_account_rules = {
+            "status": "FAIL_PROP_ACCOUNT_RULES",
+            "prop_rules_config": _relative_path(prop_rules_config),
+            "report_schema": _relative_path(prop_report_schema),
+            "failure": prop_failure,
+            "strategy_logic_changed": False,
+            "wfa_modeling_approved": False,
+            "paper_or_live_trading_approved": False,
+        }
     return_prediction_role = build_return_prediction_role(policy)
     if policy.raw_return_prediction_direct_trading_allowed:
         failures.append(DIRECT_RETURN_TRADING_FAILURE)
@@ -1737,6 +1931,7 @@ def evaluate_predictions(
         "failure_analysis_report": failure_analysis_report,
         "statistical_validity_report": statistical_validity_report,
         "capacity_liquidity_report": capacity_liquidity_report,
+        "execution_realism_report": execution_realism_report,
     }
     if not predictions_path.exists():
         failures.append(f"prediction parquet missing: {_relative_path(predictions_path)}")
@@ -1745,6 +1940,7 @@ def evaluate_predictions(
         predictions = pd.read_parquet(predictions_path)
         failures.extend(_validate_prediction_columns(predictions))
     evidence_reports: dict[str, dict[str, Any]] = {}
+    evidence_report_failures: dict[str, list[str]] = {}
     for report_name, report_path in evidence_report_paths.items():
         payload, evidence_failures = _validate_evidence_report(
             path=report_path,
@@ -1753,9 +1949,11 @@ def evaluate_predictions(
             predictions_path=predictions_path,
             predictions_manifest=predictions_manifest,
         )
+        failures.extend(evidence_failures)
+        if evidence_failures:
+            evidence_report_failures[report_name] = evidence_failures
         if payload:
             evidence_reports[report_name] = payload
-        failures.extend(evidence_failures)
     manifest_failures = (
         _prediction_manifest_failures(
             manifest,
@@ -1794,6 +1992,9 @@ def evaluate_predictions(
     failure_analysis_payload = evidence_reports.get("failure_analysis_report", {})
     baseline_payload = evidence_reports.get("baseline_report") or failure_analysis_payload
     capacity_payload = evidence_reports.get("capacity_liquidity_report") or failure_analysis_payload
+    execution_realism_payload = evidence_reports.get("execution_realism_report")
+    if evidence_report_failures.get("execution_realism_report"):
+        execution_realism_payload = None
     statistical_validity_gate = build_statistical_validity_gate(
         manifest,
         evidence_reports.get("statistical_validity_report"),
@@ -1810,7 +2011,9 @@ def evaluate_predictions(
         prediction_audit_report=phase7_prediction_audit_payload,
         baseline_report=baseline_payload,
         capacity_liquidity_report=capacity_payload,
+        execution_realism_report=execution_realism_payload,
     )
+    execution_realism_gate = promotion_metric_gate["execution_realism_gate"]
     if not statistical_validity_gate["statistical_validity_ready"]:
         promotion_gate_report["research_alpha_ready"] = False
         promotion_gate_report["model_promotion_allowed"] = False
@@ -1884,6 +2087,7 @@ def evaluate_predictions(
         else None,
         "costs_config": _relative_path(costs_config),
         "models_config": _relative_path(models_config),
+        "prop_account_rules": prop_account_rules,
         "input_file_hashes": _file_hash_map(
             [path for path in (predictions_path, costs_config, models_config) if path is not None]
         ),
@@ -1910,6 +2114,7 @@ def evaluate_predictions(
         "promotion_gate": promotion_gate_report,
         "promotion_metric_gate": promotion_metric_gate,
         "statistical_validity_gate": statistical_validity_gate,
+        "execution_realism_gate": execution_realism_gate,
         "phase7_prediction_audit_gate": promotion_metric_gate["phase7_prediction_audit_gate"],
         "prediction_diagnostics_gate": promotion_metric_gate["phase7_prediction_audit_gate"],
         "live_execution_ready": False,
@@ -1941,6 +2146,7 @@ def evaluate_predictions(
         else None,
         "models_config": _relative_path(models_config),
         "model_config_hash": _stable_hash(models),
+        "prop_account_rules": prop_account_rules,
         "prediction_manifest_artifact_evidence_ready": not manifest_failures,
         "diagnostic_evidence_reports": {
             key: _relative_path(value) if value is not None else None
@@ -1962,6 +2168,7 @@ def evaluate_predictions(
         "promotion_gate": promotion_gate_report,
         "promotion_metric_gate": promotion_metric_gate,
         "statistical_validity_gate": statistical_validity_gate,
+        "execution_realism_gate": execution_realism_gate,
         "research_alpha_ready": promotion_gate_report["research_alpha_ready"],
         "model_promotion_allowed": promotion_gate_report["model_promotion_allowed"],
         "policy_metrics_overall": policy_metrics["overall"],
@@ -2012,6 +2219,8 @@ def evaluate_predictions(
         "promotion_gate": promotion_gate_report,
         "promotion_metric_gate": promotion_metric_gate,
         "statistical_validity_gate": statistical_validity_gate,
+        "execution_realism_gate": execution_realism_gate,
+        "prop_account_rules": prop_account_rules,
         "return_prediction_role": return_prediction_role,
         "diagnostic_evidence_reports": {
             key: _relative_path(value) if value is not None else None
@@ -2047,6 +2256,7 @@ def evaluate_predictions(
         "policy_metrics": policy_metrics,
         "promotion_gate": promotion_gate_report,
         "promotion_metric_gate": promotion_metric_gate,
+        "execution_realism_gate": execution_realism_gate,
         "diagnostic_evidence_reports": evidence_reports,
     }
 
@@ -2061,6 +2271,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--predictions-manifest", default=DEFAULT_PREDICTIONS_MANIFEST.as_posix())
     parser.add_argument("--costs-config", default=DEFAULT_COSTS_CONFIG.as_posix())
     parser.add_argument("--models-config", default=DEFAULT_MODELS_CONFIG.as_posix())
+    parser.add_argument("--prop-rules-config", default=DEFAULT_PROP_RULES_CONFIG.as_posix())
+    parser.add_argument("--prop-report-schema", default=DEFAULT_PROP_REPORT_SCHEMA.as_posix())
     parser.add_argument("--metrics-root", default=DEFAULT_METRICS_ROOT.as_posix())
     parser.add_argument("--model-selection-root", default=DEFAULT_MODEL_SELECTION_ROOT.as_posix())
     parser.add_argument("--phase8-root", default=DEFAULT_PHASE8_ROOT.as_posix())
@@ -2074,6 +2286,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--failure-analysis-report", default=None)
     parser.add_argument("--statistical-validity-report", default=None)
     parser.add_argument("--capacity-liquidity-report", default=None)
+    parser.add_argument("--execution-realism-report", default=None)
     parser.add_argument("--run", default=DEFAULT_RUN)
     parser.add_argument("--long-short-margin", type=float, default=0.05)
     parser.add_argument("--min-fade-success", type=float, default=0.50)
@@ -2123,6 +2336,8 @@ def main() -> int:
         models_config=Path(args.models_config),
         metrics_root=Path(args.metrics_root),
         model_selection_root=Path(args.model_selection_root),
+        prop_rules_config=Path(args.prop_rules_config),
+        prop_report_schema=Path(args.prop_report_schema),
         phase8_root=Path(args.phase8_root),
         run=args.run,
         policy=load_policy_config(
@@ -2163,6 +2378,9 @@ def main() -> int:
         else None,
         capacity_liquidity_report=Path(args.capacity_liquidity_report)
         if args.capacity_liquidity_report
+        else None,
+        execution_realism_report=Path(args.execution_realism_report)
+        if args.execution_realism_report
         else None,
     )
     overall = result["policy_metrics"]["overall"]
