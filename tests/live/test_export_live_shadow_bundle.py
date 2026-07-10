@@ -18,6 +18,37 @@ from scripts.live_shadow_runner import REQUIRED_TARGETS, normalize_model_bundle
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _write_json(path: Path, payload: dict[str, object]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
+
+
+def _write_model_trust_inputs(tmp_path: Path, *, allow_paper_live: bool = True) -> tuple[Path, Path]:
+    closeout = _write_json(
+        tmp_path / "model_trust" / "closeout.json",
+        {
+            "run_id": "tier1_core_phase6_full_predictions_20260706",
+            "verdict": "MODEL_TRUST_READY" if allow_paper_live else "CLOSE_CURRENT_LINE_NO_ALPHA_EVIDENCE",
+            "modeling_pause_required": not allow_paper_live,
+            "promotion_allowed": allow_paper_live,
+            "non_approval": {
+                "paper": allow_paper_live,
+                "live": allow_paper_live,
+            },
+        },
+    )
+    matrix = _write_json(
+        tmp_path / "model_trust" / "matrix.json",
+        {
+            "run_id": "tier1_core_phase6_full_predictions_20260706",
+            "alpha_evidence_ready": allow_paper_live,
+            "verdict": "READY" if allow_paper_live else "PAUSE_MODELING_BASELINE_NULL_EXECUTION_EVIDENCE_INCOMPLETE",
+        },
+    )
+    return closeout, matrix
+
+
 def test_cli_help_runs_when_invoked_by_script_path() -> None:
     result = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "export_live_shadow_bundle.py"), "--help"],
@@ -133,21 +164,41 @@ def _write_feature_matrix(root: Path, *, market: str = "ES", year: int = 2024) -
 
 
 def test_approval_guard_requires_promotion_or_explicit_shadow_override(tmp_path: Path) -> None:
+    closeout, matrix = _write_model_trust_inputs(tmp_path)
+
     with pytest.raises(SystemExit, match="not promotion-approved"):
         exporter.validate_export_approval(
             promotion_report=tmp_path / "missing.json",
             allow_not_promoted_shadow_export=False,
             approval_note="paper shadow only",
+            model_trust_closeout=closeout,
+            model_trust_matrix=matrix,
         )
 
     approval = exporter.validate_export_approval(
         promotion_report=tmp_path / "missing.json",
         allow_not_promoted_shadow_export=True,
         approval_note="paper shadow only",
+        model_trust_closeout=closeout,
+        model_trust_matrix=matrix,
     )
 
     assert approval["approval_status"] == "explicit_not_promoted_shadow_export"
     assert approval["approval_note"] == "paper shadow only"
+    assert approval["model_trust_gate_allowed"] is True
+
+
+def test_model_trust_gate_blocks_shadow_export_even_with_override(tmp_path: Path) -> None:
+    closeout, matrix = _write_model_trust_inputs(tmp_path, allow_paper_live=False)
+
+    with pytest.raises(SystemExit, match="model trust gate blocks live shadow export"):
+        exporter.validate_export_approval(
+            promotion_report=tmp_path / "missing.json",
+            allow_not_promoted_shadow_export=True,
+            approval_note="paper shadow only",
+            model_trust_closeout=closeout,
+            model_trust_matrix=matrix,
+        )
 
 
 def test_export_writes_joblib_bundle_and_manifest(tmp_path: Path) -> None:

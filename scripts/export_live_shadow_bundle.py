@@ -36,6 +36,11 @@ from scripts.phase7_wfa.run_wfa import (
     load_model_specs,
     resolve_feature_set,
 )
+from scripts.validation.enforce_model_trust_gate import (
+    DEFAULT_CLOSEOUT_PATH as DEFAULT_MODEL_TRUST_CLOSEOUT,
+    DEFAULT_MATRIX_PATH as DEFAULT_MODEL_TRUST_MATRIX,
+    enforce_model_trust_gate,
+)
 
 
 DEFAULT_MARKET = "ES"
@@ -86,6 +91,8 @@ def validate_export_approval(
     promotion_report: Path,
     allow_not_promoted_shadow_export: bool,
     approval_note: str,
+    model_trust_closeout: Path = DEFAULT_MODEL_TRUST_CLOSEOUT,
+    model_trust_matrix: Path = DEFAULT_MODEL_TRUST_MATRIX,
 ) -> dict[str, Any]:
     note = approval_note.strip()
     if not note:
@@ -107,6 +114,15 @@ def validate_export_approval(
             "model is not promotion-approved; pass --allow-not-promoted-shadow-export "
             "with an explicit --approval-note for paper shadow use only"
         )
+    trust_gate = enforce_model_trust_gate(
+        repo_root=ROOT,
+        closeout_path=model_trust_closeout,
+        matrix_path=model_trust_matrix,
+        intended_action="paper-live",
+    )
+    if trust_gate["allowed"] is not True:
+        blockers = "; ".join(str(item) for item in trust_gate.get("blockers", [])[:4])
+        raise SystemExit(f"model trust gate blocks live shadow export: {blockers}")
     return {
         "approval_status": approval_status,
         "approval_note": note,
@@ -117,6 +133,10 @@ def validate_export_approval(
         "promotion_report_model_promotion_allowed": report.get("model_promotion_allowed"),
         "promotion_report_promoted": report.get("promoted"),
         "promotion_report_research_alpha_ready": report.get("research_alpha_ready"),
+        "model_trust_gate_status": trust_gate["status"],
+        "model_trust_gate_allowed": trust_gate["allowed"],
+        "model_trust_closeout": trust_gate["source_evidence"]["closeout"]["path"],
+        "model_trust_matrix": trust_gate["source_evidence"]["matrix"]["path"],
     }
 
 
@@ -280,6 +300,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", default=DEFAULT_OUTPUT.as_posix())
     parser.add_argument("--manifest-output", default=DEFAULT_MANIFEST_OUTPUT.as_posix())
     parser.add_argument("--promotion-report", default=DEFAULT_PROMOTION_REPORT.as_posix())
+    parser.add_argument("--model-trust-closeout", default=DEFAULT_MODEL_TRUST_CLOSEOUT.as_posix())
+    parser.add_argument("--model-trust-matrix", default=DEFAULT_MODEL_TRUST_MATRIX.as_posix())
     parser.add_argument("--approval-note", required=True)
     parser.add_argument("--allow-not-promoted-shadow-export", action="store_true")
     return parser
@@ -293,6 +315,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         promotion_report=Path(args.promotion_report),
         allow_not_promoted_shadow_export=bool(args.allow_not_promoted_shadow_export),
         approval_note=str(args.approval_note),
+        model_trust_closeout=Path(args.model_trust_closeout),
+        model_trust_matrix=Path(args.model_trust_matrix),
     )
     result = export_live_shadow_bundle(
         market=str(args.market),
