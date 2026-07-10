@@ -25,6 +25,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 STAGE = "phase6_wfa_runner_preflight"
 PASS_STATUS = "PASS_PHASE6_WFA_RUNNER_PREFLIGHT_READY_REPORT_ONLY"
 FAIL_STATUS = "FAIL_PHASE6_WFA_RUNNER_PREFLIGHT"
+ROLLING_SPLIT_ACCEPTANCE_STATUS = "PASS_PHASE5_SPLIT_PLAN_ACCEPTED_REPORT_ONLY"
+HARDENED_SPLIT_ACCEPTANCE_STATUS = "PASS_HARDENED_PHASE5_SPLIT_PLAN_ACCEPTED_NO_MODELING"
+HARDENED_SPLIT_STATUS = "PASS_HARDENED_PHASE5_SPLIT_PLAN_BUILT_NO_MODELING"
 DEFAULT_SPLIT_PLAN = Path("reports/wfa/tier1_core_phase5_split_plan_20260706/split_plan.json")
 DEFAULT_SPLIT_ACCEPTANCE = Path(
     "reports/wfa/tier1_core_phase5_split_plan_20260706/split_plan_acceptance_report.json"
@@ -44,6 +47,32 @@ EXPECTED_RESOLVED_PROFILE = "tier_1_research"
 EXPECTED_MARKETS = ["ES", "CL", "ZN", "6E"]
 EXPECTED_YEARS = [2023, 2024]
 FEATURE_SET_FILENAME = "tier1_core_active_feature_set.json"
+V2_LABEL_SEMANTICS_ID = "phase3_labels_v2_next_1m_open_30m_primary_60m_confirm_apex_aware"
+V2_FEATURE_PLACEMENT_STATUS = "PASS_ACTIVE_FEATURE_PLACEMENT_V2_CORE_NO_DOWNSTREAM"
+V2_LABEL_PLACEMENT_STATUS = "PASS_ACTIVE_LABEL_REPLACEMENT_V2_CORE_NO_DOWNSTREAM"
+REQUIRED_V2_TARGET_COLUMNS = [
+    "target_ret_ticks_30m",
+    "target_ret_ticks_60m",
+    "target_favorable_after_cost_30m",
+    "target_favorable_after_cost_60m",
+    "target_mfe_long_ticks_30m",
+    "target_mae_long_ticks_30m",
+    "target_mfe_short_ticks_30m",
+    "target_mae_short_ticks_30m",
+    "target_mfe_long_ticks_60m",
+    "target_mae_long_ticks_60m",
+    "target_mfe_short_ticks_60m",
+    "target_mae_short_ticks_60m",
+    "target_apex_dll_eod_threat_30m",
+    "target_apex_dll_eod_threat_60m",
+    "target_no_hold_into_close_30m",
+    "target_no_hold_into_close_60m",
+    "target_fillable_after_slippage_30m",
+    "target_fillable_after_slippage_60m",
+    "target_accept_any_30m",
+    "target_accept_any_60m",
+    "target_apex_confirmed_any_30m_60m",
+]
 
 REQUIRED_PHASE6_FLAGS = {
     "--profile",
@@ -83,6 +112,12 @@ def resolve_path(repo_root: Path, path: str | Path) -> Path:
     return candidate if candidate.is_absolute() else repo_root / candidate
 
 
+def resolve_optional_path(repo_root: Path, path: str | Path | None) -> Path | None:
+    if path is None or str(path).strip() == "":
+        return None
+    return resolve_path(repo_root, path)
+
+
 def rel(path: Path, repo_root: Path) -> str:
     try:
         return path.resolve().relative_to(repo_root.resolve()).as_posix()
@@ -110,6 +145,15 @@ def count_files(root: Path) -> int:
     if root.is_file():
         return 1
     return sum(1 for path in root.rglob("*") if path.is_file())
+
+
+def int_value(value: Any, *, default: int = -1) -> int:
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def add_check(
@@ -163,6 +207,152 @@ def phase6_required_columns(module: Any, feature_cols: list[str], model_specs: l
 
 def parquet_schema(path: Path) -> set[str]:
     return set(pq.read_schema(path).names)
+
+
+def parquet_row_count(path: Path) -> int:
+    return int(pq.ParquetFile(path).metadata.num_rows)
+
+
+def records_by_path(report: Mapping[str, Any], path_key: str) -> dict[str, Mapping[str, Any]]:
+    records = report.get("records")
+    if not isinstance(records, list):
+        return {}
+    indexed: dict[str, Mapping[str, Any]] = {}
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        raw_path = record.get(path_key)
+        if isinstance(raw_path, str) and raw_path:
+            indexed[Path(raw_path).as_posix()] = record
+    return indexed
+
+
+def scope_matches(
+    scope: Mapping[str, Any],
+    *,
+    expected_markets: list[str],
+    expected_years: list[int],
+) -> bool:
+    return sorted(str(item) for item in scope.get("markets") or []) == sorted(expected_markets) and sorted(
+        int(item) for item in scope.get("years") or []
+    ) == sorted(expected_years)
+
+
+def split_acceptance_binding(
+    *,
+    split_plan: Mapping[str, Any],
+    split_acceptance: Mapping[str, Any],
+    split_plan_path: Path,
+    repo_root: Path,
+) -> dict[str, Any]:
+    failures: list[str] = []
+    status = str(split_acceptance.get("status") or "")
+    input_evidence = split_acceptance.get("input_evidence")
+    input_evidence = input_evidence if isinstance(input_evidence, Mapping) else {}
+    summary = split_acceptance.get("summary")
+    summary = summary if isinstance(summary, Mapping) else {}
+    split_hash = file_sha256(split_plan_path)
+    split_rel = rel(split_plan_path, repo_root)
+    acceptance_kind = "unsupported"
+
+    if status == ROLLING_SPLIT_ACCEPTANCE_STATUS:
+        acceptance_kind = "rolling_research"
+        if input_evidence.get("split_plan_json_sha256") != split_hash:
+            failures.append("rolling split acceptance hash does not match split plan")
+    elif status == HARDENED_SPLIT_ACCEPTANCE_STATUS:
+        acceptance_kind = "hardened_train_validation_test"
+        accepted_path = input_evidence.get("split_plan") or input_evidence.get("split_plan_path")
+        if accepted_path != split_rel:
+            failures.append(f"hardened split acceptance path mismatch: {accepted_path!r}")
+        accepted_hash = input_evidence.get("split_plan_json_sha256") or input_evidence.get(
+            "split_plan_sha256"
+        )
+        if accepted_hash is not None and accepted_hash != split_hash:
+            failures.append("hardened split acceptance hash does not match split plan")
+        if int_value(summary.get("failure_count")) != 0:
+            failures.append("hardened split acceptance failure_count must be zero")
+        if int_value(summary.get("fold_count")) != int_value(split_plan.get("fold_count")):
+            failures.append("hardened split acceptance fold_count mismatch")
+        if summary.get("independent_test_claim_allowed") is not True:
+            failures.append("hardened split acceptance must allow independent test claim")
+        if summary.get("modeling_allowed") is not False:
+            failures.append("hardened split acceptance must keep modeling_allowed=false")
+        if summary.get("prediction_materialization_allowed") is not False:
+            failures.append(
+                "hardened split acceptance must keep prediction_materialization_allowed=false"
+            )
+        if summary.get("phase8_refresh_allowed") is not False:
+            failures.append("hardened split acceptance must keep phase8_refresh_allowed=false")
+    else:
+        failures.append(f"unsupported split acceptance status: {status!r}")
+
+    return {
+        "status": "PASS" if not failures else "FAIL",
+        "acceptance_status": status,
+        "acceptance_kind": acceptance_kind,
+        "split_plan": split_rel,
+        "split_plan_sha256": split_hash,
+        "failures": failures,
+    }
+
+
+def hardened_split_metadata_check(
+    *,
+    split_plan: Mapping[str, Any],
+    expected_markets: list[str],
+    expected_years: list[int],
+) -> dict[str, Any]:
+    failures: list[str] = []
+    is_hardened = split_plan.get("status") == HARDENED_SPLIT_STATUS
+    if not is_hardened:
+        return {"status": "PASS", "applies": False, "failures": []}
+
+    folds = split_plan.get("folds")
+    folds = folds if isinstance(folds, list) else []
+    if sorted(str(item) for item in split_plan.get("markets", [])) != sorted(expected_markets):
+        failures.append("hardened split markets mismatch")
+    if sorted(int(item) for item in split_plan.get("years", [])) != sorted(expected_years):
+        failures.append("hardened split years mismatch")
+    if int_value(split_plan.get("fold_count")) != len(expected_markets):
+        failures.append("hardened split fold_count must equal market count")
+    if split_plan.get("modeling_allowed") is not False:
+        failures.append("hardened split must keep modeling_allowed=false")
+    if split_plan.get("prediction_materialization_allowed") is not False:
+        failures.append("hardened split must keep prediction_materialization_allowed=false")
+
+    fold_counts: dict[str, int] = {}
+    required_fields = (
+        "validation_start",
+        "validation_end",
+        "validation_embargo_end",
+        "test_start",
+        "test_end",
+        "test_embargo_end",
+    )
+    for fold in folds:
+        if not isinstance(fold, Mapping):
+            failures.append("hardened split contains non-object fold")
+            continue
+        market = str(fold.get("market"))
+        fold_counts[market] = fold_counts.get(market, 0) + 1
+        missing = [field for field in required_fields if not fold.get(field)]
+        if missing:
+            failures.append(f"{fold.get('fold_id')}: missing hardened fields {missing}")
+        if fold.get("selection_source") != "validation_only":
+            failures.append(f"{fold.get('fold_id')}: selection_source must be validation_only")
+        if fold.get("independent_test_claim_allowed") is not True:
+            failures.append(f"{fold.get('fold_id')}: independent_test_claim_allowed must be true")
+        if fold.get("final_holdout") is True or fold.get("is_final_holdout") is True:
+            failures.append(f"{fold.get('fold_id')}: final holdout is not allowed")
+    if fold_counts != {market: 1 for market in expected_markets}:
+        failures.append(f"hardened split must have one fold per market: {fold_counts}")
+
+    return {
+        "status": "PASS" if not failures else "FAIL",
+        "applies": True,
+        "fold_count_by_market": fold_counts,
+        "failures": failures,
+    }
 
 
 def feature_set_payload(
@@ -234,12 +424,15 @@ def build_report(
     split_acceptance_path: Path,
     feature_root: Path,
     feature_manifest_path: Path,
+    feature_placement_hashes_path: Path | None,
+    label_placement_hashes_path: Path | None,
     feature_set_path: Path,
     json_out: Path,
     md_out: Path,
     profile_config_path: Path,
     models_config_path: Path,
     predictions_root: Path,
+    expected_prediction_run: str | None,
     expected_profile: str,
     expected_resolved_profile: str,
     expected_markets: list[str],
@@ -255,6 +448,12 @@ def build_report(
     split_plan = read_json(split_plan_path)
     split_acceptance = read_json(split_acceptance_path)
     feature_manifest = read_json(feature_manifest_path)
+    feature_placement_hashes = (
+        read_json(feature_placement_hashes_path) if feature_placement_hashes_path is not None else None
+    )
+    label_placement_hashes = (
+        read_json(label_placement_hashes_path) if label_placement_hashes_path is not None else None
+    )
     feature_cols = read_json_list(feature_root / "feature_cols.json")
     target_cols = read_json_list(feature_root / "target_cols.json")
     feature_set = read_json(feature_set_path)
@@ -317,31 +516,51 @@ def build_report(
         )
     except SystemExit as exc:
         split_scope_failure = str(exc)
-    split_hash_matches_acceptance = (
-        split_acceptance.get("status") == "PASS_PHASE5_SPLIT_PLAN_ACCEPTED_REPORT_ONLY"
-        and split_acceptance.get("input_evidence", {}).get("split_plan_json_sha256")
-        == file_sha256(split_plan_path)
+    acceptance_binding = split_acceptance_binding(
+        split_plan=split_plan,
+        split_acceptance=split_acceptance,
+        split_plan_path=split_plan_path,
+        repo_root=repo_root,
+    )
+    hardened_metadata = hardened_split_metadata_check(
+        split_plan=split_plan,
+        expected_markets=expected_markets,
+        expected_years=expected_years,
+    )
+    split_scope_pass = split_scope_failure is None or (
+        acceptance_binding["acceptance_kind"] == "hardened_train_validation_test"
+        and hardened_metadata["status"] == "PASS"
     )
     add_check(
         checks,
         failures,
         name="accepted_split_plan_bound_to_phase6_scope",
         passed=(
-            split_scope_failure is None
-            and split_hash_matches_acceptance
+            split_scope_pass
+            and acceptance_binding["status"] == "PASS"
             and split_plan.get("input_root") == rel(feature_root, repo_root)
             and int(split_plan.get("failure_count") or 0) == 0
             and int(split_plan.get("fold_count") or 0) > 0
         ),
         evidence={
             "split_plan": rel(split_plan_path, repo_root),
-            "split_hash_matches_acceptance": split_hash_matches_acceptance,
+            "split_hash_matches_acceptance": acceptance_binding["status"] == "PASS",
+            "split_acceptance_binding": acceptance_binding,
             "split_scope_failure": split_scope_failure,
+            "split_scope_pass": split_scope_pass,
             "input_root": split_plan.get("input_root"),
             "fold_count": split_plan.get("fold_count"),
             "failure_count": split_plan.get("failure_count"),
         },
         failure="accepted split plan is not bound to current Phase 6 profile/config/input root",
+    )
+    add_check(
+        checks,
+        failures,
+        name="hardened_split_validation_test_metadata",
+        passed=hardened_metadata["status"] == "PASS",
+        evidence=hardened_metadata,
+        failure="hardened split train/validation/test metadata is missing or unsafe",
     )
 
     universe_evidence = split_plan.get("data_audit_universe")
@@ -445,10 +664,62 @@ def build_report(
     split_hashes = split_hashes if isinstance(split_hashes, Mapping) else {}
     manifest_hashes = feature_manifest.get("output_hashes")
     manifest_hashes = manifest_hashes if isinstance(manifest_hashes, Mapping) else {}
+    feature_placement_records = (
+        records_by_path(feature_placement_hashes, "path")
+        if isinstance(feature_placement_hashes, Mapping)
+        else {}
+    )
     expected_files = [
         feature_root / str(pair["market"]) / f"{int(pair['year'])}.parquet"
         for pair in sorted_pairs(expected_markets, expected_years)
     ]
+    feature_placement_scope = (
+        feature_placement_hashes.get("scope")
+        if isinstance(feature_placement_hashes, Mapping)
+        else {}
+    )
+    feature_placement_scope = (
+        feature_placement_scope if isinstance(feature_placement_scope, Mapping) else {}
+    )
+    if feature_placement_hashes_path is not None:
+        feature_placement_scope_failures = []
+        if not isinstance(feature_placement_hashes, Mapping):
+            feature_placement_scope_failures.append("feature placement hash report is missing")
+        elif feature_placement_hashes.get("status") != V2_FEATURE_PLACEMENT_STATUS:
+            feature_placement_scope_failures.append(
+                f"status is {feature_placement_hashes.get('status')}"
+            )
+        if not scope_matches(
+            feature_placement_scope,
+            expected_markets=expected_markets,
+            expected_years=expected_years,
+        ):
+            feature_placement_scope_failures.append("scope markets/years do not match objective")
+        if int(feature_placement_scope.get("parquet_count") or -1) != len(expected_files):
+            feature_placement_scope_failures.append("scope parquet_count does not match objective")
+        add_check(
+            checks,
+            failures,
+            name="active_feature_placement_hash_evidence_v2_scope",
+            passed=not feature_placement_scope_failures,
+            evidence={
+                "feature_placement_hashes": rel(feature_placement_hashes_path, repo_root),
+                "status": (
+                    feature_placement_hashes.get("status")
+                    if isinstance(feature_placement_hashes, Mapping)
+                    else None
+                ),
+                "scope": dict(feature_placement_scope),
+                "record_count": len(
+                    feature_placement_hashes.get("records") or []
+                    if isinstance(feature_placement_hashes, Mapping)
+                    else []
+                ),
+                "failures": feature_placement_scope_failures,
+            },
+            failure="v2 active feature placement hash evidence is stale or out of scope",
+        )
+
     file_failures: list[str] = []
     for path in expected_files:
         path_rel = rel(path, repo_root)
@@ -458,7 +729,19 @@ def build_report(
         observed_hash = file_sha256(path)
         if split_hashes.get(path_rel) != observed_hash:
             file_failures.append(f"{path_rel}: split-plan input hash mismatch")
-        if manifest_hashes.get(path_rel) != observed_hash:
+        if feature_placement_hashes_path is not None:
+            record = feature_placement_records.get(path_rel)
+            if record is None:
+                file_failures.append(f"{path_rel}: missing from feature placement hashes")
+            else:
+                for key in ("sha256", "staged_sha256"):
+                    if record.get(key) != observed_hash:
+                        file_failures.append(f"{path_rel}: feature placement {key} mismatch")
+                if record.get("active_matches_staged") is not True:
+                    file_failures.append(f"{path_rel}: active_matches_staged is not true")
+                if record.get("backup_matches_pre_active") is not True:
+                    file_failures.append(f"{path_rel}: backup_matches_pre_active is not true")
+        elif manifest_hashes.get(path_rel) != observed_hash:
             file_failures.append(f"{path_rel}: feature-manifest output hash mismatch")
     add_check(
         checks,
@@ -469,10 +752,141 @@ def build_report(
             "expected_file_count": len(expected_files),
             "split_input_hash_count": len(split_hashes),
             "manifest_output_hash_count": len(manifest_hashes),
+            "feature_placement_hashes": (
+                rel(feature_placement_hashes_path, repo_root)
+                if feature_placement_hashes_path is not None
+                else None
+            ),
+            "feature_placement_record_count": len(feature_placement_records),
             "hash_failures": file_failures,
         },
-        failure="active feature parquet hashes do not match split-plan and feature-manifest evidence",
+        failure=(
+            "active feature parquet hashes do not match split-plan and active-placement evidence"
+        ),
     )
+
+    if label_placement_hashes_path is not None:
+        label_scope = (
+            label_placement_hashes.get("scope")
+            if isinstance(label_placement_hashes, Mapping)
+            else {}
+        )
+        label_scope = label_scope if isinstance(label_scope, Mapping) else {}
+        label_scope_failures = []
+        if not isinstance(label_placement_hashes, Mapping):
+            label_scope_failures.append("label placement hash report is missing")
+        elif label_placement_hashes.get("status") != V2_LABEL_PLACEMENT_STATUS:
+            label_scope_failures.append(f"status is {label_placement_hashes.get('status')}")
+        if (
+            isinstance(label_placement_hashes, Mapping)
+            and label_placement_hashes.get("label_semantics_id") != V2_LABEL_SEMANTICS_ID
+        ):
+            label_scope_failures.append("label semantics id is not the v2 30m/60m Apex program")
+        if not scope_matches(
+            label_scope,
+            expected_markets=expected_markets,
+            expected_years=expected_years,
+        ):
+            label_scope_failures.append("scope markets/years do not match objective")
+        if int(label_scope.get("file_count") or -1) != len(expected_files):
+            label_scope_failures.append("scope file_count does not match objective")
+        add_check(
+            checks,
+            failures,
+            name="active_label_placement_hash_evidence_v2_scope",
+            passed=not label_scope_failures,
+            evidence={
+                "label_placement_hashes": rel(label_placement_hashes_path, repo_root),
+                "status": (
+                    label_placement_hashes.get("status")
+                    if isinstance(label_placement_hashes, Mapping)
+                    else None
+                ),
+                "label_semantics_id": (
+                    label_placement_hashes.get("label_semantics_id")
+                    if isinstance(label_placement_hashes, Mapping)
+                    else None
+                ),
+                "scope": dict(label_scope),
+                "failures": label_scope_failures,
+            },
+            failure="v2 active label placement hash evidence is stale or out of scope",
+        )
+
+        label_records = (
+            records_by_path(label_placement_hashes, "active_path")
+            if isinstance(label_placement_hashes, Mapping)
+            else {}
+        )
+        label_failures: list[str] = []
+        row_count_failures: list[str] = []
+        for pair in sorted_pairs(expected_markets, expected_years):
+            market = str(pair["market"])
+            year = int(pair["year"])
+            label_path = repo_root / "data" / "labeled" / market / f"{year}.parquet"
+            label_rel = rel(label_path, repo_root)
+            feature_path = feature_root / market / f"{year}.parquet"
+            feature_rel = rel(feature_path, repo_root)
+            if not label_path.is_file():
+                label_failures.append(f"{label_rel}: missing")
+                continue
+            observed_label_hash = file_sha256(label_path)
+            record = label_records.get(label_rel)
+            if record is None:
+                label_failures.append(f"{label_rel}: missing from label placement hashes")
+            else:
+                for key in ("active_sha256", "staged_sha256"):
+                    if record.get(key) != observed_label_hash:
+                        label_failures.append(f"{label_rel}: label placement {key} mismatch")
+                if record.get("active_matches_staged") is not True:
+                    label_failures.append(f"{label_rel}: active_matches_staged is not true")
+                if record.get("backup_matches_pre_active") is not True:
+                    label_failures.append(f"{label_rel}: backup_matches_pre_active is not true")
+                if feature_path.is_file():
+                    feature_rows = parquet_row_count(feature_path)
+                    label_rows = parquet_row_count(label_path)
+                    if int(record.get("active_rows") or -1) != label_rows:
+                        row_count_failures.append(f"{label_rel}: active_rows mismatch")
+                    if feature_rows != label_rows:
+                        row_count_failures.append(
+                            f"{feature_rel} rows {feature_rows} != {label_rel} rows {label_rows}"
+                        )
+        add_check(
+            checks,
+            failures,
+            name="active_label_files_match_v2_replacement_hashes_and_feature_rows",
+            passed=not label_failures and not row_count_failures,
+            evidence={
+                "label_placement_hashes": rel(label_placement_hashes_path, repo_root),
+                "expected_file_count": len(expected_files),
+                "label_record_count": len(label_records),
+                "hash_failures": label_failures,
+                "row_count_failures": row_count_failures,
+            },
+            failure="active labels do not match v2 replacement hashes or feature row counts",
+        )
+
+        required_v2 = set(REQUIRED_V2_TARGET_COLUMNS)
+        missing_registry_v2 = sorted(required_v2 - set(target_cols))
+        schema_v2_failures: list[str] = []
+        for path in expected_files:
+            if not path.is_file():
+                continue
+            missing = sorted(required_v2 - parquet_schema(path))
+            if missing:
+                schema_v2_failures.append(f"{rel(path, repo_root)}: missing {missing}")
+        add_check(
+            checks,
+            failures,
+            name="active_v2_target_registry_and_schemas_cover_apex_30m60m_columns",
+            passed=not missing_registry_v2 and not schema_v2_failures,
+            evidence={
+                "required_v2_target_count": len(REQUIRED_V2_TARGET_COLUMNS),
+                "missing_from_target_cols": missing_registry_v2,
+                "schema_failures": schema_v2_failures[:20],
+            },
+            failure="active v2 Apex-aware 30m/60m target columns are missing",
+        )
 
     try:
         feature_set_spec = wrapper_module.load_feature_set(feature_set_path)
@@ -560,13 +974,24 @@ def build_report(
         allowed_paths={json_out, md_out, feature_set_path},
         repo_root=repo_root,
     )
-    prediction_file_count = count_files(predictions_root)
+    total_prediction_file_count = count_files(predictions_root)
+    scoped_predictions_root = (
+        predictions_root / expected_prediction_run if expected_prediction_run else predictions_root
+    )
+    prediction_file_count = count_files(scoped_predictions_root)
     add_check(
         checks,
         failures,
         name="generated_artifact_scope_and_no_prediction_writes",
         passed=not scope_failures and prediction_file_count == 0,
-        evidence={**scope_evidence, "prediction_file_count": prediction_file_count},
+        evidence={
+            **scope_evidence,
+            "predictions_root": rel(predictions_root, repo_root),
+            "expected_prediction_run": expected_prediction_run,
+            "scoped_predictions_root": rel(scoped_predictions_root, repo_root),
+            "prediction_file_count": prediction_file_count,
+            "total_prediction_file_count": total_prediction_file_count,
+        },
         failure="; ".join(scope_failures) or "prediction files are present",
     )
 
@@ -585,6 +1010,8 @@ def build_report(
     )
 
     status = PASS_STATUS if not failures else FAIL_STATUS
+    candidate_run = expected_prediction_run or "tier1_core_phase6_candidate"
+    candidate_reports_root = f"reports/wfa/{candidate_run}"
     return {
         "stage": STAGE,
         "status": status,
@@ -606,6 +1033,7 @@ def build_report(
             "model_count": len(model_specs),
             "feature_file_count": len(expected_files),
             "prediction_file_count": prediction_file_count,
+            "total_prediction_file_count": total_prediction_file_count,
             "commands_executed": 0,
             "model_training_performed": False,
             "prediction_generation_performed": False,
@@ -620,6 +1048,26 @@ def build_report(
             "split_acceptance_report_sha256": file_sha256(split_acceptance_path),
             "feature_manifest": rel(feature_manifest_path, repo_root),
             "feature_manifest_sha256": file_sha256(feature_manifest_path),
+            "feature_placement_hashes": (
+                rel(feature_placement_hashes_path, repo_root)
+                if feature_placement_hashes_path is not None
+                else None
+            ),
+            "feature_placement_hashes_sha256": (
+                file_sha256(feature_placement_hashes_path)
+                if feature_placement_hashes_path is not None
+                else None
+            ),
+            "label_placement_hashes": (
+                rel(label_placement_hashes_path, repo_root)
+                if label_placement_hashes_path is not None
+                else None
+            ),
+            "label_placement_hashes_sha256": (
+                file_sha256(label_placement_hashes_path)
+                if label_placement_hashes_path is not None
+                else None
+            ),
             "feature_set_manifest": rel(feature_set_path, repo_root),
             "feature_set_manifest_sha256": file_sha256(feature_set_path),
             "models_config": rel(models_config_path, repo_root),
@@ -630,15 +1078,16 @@ def build_report(
         },
         "candidate_phase6_command_not_approved": (
             "python -m scripts.phase6_wfa.run_wfa "
-            f"--profile {expected_profile} --matrix baseline --run tier1_core_phase6_candidate "
+            f"--profile {expected_profile} --matrix baseline --run {candidate_run} "
             f"--input-root {rel(feature_root, repo_root)} "
             f"--split-plan {rel(split_plan_path, repo_root)} "
-            f"--reports-root reports/wfa/tier1_core_phase6_candidate "
+            f"--predictions-root {rel(predictions_root, repo_root)} "
+            f"--reports-root {candidate_reports_root} "
             f"--models-config {rel(models_config_path, repo_root)} "
             f"--profile-config {rel(profile_config_path, repo_root)} "
             f"--feature-set {rel(feature_set_path, repo_root)} "
             f"--data-audit-universe-json {rel(universe_path, repo_root) if universe_path else '<missing>'} "
-            "--report-only"
+            "--write-predictions"
         ),
         "non_approval": {
             "wfa_runner_execution": False,
@@ -728,6 +1177,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--split-acceptance", default=str(DEFAULT_SPLIT_ACCEPTANCE))
     parser.add_argument("--feature-root", default=str(DEFAULT_FEATURE_ROOT))
     parser.add_argument("--feature-manifest", default=str(DEFAULT_FEATURE_MANIFEST))
+    parser.add_argument("--feature-placement-hashes", default=None)
+    parser.add_argument("--label-placement-hashes", default=None)
     parser.add_argument("--report-root", default=str(DEFAULT_REPORT_ROOT))
     parser.add_argument("--json-out", default=None)
     parser.add_argument("--md-out", default=None)
@@ -735,6 +1186,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile-config", default=str(DEFAULT_PROFILE_CONFIG))
     parser.add_argument("--models-config", default=str(DEFAULT_MODELS_CONFIG))
     parser.add_argument("--predictions-root", default=str(DEFAULT_PREDICTIONS_ROOT))
+    parser.add_argument("--expected-prediction-run", default=None)
     parser.add_argument("--expected-profile", default=EXPECTED_PROFILE)
     parser.add_argument("--expected-resolved-profile", default=EXPECTED_RESOLVED_PROFILE)
     parser.add_argument("--expected-markets", default=",".join(EXPECTED_MARKETS))
@@ -774,12 +1226,17 @@ def main(argv: Iterable[str] | None = None) -> int:
         split_acceptance_path=split_acceptance_path,
         feature_root=feature_root,
         feature_manifest_path=feature_manifest_path,
+        feature_placement_hashes_path=resolve_optional_path(
+            repo_root, args.feature_placement_hashes
+        ),
+        label_placement_hashes_path=resolve_optional_path(repo_root, args.label_placement_hashes),
         feature_set_path=feature_set_path,
         json_out=json_out,
         md_out=md_out,
         profile_config_path=resolve_path(repo_root, args.profile_config),
         models_config_path=resolve_path(repo_root, args.models_config),
         predictions_root=resolve_path(repo_root, args.predictions_root),
+        expected_prediction_run=args.expected_prediction_run,
         expected_profile=str(args.expected_profile),
         expected_resolved_profile=str(args.expected_resolved_profile),
         expected_markets=csv_strings(args.expected_markets),

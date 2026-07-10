@@ -335,6 +335,40 @@ def _write_multi_data_audit_universe(
     return path
 
 
+def _write_hardened_data_audit_universe(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    markets = ["6E", "CL", "ES", "ZN"]
+    rows = [
+        {
+            "market": market,
+            "year": year,
+            "audit_status": "usable",
+            "usable_for_wfa": True,
+            "final_decision": "usable_no_synthetic_gaps_detected",
+            "reason": "fixture",
+        }
+        for market in markets
+        for year in [2023, 2024]
+    ]
+    path.write_text(
+        json.dumps(
+            {
+                "status": "PASS",
+                "summary": {"audit_status_counts": {"usable": len(rows)}},
+                "market_years": rows,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _write_json_with_hash(path: Path, payload: dict[str, object]) -> tuple[str, str]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    return path.as_posix(), wfa._file_sha256(path)
+
+
 def _write_scope_guard_split_plan(
     path: Path,
     *,
@@ -378,6 +412,126 @@ def _write_scope_guard_split_plan(
         encoding="utf-8",
     )
     return path
+
+
+def _write_hardened_scope_guard_split_plan(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+    markets = ["6E", "CL", "ES", "ZN"]
+    years = [2023, 2024]
+    profile_config = _write_profile_config(
+        tmp_path / "configs" / "alpha_tiered.yaml",
+        profile="tier_1",
+        resolved_profile="tier_1_research",
+        markets=markets,
+        years=years,
+    )
+    models_config = _write_models_config(tmp_path / "configs" / "models.yaml")
+    feature_manifest_path, feature_manifest_hash = _write_json_with_hash(
+        tmp_path / "reports" / "features" / "baseline_feature_manifest.json",
+        {
+            "status": "PASS",
+            "profile": "tier_1",
+            "resolved_profile": "tier_1_research",
+            "output_root": "data/feature_matrices",
+            "output_count": 8,
+            "feature_count": 114,
+            "failures": [],
+        },
+    )
+    feature_hash_path, feature_hash = _write_json_with_hash(
+        tmp_path / "reports" / "features" / "post_active_feature_hashes.json",
+        {
+            "status": "PASS_ACTIVE_FEATURE_PLACEMENT_V2_CORE_NO_DOWNSTREAM",
+            "record_count": 12,
+            "market_year_records": 8,
+        },
+    )
+    label_hash_path, label_hash = _write_json_with_hash(
+        tmp_path / "reports" / "labels" / "post_replacement_hashes.json",
+        {
+            "status": "PASS_ACTIVE_LABEL_REPLACEMENT_V2_CORE_NO_DOWNSTREAM",
+            "record_count": 8,
+            "label_semantics_id": wfa.HARDENED_LABEL_SEMANTICS_ID,
+        },
+    )
+    data_audit = _write_hardened_data_audit_universe(
+        tmp_path / "reports" / "data_audit" / "universe.json"
+    )
+    data_audit_evidence = load_data_audit_universe(data_audit).evidence()
+    split_plan = tmp_path / "reports" / "wfa" / "hardened_split_plan.json"
+    split_plan.parent.mkdir(parents=True, exist_ok=True)
+    split_plan.write_text(
+        json.dumps(
+            {
+                "active_hash_evidence": {
+                    "feature_placement_hashes": {
+                        "path": feature_hash_path,
+                        "sha256": feature_hash,
+                        "record_count": 12,
+                        "market_year_records": 8,
+                    },
+                    "label_placement_hashes": {
+                        "path": label_hash_path,
+                        "sha256": label_hash,
+                        "record_count": 8,
+                        "label_semantics_id": wfa.HARDENED_LABEL_SEMANTICS_ID,
+                    },
+                },
+                "config_hash": "hardened-builder-config-hash",
+                "data_audit_universe": data_audit_evidence,
+                "failure_count": 0,
+                "feature_manifest_gate": {
+                    "expected_market_year_count": 8,
+                    "expected_output_root": "data/feature_matrices",
+                    "expected_profile": "tier_1",
+                    "expected_resolved_profile": "tier_1_research",
+                    "manifest_hash": feature_manifest_hash,
+                    "manifest_path": feature_manifest_path,
+                    "status": "PASS",
+                },
+                "final_holdout_policy": {"final_holdout_rows_allowed": False},
+                "fold_count": 4,
+                "fold_count_by_market": {market: 1 for market in markets},
+                "folds": [
+                    {
+                        "embargo_bars": 61,
+                        "final_holdout": False,
+                        "fold_id": f"{market}_hardened_0001",
+                        "hardened_split_type": "fixed_train_validation_test",
+                        "independent_test_claim_allowed": True,
+                        "is_final_holdout": False,
+                        "market": market,
+                        "purge_bars": 61,
+                        "purged_train_end": "2023-01-02T23:00:00+00:00",
+                        "resolved_purge_bars": 61,
+                        "selection_allowed": True,
+                        "selection_source": "validation_only",
+                        "split_group": "hardened_research",
+                        "test_embargo_end": "2024-01-04T00:00:00+00:00",
+                        "test_end": "2024-01-03T23:00:00+00:00",
+                        "test_selection_allowed": False,
+                        "test_start": "2024-01-03T00:00:00+00:00",
+                        "train_start": "2023-01-01T00:00:00+00:00",
+                        "validation_embargo_end": "2024-01-03T00:00:00+00:00",
+                        "validation_end": "2024-01-02T23:00:00+00:00",
+                        "validation_start": "2024-01-01T00:00:00+00:00",
+                    }
+                    for market in markets
+                ],
+                "input_file_hashes": {},
+                "markets": markets,
+                "modeling_allowed": False,
+                "prediction_materialization_allowed": False,
+                "profile": "tier_1",
+                "resolved_profile": "tier_1_research",
+                "script_hash": "fixture-script-hash",
+                "status": wfa.HARDENED_SPLIT_STATUS,
+                "warning_count": 0,
+                "years": years,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return split_plan, profile_config, models_config, data_audit
 
 
 def _run_scope_guard(
@@ -940,6 +1094,124 @@ def test_valid_tier1_split_plan_passes_scope_guard(tmp_path: Path) -> None:
     assert manifest["markets"] == scope.markets
     assert manifest["years"] == scope.years
     assert manifest["data_audit_universe"]["status_counts"] == {"usable": len(scope.markets)}
+
+
+def test_hardened_split_report_only_accepts_verified_evidence_and_selectable_folds(
+    tmp_path: Path,
+) -> None:
+    input_root = tmp_path / "data" / "feature_matrices"
+    split_plan, profile_config, models_config, data_audit = _write_hardened_scope_guard_split_plan(
+        tmp_path
+    )
+    _write_feature_matrix(input_root, market="6E", year=2023)
+    _write_feature_matrix(input_root, market="6E", year=2024)
+    feature_set = _write_tier1_feature_set(tmp_path)
+
+    manifest = _run_wfa(
+        profile="tier_1",
+        matrix="baseline",
+        run="hardened_report_only_fixture",
+        input_root=input_root,
+        split_plan=split_plan,
+        predictions_root=None,
+        reports_root=tmp_path / "reports" / "hardened_report_only",
+        models_config=models_config,
+        profile_config=profile_config,
+        feature_set_path=feature_set,
+        data_audit_universe_json=data_audit,
+        max_folds=1,
+        write_predictions=False,
+    )
+
+    assert manifest["failure_count"] == 0
+    assert manifest["unfiltered_selectable_fold_count"] == 4
+    assert manifest["fold_count"] == 1
+    assert manifest["prediction_writes_enabled"] is False
+    assert manifest["prediction_artifact_written"] is False
+    assert manifest["prediction_artifact_write_skipped"] is True
+    assert manifest["predictions_root"] is None
+
+
+def test_hardened_split_rejects_stale_embedded_active_hash_evidence(tmp_path: Path) -> None:
+    input_root = tmp_path / "data" / "feature_matrices"
+    split_plan, profile_config, models_config, data_audit = _write_hardened_scope_guard_split_plan(
+        tmp_path
+    )
+    feature_set = _write_tier1_feature_set(tmp_path)
+    payload = json.loads(split_plan.read_text(encoding="utf-8"))
+    payload["active_hash_evidence"]["feature_placement_hashes"]["sha256"] = "stale"
+    split_plan.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="hardened config provenance rejected"):
+        _run_wfa(
+            profile="tier_1",
+            matrix="baseline",
+            run="hardened_report_only_fixture",
+            input_root=input_root,
+            split_plan=split_plan,
+            predictions_root=None,
+            reports_root=tmp_path / "reports" / "hardened_report_only",
+            models_config=models_config,
+            profile_config=profile_config,
+            feature_set_path=feature_set,
+            data_audit_universe_json=data_audit,
+            write_predictions=False,
+        )
+
+
+def test_hardened_split_requires_validation_test_metadata(tmp_path: Path) -> None:
+    input_root = tmp_path / "data" / "feature_matrices"
+    split_plan, profile_config, models_config, data_audit = _write_hardened_scope_guard_split_plan(
+        tmp_path
+    )
+    feature_set = _write_tier1_feature_set(tmp_path)
+    payload = json.loads(split_plan.read_text(encoding="utf-8"))
+    payload["folds"][0].pop("validation_start")
+    split_plan.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="missing hardened metadata fields"):
+        _run_wfa(
+            profile="tier_1",
+            matrix="baseline",
+            run="hardened_report_only_fixture",
+            input_root=input_root,
+            split_plan=split_plan,
+            predictions_root=None,
+            reports_root=tmp_path / "reports" / "hardened_report_only",
+            models_config=models_config,
+            profile_config=profile_config,
+            feature_set_path=feature_set,
+            data_audit_universe_json=data_audit,
+            write_predictions=False,
+        )
+
+
+@pytest.mark.parametrize("write_predictions", [False, True])
+def test_hardened_split_forbids_prediction_output_arguments(
+    tmp_path: Path,
+    write_predictions: bool,
+) -> None:
+    input_root = tmp_path / "data" / "feature_matrices"
+    split_plan, profile_config, models_config, data_audit = _write_hardened_scope_guard_split_plan(
+        tmp_path
+    )
+    feature_set = _write_tier1_feature_set(tmp_path)
+
+    with pytest.raises(SystemExit, match="hardened split WFA is report-only only"):
+        _run_wfa(
+            profile="tier_1",
+            matrix="baseline",
+            run="hardened_report_only_fixture",
+            input_root=input_root,
+            split_plan=split_plan,
+            predictions_root=tmp_path / "data" / "predictions",
+            reports_root=tmp_path / "reports" / "hardened_report_only",
+            models_config=models_config,
+            profile_config=profile_config,
+            feature_set_path=feature_set,
+            data_audit_universe_json=data_audit,
+            write_predictions=write_predictions,
+        )
 
 
 def test_tier1_run_wfa_requires_feature_set_manifest(tmp_path: Path) -> None:

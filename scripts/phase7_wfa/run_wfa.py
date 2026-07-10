@@ -46,6 +46,14 @@ DEFAULT_MODELS_CONFIG = Path("configs/models.yaml")
 NO_CALIBRATION_ID = "no_calibration"
 PHASE_7A_STAGE = "phase_7a_linear_controls"
 CLASSIFIER_COLLAPSE_STD_EPS = 1e-9
+HARDENED_SPLIT_STATUS = "PASS_HARDENED_PHASE5_SPLIT_PLAN_BUILT_NO_MODELING"
+HARDENED_SPLIT_GROUP = "hardened_research"
+HARDENED_SELECTION_SOURCE = "validation_only"
+HARDENED_EXPECTED_MARKETS = ["6E", "CL", "ES", "ZN"]
+HARDENED_EXPECTED_YEARS = [2023, 2024]
+HARDENED_LABEL_SEMANTICS_ID = (
+    "phase3_labels_v2_next_1m_open_30m_primary_60m_confirm_apex_aware"
+)
 PREDICTION_COLUMNS = [
     "market",
     "year",
@@ -314,6 +322,226 @@ def _int_list(value: object) -> list[int] | None:
         return None
 
 
+def _as_int(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_hardened_split_manifest(split_manifest: Mapping[str, Any]) -> bool:
+    if split_manifest.get("status") == HARDENED_SPLIT_STATUS:
+        return True
+    folds = split_manifest.get("folds", [])
+    if not isinstance(folds, list):
+        return False
+    return any(
+        isinstance(fold, Mapping)
+        and str(fold.get("split_group", "")) == HARDENED_SPLIT_GROUP
+        for fold in folds
+    )
+
+
+def _path_hash_evidence_failures(
+    label: str,
+    payload: object,
+    *,
+    hash_field: str = "sha256",
+    path_field: str = "path",
+) -> list[str]:
+    if not isinstance(payload, Mapping):
+        return [f"{label}: evidence is missing or invalid"]
+    path_value = payload.get(path_field)
+    expected_hash = payload.get(hash_field)
+    failures: list[str] = []
+    if not isinstance(path_value, str) or not path_value.strip():
+        failures.append(f"{label}: missing {path_field}")
+        return failures
+    if not isinstance(expected_hash, str) or not expected_hash.strip():
+        failures.append(f"{label}: missing {hash_field}")
+        return failures
+    path = Path(path_value)
+    if not path.exists():
+        failures.append(f"{label}: evidence path does not exist: {path_value}")
+        return failures
+    actual_hash = _file_sha256(path)
+    if actual_hash != expected_hash:
+        failures.append(
+            f"{label}: hash mismatch for {path_value}; expected={expected_hash} actual={actual_hash}"
+        )
+    return failures
+
+
+def _hardened_count_failure(label: str, value: object, expected: int) -> str | None:
+    actual = _as_int(value)
+    if actual != expected:
+        return f"{label}: expected {expected}, got {value!r}"
+    return None
+
+
+def _hardened_split_evidence_failures(split_manifest: Mapping[str, Any]) -> list[str]:
+    failures: list[str] = []
+    if split_manifest.get("status") != HARDENED_SPLIT_STATUS:
+        failures.append(f"hardened split status must be {HARDENED_SPLIT_STATUS}")
+    if split_manifest.get("modeling_allowed") is not False:
+        failures.append("hardened split must have modeling_allowed=false")
+    if split_manifest.get("prediction_materialization_allowed") is not False:
+        failures.append("hardened split must have prediction_materialization_allowed=false")
+    actual_markets = _string_list(split_manifest.get("markets"))
+    actual_years = _int_list(split_manifest.get("years"))
+    if actual_markets != HARDENED_EXPECTED_MARKETS:
+        failures.append(
+            f"hardened split markets must be {HARDENED_EXPECTED_MARKETS}, got {actual_markets}"
+        )
+    if actual_years != HARDENED_EXPECTED_YEARS:
+        failures.append(
+            f"hardened split years must be {HARDENED_EXPECTED_YEARS}, got {actual_years}"
+        )
+    for count_label, expected in (("failure_count", 0), ("warning_count", 0), ("fold_count", 4)):
+        failure = _hardened_count_failure(count_label, split_manifest.get(count_label), expected)
+        if failure:
+            failures.append(failure)
+
+    active_hash_evidence = split_manifest.get("active_hash_evidence")
+    if not isinstance(active_hash_evidence, Mapping):
+        failures.append("active_hash_evidence is missing or invalid")
+    else:
+        feature_hashes = active_hash_evidence.get("feature_placement_hashes")
+        label_hashes = active_hash_evidence.get("label_placement_hashes")
+        failures.extend(_path_hash_evidence_failures("feature_placement_hashes", feature_hashes))
+        failures.extend(_path_hash_evidence_failures("label_placement_hashes", label_hashes))
+        if isinstance(feature_hashes, Mapping):
+            for count_label, expected in (
+                ("feature_placement_hashes.record_count", 12),
+                ("feature_placement_hashes.market_year_records", 8),
+            ):
+                field = count_label.split(".")[-1]
+                failure = _hardened_count_failure(count_label, feature_hashes.get(field), expected)
+                if failure:
+                    failures.append(failure)
+        if isinstance(label_hashes, Mapping):
+            failure = _hardened_count_failure(
+                "label_placement_hashes.record_count",
+                label_hashes.get("record_count"),
+                8,
+            )
+            if failure:
+                failures.append(failure)
+            if label_hashes.get("label_semantics_id") != HARDENED_LABEL_SEMANTICS_ID:
+                failures.append(
+                    "label_placement_hashes.label_semantics_id mismatch: "
+                    f"{label_hashes.get('label_semantics_id')!r}"
+                )
+
+    feature_gate = split_manifest.get("feature_manifest_gate")
+    if not isinstance(feature_gate, Mapping):
+        failures.append("feature_manifest_gate is missing or invalid")
+    else:
+        if feature_gate.get("status") != "PASS":
+            failures.append(f"feature_manifest_gate.status must be PASS, got {feature_gate.get('status')!r}")
+        if feature_gate.get("expected_profile") != "tier_1":
+            failures.append("feature_manifest_gate.expected_profile must be tier_1")
+        if feature_gate.get("expected_resolved_profile") != "tier_1_research":
+            failures.append("feature_manifest_gate.expected_resolved_profile must be tier_1_research")
+        if feature_gate.get("expected_output_root") != "data/feature_matrices":
+            failures.append("feature_manifest_gate.expected_output_root must be data/feature_matrices")
+        failure = _hardened_count_failure(
+            "feature_manifest_gate.expected_market_year_count",
+            feature_gate.get("expected_market_year_count"),
+            8,
+        )
+        if failure:
+            failures.append(failure)
+        failures.extend(
+            _path_hash_evidence_failures(
+                "feature_manifest_gate",
+                feature_gate,
+                path_field="manifest_path",
+                hash_field="manifest_hash",
+            )
+        )
+
+    data_audit = split_manifest.get("data_audit_universe")
+    if not isinstance(data_audit, Mapping):
+        failures.append("data_audit_universe is missing or invalid")
+    else:
+        failures.extend(
+            _path_hash_evidence_failures(
+                "data_audit_universe",
+                data_audit,
+                hash_field="file_hash",
+            )
+        )
+        if data_audit.get("allowed_status") != "usable":
+            failures.append("data_audit_universe.allowed_status must be usable")
+        if data_audit.get("requires_usable_for_wfa") is not True:
+            failures.append("data_audit_universe.requires_usable_for_wfa must be true")
+        status_counts = data_audit.get("status_counts")
+        if not isinstance(status_counts, Mapping) or _as_int(status_counts.get("usable")) != 8:
+            failures.append("data_audit_universe.status_counts.usable must be 8")
+
+    final_holdout_policy = split_manifest.get("final_holdout_policy")
+    if not isinstance(final_holdout_policy, Mapping):
+        failures.append("final_holdout_policy is missing or invalid")
+    elif final_holdout_policy.get("final_holdout_rows_allowed") is not False:
+        failures.append("final_holdout_policy.final_holdout_rows_allowed must be false")
+
+    fold_count_by_market = split_manifest.get("fold_count_by_market")
+    expected_fold_counts = {market: 1 for market in HARDENED_EXPECTED_MARKETS}
+    if fold_count_by_market != expected_fold_counts:
+        failures.append(
+            f"fold_count_by_market must be {expected_fold_counts}, got {fold_count_by_market!r}"
+        )
+
+    folds = split_manifest.get("folds")
+    if not isinstance(folds, list) or len(folds) != 4:
+        failures.append("hardened split must contain exactly 4 folds")
+        return failures
+    seen_markets: set[str] = set()
+    required_fold_metadata = [
+        "validation_start",
+        "validation_end",
+        "validation_embargo_end",
+        "test_start",
+        "test_end",
+        "test_embargo_end",
+        "hardened_split_type",
+    ]
+    for index, fold in enumerate(folds, start=1):
+        if not isinstance(fold, Mapping):
+            failures.append(f"fold {index}: invalid fold entry")
+            continue
+        fold_id = str(fold.get("fold_id", f"fold_{index}"))
+        market = str(fold.get("market", ""))
+        seen_markets.add(market)
+        if market not in HARDENED_EXPECTED_MARKETS:
+            failures.append(f"{fold_id}: market must be one of {HARDENED_EXPECTED_MARKETS}")
+        if str(fold.get("split_group", "")) != HARDENED_SPLIT_GROUP:
+            failures.append(f"{fold_id}: split_group must be {HARDENED_SPLIT_GROUP}")
+        if fold.get("selection_allowed") is not True:
+            failures.append(f"{fold_id}: selection_allowed must be true")
+        if fold.get("selection_source") != HARDENED_SELECTION_SOURCE:
+            failures.append(f"{fold_id}: selection_source must be {HARDENED_SELECTION_SOURCE}")
+        if fold.get("test_selection_allowed") is not False:
+            failures.append(f"{fold_id}: test_selection_allowed must be false")
+        if fold.get("independent_test_claim_allowed") is not True:
+            failures.append(f"{fold_id}: independent_test_claim_allowed must be true")
+        if bool(fold.get("final_holdout", False)) or bool(fold.get("is_final_holdout", False)):
+            failures.append(f"{fold_id}: final_holdout rows are not allowed")
+        missing_metadata = [field for field in required_fold_metadata if field not in fold]
+        if missing_metadata:
+            failures.append(f"{fold_id}: missing hardened metadata fields: {missing_metadata}")
+        for bar_field in ("purge_bars", "embargo_bars", "resolved_purge_bars"):
+            bars = _as_int(fold.get(bar_field))
+            if bars is None or bars < 61:
+                failures.append(f"{fold_id}: {bar_field} must be at least 61")
+    if seen_markets != set(HARDENED_EXPECTED_MARKETS):
+        failures.append(
+            f"hardened split must have one fold for each market {HARDENED_EXPECTED_MARKETS}"
+        )
+    return failures
+
+
 def _split_scope_context(
     *,
     plan: ProfileScope,
@@ -384,8 +612,17 @@ def _validate_split_plan_scope(
         if field not in split_manifest:
             add(f"missing provenance field {field}")
     expected_config_hash = profile_config_hash([profile_config, models_config])
+    hardened_split = _is_hardened_split_manifest(split_manifest)
+    hardened_failures = _hardened_split_evidence_failures(split_manifest) if hardened_split else []
     if split_manifest.get("config_hash") not in (None, expected_config_hash):
-        add("config_hash mismatch")
+        if hardened_split and not hardened_failures:
+            pass
+        elif hardened_split:
+            add("hardened config provenance rejected: " + " | ".join(hardened_failures))
+        else:
+            add("config_hash mismatch")
+    elif hardened_failures:
+        add("hardened split evidence invalid: " + " | ".join(hardened_failures))
 
     if failures:
         raise SystemExit("; ".join(failures))
@@ -842,7 +1079,11 @@ def _fold_masks(frame: pd.DataFrame, fold: Mapping[str, Any], y: pd.Series) -> t
     return train_mask, test_mask
 
 
-def _validate_fold_fields(fold: Mapping[str, Any]) -> list[str]:
+def _validate_fold_fields(
+    fold: Mapping[str, Any],
+    *,
+    allow_hardened_research: bool = False,
+) -> list[str]:
     fold_id = str(fold.get("fold_id", "<unknown>"))
     failures: list[str] = []
     required = [
@@ -866,7 +1107,10 @@ def _validate_fold_fields(fold: Mapping[str, Any]) -> list[str]:
     if not str(fold.get("market", "")).strip():
         failures.append(f"{fold_id}: market is empty")
     split_group = str(fold.get("split_group", ""))
-    if split_group not in {"research", "restricted", "forward", "final_holdout"}:
+    allowed_split_groups = {"research", "restricted", "forward", "final_holdout"}
+    if allow_hardened_research:
+        allowed_split_groups.add(HARDENED_SPLIT_GROUP)
+    if split_group not in allowed_split_groups:
         failures.append(f"{fold_id}: invalid split_group {split_group!r}")
     if not isinstance(fold.get("selection_allowed"), bool):
         failures.append(f"{fold_id}: selection_allowed must be boolean")
@@ -953,6 +1197,12 @@ def run_wfa(
     resolved_feature_config_path = feature_set.config_path
     model_specs, model_config = load_model_specs(models_config)
     split_manifest = _read_json(split_plan)
+    hardened_split = _is_hardened_split_manifest(split_manifest)
+    if hardened_split and (write_predictions or predictions_root is not None):
+        raise SystemExit(
+            "hardened split WFA is report-only only; --write-predictions and "
+            "--predictions-root are forbidden"
+        )
     _validate_split_plan_scope(
         split_manifest=split_manifest,
         plan=profile_scope,
@@ -992,12 +1242,18 @@ def run_wfa(
         if not isinstance(fold, Mapping):
             failures.append("invalid fold entry")
             continue
-        fold_failures = _validate_fold_fields(fold)
+        fold_failures = _validate_fold_fields(
+            fold,
+            allow_hardened_research=hardened_split,
+        )
         if fold_failures:
             failures.extend(fold_failures)
             continue
         split_group = str(fold.get("split_group", ""))
-        if fold.get("selection_allowed") is True and split_group == "research":
+        selection_group_allowed = split_group == "research" or (
+            hardened_split and split_group == HARDENED_SPLIT_GROUP
+        )
+        if fold.get("selection_allowed") is True and selection_group_allowed:
             if data_audit_plan_failure is not None:
                 skipped_folds.append(
                     {
