@@ -162,7 +162,7 @@ This section is the authoritative workflow map. Detailed phase commands live in 
 | 6 | Train WFA models and write out-of-sample predictions, then combine prediction shards; model-trust use requires a pre-modeling hypothesis/trial ledger and baseline-suite comparability | `scripts.phase6_wfa.run_wfa`; `scripts.phase6_wfa.combine_wfa_predictions` | `data/predictions/{run}/oos_predictions.parquet` and WFA reports/manifests |
 | 7 | Audit saved Phase 6 prediction artifacts and signal quality before trading evaluation | `scripts.phase7_prediction_audit.audit_predictions` | `reports/prediction_audit/{run}/prediction_audit_summary.json` |
 | Internal | Legacy internal WFA engine used by Phase 6; not a runnable pipeline phase | `scripts.phase7_wfa.*` | no standalone output; internal implementation only |
-| 8 | Evaluate predictions, costs, baseline-suite comparisons, portfolio/risk subgate, statistical-validity inputs, policy alignment, and promotion readiness | `scripts.phase8_model_selection.*` | `reports/phase8/*` |
+| 8 | Evaluate predictions, costs, policy alignment, and promotion readiness; consume baseline-suite comparisons, portfolio/risk subgate, and statistical-validity inputs | `scripts.phase8_model_selection.*` | `reports/phase8/*` |
 | 8 subgate | Review portfolio/risk evidence over locked costed OOS policy rows before promotion readiness or artifact freeze | `Portfolio And Risk Gate`; `scripts.phase8_model_selection.*` | portfolio/risk decision reports and blockers |
 | 9 | Run bounded research harnesses and adversarial/statistical-validity diagnostics; statistical-validity reports may be pre-promotion inputs consumed by Phase 8 | `scripts.phase9_research.*` | `reports/pipeline_audit/*` or focused reports |
 | 10 | Freeze approved research artifacts only after explicit approval | `scripts.artifact_freeze.freeze_research_artifacts` | frozen artifact metadata |
@@ -396,14 +396,35 @@ python -m scripts.phase9_research.statistical_validity --predictions <prediction
 Phase 8 can consume these evidence reports with:
 
 ```powershell
-python -m scripts.phase8_model_selection.evaluate_predictions --predictions <prediction_parquet> --predictions-manifest <prediction_manifest> --phase7-prediction-audit reports/prediction_audit/<run>/prediction_audit_summary.json --failure-analysis-report reports/failure_analysis/<run>/failure_analysis_summary.json --statistical-validity-report reports/statistical_validity/<run>/statistical_validity_summary.json --run <run>
+python -m scripts.validation.build_execution_realism_primary_evidence_intake --run <run> --prediction-path <prediction_parquet> --predictions-manifest <prediction_manifest> --source-manifest <absolute_local_source_manifest.json> --output-root reports/execution_realism/<run> --max-source-files 16 --max-total-bytes 268435456
+```
+
+The execution-realism intake command is local-file-only evidence work. It
+hashes user-supplied source files from an explicit source manifest and writes an
+`execution_realism_summary.json` plus source inventory. It does not call
+providers, create fills, run Phase 8, change models, or approve PASS/FAIL rows
+unless source paths, computed hashes, reviewed status, and review rationale are
+present.
+
+```powershell
+python -m scripts.phase8_model_selection.evaluate_predictions --predictions <prediction_parquet> --predictions-manifest <prediction_manifest> --phase7-prediction-audit reports/prediction_audit/<run>/prediction_audit_summary.json --failure-analysis-report reports/failure_analysis/<run>/failure_analysis_summary.json --statistical-validity-report reports/statistical_validity/<run>/statistical_validity_summary.json --execution-realism-report reports/execution_realism/<run>/execution_realism_summary.json --run <run>
 ```
 
 When optional evidence paths are supplied, Phase 8 validates run id, prediction
 path, prediction-manifest path, and input hashes before using them. Evidence
 paths that are absent keep the existing fail-closed blockers. Evidence paths
 that are present but stale, mismatched, or hash-invalid are structural Phase 8
-failures. `--prediction-diagnostics` remains a legacy alias for older reports.
+failures. `--execution-realism-report` must expose
+`execution_realism_gate.check_results` for `delay_stress`, `liquidity_window`,
+`spread_slippage`, and `partial_fills_rejects`; PASS/FAIL rows require primary
+source paths and source hashes, while missing or unaudited rows remain blocked.
+`--prediction-diagnostics` remains a legacy alias for older reports.
+
+Focused validation for the model-trust/evidence-ingestion interface:
+
+```powershell
+python -m pytest -q tests\validation\test_build_execution_realism_primary_evidence_intake.py tests\phase8_model_selection\test_evaluate_predictions.py tests\validation\test_build_alpha_evidence_gap_matrix.py
+```
 
 ## Mandatory Gates Before Model Trust
 
@@ -598,10 +619,13 @@ Required inputs:
   market-years;
 - target formula and target column definitions;
 - prediction timestamp, feature cutoff timestamp, entry timestamp, exit
-  timestamp, configured entry lag, and horizon;
+  timestamp, configured entry lag, 30m primary horizon, and independent 60m
+  robustness horizon;
 - same-session, roll-window, holiday, early-close, session-boundary, and
   missing-bar rules;
 - configured costs required for cost-aware target validity flags;
+- Apex-aware path gates for MFE/MAE, daily-loss/EOD drawdown danger,
+  no-hold-into-close exclusion, and stressed slippage/fillability;
 - label invalidation rules for insufficient horizon, stale data, bad bars,
   synthetic/degraded rows, and roll/session conflicts.
 
@@ -613,6 +637,8 @@ Required outputs:
 - timing diagram or equivalent manifest fields proving prediction, entry, and
   exit timestamps are ordered correctly;
 - overlap-leakage, horizon, and session-validity diagnostics;
+- label semantics id
+  `phase3_labels_v2_next_1m_open_30m_primary_60m_confirm_apex_aware`;
 - downstream target/excluded-column registry evidence.
 
 Acceptance checks:
@@ -621,9 +647,12 @@ Acceptance checks:
   the declared horizon;
 - features available at the prediction timestamp cannot include the future label
   interval;
-- entry lag, exit timestamp, and target horizon are explicit and match config;
+- entry lag, exit timestamp, primary 30m horizon, robustness 60m horizon, and
+  resolved 61-bar purge are explicit and match config;
 - labels do not cross invalid sessions, holidays, early closes, roll windows, or
   missing-bar boundaries unless an explicit rule allows it;
+- 15m labels are diagnostic only and must not be used as the primary acceptance
+  target;
 - label distributions, flat/invalid classes, and edge cases are reported by
   market-year;
 - label manifests record input selection, source hashes, output hashes, row
@@ -1042,11 +1071,11 @@ Required pre-download plan command, no provider API calls:
 ```powershell
 python -m scripts.phase1A_download.download_databento_raw --universe extended_cme --start-year 2010 --end-year 2026 --end-date 2026-06-10 --schema all --mode download-dbn --raw-format dbn-zstd --chunk year --workers 4 --resume --dry-run --reports-root reports\raw_ingest
 ```
+
 Future provider downloads require a tracked dry-run plan and explicit bounded
 scope approval before any download starts. Pass the approval id and approved
 tracked dry-run plan path to the download command; the runtime stable
 `plan_hash` must match the approved plan hash.
-
 
 Cost estimate evidence, when provider metadata calls are approved but before
 any download. This estimates cost only; it is not a zero-cost blocking gate by
@@ -1138,7 +1167,6 @@ Post-download DBN file/manifest validation:
   `dataset=GLBX.MDP3`, and `request_status=ok`.
 - Manifest `path` points to the actual DBN file, `file_size_bytes` is positive,
   and `file_sha256` equals the actual DBN bytes.
-- No unexpected overwrite occurred.
 - New DBN manifests persist provenance fields when available:
   `dataset_version`, `schema_version`, `request_text`, `original_filename`,
   `original_file_sha256`, `download_started_at`, `download_completed_at`,
@@ -1146,6 +1174,7 @@ Post-download DBN file/manifest validation:
   Existing manifests that only prove current file hashes remain valid current
   artifacts, but their provenance must be classified as `post_transfer_hash_only`
   and `partially_reproducible` unless original delivery evidence is recovered.
+- No unexpected overwrite occurred.
 
 Stop conditions:
 
@@ -1364,6 +1393,13 @@ synthetic rows, and causally gate data. Phase 2 must validate causal output
 row counts, raw input paths/hashes, manifests, and row/hash evidence before any
 staged causal parquet is promoted to an active root.
 
+Durable normalization contract:
+`docs/phase2_causal_session_normalization_spec.md` defines the active timestamp,
+session, gap-marker, readiness, leakage, and lineage rules for Phase 2 outputs.
+Synthetic gap rows are invalid markers, not fabricated OHLCV bars; downstream
+features and labels must use `phase2_ready`, `phase2_not_ready_reason`, and
+`bar_available_ts` as the readiness and availability contract.
+
 Required Phase 2 command sequence. Phase 2 is incomplete unless readiness,
 build, and output validation all pass for the same scope. The bounded approval
 must name the scope once, and the readiness/build commands plus generated
@@ -1446,7 +1482,8 @@ Stop conditions:
 
 ### 3. Build Labels
 
-Purpose: create future-looking labels and cost-aware target validity flags.
+Purpose: create future-looking 30m primary labels, independent 60m robustness
+labels, diagnostic-only 15m labels, and Apex-aware cost/path validity flags.
 
 Command:
 
@@ -1474,10 +1511,20 @@ Outputs:
 
 Acceptance checks:
 
-- Label horizons respect intraday/session validity.
+- `target_valid` is the canonical 30m primary validity gate. It uses the next
+  1-minute open as entry and the open 31 rows ahead as the fixed 30-minute exit.
+- 60m robustness labels are computed independently with the same next-open entry
+  and the open 61 rows ahead as exit. They must be tested separately, not
+  inferred from 30m labels.
+- 15m labels are emitted only under `diagnostic_*_15m` names and are not an
+  acceptance target.
+- Label horizons respect intraday/session validity and the Apex EOD close
+  buffer.
 - Target columns are present and separated from feature columns downstream.
-- Cost-aware validity flags are generated from configured costs, not ad hoc
-  assumptions.
+- Favorable-after-cost, MFE/MAE path, Apex DLL/EOD danger, no-hold-into-close,
+  and stressed slippage/fillability gates are generated from configured costs
+  and the predeclared conservative Apex row-risk threshold, not ad hoc
+  post-test assumptions.
 - `--markets` and `--years` filters select only market-years inside the
   resolved profile, and label manifests record `input_selection`.
 
@@ -2122,10 +2169,17 @@ Major trust gate checks:
 | Coordination docs | `python -m scripts.validation.check_coordination_docs` |
 | Raw Data And Metadata Gate / Phase 1A | `python -m pytest -q tests/phase1A_download/test_download_databento_raw.py tests/validation/test_check_dbn_archive_coverage.py tests/validation/test_phase1a_acquisition_registry.py`; `python -m scripts.validation.phase1a_acquisition_registry --validate-only` |
 | Phase 1B raw/DBN validation | `python -m pytest -q tests/validation/test_audit_raw_dbn_alignment.py tests/validation/test_audit_enriched_raw_optional_schemas.py` |
-| Cleaning And Normalization Gate / Phase 2 | `python -m pytest -q tests/phase2_causal_base/test_build_causal_base_data.py tests/validation/test_audit_phase2_readiness.py tests/validation/test_check_phase2_manifest_trust.py` |
+| Cleaning And Normalization Gate / Phase 2 | `python -m pytest -q tests/phase2_causal_base/test_build_causal_base_data.py tests/validation/test_audit_phase2_readiness.py tests/validation/test_check_phase2_manifest_trust.py tests/validation/test_audit_phase2_causal_session_normalization.py`; `python -m scripts.validation.audit_phase2_causal_session_normalization --causal-root data/causally_gated_normalized --raw-root data/raw --session-config configs/market_sessions.yaml` |
 | Label And Target Gate / Phase 3 | `python -m pytest -q tests/phase3_labels/test_build_labels.py tests/validation/test_target_policy_contract.py` |
+| Active v2 target timing audit | `python -m scripts.validation.build_target_timing_audit --reports-root reports/model_trust_audit/target_timing_v2_tier1_core_20260709`; report-only proof for active v2 Tier 1 core label/feature timestamp alignment and same-session 30m/60m target windows. |
 | Feature audit / Phase 4 | `python -m pytest -q tests/phase4_features/test_build_baseline_features.py tests/phase8_model_selection/test_audit_label_feature_sanity.py` |
 | WFA split gate / Phase 5 | `python -m pytest -q tests/phase5_wfa/test_build_wfa_splits.py` |
+| WFA split-contamination guard | `python -m scripts.validation.audit_wfa_split_contamination --reports-root reports/wfa/phase5_v2_apex_30m60m_20260709_tier1_core_contamination_audit`; report-only active v2 Tier 1 core guard for same-fold 30m/60m target-horizon overlap, purge/embargo policy, rolling-retraining OOS reuse classification, feature-registry leakage, and train-only runner patterns. |
+| Phase 5 split-hardening decision | `python -m scripts.validation.build_phase5_v2_split_hardening_decision --reports-root reports/wfa/phase5_v2_apex_30m60m_20260709_tier1_core_split_hardening_decision`; report-only active v2 Tier 1 core decision gate that keeps the accepted split research-only and reports whether a hardened split rebuild design is feasible without creating split plans. |
+| Phase 5 hardened split builder | `python -m scripts.phase5_wfa.build_hardened_wfa_splits --profile tier_1 --input-root data/feature_matrices --reports-root reports/wfa/phase5_v2_apex_30m60m_20260709_tier1_core_hardened_split_candidate --profile-config configs/alpha_tiered.yaml --models-config configs/models.yaml --feature-manifest reports/features_baseline/phase4_v2_apex_30m60m_20260709_tier1_core_active_placement/baseline_feature_manifest.json --feature-placement-hashes reports/features_baseline/phase4_v2_apex_30m60m_20260709_tier1_core_active_placement/post_active_feature_hashes.json --label-placement-hashes reports/labels/phase3_v2_apex_30m60m_20260709_active_replacement_decision/post_replacement_hashes.json --data-audit-universe-json reports/data_audit/wfa_research/tier1_rebuild_v1/preflight/data_audit_universe_tier1_rebuild_v1.json --split-hardening-decision reports/wfa/phase5_v2_apex_30m60m_20260709_tier1_core_split_hardening_decision/split_hardening_decision.json --contamination-audit reports/wfa/phase5_v2_apex_30m60m_20260709_tier1_core_contamination_audit/wfa_split_contamination_audit.json --markets 6E,CL,ES,ZN --years 2023,2024 --approve-generation --approval-token BUILD_HARDENED_PHASE5_SPLIT_V2_TIER1_CORE`; separately approved active v2 Tier 1 core hardened train/validation/test split candidate builder, not modeling or prediction materialization. |
+| Phase 5 v2 WFA preflight decision | `python -m scripts.validation.build_phase5_v2_wfa_preflight_decision`; report-only active v2 Tier 1 core compatibility gate that may expose a future exact Phase 5 split command as evidence only, without running Phase 5 or creating split plans. |
+| Phase 6 hardened-split compatibility decision | `python -m scripts.validation.build_phase6_hardened_split_compatibility_decision --split-plan reports/wfa/phase5_v2_apex_30m60m_20260709_tier1_core_hardened_split_candidate/split_plan.json --split-acceptance reports/wfa/phase5_v2_apex_30m60m_20260709_tier1_core_hardened_split_candidate/hardened_split_acceptance_report.json --feature-root data/feature_matrices --feature-manifest reports/features_baseline/phase4_v2_apex_30m60m_20260709_tier1_core_active_placement/baseline_feature_manifest.json --feature-placement-hashes reports/features_baseline/phase4_v2_apex_30m60m_20260709_tier1_core_active_placement/post_active_feature_hashes.json --label-placement-hashes reports/labels/phase3_v2_apex_30m60m_20260709_active_replacement_decision/post_replacement_hashes.json --master-audit-run-status reports/master_audit/master_audit_run_status_20260709/master_audit_run_status.json --master-audit-overview reports/master_audit/master_audit_overview_20260709/master_audit_overview.json --reports-root reports/wfa/phase6_v2_apex_30m60m_20260709_tier1_core_hardened_split_compatibility --markets 6E,CL,ES,ZN --years 2023,2024`; report-only gate for hardened Phase 5 split compatibility with active v2 labels/features and master-audit Phase 6/7 NOT_RUN status; exposes a future preflight command only and does not run WFA or predictions. |
+| Phase 6 hardened prediction-materialization decision | `python -m scripts.validation.build_phase6_hardened_prediction_materialization_decision`; report-only approval decision for active v2 Tier 1 core hardened prediction writes; records the exact future `--write-predictions` command as not approved and currently blocks while the runner guard forbids hardened prediction outputs. |
 | Phase 6 wrapper surface | `python -c "import scripts.phase6_wfa.run_wfa as r; import scripts.phase6_wfa.combine_wfa_predictions as c; assert callable(r.main); assert callable(c.main)"` |
 | Phase 7 prediction audit | `python -m pytest -q tests/phase7_prediction_audit/test_audit_predictions.py tests/phase6_wfa/test_prediction_diagnostics.py` |
 | Phase 8 / Backtest And Cost Gate | `python -m pytest -q tests/phase8_model_selection/test_evaluate_predictions.py tests/phase8_model_selection/test_audit_return_model_scale.py tests/phase8_model_selection/test_audit_policy_signal_alignment.py` |
@@ -2133,6 +2187,7 @@ Major trust gate checks:
 | Statistical Validity Gate | Manual evidence review only unless the scoped Phase 8 report explicitly records PBO, Deflated Sharpe, Probabilistic Sharpe, bootstrap confidence intervals, multiple-testing adjustment, parameter stability, regime breakdowns, and `PASS` / `FAIL` / `NOT_APPLICABLE_WITH_REASON` status for each item. |
 | Alpha Evidence Gap Matrix | `python -m scripts.validation.build_alpha_evidence_gap_matrix`; report-only baseline/null/statistical/execution evidence matrix. A pause verdict does not approve target discovery, WFA/modeling, promotion, artifact freeze, final holdout, paper/live, provider downloads, cleanup, staging, commit, push, or rescue tuning. |
 | Alpha Evidence Completion Closeout | `python -m scripts.validation.build_alpha_evidence_completion_closeout`; report-only terminal closeout for the current Tier 1 line from the fixed `alpha_evidence_gap_matrix_20260709T034313Z` matrix. Verdict `CLOSE_CURRENT_LINE_NO_ALPHA_EVIDENCE` closes the current model line and does not approve rescue tuning or new modeling. |
+| Model Trust Enforcement Gate | `python -m scripts.validation.enforce_model_trust_gate --intended-action wfa-modeling --fail-on-blocked`; read-only hard gate that converts the current audit/evidence closeout into an allow/block decision for evidence work, target discovery, WFA/modeling, Phase 8 refresh, promotion, artifact freeze, final holdout, paper/live, provider downloads, cleanup, staging, commit, push, and rescue tuning. |
 | Production Deferral Gate | Manual evidence review only; no paper/live command is authorized by this file. |
 | Paper/Live Readiness Gate | Manual evidence review only; future and non-authorizing until a separate runbook, validation suite, and evidence manifest exist. |
 | Phase 10 artifact freeze | `python -m pytest -q tests/artifact_freeze/test_freeze_research_artifacts.py` |

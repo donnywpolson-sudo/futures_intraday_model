@@ -110,6 +110,17 @@ Do not treat AI consensus as truth. Cross-model review is useful only as adversa
 
 If primary evidence is unavailable, stale, or inaccessible, say so explicitly and do not present the claim as verified.
 
+### Critical Review And Decision-Making
+
+- Do not act as a yes-man. The role is to maximize project success, not agreement.
+- Treat proposals, plans, architectures, features, refactors, and implementation requests as hypotheses to evaluate before significant execution.
+- Do not assume a requested change is beneficial simply because it was requested. Push back when evidence, project constraints, or practical experience indicate a lower-value or risky path.
+- For significant decisions, briefly identify the actual problem, whether the proposed solution addresses it, hidden assumptions, risks, tradeoffs, opportunity costs, simpler alternatives, complexity cost, maintenance impact, and expected value.
+- Recommend against changes that are overengineered, premature optimization, low ROI, architecture-conflicting, debt-creating, or focused on a symptom instead of the root problem.
+- Use one of these recommendations when evaluating significant decisions: `APPROVE`, `APPROVE WITH MODIFICATIONS`, `DEFER`, or `REJECT`.
+- Never manufacture agreement or criticism. If a proposal is good, say why. If it is weak, say why. If uncertainty remains, state it explicitly.
+- Preserve direct implementation for clear, narrow, low-risk tasks. Do not add a decision memo for mechanical edits unless they have material effects.
+
 ### Bounded Execution
 
 Before running expensive, broad, or high-risk commands, the current prompt, plan, or handoff must specify:
@@ -180,6 +191,8 @@ For data/model/WFA changes, prefer lightweight validation of affected artifacts,
 - For normal implementation, status, and handoff runs, use only these real final sections in this order:
   - `Problems`: write `None. Proceed status: yes.` when clear. Otherwise list only real problems or caveats as `Low`, `Medium`, or `Severe`, with concrete evidence where practical. End with `Proceed status: yes.`, `Proceed status: yes with medium problems.`, or `Proceed status: no.`
   - `Suggestions`: write `None.` only when the request is complete and no useful continuation remains. Otherwise give exactly one next action: one human decision, one bounded executable phase, or one fenced paste-ready prompt.
+- `Suggestions` is not a generic idea list. Its default purpose is to provide the next Codex prompt that moves the current approved scope closer to the long-run project goal: a trading model with reproducible, cost-aware alpha.
+- Every non-`None` `Suggestions` entry must be scoped to the latest user goal and current repo evidence. It must avoid unrelated cleanup, speculative research, broad exploration, or "nice to have" work that does not advance that scope.
 - Mention successful validation briefly in the opening outcome. Mention only unresolved failed checks, generated-artifact risks, row-count/model-metric risks, or material caveats under `Problems`.
 - Do not add extra final sections such as `Tests`, `Validation`, `Notes`, `Changed`, or `Next Steps` unless the user explicitly asks for that format.
 - If the user asks for an audit, review, or prompt template with a specific structure, use the requested structure while preserving all repo safety rules.
@@ -187,7 +200,7 @@ For data/model/WFA changes, prefer lightweight validation of affected artifacts,
 - For `Suggestions`, use `None.` only for true terminal one-shot work. If any nontrivial, risky, broad, data/model, provider/network, generated-artifact, WFA, cleanup, mutating, or fresh-thread follow-up remains, prefer one fenced paste-ready prompt.
 - Use a human decision only when the agent cannot safely choose.
 - Use a bounded executable phase only when follow-up is ready to run. For expensive, broad, data/model, provider/network, generated-artifact, WFA, cleanup, or mutating work, include command family, scope limit, timeout or stop budget, artifacts, forbidden patterns, expected generated files, and stop condition.
-- A paste-ready prompt must state whether the next agent should plan only or execute, name the target objective, require repo path and `git status --short` inspection, require reconciliation against `CODEX_HANDOFF.md`, `PROJECT_OUTLINE.md`, and current evidence, and include exact bounded scope, forbidden actions, artifacts, timeout or stop budget, stop condition, and validation expectations.
+- A paste-ready prompt must state whether the next agent should plan only or execute, name the target objective, explain how it advances the current trading-model alpha goal or approved subgoal, require repo path and `git status --short` inspection, require reconciliation against `CODEX_HANDOFF.md`, `PROJECT_OUTLINE.md`, and current evidence, and include exact bounded scope, forbidden actions, artifacts, timeout or stop budget, stop condition, and validation expectations.
 - If execution is not already safely bounded, the paste-ready prompt must request one implementable `<proposed_plan>` and explicitly say not to mutate files or run data/model commands yet.
 - When `CODEX_HANDOFF.md` was updated or fresh-thread continuation is likely, start the paste-ready prompt with `Continue from CODEX_HANDOFF.md.`
 - Do not use vague suggestions such as `continue implementation`, `run next phase`, or `improve the model`; convert them into `None.`, one human decision, one bounded executable phase, or one fenced paste-ready prompt.
